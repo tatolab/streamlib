@@ -41,14 +41,14 @@ use crate::control_operation_requests::{
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
     SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
-    SetStudioFieldsRequest, SubscribeProjectChangesRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetStudioFieldsRequest, SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
+    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 use crate::control_operation_results::{
-    DiscoverResult, SubscribeProjectChangesResult, SubscribeStreamActionChangesResult,
-    SubscribeStreamGraphChangesResult,
+    DiscoverResult, SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
+    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
 };
 
 /// The contract's version: bumped only by a breaking change to an operation already in it.
@@ -95,6 +95,25 @@ impl ControlOperation for SubscribeProjectChanges {
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `subscribe_project_log_records`: the connection is told each time some projects' logs have new
+/// records.
+pub struct SubscribeProjectLogRecords;
+
+impl ControlOperation for SubscribeProjectLogRecords {
+    type Request = SubscribeProjectLogRecordsRequest;
+    type Result = SubscribeProjectLogRecordsResult;
+    const METHOD_NAME: &'static str = "subscribe_project_log_records";
+    const ONE_LINE_DOC: &'static str = "Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
@@ -1479,6 +1498,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<SubscribeProjectChanges>(),
     ControlOperationDeclaration::of::<SubscribeStreamGraphChanges>(),
     ControlOperationDeclaration::of::<SubscribeStreamActionChanges>(),
+    ControlOperationDeclaration::of::<SubscribeProjectLogRecords>(),
     ControlOperationDeclaration::of::<DescribeRuntime>(),
     ControlOperationDeclaration::of::<ListStreams>(),
     ControlOperationDeclaration::of::<Graph>(),
@@ -1565,6 +1585,8 @@ pub enum ControlOperationCall {
     SubscribeStreamGraphChanges(SubscribeStreamGraphChangesRequest),
     /// A `subscribe_stream_action_changes` call.
     SubscribeStreamActionChanges(SubscribeStreamActionChangesRequest),
+    /// A `subscribe_project_log_records` call.
+    SubscribeProjectLogRecords(SubscribeProjectLogRecordsRequest),
     /// A `describe_runtime` call.
     DescribeRuntime(DescribeRuntimeRequest),
     /// A `list_streams` call.
@@ -1767,6 +1789,10 @@ impl ControlOperationCall {
                 the_request_of::<SubscribeStreamActionChanges>(params)
                     .map(Self::SubscribeStreamActionChanges)
             }
+            SubscribeProjectLogRecords::METHOD_NAME => {
+                the_request_of::<SubscribeProjectLogRecords>(params)
+                    .map(Self::SubscribeProjectLogRecords)
+            }
             DescribeRuntime::METHOD_NAME => {
                 the_request_of::<DescribeRuntime>(params).map(Self::DescribeRuntime)
             }
@@ -1965,6 +1991,7 @@ impl ControlOperationCall {
         match self {
             Self::Discover(_) => Discover::METHOD_NAME,
             Self::SubscribeProjectChanges(_) => SubscribeProjectChanges::METHOD_NAME,
+            Self::SubscribeProjectLogRecords(_) => SubscribeProjectLogRecords::METHOD_NAME,
             Self::SubscribeStreamGraphChanges(_) => SubscribeStreamGraphChanges::METHOD_NAME,
             Self::SubscribeStreamActionChanges(_) => SubscribeStreamActionChanges::METHOD_NAME,
             Self::DescribeRuntime(_) => DescribeRuntime::METHOD_NAME,

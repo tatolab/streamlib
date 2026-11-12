@@ -73,6 +73,25 @@ thread_local! {
         const { RefCell::new(None) };
 }
 
+/// How many project log writes a listener may fall behind by before it is told it missed some.
+const PROJECT_LOG_WRITES_HELD_FOR_A_SLOW_LISTENER: usize = 256;
+
+/// The broadcast each project's directory, symlinks resolved, is sent on once the drain worker
+/// has handed new records of its log to the OS, so a reader of its log finds them.
+fn project_log_writes_announced_in_this_process() -> &'static tokio::sync::broadcast::Sender<PathBuf>
+{
+    static PROJECT_LOG_WRITES: OnceLock<tokio::sync::broadcast::Sender<PathBuf>> = OnceLock::new();
+    PROJECT_LOG_WRITES.get_or_init(|| {
+        tokio::sync::broadcast::channel(PROJECT_LOG_WRITES_HELD_FOR_A_SLOW_LISTENER).0
+    })
+}
+
+/// Hear the directory, symlinks resolved, of each project whose log has new records to read, at
+/// most once per drain worker flush; a listener that falls behind is told how many it lagged.
+pub fn listen_for_each_project_log_written() -> tokio::sync::broadcast::Receiver<PathBuf> {
+    project_log_writes_announced_in_this_process().subscribe()
+}
+
 /// The route of each project a route is open for in this process, so every
 /// stream and action of one project shares one file.
 fn project_log_routes_open_in_this_process()
@@ -286,6 +305,16 @@ impl ProjectLogRoute {
             && let Some(writer) = jsonl_log_file.writer_while_open.lock().as_mut()
         {
             let _ = writer.flush_and_fsync();
+        }
+    }
+
+    /// Tell each listener of [`listen_for_each_project_log_written`] this project's log has new
+    /// records to read; the runtime's own log tells none.
+    pub(crate) fn announce_its_log_written(&self) {
+        if let ProjectLogRouteOwner::Project(project_directory) = &self.owner
+            && self.jsonl_log_file.is_some()
+        {
+            let _ = project_log_writes_announced_in_this_process().send(project_directory.clone());
         }
     }
 }

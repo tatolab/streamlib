@@ -509,6 +509,17 @@ Subscribe the connection to the live graphs of `streams`, by stream id, each loa
 - Result: `SubscribeStreamGraphChangesResult`
 - Errors: `1` refused, `2` failed
 
+### `subscribe_project_log_records`
+
+Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
+
+Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+
+- Since contract version 2, experimental.
+- Params: `SubscribeProjectLogRecordsRequest`
+- Result: `SubscribeProjectLogRecordsResult`
+- Errors: `1` refused, `2` failed
+
 ### `describe_runtime`
 
 Describe this runtime: its version, its build id, how long it has been up and where it logs.
@@ -881,3 +892,11 @@ A stream action changed, which `describe_stream_action` describes, or `missed`.
 - Sent after `subscribe_stream_action_changes`.
 - Since contract version 2, experimental.
 - Params: `StreamActionChangedNotificationParams`
+
+### `project_log_records_written`
+
+A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.
+
+- Sent after `subscribe_project_log_records`.
+- Since contract version 2, experimental.
+- Params: `ProjectLogRecordsWrittenNotificationParams`

@@ -5,6 +5,7 @@
 //! graphs, read from `PUBSUB` on each stream's topic, and the stream actions.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -24,6 +25,8 @@ use uuid::Uuid;
 /// The subscriptions of one connection that stays open to be sent notifications.
 pub(crate) struct ControlSubscriptionsOfOneConnection {
     subscribed_projects: Mutex<BTreeSet<Uuid>>,
+    subscribed_project_logs_by_directory_with_symlinks_resolved:
+        Mutex<BTreeMap<PathBuf, BTreeSet<PathBuf>>>,
     followed_stream_graphs: Mutex<BTreeMap<String, Option<StreamGraphFollowedOnOneLoad>>>,
     stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
     subscribed_to_stream_actions: AtomicBool,
@@ -34,6 +37,12 @@ impl std::fmt::Debug for ControlSubscriptionsOfOneConnection {
         formatter
             .debug_struct("ControlSubscriptionsOfOneConnection")
             .field("subscribed_projects", &*self.subscribed_projects.lock())
+            .field(
+                "subscribed_project_logs_by_directory_with_symlinks_resolved",
+                &*self
+                    .subscribed_project_logs_by_directory_with_symlinks_resolved
+                    .lock(),
+            )
             .field(
                 "followed_stream_graphs",
                 &self
@@ -64,6 +73,7 @@ impl ControlSubscriptionsOfOneConnection {
     ) -> Self {
         Self {
             subscribed_projects: Mutex::new(BTreeSet::new()),
+            subscribed_project_logs_by_directory_with_symlinks_resolved: Mutex::new(BTreeMap::new()),
             followed_stream_graphs: Mutex::new(BTreeMap::new()),
             stream_graph_changes_to_the_connection,
             subscribed_to_stream_actions: AtomicBool::new(false),
@@ -85,6 +95,53 @@ impl ControlSubscriptionsOfOneConnection {
         let mut subscribed_projects = self.subscribed_projects.lock();
         subscribed_projects.extend(projects);
         subscribed_projects.iter().copied().collect()
+    }
+
+    /// The project in `project_directory_with_symlinks_resolved`, by each directory the connection
+    /// subscribed to its log as; none when it did not subscribe to it.
+    pub(crate) fn the_project_log_as_subscribed(
+        &self,
+        project_directory_with_symlinks_resolved: &Path,
+    ) -> Vec<PathBuf> {
+        self.subscribed_project_logs_by_directory_with_symlinks_resolved
+            .lock()
+            .get(project_directory_with_symlinks_resolved)
+            .map(|directories_as_subscribed| directories_as_subscribed.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every project, by each directory the connection subscribed to its log as.
+    pub(crate) fn every_subscribed_project_log(&self) -> Vec<PathBuf> {
+        self.subscribed_project_logs_by_directory_with_symlinks_resolved
+            .lock()
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
+    /// Subscribe to the log of each project, keyed by its directory as subscribed and with
+    /// symlinks resolved, answering every directory a project log is subscribed to as.
+    pub(crate) fn subscribe_to_the_project_logs(
+        &self,
+        project_directories_as_subscribed_and_with_symlinks_resolved: Vec<(PathBuf, PathBuf)>,
+    ) -> Vec<PathBuf> {
+        let mut subscribed_project_logs = self
+            .subscribed_project_logs_by_directory_with_symlinks_resolved
+            .lock();
+        for (project_directory_as_subscribed, project_directory_with_symlinks_resolved) in
+            project_directories_as_subscribed_and_with_symlinks_resolved
+        {
+            subscribed_project_logs
+                .entry(project_directory_with_symlinks_resolved)
+                .or_default()
+                .insert(project_directory_as_subscribed);
+        }
+        subscribed_project_logs
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     /// Follow the live graph of each stream, as it is loaded now, answering every stream

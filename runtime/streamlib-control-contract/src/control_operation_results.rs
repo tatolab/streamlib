@@ -35,6 +35,15 @@ pub struct SubscribeStreamGraphChangesResult {
     pub streams: Vec<String>,
 }
 
+/// What `subscribe_project_log_records` answers: the projects the connection is now told of new
+/// log records of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeProjectLogRecordsResult {
+    /// Every project the connection is subscribed to, by its directory as the connection spelled
+    /// it, this call's among them.
+    pub project_directories: Vec<std::path::PathBuf>,
+}
+
 /// What `subscribe_stream_action_changes` answers: the actions under way when the subscription
 /// began, which the client describes once to follow from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

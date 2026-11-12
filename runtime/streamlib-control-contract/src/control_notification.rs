@@ -218,11 +218,49 @@ impl ControlNotification for StreamActionChanged {
     ];
 }
 
+/// What a `project_log_records_written` tells of a project's log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectLogRecordsChangeKindOnTheWire {
+    /// The runtime wrote new records to the project's log.
+    Written,
+    /// The connection fell behind and may have missed a write.
+    Missed,
+}
+
+/// `project_log_records_written`'s params.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectLogRecordsWrittenNotificationParams {
+    /// The project, by its directory as the connection spelled it to
+    /// `subscribe_project_log_records`; once for each spelling of one project subscribed.
+    pub project_directory: std::path::PathBuf,
+    /// `written`, or `missed` when the connection fell behind; either way the client reads `logs`
+    /// on from its cursor.
+    pub change: ProjectLogRecordsChangeKindOnTheWire,
+}
+
+/// `project_log_records_written`: a subscribed project's log has new records to read.
+pub struct ProjectLogRecordsWritten;
+
+impl ControlNotification for ProjectLogRecordsWritten {
+    type Params = ProjectLogRecordsWrittenNotificationParams;
+    const METHOD_NAME: &'static str = "project_log_records_written";
+    const ONE_LINE_DOC: &'static str = "A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.";
+    const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_project_log_records";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const EXPOSURES: &'static [ControlOperationExposure] = &[
+        ControlOperationExposure::Studio,
+        ControlOperationExposure::Public,
+    ];
+}
+
 /// Every notification the contract declares.
 pub const CONTROL_NOTIFICATIONS: &[ControlNotificationDeclaration] = &[
     ControlNotificationDeclaration::of::<ProjectChanged>(),
     ControlNotificationDeclaration::of::<StreamGraphChanged>(),
     ControlNotificationDeclaration::of::<StreamActionChanged>(),
+    ControlNotificationDeclaration::of::<ProjectLogRecordsWritten>(),
 ];
 
 #[cfg(test)]

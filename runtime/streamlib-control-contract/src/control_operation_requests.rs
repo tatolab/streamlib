@@ -670,6 +670,15 @@ pub struct SubscribeStreamGraphChangesRequest {
     pub streams: Vec<String>,
 }
 
+/// `subscribe_project_log_records`' params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribeProjectLogRecordsRequest {
+    /// The projects, by absolute directory, whose new log records the connection is told of;
+    /// refused when empty or when one is relative.
+    pub project_directories: Vec<PathBuf>,
+}
+
 /// `subscribe_stream_action_changes`' params, which name nothing.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
