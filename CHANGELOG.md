@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.81](https://github.com/tatolab/streamlib/compare/v0.68.80...v0.68.81) (2026-11-12)
+
+
+### Features
+
+* **control:** push drops, raises and link states on stream_graph_changed ([279a92c](https://github.com/tatolab/streamlib/commit/279a92c1032a751cb625d908dbbdf040a9eb436d))
+* **control:** push drops, raises and link states on stream_graph_changed ([d7b0033](https://github.com/tatolab/streamlib/commit/d7b0033e46b86d3e2b6c518189f93a8099a5bf29)), closes [#3629](https://github.com/tatolab/streamlib/issues/3629)
+
 ## [0.68.80](https://github.com/tatolab/streamlib/compare/v0.68.79...v0.68.80) (2026-11-12)
 
 
