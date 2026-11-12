@@ -18,9 +18,17 @@ export interface ControlOperationAbortSignal {
   removeEventListener(type: "abort", listener: () => void): void;
 }
 
-/** How one call waits: aborting `signal` rejects it with the signal's reason and drops a late answer. */
+/** The source text `JSON.parse` hands a reviver beside a primitive value. */
+export interface ControlOperationResultReviverContext {
+  readonly source?: string;
+}
+
+/** How one call waits and reads its answer. */
 export interface ControlOperationCallOptions {
+  /** Aborting it rejects the call with the signal's reason and drops a late answer. */
   signal?: ControlOperationAbortSignal;
+  /** Parses the answer with this `JSON.parse` reviver, so a caller can keep a number's digits as written; each value in the result is what the reviver returned for it. */
+  resultReviver?: (key: string, value: unknown, context?: ControlOperationResultReviverContext) => unknown;
 }
 
 /** How to reach a runtime's local API and who the client is. */

@@ -67,7 +67,7 @@ export class TatolabRuntimeControlClient {
     }
   }
 
-  call(method, params, { signal } = {}) {
+  call(method, params, { signal, resultReviver } = {}) {
     if (this.#upgradedSocket.destroyed || this.#upgradedSocket.writableEnded) {
       return Promise.reject(new Error(`the control connection is closed; \`${method}\` was not sent`));
     }
@@ -84,6 +84,7 @@ export class TatolabRuntimeControlClient {
       signal?.addEventListener("abort", forgetTheCallWhenAborted, { once: true });
       this.#callsAwaitingAnAnswerById.set(requestId, {
         method,
+        resultReviver,
         resolveResult: (result) => {
           stopListeningForAnAbort();
           resolveResult(result);
@@ -145,8 +146,10 @@ export class TatolabRuntimeControlClient {
     this.#callsAwaitingAnAnswerById.delete(message.id);
     if (message.error !== undefined) {
       callAwaitingThisAnswer.rejectResult(new ControlOperationError(callAwaitingThisAnswer.method, message.error));
-    } else {
+    } else if (callAwaitingThisAnswer.resultReviver === undefined) {
       callAwaitingThisAnswer.resolveResult(message.result);
+    } else {
+      callAwaitingThisAnswer.resolveResult(resultOfTheAnswerRevivedWith(line, callAwaitingThisAnswer.resultReviver));
     }
   }
 
@@ -158,7 +161,11 @@ export class TatolabRuntimeControlClient {
   }
 }
 
-export function callOneControlOperation({ socketPath, clientName }, method, params, { signal } = {}) {
+function resultOfTheAnswerRevivedWith(answerText, resultReviver) {
+  return JSON.parse(answerText, resultReviver).result;
+}
+
+export function callOneControlOperation({ socketPath, clientName }, method, params, { signal, resultReviver } = {}) {
   const requestBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   return new Promise((resolveResult, rejectResult) => {
     const postRequest = sendAnHttpRequest(
@@ -194,7 +201,7 @@ export function callOneControlOperation({ socketPath, clientName }, method, para
           if (answer.error !== undefined) {
             rejectResult(new ControlOperationError(method, answer.error));
           } else {
-            resolveResult(answer.result);
+            resolveResult(resultReviver === undefined ? answer.result : resultOfTheAnswerRevivedWith(answerText, resultReviver));
           }
         });
       },

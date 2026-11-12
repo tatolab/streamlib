@@ -51,6 +51,9 @@ export async function aClientCallingEveryOperation(
     { signal: callAbortSignal },
   );
   const describedUntilAborted: DescribeRuntimeToolResult = await client.call("describe_runtime", {}, { signal: callAbortSignal });
+  const describedWithItsDigitsAsWritten = await client.call("describe_runtime", {}, {
+    resultReviver: (_key, value, context) => (typeof value === "number" ? (context?.source ?? String(value)) : value),
+  });
   const connectedUntilAborted = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check", signal: callAbortSignal });
   await connectedUntilAborted.close();
   const stopHearing = client.onNotification("project_changed", (params: ProjectChangedNotificationParams) => {
@@ -78,7 +81,7 @@ export async function aClientCallingEveryOperation(
     }
   }
   const everyMethodName: readonly ControlOperationMethodName[] = CONTROL_OPERATION_METHOD_NAMES;
-  void [discovered, subscribed, described, exportedGraph, transacted, added, connected, describedOverAPost, describedUntilAborted];
+  void [discovered, subscribed, described, exportedGraph, transacted, added, connected, describedOverAPost, describedUntilAborted, describedWithItsDigitsAsWritten];
   void everyMethodName;
   await client.close();
 }
