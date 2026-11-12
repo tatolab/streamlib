@@ -155,6 +155,13 @@ impl StreamRecord {
         self.failed_because.is_some()
     }
 
+    /// Whether the stream is failed for crashing the runtime, so a start builds none of it.
+    pub fn is_failed_for_crashing_the_runtime(&self) -> bool {
+        self.is_failed()
+            && self.runtime_crashes_in_a_row_implicating_it
+                >= super::RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM
+    }
+
     /// The state the stream is listed in while it is not loaded: failed
     /// before closed, closed before stopped, and running otherwise.
     pub fn listing_state(&self) -> StreamListingState {

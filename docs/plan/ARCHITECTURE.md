@@ -233,9 +233,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   A committed edit is written to the document, so it is kept on the next start, and a live
   edit is gone on it; picking up a document changed on disk is a `reload`; a
   stream implicated in the runtime's last two crashes in a row — a clean stop of the runtime or
-  a manual restart is no crash and resets the count — or one that cannot re-load at start (a
-  venv that cannot be made, a type that will not describe) is `failed`, shown with its reason
-  and skipped at start until `tatolab reload` retries it; a first load whose document will
+  a manual restart is no crash and resets the count — is `failed`, shown with its reason and
+  built at no start until a play or `tatolab reload` retries it; one that cannot re-load at
+  start (a venv that cannot be made, a type that will not describe, a refused start) is `failed`
+  and held stopped from its document, its graph there to read and edit, because nothing a
+  person made ever disappears (owner, 2026-11-11); a first load whose document will
   not load is recorded `failed` too, and a venv whose interpreter does not run is made again rather than
   failing a re-load (owner, 2026-10-02 and 2026-10-29). `tatolab streams` lists all three —
   running, stopped, failed. Where no installer put a runtime, `tatolabd` runs in a terminal or
