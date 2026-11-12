@@ -124,7 +124,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
-            | StreamGraphOperation::EditInsideFragment { .. }
+            | StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => {
@@ -161,7 +161,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::RemoveGroup { .. }
             | StreamGraphOperation::FoldIntoFragment { .. }
             | StreamGraphOperation::UnfoldFragment { .. }
-            | StreamGraphOperation::EditInsideFragment { .. }
+            | StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream { .. }
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => true,
@@ -197,7 +197,6 @@ impl LoadedStreamInThisRuntime {
         let graph_as_drawn = self.to_json()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
-        self.name_a_node_added_inside_a_fragment(&graph_document, &mut graph_operation)?;
         graph_document
             .apply(&graph_operation)
             .map_err(Error::GraphError)?;
@@ -221,39 +220,20 @@ impl LoadedStreamInThisRuntime {
         Ok(graph_operation)
     }
 
-    /// Name the node an edit inside a fragment adds, as an add to the stream's own level names
-    /// it, against the names of the fragment's level.
-    fn name_a_node_added_inside_a_fragment(
+    /// The name a node of type `node_type` added with none takes at a level whose nodes are
+    /// named `names_at_the_level`, as this stream resolves the type.
+    pub(crate) fn the_name_a_node_of_the_type_takes_at_a_level(
         &self,
-        graph_document: &StreamGraphDocument,
-        graph_operation: &mut StreamGraphOperation,
-    ) -> Result<()> {
-        let (level, edit) = graph_operation.the_edit_at_its_own_level_mut();
-        let StreamGraphOperation::AddNode { node, .. } = edit else {
-            return Ok(());
-        };
-        if level.is_empty() {
-            return Ok(());
-        }
-        if !node.name.is_empty() {
-            node.name = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
-            return Ok(());
-        }
-        let names_at_the_level: HashSet<String> = graph_document
-            .the_level_inside(&level)
-            .map_err(Error::GraphError)?
-            .nodes()
-            .into_iter()
-            .map(|held| held.name)
-            .collect();
-        node.name = the_default_name_a_new_node_takes(
+        node_type: &str,
+        names_at_the_level: &HashSet<String>,
+    ) -> Result<String> {
+        the_default_name_a_new_node_takes(
             self.node_types_this_stream_resolves(),
-            &ProcessorClassImportPath::new(&node.node_type).map_err(|refusal| {
-                Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+            &ProcessorClassImportPath::new(node_type).map_err(|refusal| {
+                Error::GraphError(format!("node type `{node_type}`: {refusal}"))
             })?,
             |candidate| names_at_the_level.contains(candidate),
-        )?;
-        Ok(())
+        )
     }
 
     /// Take out of the live graph the node of UUID `node` a refused add left in it, if it left

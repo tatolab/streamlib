@@ -30,7 +30,7 @@ mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_document;
 mod stream_graph_fragment_fold;
-mod stream_graph_fragment_level;
+mod stream_graph_placed_stream_level;
 mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
 
@@ -129,8 +129,10 @@ pub use stream_graph_document::{
     is_a_graph_interface_node_type,
 };
 pub use stream_graph_fragment_fold::{
-    AUTHORED_FRAGMENT_NODE_TYPE, StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
+    StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
+    StreamGraphSelectionCollapsedIntoAPlacedStream,
 };
+pub use stream_graph_placed_stream_level::StreamGraphLevelOfAPlacedStream;
 pub use stream_graph_studio_contract::{
     STUDIO_CONTRACT_VERSION, StreamGraphDocumentNote, StreamGraphNodeStudioFields,
     StreamGraphNoteFields, StudioCanvasPair,

@@ -14,7 +14,7 @@ use crate::StudioCanvasPair;
 /// How a graph action's `stream` is described to its caller.
 pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.";
 /// How a graph action's `level` is described to its caller.
-pub const GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION: &str = "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.";
+pub const GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION: &str = "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.";
 /// How a graph action's `node` is described to its caller.
 pub const GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.";
 /// How `import_graph_generator`'s `generator` is described to its caller.
@@ -352,9 +352,9 @@ pub enum StreamGraphAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
-    /// Move nodes of one level of the stream, and the links between them, into one new
-    /// authored fragment, each link that crossed the selection carried through a `GraphInput`
-    /// or `GraphOutput` inside it.
+    /// Save nodes of one level of the stream, and the links between them, as a new stream of the
+    /// project, `streams/<name>.graph.json`, and place it where they were, each link that crossed
+    /// the selection carried through a `GraphInput` or `GraphOutput` of the new stream.
     CollapseSelectionIntoSubgraph {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,
@@ -371,7 +371,7 @@ pub enum StreamGraphAction {
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
-                description = "The subgraph node's name, lowercase URL-safe, refused when a node outside the selection has it."
+                description = "The subgraph node's name, lowercase URL-safe, and the new stream's, `streams/<name>.graph.json`; refused when a node outside the selection or a stream of the project has it."
             )
         )]
         name: String,
@@ -385,9 +385,9 @@ pub enum StreamGraphAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
-    /// Replace a fragment node of one level of the stream with the nodes and links it places,
-    /// as plain nodes no refresh reaches.
-    UnlockGeneratorFragment {
+    /// Replace a subgraph node of one level of the stream with the nodes and links it places, as
+    /// plain nodes no refresh or edit of a placed stream reaches.
+    UnlockSubgraph {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
@@ -396,7 +396,7 @@ pub enum StreamGraphAction {
         #[cfg_attr(
             feature = "mcp-tool-json-schema",
             schemars(
-                description = "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+                description = "The subgraph node, by its UUID: one holding a graph generator's output, or one placing a stream, whose nodes come back as a copy under new UUIDs."
             )
         )]
         fragment: String,
@@ -468,7 +468,7 @@ impl StreamGraphAction {
             | Self::SetGroupFields { level, .. }
             | Self::RemoveGroup { level, .. }
             | Self::CollapseSelectionIntoSubgraph { level, .. }
-            | Self::UnlockGeneratorFragment { level, .. } => level,
+            | Self::UnlockSubgraph { level, .. } => level,
             Self::ImportGraphGenerator { .. }
             | Self::UseDependencyStream { .. }
             | Self::AddNote { .. }
@@ -495,7 +495,7 @@ impl StreamGraphAction {
             | Self::RemoveGroup { stream, .. }
             | Self::UseDependencyStream { stream, .. }
             | Self::CollapseSelectionIntoSubgraph { stream, .. }
-            | Self::UnlockGeneratorFragment { stream, .. }
+            | Self::UnlockSubgraph { stream, .. }
             | Self::AddNote { stream, .. }
             | Self::SetNoteFields { stream, .. }
             | Self::RemoveNote { stream, .. } => *stream,

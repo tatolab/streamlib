@@ -118,6 +118,21 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn the_name_a_node_added_with_none_takes(
+            &self,
+            _node_type: &str,
+            _names_at_the_level: &::std::collections::HashSet<String>,
+        ) -> ::streamlib::sdk::error::Result<String> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
+        fn refuse_a_node_a_live_add_would_refuse(
+            &self,
+            _node_type: &str,
+            _node_name: &str,
+            _config: &::serde_json::Value,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -583,6 +598,21 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
             &self,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn the_name_a_node_added_with_none_takes(
+            &self,
+            node_type: &str,
+            _names_at_the_level: &::std::collections::HashSet<String>,
+        ) -> ::streamlib::sdk::error::Result<String> {
+            Ok(node_type.rsplit(':').next().unwrap_or(node_type).to_lowercase())
+        }
+        fn refuse_a_node_a_live_add_would_refuse(
+            &self,
+            _node_type: &str,
+            _node_name: &str,
+            _config: &::serde_json::Value,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             Box::pin(async { Ok(()) })
         }
