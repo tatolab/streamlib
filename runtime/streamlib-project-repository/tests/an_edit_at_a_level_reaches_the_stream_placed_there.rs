@@ -294,6 +294,47 @@ fn a_config_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
 }
 
 #[test]
+fn studio_metadata_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
+    let level = the_level(&[uuid(LOOK)]).unwrap();
+    let drawn_tint = drawn_inside(LOOK, TINT).to_string();
+    let speck = Uuid::from_u128(0x201);
+
+    let mut speck_naming_drawn_tint = a_plain_node(speck, "speck");
+    speck_naming_drawn_tint
+        .studio
+        .metadata
+        .insert("id".to_owned(), json!(drawn_tint));
+    let add = level
+        .the_operation_on_the_document(StreamGraphOperation::AddNode {
+            node: speck_naming_drawn_tint,
+            links: Vec::new(),
+        })
+        .unwrap();
+    let StreamGraphOperation::AddNode { node, .. } = &add else {
+        panic!("an add is made as an add");
+    };
+    assert_eq!(node.studio.metadata["id"], json!(drawn_tint));
+
+    let mut speck_naming_tint = a_plain_node(speck, "speck");
+    speck_naming_tint
+        .studio
+        .metadata
+        .insert("id".to_owned(), json!(TINT));
+    let add = StreamGraphOperation::AddNode {
+        node: speck_naming_tint,
+        links: Vec::new(),
+    };
+    let mut added = level.document.clone();
+    added.apply(&add).unwrap();
+    let StreamGraphOperation::AddNode { node, .. } =
+        level.the_operation_as_drawn(&add, &added).unwrap()
+    else {
+        panic!("an add is drawn as an add");
+    };
+    assert_eq!(node.studio.metadata["id"], json!(TINT));
+}
+
+#[test]
 fn a_name_at_a_placed_level_clashes_only_with_a_name_of_the_placed_stream() {
     let level = the_level(&[uuid(LOOK)]).unwrap();
     let mut placed = level.document.clone();

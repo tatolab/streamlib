@@ -363,7 +363,8 @@ fn the_operation_with_each_node_and_group_renamed(
 
 /// Each node and group UUID `value` names, at any depth, replaced by its value in `renamed`: a
 /// node's or group's `id`, a link end's or an operation's `node`, a `group`, and each entry of a
-/// `nodes` list. A node's `config` and `pins` are values of its own and are left as they are.
+/// `nodes` list. A node's `config`, `pins` and `studio.metadata` are values of its own and are left
+/// as they are.
 fn each_node_and_group_reference_renamed(value: &mut Value, renamed: &HashMap<String, String>) {
     let rename = |text: &mut String| {
         if let Some(new_text) = renamed.get(text.as_str()) {
@@ -374,7 +375,7 @@ fn each_node_and_group_reference_renamed(value: &mut Value, renamed: &HashMap<St
         Value::Object(object) => {
             for (key, entry) in object.iter_mut() {
                 match (key.as_str(), entry) {
-                    ("config" | "pins", _) => {}
+                    ("config" | "pins" | "metadata", _) => {}
                     ("id" | "node" | "group", Value::String(text)) => rename(text),
                     ("nodes", Value::Array(entries)) => {
                         for entry in entries {
