@@ -1,6 +1,6 @@
 [package]
 name = "streamlib-h265"
-version = "0.68.75"
+version = "0.68.76"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
