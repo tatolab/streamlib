@@ -37,6 +37,182 @@ Link an output port to an input port in one loaded stream, as one transaction, e
 - Result: `GraphTransactionToolResult`
 - Errors: `1` refused, `2` failed
 
+### `import_graph_generator`
+
+Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
+
+Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.
+
+- Since contract version 1, stable.
+- Params: `ImportGraphGeneratorRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `remove_node`
+
+Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.
+
+Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it; its links go with it, and undo brings both back.
+
+- Since contract version 1, stable.
+- Params: `OneNodeGraphEditRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `disconnect`
+
+Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
+
+Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
+
+- Since contract version 1, stable.
+- Params: `OneLinkGraphEditRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_node_config`
+
+Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+
+Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands.
+
+- Since contract version 1, stable.
+- Params: `SetNodeConfigRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_pin_value`
+
+Set the value one of a node's inputs holds while no link feeds it, as one transaction.
+
+Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.
+
+- Since contract version 1, stable.
+- Params: `SetPinValueRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `rename_node`
+
+Give a node another name, a label, as one transaction.
+
+Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while another node's config names it by its name.
+
+- Since contract version 1, stable.
+- Params: `RenameNodeRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_studio_fields`
+
+Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
+
+Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole. The fields are held to the studio contract: a key of the wrong shape, or any key outside it, is refused by name. It changes nothing that runs.
+
+- Since contract version 1, stable.
+- Params: `SetStudioFieldsRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_exposed_config_fields`
+
+Replace the config fields a node takes as inputs, as one transaction.
+
+Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.
+
+- Since contract version 1, stable.
+- Params: `SetExposedConfigFieldsRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `add_group`
+
+Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+
+Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`.
+
+- Since contract version 1, stable.
+- Params: `AddGroupRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_group_fields`
+
+Set a labelled group's title, description or colour, as one transaction.
+
+Set a labelled group's title, description or colour, as one transaction; a field omitted is kept. Its nodes stay as they are.
+
+- Since contract version 1, stable.
+- Params: `SetGroupFieldsRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `collapse_selection_into_subgraph`
+
+Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
+
+Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.
+
+- Since contract version 1, stable.
+- Params: `CollapseSelectionIntoSubgraphRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `unlock_generator_fragment`
+
+Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+
+Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.
+
+- Since contract version 1, stable.
+- Params: `UnlockGeneratorFragmentRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `add_note`
+
+Place a canvas note on a loaded stream's graph, as one transaction.
+
+Place a canvas note on a loaded stream's graph, as one transaction: text at a position and size Tato Studio draws it at, beside the nodes rather than on one. It changes nothing that runs. Answers as `transact` does, the new note's UUID under `added_notes`.
+
+- Since contract version 1, stable.
+- Params: `AddNoteRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `set_note_fields`
+
+Set a canvas note's text, position or size, as one transaction.
+
+Set a canvas note's text, position or size, as one transaction; a field omitted is kept.
+
+- Since contract version 1, stable.
+- Params: `SetNoteFieldsRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `remove_note`
+
+Take a canvas note off a loaded stream's graph, as one transaction.
+
+Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it back as it was.
+
+- Since contract version 1, stable.
+- Params: `RemoveNoteRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
+### `remove_group`
+
+Take out a labelled group, as one transaction.
+
+Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it.
+
+- Since contract version 1, stable.
+- Params: `RemoveGroupRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed
+
 ## observe
 
 ### `discover`

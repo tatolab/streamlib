@@ -26,20 +26,28 @@ pub use control_operation::{
     ControlOperationStability,
 };
 pub use control_operation_requests::{
-    AUTHOR_ARGUMENT_DESCRIPTION, AddNodeRequest, DescribeRuntimeRequest, DiscoverRequest,
+    AUTHOR_ARGUMENT_DESCRIPTION, AddGroupRequest, AddNodeRequest, AddNoteRequest,
+    CollapseSelectionIntoSubgraphRequest, DescribeRuntimeRequest, DiscoverRequest,
     GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GRAPH_STREAM_ARGUMENT_DESCRIPTION, GraphEditMode,
-    GraphRequest, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ListStreamsRequest,
-    OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    GraphRequest, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ImportGraphGeneratorRequest,
+    ListStreamsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
+    OneProjectByItsDirectoryRequest, OneStreamActionRequest,
     PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorArgument,
-    ProjectTransactionAuthorKindArgument, STREAM_ACTION_ARGUMENT_DESCRIPTION,
-    SubscribeProjectChangesRequest, TransactRequest,
+    ProjectTransactionAuthorKindArgument, RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest,
+    STREAM_ACTION_ARGUMENT_DESCRIPTION, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
+    SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
+    SubscribeProjectChangesRequest, TransactRequest, UnlockGeneratorFragmentRequest,
 };
 pub use control_operation_results::{
     ControlContractVersionMismatch, DiscoverResult, SubscribeProjectChangesResult,
 };
 pub use control_operations::{
-    AddNode, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, CancelStreamAction, CloseProject,
-    Connect, ControlOperationCall, ControlOperationCallParseRefusal, DescribeRuntime,
-    DescribeStreamAction, Discover, Graph, ListStreams, OpenProject, PausePlayback, ReloadProject,
-    RemoveProject, ResumePlayback, StartPlayback, StopPlayback, SubscribeProjectChanges, Transact,
+    AddGroup, AddNode, AddNote, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, CancelStreamAction,
+    CloseProject, CollapseSelectionIntoSubgraph, Connect, ControlOperationCall,
+    ControlOperationCallParseRefusal, DescribeRuntime, DescribeStreamAction, Disconnect, Discover,
+    Graph, ImportGraphGenerator, ListStreams, OpenProject, PausePlayback, ReloadProject,
+    RemoveGroup, RemoveNode, RemoveNote, RemoveProject, RenameNode, ResumePlayback,
+    SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNoteFields, SetPinValue,
+    SetStudioFields, StartPlayback, StopPlayback, SubscribeProjectChanges, Transact,
+    UnlockGeneratorFragment,
 };

@@ -347,6 +347,678 @@
       ]
     },
     {
+      "name": "import_graph_generator",
+      "summary": "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.",
+      "description": "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ImportGraphGeneratorRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "import_graph_generator_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "remove_node",
+      "summary": "Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.",
+      "description": "Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it; its links go with it, and undo brings both back.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/OneNodeGraphEditRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "remove_node_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "disconnect",
+      "summary": "Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.",
+      "description": "Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/OneLinkGraphEditRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "disconnect_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_node_config",
+      "summary": "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.",
+      "description": "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetNodeConfigRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_node_config_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_pin_value",
+      "summary": "Set the value one of a node's inputs holds while no link feeds it, as one transaction.",
+      "description": "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetPinValueRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_pin_value_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "rename_node",
+      "summary": "Give a node another name, a label, as one transaction.",
+      "description": "Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while another node's config names it by its name.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/RenameNodeRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "rename_node_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_studio_fields",
+      "summary": "Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.",
+      "description": "Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole. The fields are held to the studio contract: a key of the wrong shape, or any key outside it, is refused by name. It changes nothing that runs.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetStudioFieldsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_studio_fields_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_exposed_config_fields",
+      "summary": "Replace the config fields a node takes as inputs, as one transaction.",
+      "description": "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetExposedConfigFieldsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_exposed_config_fields_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "add_group",
+      "summary": "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.",
+      "description": "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AddGroupRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "add_group_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_group_fields",
+      "summary": "Set a labelled group's title, description or colour, as one transaction.",
+      "description": "Set a labelled group's title, description or colour, as one transaction; a field omitted is kept. Its nodes stay as they are.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetGroupFieldsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_group_fields_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "collapse_selection_into_subgraph",
+      "summary": "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.",
+      "description": "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/CollapseSelectionIntoSubgraphRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "collapse_selection_into_subgraph_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "unlock_generator_fragment",
+      "summary": "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.",
+      "description": "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/UnlockGeneratorFragmentRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "unlock_generator_fragment_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "add_note",
+      "summary": "Place a canvas note on a loaded stream's graph, as one transaction.",
+      "description": "Place a canvas note on a loaded stream's graph, as one transaction: text at a position and size Tato Studio draws it at, beside the nodes rather than on one. It changes nothing that runs. Answers as `transact` does, the new note's UUID under `added_notes`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AddNoteRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "add_note_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "set_note_fields",
+      "summary": "Set a canvas note's text, position or size, as one transaction.",
+      "description": "Set a canvas note's text, position or size, as one transaction; a field omitted is kept.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SetNoteFieldsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "set_note_fields_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "remove_note",
+      "summary": "Take a canvas note off a loaded stream's graph, as one transaction.",
+      "description": "Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it back as it was.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/RemoveNoteRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "remove_note_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
+      "name": "remove_group",
+      "summary": "Take out a labelled group, as one transaction.",
+      "description": "Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/RemoveGroupRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "remove_group_result",
+        "schema": {
+          "$ref": "#/components/schemas/GraphTransactionToolResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ]
+    },
+    {
       "name": "open_project",
       "summary": "Queue the open of a project: its streams are loaded and held with their playback stopped.",
       "description": "Open the project in `project_directory`: queue its open on its own stream action queue and answer at once with the action's id as `action`. The open reads its `tatolab-project.json` and each stream asset's graph document, makes the project's `.venv` with the uv the runtime carries when its `.venv/bin/python` does not run — however long uv takes — then loads each stream under its stream id, `<project>-<stream>-<hash>`, the hash over the project's UUID and the stream asset's UUID, and holds it with its playback stopped, recording each stream stopped or failed: a graph document that does not load, or a load that is refused, with its reason, and a `.venv` uv cannot make — uv's own words — failing every stream of the project. It starts no node. Once it is done, `graph`, every graph edit and the node catalog answer for each stream, and `start_playback` plays the project. The project stays open, held stopped or playing, across the runtime's restarts until `close_project`. It opens a project that was never opened, one `close_project` closed, and one whose every stream failed, retrying them. One project's actions run one at a time, in the order they were queued; different projects' run side by side. Follow the action with `describe_stream_action`, its streams with `list_streams` — `preparing`, with the action and its `step`, until it ends — and its records with `logs` given `action`. A directory that does not exist or holds no `tatolab-project.json` fails the action, never the call. Refused, with nothing queued: a `project_directory` that is not absolute, and a project open once its queued actions run, which `reload_project` refreshes.",
@@ -2562,6 +3234,1016 @@
           "target"
         ],
         "description": "The params of an edit naming one link: `connect`'s, and `disconnect`'s."
+      },
+      "ImportGraphGeneratorRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "generator": {
+            "type": "string",
+            "description": "The graph generator by its import path, `<module>:<function>`, a `@graph_generator` function the stream's own interpreter imports from its project, e.g. `generators.looks:soft_look`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fragment node's name, cast to lowercase URL-safe; the generator's own name when omitted. A top-level fragment of that name is refreshed, and any other node of that name refuses the import."
+          },
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The settings the generator promotes, by name, which it runs with and the fragment node keeps as its `config`. Omit for the generator's defaults."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "generator"
+        ],
+        "description": "`import_graph_generator`'s params."
+      },
+      "OneNodeGraphEditRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node"
+        ],
+        "description": "`remove_node`'s params."
+      },
+      "SetNodeConfigRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The node's new config, as the keys its type's schema declares; it replaces the old one whole."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "config"
+        ],
+        "description": "`set_node_config`'s params."
+      },
+      "SetPinValueRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "input": {
+            "type": "string",
+            "description": "The input's name, as `graph` lists it under the node's `ports.inputs`."
+          },
+          "value": {
+            "description": "The value the input holds while no link feeds it. Omit it, or send `null`, to take the value off."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "input"
+        ],
+        "description": "`set_pin_value`'s params."
+      },
+      "RenameNodeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "name": {
+            "type": "string",
+            "description": "The node's new name: cast to lowercase URL-safe, refused when another node has it. The node keeps its UUID."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "name"
+        ],
+        "description": "`rename_node`'s params."
+      },
+      "SetStudioFieldsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "studio": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "studio"
+        ],
+        "description": "`set_studio_fields`'s params."
+      },
+      "SetExposedConfigFieldsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
+          },
+          "exposed_config_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "exposed_config_fields"
+        ],
+        "description": "`set_exposed_config_fields`'s params."
+      },
+      "AddGroupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "title": {
+            "type": "string",
+            "description": "The group's title, which Tato Studio draws on its frame."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the group's nodes do, for the next person who reads the graph."
+          },
+          "colour": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The colour Tato Studio draws the group's frame with, e.g. `#3b82f6`."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The nodes that join it, each by the UUID `graph` lists as its `id`; a node of another group is refused."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "title",
+          "nodes"
+        ],
+        "description": "`add_group`'s params."
+      },
+      "SetGroupFieldsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "group": {
+            "type": "string",
+            "description": "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group's new title; kept when omitted."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the group's nodes do; kept when omitted, cleared by `\"\"`."
+          },
+          "colour": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group's new colour; kept when omitted, cleared by `\"\"`."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "group"
+        ],
+        "description": "`set_group_fields`'s params."
+      },
+      "CollapseSelectionIntoSubgraphRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The nodes collapsed, each by its UUID, all of the level `level` names and none of that level's own `GraphInput` or `GraphOutput` nodes."
+          },
+          "name": {
+            "type": "string",
+            "description": "The subgraph node's name, cast to lowercase URL-safe and refused when a node outside the selection has it."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "nodes",
+          "name"
+        ],
+        "description": "`collapse_selection_into_subgraph`'s params."
+      },
+      "UnlockGeneratorFragmentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "fragment": {
+            "type": "string",
+            "description": "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "fragment"
+        ],
+        "description": "`unlock_generator_fragment`'s params."
+      },
+      "AddNoteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "text": {
+            "type": "string",
+            "description": "What the note says, for the next person who reads the graph."
+          },
+          "position": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Where the note's top-left corner sits on the canvas, an `[x, y]` pair of numbers."
+          },
+          "size": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "The note's width and height on the canvas, a `[width, height]` pair of numbers."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "text",
+          "position",
+          "size"
+        ],
+        "description": "`add_note`'s params."
+      },
+      "SetNoteFieldsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "note": {
+            "type": "string",
+            "description": "The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers."
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the note says; kept when omitted."
+          },
+          "position": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Where the note's top-left corner sits, `[x, y]`; kept when omitted."
+          },
+          "size": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "The note's `[width, height]`; kept when omitted."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "note"
+        ],
+        "description": "`set_note_fields`'s params."
+      },
+      "RemoveNoteRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "note": {
+            "type": "string",
+            "description": "The canvas note, by the UUID `graph` lists under `notes` and `add_note` answers."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "note"
+        ],
+        "description": "`remove_note`'s params."
+      },
+      "RemoveGroupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream."
+          },
+          "group": {
+            "type": "string",
+            "description": "The labelled group, by the UUID `graph` lists under `groups` and `add_group` answers."
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphEditMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends."
+          },
+          "author": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionAuthorArgument"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept."
+          }
+        },
+        "required": [
+          "stream",
+          "group"
+        ],
+        "description": "`remove_group`'s params."
       },
       "OneProjectByItsDirectoryRequest": {
         "type": "object",

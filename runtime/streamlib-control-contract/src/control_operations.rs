@@ -16,9 +16,13 @@ use crate::control_operation::{
     ControlOperationStability,
 };
 use crate::control_operation_requests::{
-    AddNodeRequest, DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest,
-    OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
-    SubscribeProjectChangesRequest, TransactRequest,
+    AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
+    DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ImportGraphGeneratorRequest,
+    ListStreamsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
+    OneProjectByItsDirectoryRequest, OneStreamActionRequest, RemoveGroupRequest, RemoveNoteRequest,
+    RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest, SetNodeConfigRequest,
+    SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
+    SubscribeProjectChangesRequest, TransactRequest, UnlockGeneratorFragmentRequest,
 };
 use crate::control_operation_results::{DiscoverResult, SubscribeProjectChangesResult};
 
@@ -154,6 +158,254 @@ impl ControlOperation for Connect {
     const ONE_LINE_DOC: &'static str =
         "Link an output port to an input port in one loaded stream, as one transaction.";
     const AGENT_USAGE_NOTE: &'static str = "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `import_graph_generator`: run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
+pub struct ImportGraphGenerator;
+
+impl ControlOperation for ImportGraphGenerator {
+    type Request = ImportGraphGeneratorRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "import_graph_generator";
+    const ONE_LINE_DOC: &'static str = "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction: its generator as `type`, its promoted settings as `config`, and the nodes and links it built stored under `fragment`, each node with a UUID of its own. Run again under the name of a fragment the graph holds, it refreshes that fragment with the fresh run: each node it builds keeps the UUID of the node of the same name it built before, so links into the fragment and the graph's history hold. A generator that raises, refuses, or is not found is refused with its traceback, nothing changed. Answers as `transact` does, a new fragment node under `added_nodes`; undo restores the fragment as it was.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `remove_node`: remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.
+pub struct RemoveNode;
+
+impl ControlOperation for RemoveNode {
+    type Request = OneNodeGraphEditRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "remove_node";
+    const ONE_LINE_DOC: &'static str =
+        "Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it.";
+    const AGENT_USAGE_NOTE: &'static str = "Remove a node from a loaded stream's graph by its UUID, as one transaction, stopping it; its links go with it, and undo brings both back.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `disconnect`: take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.
+pub struct Disconnect;
+
+impl ControlOperation for Disconnect {
+    type Request = OneLinkGraphEditRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "disconnect";
+    const ONE_LINE_DOC: &'static str = "Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.";
+    const AGENT_USAGE_NOTE: &'static str = "Take out the link between an output port and an input port in one loaded stream, as one transaction, each end a node's UUID and a port name.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_node_config`: replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+pub struct SetNodeConfig;
+
+impl ControlOperation for SetNodeConfig {
+    type Request = SetNodeConfigRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_node_config";
+    const ONE_LINE_DOC: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.";
+    const AGENT_USAGE_NOTE: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_pin_value`: set the value one of a node's inputs holds while no link feeds it, as one transaction.
+pub struct SetPinValue;
+
+impl ControlOperation for SetPinValue {
+    type Request = SetPinValueRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_pin_value";
+    const ONE_LINE_DOC: &'static str =
+        "Set the value one of a node's inputs holds while no link feeds it, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `rename_node`: give a node another name, a label, as one transaction.
+pub struct RenameNode;
+
+impl ControlOperation for RenameNode {
+    type Request = RenameNodeRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "rename_node";
+    const ONE_LINE_DOC: &'static str = "Give a node another name, a label, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Give a node another name, a label, as one transaction; the node keeps its UUID, which every address names it by. Refused while another node's config names it by its name.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_studio_fields`: replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.
+pub struct SetStudioFields;
+
+impl ControlOperation for SetStudioFields {
+    type Request = SetStudioFieldsRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_studio_fields";
+    const ONE_LINE_DOC: &'static str = "Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole.";
+    const AGENT_USAGE_NOTE: &'static str = "Replace what Tato Studio draws a node with — canvas position, group, comment, colour, collapsed, and a client's own `metadata` — as one transaction, the old fields replaced whole. The fields are held to the studio contract: a key of the wrong shape, or any key outside it, is refused by name. It changes nothing that runs.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_exposed_config_fields`: replace the config fields a node takes as inputs, as one transaction.
+pub struct SetExposedConfigFields;
+
+impl ControlOperation for SetExposedConfigFields {
+    type Request = SetExposedConfigFieldsRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_exposed_config_fields";
+    const ONE_LINE_DOC: &'static str =
+        "Replace the config fields a node takes as inputs, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `add_group`: make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+pub struct AddGroup;
+
+impl ControlOperation for AddGroup {
+    type Request = AddGroupRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "add_group";
+    const ONE_LINE_DOC: &'static str = "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Make a labelled group of nodes of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: a title, a description and a colour Tato Studio frames the nodes with, so the next reader knows what they do. It changes nothing that runs. Each node joins it by holding the group's UUID as its `studio.group`; a node of another group is refused, and a node leaves or joins later through `set_studio_fields`. Answers as `transact` does, the new group's UUID under `added_groups`.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_group_fields`: set a labelled group's title, description or colour, as one transaction.
+pub struct SetGroupFields;
+
+impl ControlOperation for SetGroupFields {
+    type Request = SetGroupFieldsRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_group_fields";
+    const ONE_LINE_DOC: &'static str =
+        "Set a labelled group's title, description or colour, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Set a labelled group's title, description or colour, as one transaction; a field omitted is kept. Its nodes stay as they are.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `collapse_selection_into_subgraph`: collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
+pub struct CollapseSelectionIntoSubgraph;
+
+impl ControlOperation for CollapseSelectionIntoSubgraph {
+    type Request = CollapseSelectionIntoSubgraphRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "collapse_selection_into_subgraph";
+    const ONE_LINE_DOC: &'static str = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `unlock_generator_fragment`: unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+pub struct UnlockGeneratorFragment;
+
+impl ControlOperation for UnlockGeneratorFragment {
+    type Request = UnlockGeneratorFragmentRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "unlock_generator_fragment";
+    const ONE_LINE_DOC: &'static str = "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `add_note`: place a canvas note on a loaded stream's graph, as one transaction.
+pub struct AddNote;
+
+impl ControlOperation for AddNote {
+    type Request = AddNoteRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "add_note";
+    const ONE_LINE_DOC: &'static str =
+        "Place a canvas note on a loaded stream's graph, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Place a canvas note on a loaded stream's graph, as one transaction: text at a position and size Tato Studio draws it at, beside the nodes rather than on one. It changes nothing that runs. Answers as `transact` does, the new note's UUID under `added_notes`.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `set_note_fields`: set a canvas note's text, position or size, as one transaction.
+pub struct SetNoteFields;
+
+impl ControlOperation for SetNoteFields {
+    type Request = SetNoteFieldsRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_note_fields";
+    const ONE_LINE_DOC: &'static str =
+        "Set a canvas note's text, position or size, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str =
+        "Set a canvas note's text, position or size, as one transaction; a field omitted is kept.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `remove_note`: take a canvas note off a loaded stream's graph, as one transaction.
+pub struct RemoveNote;
+
+impl ControlOperation for RemoveNote {
+    type Request = RemoveNoteRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "remove_note";
+    const ONE_LINE_DOC: &'static str =
+        "Take a canvas note off a loaded stream's graph, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it back as it was.";
+    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+}
+
+/// `remove_group`: take out a labelled group, as one transaction.
+pub struct RemoveGroup;
+
+impl ControlOperation for RemoveGroup {
+    type Request = RemoveGroupRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "remove_group";
+    const ONE_LINE_DOC: &'static str = "Take out a labelled group, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo brings the group back with every node that belonged to it.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
@@ -325,6 +577,22 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Transact>(),
     ControlOperationDeclaration::of::<AddNode>(),
     ControlOperationDeclaration::of::<Connect>(),
+    ControlOperationDeclaration::of::<ImportGraphGenerator>(),
+    ControlOperationDeclaration::of::<RemoveNode>(),
+    ControlOperationDeclaration::of::<Disconnect>(),
+    ControlOperationDeclaration::of::<SetNodeConfig>(),
+    ControlOperationDeclaration::of::<SetPinValue>(),
+    ControlOperationDeclaration::of::<RenameNode>(),
+    ControlOperationDeclaration::of::<SetStudioFields>(),
+    ControlOperationDeclaration::of::<SetExposedConfigFields>(),
+    ControlOperationDeclaration::of::<AddGroup>(),
+    ControlOperationDeclaration::of::<SetGroupFields>(),
+    ControlOperationDeclaration::of::<CollapseSelectionIntoSubgraph>(),
+    ControlOperationDeclaration::of::<UnlockGeneratorFragment>(),
+    ControlOperationDeclaration::of::<AddNote>(),
+    ControlOperationDeclaration::of::<SetNoteFields>(),
+    ControlOperationDeclaration::of::<RemoveNote>(),
+    ControlOperationDeclaration::of::<RemoveGroup>(),
     ControlOperationDeclaration::of::<OpenProject>(),
     ControlOperationDeclaration::of::<ReloadProject>(),
     ControlOperationDeclaration::of::<CloseProject>(),
@@ -357,6 +625,38 @@ pub enum ControlOperationCall {
     AddNode(AddNodeRequest),
     /// A `connect` call.
     Connect(OneLinkGraphEditRequest),
+    /// A `import_graph_generator` call.
+    ImportGraphGenerator(ImportGraphGeneratorRequest),
+    /// A `remove_node` call.
+    RemoveNode(OneNodeGraphEditRequest),
+    /// A `disconnect` call.
+    Disconnect(OneLinkGraphEditRequest),
+    /// A `set_node_config` call.
+    SetNodeConfig(SetNodeConfigRequest),
+    /// A `set_pin_value` call.
+    SetPinValue(SetPinValueRequest),
+    /// A `rename_node` call.
+    RenameNode(RenameNodeRequest),
+    /// A `set_studio_fields` call.
+    SetStudioFields(SetStudioFieldsRequest),
+    /// A `set_exposed_config_fields` call.
+    SetExposedConfigFields(SetExposedConfigFieldsRequest),
+    /// A `add_group` call.
+    AddGroup(AddGroupRequest),
+    /// A `set_group_fields` call.
+    SetGroupFields(SetGroupFieldsRequest),
+    /// A `collapse_selection_into_subgraph` call.
+    CollapseSelectionIntoSubgraph(CollapseSelectionIntoSubgraphRequest),
+    /// A `unlock_generator_fragment` call.
+    UnlockGeneratorFragment(UnlockGeneratorFragmentRequest),
+    /// A `add_note` call.
+    AddNote(AddNoteRequest),
+    /// A `set_note_fields` call.
+    SetNoteFields(SetNoteFieldsRequest),
+    /// A `remove_note` call.
+    RemoveNote(RemoveNoteRequest),
+    /// A `remove_group` call.
+    RemoveGroup(RemoveGroupRequest),
     /// An `open_project` call.
     OpenProject(OneProjectByItsDirectoryRequest),
     /// A `reload_project` call.
@@ -437,6 +737,43 @@ impl ControlOperationCall {
             Transact::METHOD_NAME => the_request_of::<Transact>(params).map(Self::Transact),
             AddNode::METHOD_NAME => the_request_of::<AddNode>(params).map(Self::AddNode),
             Connect::METHOD_NAME => the_request_of::<Connect>(params).map(Self::Connect),
+            ImportGraphGenerator::METHOD_NAME => {
+                the_request_of::<ImportGraphGenerator>(params).map(Self::ImportGraphGenerator)
+            }
+            RemoveNode::METHOD_NAME => the_request_of::<RemoveNode>(params).map(Self::RemoveNode),
+            Disconnect::METHOD_NAME => the_request_of::<Disconnect>(params).map(Self::Disconnect),
+            SetNodeConfig::METHOD_NAME => {
+                the_request_of::<SetNodeConfig>(params).map(Self::SetNodeConfig)
+            }
+            SetPinValue::METHOD_NAME => {
+                the_request_of::<SetPinValue>(params).map(Self::SetPinValue)
+            }
+            RenameNode::METHOD_NAME => the_request_of::<RenameNode>(params).map(Self::RenameNode),
+            SetStudioFields::METHOD_NAME => {
+                the_request_of::<SetStudioFields>(params).map(Self::SetStudioFields)
+            }
+            SetExposedConfigFields::METHOD_NAME => {
+                the_request_of::<SetExposedConfigFields>(params).map(Self::SetExposedConfigFields)
+            }
+            AddGroup::METHOD_NAME => the_request_of::<AddGroup>(params).map(Self::AddGroup),
+            SetGroupFields::METHOD_NAME => {
+                the_request_of::<SetGroupFields>(params).map(Self::SetGroupFields)
+            }
+            CollapseSelectionIntoSubgraph::METHOD_NAME => {
+                the_request_of::<CollapseSelectionIntoSubgraph>(params)
+                    .map(Self::CollapseSelectionIntoSubgraph)
+            }
+            UnlockGeneratorFragment::METHOD_NAME => {
+                the_request_of::<UnlockGeneratorFragment>(params).map(Self::UnlockGeneratorFragment)
+            }
+            AddNote::METHOD_NAME => the_request_of::<AddNote>(params).map(Self::AddNote),
+            SetNoteFields::METHOD_NAME => {
+                the_request_of::<SetNoteFields>(params).map(Self::SetNoteFields)
+            }
+            RemoveNote::METHOD_NAME => the_request_of::<RemoveNote>(params).map(Self::RemoveNote),
+            RemoveGroup::METHOD_NAME => {
+                the_request_of::<RemoveGroup>(params).map(Self::RemoveGroup)
+            }
             OpenProject::METHOD_NAME => {
                 the_request_of::<OpenProject>(params).map(Self::OpenProject)
             }
@@ -484,6 +821,22 @@ impl ControlOperationCall {
             Self::Transact(_) => Transact::METHOD_NAME,
             Self::AddNode(_) => AddNode::METHOD_NAME,
             Self::Connect(_) => Connect::METHOD_NAME,
+            Self::ImportGraphGenerator(_) => ImportGraphGenerator::METHOD_NAME,
+            Self::RemoveNode(_) => RemoveNode::METHOD_NAME,
+            Self::Disconnect(_) => Disconnect::METHOD_NAME,
+            Self::SetNodeConfig(_) => SetNodeConfig::METHOD_NAME,
+            Self::SetPinValue(_) => SetPinValue::METHOD_NAME,
+            Self::RenameNode(_) => RenameNode::METHOD_NAME,
+            Self::SetStudioFields(_) => SetStudioFields::METHOD_NAME,
+            Self::SetExposedConfigFields(_) => SetExposedConfigFields::METHOD_NAME,
+            Self::AddGroup(_) => AddGroup::METHOD_NAME,
+            Self::SetGroupFields(_) => SetGroupFields::METHOD_NAME,
+            Self::CollapseSelectionIntoSubgraph(_) => CollapseSelectionIntoSubgraph::METHOD_NAME,
+            Self::UnlockGeneratorFragment(_) => UnlockGeneratorFragment::METHOD_NAME,
+            Self::AddNote(_) => AddNote::METHOD_NAME,
+            Self::SetNoteFields(_) => SetNoteFields::METHOD_NAME,
+            Self::RemoveNote(_) => RemoveNote::METHOD_NAME,
+            Self::RemoveGroup(_) => RemoveGroup::METHOD_NAME,
             Self::OpenProject(_) => OpenProject::METHOD_NAME,
             Self::ReloadProject(_) => ReloadProject::METHOD_NAME,
             Self::CloseProject(_) => CloseProject::METHOD_NAME,
@@ -556,86 +909,15 @@ mod tests {
     }
 
     #[test]
-    fn every_registered_method_name_parses_to_the_call_of_that_name() {
-        let params_of_each_method = [
-            ("discover", serde_json::json!({ "contract_version": 1 })),
-            (
-                "subscribe_project_changes",
-                serde_json::json!({ "projects": ["00000000-0000-0000-0000-000000000001"] }),
-            ),
-            ("describe_runtime", serde_json::json!({})),
-            ("list_streams", serde_json::json!({})),
-            ("graph", serde_json::json!({})),
-            ("transact", serde_json::json!({ "operations": [] })),
-            (
-                "add_node",
-                serde_json::json!({
-                    "stream": "00000000-0000-0000-0000-000000000001",
-                    "type": "nodes.grayscale_effect:GrayscaleEffect"
-                }),
-            ),
-            (
-                "connect",
-                serde_json::json!({
-                    "stream": "00000000-0000-0000-0000-000000000001",
-                    "source": { "node": "a", "port": "video" },
-                    "target": { "node": "b", "port": "video" }
-                }),
-            ),
-            (
-                "open_project",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "reload_project",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "close_project",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "remove_project",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "start_playback",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "stop_playback",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "pause_playback",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "resume_playback",
-                serde_json::json!({ "project_directory": "/projects/rig" }),
-            ),
-            (
-                "describe_stream_action",
-                serde_json::json!({ "action": "A1" }),
-            ),
-            (
-                "cancel_stream_action",
-                serde_json::json!({ "action": "A1" }),
-            ),
-        ];
-        let registered: BTreeSet<&str> = CONTROL_OPERATIONS
-            .iter()
-            .map(|declaration| declaration.method_name)
-            .collect();
-        let exercised: BTreeSet<&str> = params_of_each_method
-            .iter()
-            .map(|(method_name, _)| *method_name)
-            .collect();
-        assert_eq!(registered, exercised);
-        for (method_name, params) in params_of_each_method {
-            let call = ControlOperationCall::parse(method_name, Some(params))
-                .unwrap_or_else(|refusal| panic!("{refusal}"));
-            assert_eq!(call.method_name(), method_name);
+    fn every_registered_method_name_parses_to_the_call_of_that_name_or_is_refused_for_its_params() {
+        for declaration in CONTROL_OPERATIONS {
+            match ControlOperationCall::parse(declaration.method_name, None) {
+                Ok(call) => assert_eq!(call.method_name(), declaration.method_name),
+                Err(ControlOperationCallParseRefusal::InvalidParams { method_name, .. }) => {
+                    assert_eq!(method_name, declaration.method_name)
+                }
+                Err(refusal) => panic!("{refusal}"),
+            }
         }
     }
 

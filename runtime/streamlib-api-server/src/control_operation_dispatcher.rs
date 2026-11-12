@@ -15,11 +15,16 @@ use streamlib::sdk::runtime::{
     StreamActionStep, StreamListingState, StreamLocation,
 };
 use streamlib_control_contract::{
-    AddNodeRequest, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, ControlContractVersionMismatch,
-    ControlOperationCall, DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode,
-    GraphRequest, ListStreamsRequest, OneLinkGraphEditRequest, OneProjectByItsDirectoryRequest,
-    OneStreamActionRequest, ProjectTransactionAuthorArgument, ProjectTransactionAuthorKindArgument,
+    AddGroupRequest, AddNodeRequest, AddNoteRequest, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS,
+    CollapseSelectionIntoSubgraphRequest, ControlContractVersionMismatch, ControlOperationCall,
+    DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode, GraphRequest,
+    ImportGraphGeneratorRequest, ListStreamsRequest, OneLinkGraphEditRequest,
+    OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest, OneStreamActionRequest,
+    ProjectTransactionAuthorArgument, ProjectTransactionAuthorKindArgument, RemoveGroupRequest,
+    RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
+    SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
     SubscribeProjectChangesRequest, SubscribeProjectChangesResult, TransactRequest,
+    UnlockGeneratorFragmentRequest,
 };
 use streamlib_project_repository::{
     ProjectRepositoriesOpenInThisRuntime, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
@@ -225,6 +230,393 @@ impl ControlOperationDispatcher {
                         level: level.unwrap_or_default(),
                         source,
                         target,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::ImportGraphGenerator(ImportGraphGeneratorRequest {
+                stream,
+                generator,
+                name,
+                config,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "import_graph_generator",
+                    vec![StreamGraphAction::ImportGraphGenerator {
+                        stream,
+                        generator,
+                        name,
+                        config,
+                        label: None,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::RemoveNode(OneNodeGraphEditRequest {
+                stream,
+                level,
+                node,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "remove_node",
+                    vec![StreamGraphAction::RemoveNode {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::Disconnect(OneLinkGraphEditRequest {
+                stream,
+                level,
+                source,
+                target,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "disconnect",
+                    vec![StreamGraphAction::Disconnect {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        source,
+                        target,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetNodeConfig(SetNodeConfigRequest {
+                stream,
+                level,
+                node,
+                config,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_node_config",
+                    vec![StreamGraphAction::SetNodeConfig {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                        config,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetPinValue(SetPinValueRequest {
+                stream,
+                level,
+                node,
+                input,
+                value,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_pin_value",
+                    vec![StreamGraphAction::SetPinValue {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                        input,
+                        value,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::RenameNode(RenameNodeRequest {
+                stream,
+                level,
+                node,
+                name,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "rename_node",
+                    vec![StreamGraphAction::RenameNode {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                        name,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetStudioFields(SetStudioFieldsRequest {
+                stream,
+                level,
+                node,
+                studio,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_studio_fields",
+                    vec![StreamGraphAction::SetStudioFields {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                        studio,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetExposedConfigFields(SetExposedConfigFieldsRequest {
+                stream,
+                level,
+                node,
+                exposed_config_fields,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_exposed_config_fields",
+                    vec![StreamGraphAction::SetExposedConfigFields {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        node,
+                        exposed_config_fields,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::AddGroup(AddGroupRequest {
+                stream,
+                level,
+                title,
+                description,
+                colour,
+                nodes,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "add_group",
+                    vec![StreamGraphAction::AddGroup {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        title,
+                        description,
+                        colour,
+                        nodes,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetGroupFields(SetGroupFieldsRequest {
+                stream,
+                level,
+                group,
+                title,
+                description,
+                colour,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_group_fields",
+                    vec![StreamGraphAction::SetGroupFields {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        group,
+                        title,
+                        description,
+                        colour,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::CollapseSelectionIntoSubgraph(
+                CollapseSelectionIntoSubgraphRequest {
+                    stream,
+                    level,
+                    nodes,
+                    name,
+                    mode,
+                    author,
+                    idempotency_key,
+                },
+            ) => self
+                .apply_a_graph_transaction(
+                    "collapse_selection_into_subgraph",
+                    vec![StreamGraphAction::CollapseSelectionIntoSubgraph {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        nodes,
+                        name,
+                        label: None,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::UnlockGeneratorFragment(UnlockGeneratorFragmentRequest {
+                stream,
+                level,
+                fragment,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "unlock_generator_fragment",
+                    vec![StreamGraphAction::UnlockGeneratorFragment {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        fragment,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::AddNote(AddNoteRequest {
+                stream,
+                text,
+                position,
+                size,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "add_note",
+                    vec![StreamGraphAction::AddNote {
+                        stream,
+                        text,
+                        position,
+                        size,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::SetNoteFields(SetNoteFieldsRequest {
+                stream,
+                note,
+                text,
+                position,
+                size,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "set_note_fields",
+                    vec![StreamGraphAction::SetNoteFields {
+                        stream,
+                        note,
+                        text,
+                        position,
+                        size,
+                    }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::RemoveNote(RemoveNoteRequest {
+                stream,
+                note,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "remove_note",
+                    vec![StreamGraphAction::RemoveNote { stream, note }],
+                    mode,
+                    author,
+                    idempotency_key,
+                    request_origin,
+                )
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::RemoveGroup(RemoveGroupRequest {
+                stream,
+                level,
+                group,
+                mode,
+                author,
+                idempotency_key,
+            }) => self
+                .apply_a_graph_transaction(
+                    "remove_group",
+                    vec![StreamGraphAction::RemoveGroup {
+                        stream,
+                        level: level.unwrap_or_default(),
+                        group,
                     }],
                     mode,
                     author,
