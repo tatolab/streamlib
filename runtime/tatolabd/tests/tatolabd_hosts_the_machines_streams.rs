@@ -484,3 +484,41 @@ fn a_streams_record_round_trips_through_a_restart_until_it_is_removed() {
         record_path.display()
     );
 }
+
+#[test]
+fn a_child_started_through_the_close_on_exec_step_inherits_no_descriptor_left_inheritable() {
+    use std::os::fd::AsRawFd;
+
+    let listener_left_inheritable =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener binds");
+    let listener_descriptor = listener_left_inheritable.as_raw_fd();
+    // SAFETY: the descriptor is this test's own open listener.
+    let cleared = unsafe { libc::fcntl(listener_descriptor, libc::F_SETFD, 0) };
+    assert_eq!(cleared, 0, "the listener's close-on-exec flag is cleared");
+
+    let a_shell_asking_whether_it_holds_the_listener = || {
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell
+            .arg("-c")
+            .arg(format!("test -e /dev/fd/{listener_descriptor}"));
+        shell
+    };
+
+    let inherited = a_shell_asking_whether_it_holds_the_listener()
+        .status()
+        .expect("the shell runs");
+    assert!(
+        inherited.success(),
+        "a plain spawn hands the child the listener"
+    );
+
+    let mut shell_behind_the_step = a_shell_asking_whether_it_holds_the_listener();
+    common::close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_child(
+        &mut shell_behind_the_step,
+    );
+    let inherited_behind_the_step = shell_behind_the_step.status().expect("the shell runs");
+    assert!(
+        !inherited_behind_the_step.success(),
+        "the step keeps the listener out of the child"
+    );
+}
