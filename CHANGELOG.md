@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.70](https://github.com/tatolab/streamlib/compare/v0.68.69...v0.68.70) (2026-11-12)
+
+
+### Features
+
+* edit the inside of an authored subgraph through a graph edit's level ([5842c20](https://github.com/tatolab/streamlib/commit/5842c2042bb9bb97d8ef056b91b56a28c27bb459))
+
 ## [0.68.69](https://github.com/tatolab/streamlib/compare/v0.68.68...v0.68.69) (2026-11-12)
 
 

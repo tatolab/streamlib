@@ -200,6 +200,12 @@ pressing Stop took the editor down with the flow (owner, 2026-11-11, #3542)."
 5. **Stop forgets function-node state** (owner, 2026-11-11).
 6. **The stopped preview answer** is a structured refusal with `not_running_because`, never a
    success with an empty viewer (session, 2026-11-11).
+7. **Nothing ever disappears.** A stream or node that fails stays shown, to read and edit, so
+   people can fix it; being able to stop is what lets them design and prototype without fearing
+   broken state (owner, 2026-11-11). A failed stream is held stopped from its document at a
+   runtime start as at an open; one failed for crashing the runtime is listed failed with its
+   reason and built at no start until a play or reload retries it, since building it is what
+   crashed the runtime (session, 2026-11-11).
 
 ## Tickets (tracer bullets)
 

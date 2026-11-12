@@ -435,9 +435,10 @@ pub enum StreamListingState {
     /// Loaded with its project paused: its processors hold their state and process nothing
     /// until `resume_playback`.
     Paused,
-    /// It kept crashing the runtime or could not re-load at its start, and is
-    /// skipped at the start until an `open_project` or `reload_project` retries it; or it was
-    /// recorded by an earlier runtime, and is never loaded.
+    /// Its code, its venv, its load or its start failed: held stopped from its document when
+    /// that reads, its graph there to read and edit, until a play or a `reload_project` retries
+    /// it; or it kept crashing the runtime, and none of it is built at a start until then; or it
+    /// was recorded by an earlier runtime, and is never loaded.
     Failed,
     /// A stream action queued or running loads it.
     Preparing,
@@ -1955,11 +1956,10 @@ impl Runner {
         }
     }
 
-    /// Queue one re-load per project holding a record neither stopped nor
-    /// failed, as a runtime does at its start, and answer the actions. Each
-    /// loads only those records of its project; a record failed, one an
-    /// earlier runtime wrote, and one that cannot be read are logged and left
-    /// in place.
+    /// Queue one re-load per project holding a record not closed, as a runtime does at its
+    /// start, and answer the actions. Each loads only those records of its project, a failed
+    /// one held stopped from its document; a record failed for crashing the runtime, one an
+    /// earlier runtime wrote and one that cannot be read are logged and left in place.
     pub fn queue_the_reload_of_every_project_at_the_start(&self) -> Vec<StreamActionQueued> {
         let Some(stream_records) = self.stream_records() else {
             return Vec::new();
@@ -1981,10 +1981,14 @@ impl Runner {
                     continue;
                 }
             };
-            if let Some(failed_because) = &record.failed_because {
+            if let Some(failed_because) = record
+                .failed_because
+                .as_ref()
+                .filter(|_| record.is_failed_for_crashing_the_runtime())
+            {
                 tracing::warn!(
-                    "the stream `{}` is failed, so it is not re-loaded: {failed_because}; \
-                     `tatolab reload` retries it",
+                    "the stream `{}` is failed for crashing the runtime, so none of it is built \
+                     at the start: {failed_because}; a play or `tatolab reload` retries it",
                     record.stream_id
                 );
                 continue;
@@ -2130,7 +2134,7 @@ impl Runner {
             };
             let venv_made_outside_the_lock = match stream_records.read(&stream_id) {
                 Ok(Some(StreamRecordAsRead::Current(record)))
-                    if !record.is_failed() && !record.closed =>
+                    if !record.closed && !record.is_failed_for_crashing_the_runtime() =>
                 {
                     Some(self.make_the_venv_of_a_recorded_stream(&record, is_interrupted))
                 }
@@ -2165,10 +2169,15 @@ impl Runner {
                     continue;
                 }
             };
-            if let Some(failed_because) = record.failed_because {
+            if let Some(failed_because) = record
+                .failed_because
+                .clone()
+                .filter(|_| record.is_failed_for_crashing_the_runtime())
+            {
                 tracing::warn!(
-                    "the stream `{stream_id}` is failed, so it is not re-loaded: \
-                     {failed_because}; `tatolab reload` retries it"
+                    "the stream `{stream_id}` is failed for crashing the runtime, so none of it \
+                     is built at the start: {failed_because}; a play or `tatolab reload` retries \
+                     it"
                 );
                 reloads.push(StreamReloadAtTheStart::SkippedAsFailed {
                     stream_id,
@@ -2197,7 +2206,7 @@ impl Runner {
                 listed.push_front(Ok(StreamRecordAsRead::Current(record)));
                 continue;
             };
-            let playback_after_the_load = if record.stopped {
+            let playback_after_the_load = if record.stopped || record.is_failed() {
                 ProjectPlaybackAfterItsLoad::HeldStopped
             } else {
                 ProjectPlaybackAfterItsLoad::Playing
@@ -2205,6 +2214,22 @@ impl Runner {
             if record.comes_back_paused_at_a_restart() {
                 self.hold_the_project_paused(&record.location.project_directory);
             }
+            let why_its_venv_was_not_made = match &venv_made_outside_the_lock {
+                Err(venv_not_made) if !is_interrupted() => Some(format!(
+                    "its `.venv` was not made as it re-loaded at the runtime's start: \
+                     {venv_not_made}"
+                )),
+                _ => None,
+            };
+            let playback_after_the_load = if why_its_venv_was_not_made.is_some() {
+                ProjectPlaybackAfterItsLoad::HeldStopped
+            } else {
+                playback_after_the_load
+            };
+            let venv_made_outside_the_lock = match venv_made_outside_the_lock {
+                Err(_) if why_its_venv_was_not_made.is_some() => Ok(()),
+                made_or_interrupted => made_or_interrupted,
+            };
             let reloaded = venv_made_outside_the_lock.and_then(|()| {
                 let graph = the_graph_the_recorded_stream_holds(&record).map_err(Error::Runtime)?;
                 let display_name =
@@ -2219,9 +2244,40 @@ impl Runner {
                 )
             });
             match reloaded {
-                Ok(stream) => {
-                    if let Some(why_it_cannot_play) =
+                Ok((_, Some(start_refusal @ Error::EngineResourceRefusedAtAStreamsStart(_)))) => {
+                    tracing::error!(
+                        "the stream `{stream_id}` is held stopped, its start refused, and is \
+                         started again at the runtime's next start: {start_refusal}"
+                    );
+                    reloads.push(StreamReloadAtTheStart::NotReloaded {
+                        stream_id,
+                        refusal: start_refusal,
+                    });
+                }
+                Ok((_, Some(start_refusal))) => {
+                    let failed_because =
+                        format!("its start at the runtime's start was refused: {start_refusal}");
+                    tracing::error!(
+                        "the stream `{stream_id}` is held stopped, and is failed: {failed_because}"
+                    );
+                    if let Err(not_written) =
+                        stream_records.change_the_record(&stream_id, |recorded| {
+                            recorded.mark_open_with_its_playback_stopped();
+                            recorded.failed_because = Some(failed_because);
+                        })
+                    {
+                        tracing::error!(
+                            "the stream `{stream_id}` was not recorded failed: {not_written}"
+                        );
+                    }
+                    reloads.push(StreamReloadAtTheStart::HeldStopped { stream_id });
+                }
+                Ok((stream, None)) => {
+                    let why_it_cannot_play = why_its_venv_was_not_made.clone().or_else(|| {
                         stream.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+                    });
+                    if let Some(why_it_cannot_play) = why_it_cannot_play
+                        && !record.is_failed()
                     {
                         tracing::error!(
                             "the stream `{stream_id}` re-loaded held stopped from its document, \
@@ -2236,6 +2292,15 @@ impl Runner {
                                 "the stream `{stream_id}` was not recorded failed: {not_written}"
                             );
                         }
+                        reloads.push(StreamReloadAtTheStart::HeldStopped { stream_id });
+                        continue;
+                    }
+                    if let Some(failed_because) = &record.failed_because {
+                        tracing::warn!(
+                            "the stream `{stream_id}` is failed, so it is re-loaded held stopped \
+                             from its document: {failed_because}; a play or `tatolab reload` \
+                             retries it"
+                        );
                         reloads.push(StreamReloadAtTheStart::HeldStopped { stream_id });
                         continue;
                     }
@@ -2278,7 +2343,9 @@ impl Runner {
                     let failed_because =
                         format!("it did not re-load at the runtime's start: {reload_refusal}");
                     match stream_records.change_the_record(&stream_id, |recorded| {
-                        recorded.failed_because = Some(failed_because);
+                        if !recorded.is_failed() {
+                            recorded.failed_because = Some(failed_because);
+                        }
                     }) {
                         Ok(_) => tracing::error!(
                             "the stream `{stream_id}` did not re-load, and is failed: \
@@ -2300,7 +2367,7 @@ impl Runner {
     }
 
     /// Count how the runtime's previous run ended against every current
-    /// record not failed, before any re-load: a clean end resets each crash
+    /// record not failed for crashing the runtime, before any re-load: a clean end resets each crash
     /// count; a crash adds one to each stream it was pinned on — failing it at
     /// [`RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM`] — and resets every
     /// other's. Returns the ids of the streams it failed.
@@ -2325,7 +2392,7 @@ impl Runner {
             let Ok(StreamRecordAsRead::Current(mut record)) = read else {
                 continue;
             };
-            if record.is_failed() {
+            if record.is_failed_for_crashing_the_runtime() {
                 continue;
             }
             let crashes_in_a_row_before = record.runtime_crashes_in_a_row_implicating_it;
@@ -2362,10 +2429,12 @@ impl Runner {
                 );
                 continue;
             }
-            if let Some(failed_because) = &record.failed_because {
+            if record.is_failed_for_crashing_the_runtime()
+                && let Some(failed_because) = &record.failed_because
+            {
                 tracing::error!(
-                    "the stream `{}` is failed: {failed_because}; it is not re-loaded until \
-                     `tatolab reload` retries it",
+                    "the stream `{}` is failed: {failed_because}; none of it is built at a \
+                     start until a play or `tatolab reload` retries it",
                     record.stream_id
                 );
                 streams_failed.push(record.stream_id);
@@ -2859,7 +2928,7 @@ impl Runner {
     /// Load a recorded stream from `record` and the graph `graph` its document holds, started
     /// or held stopped as `playback_after_the_load` says, its capture devices asking the user
     /// as `capture_device_access_prompting` says, the load abandoned once `is_interrupted`
-    /// reports true.
+    /// reports true. A start that is refused holds the stream stopped, answered beside it.
     fn load_a_recorded_stream_from_its_record(
         &self,
         record: &StreamRecord,
@@ -2868,11 +2937,30 @@ impl Runner {
         capture_device_access_prompting: CaptureDeviceAccessPrompting,
         playback_after_the_load: ProjectPlaybackAfterItsLoad,
         is_interrupted: &dyn Fn() -> bool,
-    ) -> Result<Arc<LoadedStreamInThisRuntime>> {
+    ) -> Result<(Arc<LoadedStreamInThisRuntime>, Option<Error>)> {
         let stream_to_load = OneStreamAStreamActionLoads::recorded_by(record, display_name, graph)
             .with_capture_device_access_prompting(capture_device_access_prompting)
             .abandoned_once(is_interrupted);
         let stream = self.load_a_recorded_stream(stream_to_load)?;
+        let start_refusal = self.start_a_loaded_recorded_stream_unless_it_is_held_stopped(
+            &stream,
+            playback_after_the_load,
+        );
+        stream.log_route().write_every_record_it_emitted_and_sync();
+        match start_refusal {
+            Some(start_refusal) if stream.has_ended() => Err(start_refusal),
+            start_refusal => Ok((stream, start_refusal)),
+        }
+    }
+
+    /// Start `stream` as `playback_after_the_load` says, or hold it stopped when that says so
+    /// or its document names a node type not described; a refused start holds it stopped and
+    /// is answered.
+    fn start_a_loaded_recorded_stream_unless_it_is_held_stopped(
+        &self,
+        stream: &Arc<LoadedStreamInThisRuntime>,
+        playback_after_the_load: ProjectPlaybackAfterItsLoad,
+    ) -> Option<Error> {
         let held_from_its_document = stream
             .why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
             .is_some();
@@ -2880,13 +2968,13 @@ impl Runner {
             || playback_after_the_load == ProjectPlaybackAfterItsLoad::HeldStopped
         {
             stream.hold_stopped_without_a_start();
-            return Ok(stream);
+            return None;
         }
-        if let Err(start_refusal) = self.start_the_stream_paused_while_its_project_is(&stream) {
-            unload_a_stream_an_action_took_back(&stream, "its start was refused");
-            return Err(start_refusal);
-        }
-        Ok(stream)
+        let start_refusal = self
+            .start_the_stream_paused_while_its_project_is(stream)
+            .err()?;
+        hold_a_stream_whose_start_was_refused_stopped(stream);
+        Some(start_refusal)
     }
 
     /// Load `stream_to_load` without starting it.
@@ -4301,11 +4389,9 @@ mod tests {
             })
         }
 
-        /// Re-load every recorded stream neither stopped nor failed on this
-        /// thread, as each project's re-load at the start does.
-        fn reload_every_recorded_stream_neither_closed_nor_failed_at_once(
-            &self,
-        ) -> Vec<StreamReloadAtTheStart> {
+        /// Re-load every recorded stream not closed on this thread, as each project's
+        /// re-load at the start does.
+        fn reload_every_recorded_stream_not_closed_at_once(&self) -> Vec<StreamReloadAtTheStart> {
             let Some(stream_records) = self.stream_records() else {
                 return Vec::new();
             };
@@ -5600,7 +5686,7 @@ mod tests {
         }
         let broken = project.stream_id_of("broken");
 
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert!(
             reloads.iter().any(|reload| matches!(
@@ -5660,7 +5746,7 @@ mod tests {
 
         let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
-        let reloads = fresh_runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = fresh_runner.reload_every_recorded_stream_not_closed_at_once();
         assert!(
             matches!(
                 reloads.as_slice(),
@@ -6073,7 +6159,7 @@ mod tests {
         runner.count_the_previous_runtime_runs_end_against_the_recorded_streams(
             &a_crash_pinned_on(&["main"]),
         );
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
         let listing = runner.list_streams();
 
         assert_eq!(
@@ -6130,11 +6216,12 @@ mod tests {
 
     #[test]
     #[serial]
-    fn reloading_reports_each_recorded_stream_whose_venv_cannot_be_made_by_id_and_keeps_going() {
+    fn reloading_holds_each_recorded_stream_whose_venv_cannot_be_made_failed_and_keeps_going() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::with_no_venv();
         let records = records_in(state_directory.path());
         for function_name in ["a-camera", "c-microphone"] {
+            project.write_the_graph_document(the_graph_of_a_stream_named(function_name));
             records
                 .write(&a_record_of(&project, function_name))
                 .unwrap();
@@ -6146,20 +6233,28 @@ mod tests {
         records.write(&closed).unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert_eq!(reloads.len(), 3, "{reloads:?}");
         let mut ids_not_reloaded = Vec::new();
         let mut unreadable_paths = Vec::new();
         for reload in &reloads {
             match reload {
-                StreamReloadAtTheStart::NotReloaded { stream_id, refusal } => {
-                    let refusal = refusal.to_string();
+                StreamReloadAtTheStart::HeldStopped { stream_id } => {
+                    let failed_because = records
+                        .read(stream_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|read| match read {
+                            StreamRecordAsRead::Current(record) => record.failed_because,
+                            StreamRecordAsRead::RecordedByAnEarlierRuntime(_) => None,
+                        })
+                        .expect("the stream is recorded failed");
                     assert!(
-                        refusal.contains(&project.interpreter().display().to_string()),
-                        "{refusal}"
+                        failed_because.contains(&project.interpreter().display().to_string()),
+                        "{failed_because}"
                     );
-                    assert!(refusal.contains("carries no uv"), "{refusal}");
+                    assert!(failed_because.contains("carries no uv"), "{failed_because}");
                     ids_not_reloaded.push(stream_id.clone());
                 }
                 StreamReloadAtTheStart::RecordUnreadable(unreadable) => {
@@ -6178,7 +6273,9 @@ mod tests {
         expected_ids.sort();
         assert_eq!(ids_not_reloaded, expected_ids);
         assert_eq!(unreadable_paths, [malformed]);
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
+        let mut loaded = runner.ids_of_the_loaded_streams();
+        loaded.sort();
+        assert_eq!(loaded, expected_ids, "each is held to read and edit");
         assert_eq!(records.read_every().len(), 4, "every record stays");
     }
 
@@ -6509,7 +6606,7 @@ mod tests {
         }
 
         let restarted = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        let reloads = restarted.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = restarted.reload_every_recorded_stream_not_closed_at_once();
 
         assert!(
             matches!(
@@ -6756,54 +6853,143 @@ mod tests {
 
     #[test]
     #[serial]
-    fn a_failed_stream_is_left_failed_by_a_crash_count_and_skipped_at_the_start() {
+    fn a_stream_failed_for_crashing_the_runtime_is_built_none_of_at_the_start_and_listed_failed() {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("crasher"));
         let crasher = project.stream_id_of("crasher");
         let mut failed = a_record_of(&project, "crasher");
         failed.failed_because = Some("it crashed the runtime".to_string());
-        failed.runtime_crashes_in_a_row_implicating_it = 2;
+        failed.runtime_crashes_in_a_row_implicating_it =
+            RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM;
         records_in(state_directory.path()).write(&failed).unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
         runner.count_the_previous_runtime_runs_end_against_the_recorded_streams(
             &HowThePreviousRuntimeRunEnded::Cleanly,
         );
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert_eq!(the_record_of(state_directory.path(), &crasher), failed);
         assert!(
             matches!(
                 reloads.as_slice(),
-                [StreamReloadAtTheStart::SkippedAsFailed { stream_id, failed_because }]
-                    if *stream_id == crasher && failed_because == "it crashed the runtime"
+                [StreamReloadAtTheStart::SkippedAsFailed { stream_id, .. }] if *stream_id == crasher
             ),
             "{reloads:?}"
         );
-        assert!(runner.ids_of_the_loaded_streams().is_empty());
-        let refusal = refusal_of(runner.stop_the_stream_finishing_its_pending_stop(&crasher, None));
-        assert!(refusal.contains("is failed"), "{refusal}");
-        assert!(refusal.contains("it crashed the runtime"), "{refusal}");
-        assert_eq!(the_record_of(state_directory.path(), &crasher), failed);
+        assert!(
+            runner
+                .loaded_stream_of_the_id_when_loaded(&crasher)
+                .is_none()
+        );
+        let listed = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == crasher)
+            .unwrap();
+        assert_eq!(listed.state, StreamListingState::Failed);
+        assert_eq!(
+            listed.failed_because.as_deref(),
+            Some("it crashed the runtime")
+        );
     }
 
     #[test]
     #[serial]
-    fn a_recorded_stream_whose_venv_is_gone_is_failed_at_the_start_naming_its_interpreter() {
+    fn a_stream_failed_for_a_reason_other_than_crashes_is_held_stopped_at_the_start() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("refused"));
+        let refused = project.stream_id_of("refused");
+        let mut failed = a_record_of(&project, "refused");
+        failed.failed_because = Some("its start was refused".to_string());
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+
+        runner.count_the_previous_runtime_runs_end_against_the_recorded_streams(
+            &HowThePreviousRuntimeRunEnded::Cleanly,
+        );
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
+
+        assert_eq!(the_record_of(state_directory.path(), &refused), failed);
+        assert!(
+            matches!(
+                reloads.as_slice(),
+                [StreamReloadAtTheStart::HeldStopped { stream_id }] if *stream_id == refused
+            ),
+            "{reloads:?}"
+        );
+        let held = runner.loaded_stream_of_the_id(&refused).unwrap();
+        assert!(held.is_held_stopped() && held.runtime_context.lock().is_none());
+        let listed = runner
+            .list_streams()
+            .into_iter()
+            .find(|listed| listed.stream_id == refused)
+            .unwrap();
+        assert_eq!(listed.state, StreamListingState::Failed);
+        assert_eq!(
+            listed.failed_because.as_deref(),
+            Some("its start was refused")
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_stream_failed_for_another_reason_that_keeps_crashing_the_runtime_is_failed_for_its_crashes()
+     {
+        let state_directory = tempfile::tempdir().unwrap();
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        let refused = project.stream_id_of("refused");
+        let mut failed = a_record_of(&project, "refused");
+        failed.failed_because = Some("its start was refused".to_string());
+        failed.runtime_crashes_in_a_row_implicating_it =
+            RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM - 1;
+        records_in(state_directory.path()).write(&failed).unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+
+        let streams_failed = runner
+            .count_the_previous_runtime_runs_end_against_the_recorded_streams(
+                &HowThePreviousRuntimeRunEnded::Crashed(CrashOfThePreviousRuntimeRun {
+                    causes_by_implicated_stream: [(refused.clone(), "SIGSEGV".to_string())].into(),
+                    ..CrashOfThePreviousRuntimeRun::default()
+                }),
+            );
+
+        assert_eq!(streams_failed, vec![refused.clone()]);
+        let recorded = the_record_of(state_directory.path(), &refused);
+        assert!(
+            recorded.is_failed_for_crashing_the_runtime(),
+            "{recorded:?}"
+        );
+        assert!(
+            recorded
+                .failed_because
+                .as_deref()
+                .is_some_and(|failed_because| failed_because.contains("SIGSEGV")),
+            "{recorded:?}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn a_recorded_stream_whose_venv_is_gone_is_held_stopped_failed_at_the_start_naming_its_interpreter()
+     {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::with_no_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
         let camera = project.stream_id_of("camera");
         records_in(state_directory.path())
             .write(&a_record_of(&project, "camera"))
             .unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert!(
             matches!(
                 reloads.as_slice(),
-                [StreamReloadAtTheStart::NotReloaded { stream_id, .. }] if *stream_id == camera
+                [StreamReloadAtTheStart::HeldStopped { stream_id }] if *stream_id == camera
             ),
             "{reloads:?}"
         );
@@ -6815,12 +7001,18 @@ mod tests {
             "{failed_because}"
         );
         assert!(failed_because.contains("re-load"), "{failed_because}");
+        assert!(
+            runner
+                .loaded_stream_of_the_id(&camera)
+                .unwrap()
+                .is_held_stopped()
+        );
         let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         assert!(matches!(
             fresh_runner
-                .reload_every_recorded_stream_neither_closed_nor_failed_at_once()
+                .reload_every_recorded_stream_not_closed_at_once()
                 .as_slice(),
-            [StreamReloadAtTheStart::SkippedAsFailed { .. }]
+            [StreamReloadAtTheStart::HeldStopped { .. }]
         ));
     }
 
@@ -7129,7 +7321,7 @@ mod tests {
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         stub_uv.handed_to(&runner);
 
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert!(
             reloads
@@ -7174,7 +7366,7 @@ mod tests {
             .unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
 
-        runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        runner.reload_every_recorded_stream_not_closed_at_once();
 
         let reloaded = runner
             .loaded_stream_of_the_id_when_loaded(&camera)
@@ -7211,7 +7403,7 @@ mod tests {
             ))
             .unwrap();
         let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        runner.reload_every_recorded_stream_not_closed_at_once();
 
         runner
             .stop_the_stream_finishing_its_pending_stop(&camera, None)
@@ -7240,9 +7432,11 @@ mod tests {
 
     #[test]
     #[serial]
-    fn the_reload_at_the_start_records_failed_in_uvs_words_a_stream_whose_venv_uv_cannot_make() {
+    fn the_reload_at_the_start_holds_stopped_and_records_failed_in_uvs_words_a_stream_whose_venv_uv_cannot_make()
+     {
         let state_directory = tempfile::tempdir().unwrap();
         let project = ProjectWithGraphDocuments::with_no_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
         let camera = project.stream_id_of("camera");
         records_in(state_directory.path())
             .write(&a_record_of(&project, "camera"))
@@ -7251,12 +7445,12 @@ mod tests {
         let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
         stub_uv.handed_to(&runner);
 
-        let reloads = runner.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        let reloads = runner.reload_every_recorded_stream_not_closed_at_once();
 
         assert!(
             matches!(
                 reloads.as_slice(),
-                [StreamReloadAtTheStart::NotReloaded { stream_id, .. }] if *stream_id == camera
+                [StreamReloadAtTheStart::HeldStopped { stream_id }] if *stream_id == camera
             ),
             "{reloads:?}"
         );
@@ -7796,7 +7990,7 @@ mod tests {
         let fresh_runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
         assert!(
             fresh_runner
-                .reload_every_recorded_stream_neither_closed_nor_failed_at_once()
+                .reload_every_recorded_stream_not_closed_at_once()
                 .is_empty()
         );
         assert!(fresh_runner.ids_of_the_loaded_streams().is_empty());
@@ -9011,7 +9205,7 @@ mod tests {
         }
 
         let restarted = a_runner_recording_its_streams_in(Some(state_directory.path()));
-        restarted.reload_every_recorded_stream_neither_closed_nor_failed_at_once();
+        restarted.reload_every_recorded_stream_not_closed_at_once();
         for stream_id in &both_streams {
             assert_eq!(
                 restarted

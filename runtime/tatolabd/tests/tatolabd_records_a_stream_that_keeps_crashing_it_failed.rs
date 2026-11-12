@@ -85,7 +85,7 @@ fn a_stream_crashing_the_runtime_twice_is_failed_named_with_its_reason_and_a_run
     let standard_error = runtime.standard_error();
     assert!(
         standard_error.contains(&format!(
-            "the stream `{crasher_stream_id}` is failed, so it is not re-loaded"
+            "the stream `{crasher_stream_id}` is failed for crashing the runtime, so none of it is built at the start"
         )),
         "{standard_error}"
     );
