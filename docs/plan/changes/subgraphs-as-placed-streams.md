@@ -48,6 +48,10 @@
 - **A placed stream runs only where it is placed.** Loading a project skips each stream asset
   another stream of the project places, as it skips an import's streams. A stream placed nowhere
   loads as before. `dev` re-places each stream that places a stream whose document changed on disk.
+  The rule holds after every committed edit too, not only at a load: a stream running as its own
+  that an edit places is unloaded as its own and runs only inside the stream placing it, and a
+  stream whose last placement an edit removes loads as its own stream, following the project's
+  playback (session, 2026-11-12).
 - **An edit at a level edits the placed stream.** An edit whose `level` ends at a placed stream is
   made on that stream's own document, the nodes it names read from the placing graph's UUIDv5 ids
   back to the placed stream's own. Every loaded stream placing it is then re-placed. History records
@@ -87,8 +91,10 @@
 
 ## Consumers
 
-- **Tato Studio (tatolab-app).** It already sends `level` and steps in by subgraph id, so the wire
-  does not change. It stops treating a placed stream as read only and drops the `authored` kind:
+- **Tato Studio (tatolab-app).** It already sends `level` and steps in by subgraph id, so those
+  fields do not change. The tool `unlock_generator_fragment` is renamed `unlock_subgraph` with the
+  old name removed, so Studio calls `unlock_subgraph`. It stops treating a placed stream as
+  read-only and drops the `authored` kind:
   stepping into a placed stream edits it, and Unlock shows on it. Properties gains editing of a node
   inside a subgraph at its level. It is filed as a tatolab-app issue that waits on this change.
 
