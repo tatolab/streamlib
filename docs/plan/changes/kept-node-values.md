@@ -34,6 +34,9 @@
   `GraphInput`'s value. Each has a lifetime: `kept` (survives Stop, Play, close and a runtime
   restart) or `reset` (forgotten at Stop). Two placed instances never share one; a rename keeps it
   (owner, 2026-11-11).
+- **One node, one UUID across a project's streams.** A project two of whose stream graph
+  documents hold a node of one UUID, as a hand-copied document does, is refused at load, the
+  refusal naming both documents and the node (owner, 2026-11-12).
 - **Defaults.** A function node's `State` is `reset`, as stateless nodes and today's nodes
   expect. A top-level `GraphInput` is `kept` (owner, 2026-11-11). A `GraphInput`'s config takes an
   optional `lifetime: "kept" | "reset"`; `GraphInputConfig` gains `lifetime: NotRequired[...]`.

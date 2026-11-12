@@ -454,3 +454,101 @@ fn an_inline_subgraph_under_a_node_type_the_runtime_defines_is_refused_naming_it
         );
     }
 }
+
+#[test]
+fn an_unlocked_placed_stream_holding_a_generators_output_copies_every_node_and_group_inside_it_anew()
+ {
+    let placing = "00000000-0000-4000-8000-0000000000b0";
+    let subgraph_input = "00000000-0000-4000-8000-0000000000b1";
+    let held_in_the_subgraph = "00000000-0000-4000-8000-0000000000b2";
+    let subgraph_output = "00000000-0000-4000-8000-0000000000b3";
+    let group_in_the_subgraph = "00000000-0000-4000-8000-0000000000b4";
+    let placed_input = "00000000-0000-4000-8000-0000000000b5";
+    let subgraph = "00000000-0000-4000-8000-0000000000b6";
+    let placed_output = "00000000-0000-4000-8000-0000000000b7";
+    let document = StreamGraphDocument::from_value(json!({
+        "nodes": [
+            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source", "config": {} },
+            { "id": placing, "name": "look", "type": STREAM_FRAGMENT_NODE_TYPE,
+              "config": { "stream": { "asset": LOOK_STREAM } } },
+            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink", "config": {} },
+        ],
+        "links": [
+            a_link(SOURCE, "video", placing, "video"),
+            a_link(placing, "graded", SINK, "video"),
+        ],
+    }))
+    .unwrap();
+    let placed_stream_holding_a_subgraph = StreamGraphDocument::from_value(json!({
+        "asset": LOOK_STREAM,
+        "nodes": [
+            { "id": placed_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
+              "config": { "port": "video", "family": "image" } },
+            { "id": subgraph, "name": "grade", "type": "looks.generators:grade", "config": {},
+              "fragment": {
+                  "nodes": [
+                      { "id": subgraph_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
+                        "config": { "port": "video", "family": "image" } },
+                      { "id": held_in_the_subgraph, "name": "tint", "type": "looks.nodes:Tint",
+                        "config": {}, "studio": { "group": group_in_the_subgraph } },
+                      { "id": subgraph_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
+                        "config": { "port": "graded", "family": "image" } },
+                  ],
+                  "groups": [{ "id": group_in_the_subgraph, "title": "tints" }],
+                  "links": [
+                      a_link(subgraph_input, "value", held_in_the_subgraph, "video"),
+                      a_link(held_in_the_subgraph, "video", subgraph_output, "value"),
+                  ],
+              } },
+            { "id": placed_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
+              "config": { "port": "graded", "family": "image" } },
+        ],
+        "links": [
+            a_link(placed_input, "value", subgraph, "video"),
+            a_link(subgraph, "graded", placed_output, "value"),
+        ],
+    }))
+    .unwrap();
+    let unlock = StreamGraphOperation::UnfoldFragment {
+        fold: document
+            .the_fold_a_fragment_unfolds(
+                uuid(placing),
+                &|_: &Value| Ok(placed_stream_holding_a_subgraph.clone()),
+                &mut fresh_uuids(),
+            )
+            .unwrap(),
+    };
+
+    let unlocked = applied(&document, &unlock).to_value();
+
+    let copied_subgraph = unlocked["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "grade")
+        .expect("the subgraph is copied into place")["fragment"]
+        .clone();
+    let inner_uuids: Vec<&str> = copied_subgraph["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["id"].as_str().unwrap())
+        .collect();
+    for held_uuid in [subgraph_input, held_in_the_subgraph, subgraph_output] {
+        assert!(
+            !inner_uuids.contains(&held_uuid),
+            "{held_uuid} comes back under a fresh UUID: {inner_uuids:?}"
+        );
+    }
+    let copied_tint = &copied_subgraph["nodes"][1];
+    let copied_group = copied_subgraph["groups"][0]["id"].as_str().unwrap();
+    assert_ne!(copied_group, group_in_the_subgraph);
+    assert_eq!(copied_tint["studio"]["group"], copied_group);
+    assert_eq!(
+        copied_subgraph["links"],
+        json!([
+            a_link(inner_uuids[0], "value", inner_uuids[1], "video"),
+            a_link(inner_uuids[1], "video", inner_uuids[2], "value"),
+        ])
+    );
+}
