@@ -5,7 +5,7 @@
 
 `stream_builder.add` with no adapter and no engine change is the whole claim of the
 extension model, so it is what these check — each stream compiled here and loaded
-with `tatolab start` on the machine's runtime, a real `tatolabd` from the runtime
+with `tatolab open --play` on the machine's runtime, a real `tatolabd` from the runtime
 unit, which needs no device to load one. The load is the subject: the runtime
 reaches no Vulkan driver, so the start that follows every load is refused at the
 GPU, and these require exactly that refusal.
@@ -355,9 +355,9 @@ def node_names_loaded_by_tatolabd(
     working_directory: Path,
     tatolabd: TatolabdWithNoVulkanDriver,
 ) -> "list[str]":
-    """Compile `stream_function`, load it on `tatolabd` with `tatolab start`, and name the nodes it held.
+    """Compile `stream_function`, load it on `tatolabd` with `tatolab open --play`, and name the nodes it held.
 
-    `tatolab start` queues the load and exits 0. The engine loads the compiled
+    `tatolab open --play` queues the load and its playback, and exits 0. The engine loads the compiled
     names unsuffixed, so they are the names it holds. Its start is then refused
     at the GPU, which the runtime logs, and its unload counts the processors the
     load added. Fails naming what the runtime said when the load is refused.
@@ -371,9 +371,10 @@ def node_names_loaded_by_tatolabd(
     tatolab_run = subprocess.run(
         [
             str(_runtime_unit_executable(TATOLAB_EXECUTABLE)),
-            "start",
+            "open",
             "--dir",
             str(project_directory),
+            "--play",
         ],
         cwd=working_directory,
         env=tatolabd.cli_environment,
@@ -386,12 +387,12 @@ def node_names_loaded_by_tatolabd(
 
     def what_the_run_and_the_runtime_said() -> str:
         return (
-            f"`tatolab start` exited {tatolab_run.returncode}:\n{tatolab_run.stdout[-4000:]}"
+            f"`tatolab open --play` exited {tatolab_run.returncode}:\n{tatolab_run.stdout[-4000:]}"
             f"{tatolab_run.stderr[-4000:]}\n"
             f"tatolabd:\n{tatolabd.standard_error_text_since(standard_error_mark)[-8000:]}"
         )
 
-    # The queued load runs after `tatolab start` exits, and its lines reach this
+    # The queued load runs after `tatolab open --play` exits, and its lines reach this
     # process through the drain thread.
     load_and_unload_lines_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
     while True:

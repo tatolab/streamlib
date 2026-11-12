@@ -118,6 +118,13 @@ if ! "$tatolab_executable" new /tmp/stream-on-the-software-device >/tmp/tatolab-
 	echo "error: tatolab new did not queue the create" >&2
 	exit 1
 fi
+# A created project opens held stopped; the stream, and with it the GPU
+# context, starts only on its playback, queued here behind the create.
+if ! "$tatolab_executable" play --dir /tmp/stream-on-the-software-device >>/tmp/tatolab-new.log 2>&1; then
+	cat /tmp/tatolab-new.log /tmp/tatolabd.log
+	echo "error: tatolab play did not queue the playback" >&2
+	exit 1
+fi
 device_deadline=$((SECONDS + 120))
 until grep -q 'Selected Vulkan device' /tmp/tatolabd.log; do
 	if [ "$SECONDS" -ge "$device_deadline" ] || ! kill -0 "$tatolabd_pid" 2>/dev/null; then
