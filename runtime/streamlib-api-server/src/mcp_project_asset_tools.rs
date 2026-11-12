@@ -26,7 +26,6 @@ use streamlib_project_repository::{
     ProjectAsset, ProjectAssetAction, ProjectAssetImportSource, ProjectAssetKind,
     ProjectAssetOperation, ProjectOperation, ProjectRepository, ProjectRepositoryRefusal,
     ProjectStreamDocumentOperation, ProjectTransaction, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, DescribeAssetToolResult, ListAssetsToolResult,
@@ -37,11 +36,10 @@ use uuid::Uuid;
 use crate::asset_media_facts_reads::AssetMediaFactsNow;
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_change_feed::project_transactions_resource_uri;
-
-/// The author an asset change names when its caller's MCP client gave no name.
-const AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT: &str = "an MCP client";
-
-pub(crate) const IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION: &str = "A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.";
+use streamlib_control_contract::{
+    AUTHOR_ARGUMENT_DESCRIPTION, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
+    ProjectTransactionAuthorArgument,
+};
 
 /// The key a caller sent, refused when blank.
 pub(crate) fn the_idempotency_key_a_caller_sent(
@@ -59,7 +57,6 @@ const ASSET_ARGUMENT_DESCRIPTION: &str =
 const STREAM_ASSET_ARGUMENT_DESCRIPTION: &str = "The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports as its location's `stream_asset`.";
 const STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION: &str =
     "The name the stream is shown under, written in its graph document; refused when blank.";
-pub(crate) const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";
 
 /// What an asset is, as a caller names it.
 #[derive(Clone, Copy, Deserialize, JsonSchema)]
@@ -85,27 +82,6 @@ impl From<ProjectAssetKindToolArgument> for ProjectAssetKind {
             ProjectAssetKindToolArgument::Stream => Self::Stream,
         }
     }
-}
-
-/// Who an asset change is by, as a caller names it.
-#[derive(Clone, Copy, Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum ProjectTransactionAuthorKindToolArgument {
-    /// A person, through the studio or the CLI.
-    Person,
-    /// An agent.
-    Agent,
-}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProjectTransactionAuthorToolArgument {
-    #[schemars(description = "`person` or `agent`.")]
-    kind: ProjectTransactionAuthorKindToolArgument,
-    #[schemars(description = "The author's name as history shows it.")]
-    name: String,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -163,7 +139,7 @@ struct ImportAssetToolArguments {
     #[schemars(description = "The settings the import takes, kept in the asset's sidecar.")]
     import_settings: Option<Map<String, Value>>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -181,7 +157,7 @@ struct RelocateAssetToolArguments {
     )]
     to_path: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -195,7 +171,7 @@ struct DeleteAssetToolArguments {
     #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
     asset: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -211,7 +187,7 @@ struct SetAssetSettingsToolArguments {
     #[schemars(description = "The settings that replace the asset's import settings whole.")]
     import_settings: Map<String, Value>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -229,7 +205,7 @@ struct ReplaceAssetToolArguments {
     )]
     source: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -247,7 +223,7 @@ struct CreateStreamToolArguments {
     #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
     display_name: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -261,7 +237,7 @@ struct DeleteStreamToolArguments {
     #[schemars(description = STREAM_ASSET_ARGUMENT_DESCRIPTION)]
     stream_asset: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -277,7 +253,7 @@ struct SetStreamDisplayNameToolArguments {
     #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
     display_name: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -867,30 +843,13 @@ pub(crate) fn bring_the_loaded_streams_in_line_with_the_stream_documents_of(
 /// The author a change names: the caller's own, or the agent the request's MCP client names
 /// itself — in the request's `_meta` `clientInfo`, or else its `initialize` handshake.
 pub(crate) fn the_author_of_a_change(
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     tool_call_request_context: &RequestContext<RoleServer>,
 ) -> ProjectTransactionAuthor {
-    match author {
-        Some(ProjectTransactionAuthorToolArgument { kind, name }) => ProjectTransactionAuthor {
-            kind: match kind {
-                ProjectTransactionAuthorKindToolArgument::Person => {
-                    ProjectTransactionAuthorKind::Person
-                }
-                ProjectTransactionAuthorKindToolArgument::Agent => {
-                    ProjectTransactionAuthorKind::Agent
-                }
-            },
-            name,
-        },
-        None => ProjectTransactionAuthor {
-            kind: ProjectTransactionAuthorKind::Agent,
-            name: tool_call_request_context
-                .client_info()
-                .map(|client| client.name)
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| AUTHOR_NAME_OF_AN_UNNAMED_MCP_CLIENT.to_owned()),
-        },
-    }
+    crate::control_operation_dispatcher::the_author_of_a_change(
+        author,
+        &crate::mcp::control_request_origin_of_an_mcp_tool_call(tool_call_request_context),
+    )
 }
 
 /// The asset UUID a call spells in its argument `argument_name`.

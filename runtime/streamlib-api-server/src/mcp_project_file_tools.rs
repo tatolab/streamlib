@@ -23,12 +23,15 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_asset_tools::{
-    ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, AUTHOR_ARGUMENT_DESCRIPTION,
-    IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorToolArgument,
-    the_author_of_a_change, the_idempotency_key_a_caller_sent,
+    ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, the_author_of_a_change,
+    the_idempotency_key_a_caller_sent,
 };
 use crate::new_node_file_template::{
     NewNodeFileRenderedFromTheTemplate, render_the_new_node_file_template_for,
+};
+use streamlib_control_contract::{
+    AUTHOR_ARGUMENT_DESCRIPTION, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
+    ProjectTransactionAuthorArgument,
 };
 
 const PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION: &str = "The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`; refused outside the project, inside `.tatolab/`, or through a symbolic link.";
@@ -76,7 +79,7 @@ struct WriteProjectFileToolArguments {
     )]
     expected_sha256: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -92,7 +95,7 @@ struct CreateNodeFileToolArguments {
     )]
     path: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }

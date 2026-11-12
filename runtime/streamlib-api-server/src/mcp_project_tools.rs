@@ -23,9 +23,12 @@ use uuid::Uuid;
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
 use crate::mcp_project_asset_tools::{
-    ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, AUTHOR_ARGUMENT_DESCRIPTION,
-    IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION, ProjectTransactionAuthorToolArgument,
-    the_author_of_a_change, the_idempotency_key_a_caller_sent,
+    ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION, the_author_of_a_change,
+    the_idempotency_key_a_caller_sent,
+};
+use streamlib_control_contract::{
+    AUTHOR_ARGUMENT_DESCRIPTION, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
+    ProjectTransactionAuthorArgument,
 };
 
 #[derive(Deserialize, JsonSchema)]
@@ -37,7 +40,7 @@ struct RenameProjectToolArguments {
     #[schemars(description = "The project's new name; never blank.")]
     name: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -51,7 +54,7 @@ struct SetProjectDescriptionToolArguments {
     #[schemars(description = "What the project is; `null` or blank clears it.")]
     description: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -67,7 +70,7 @@ struct SetProjectCoverToolArguments {
     )]
     cover: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -83,7 +86,7 @@ struct DuplicateProjectToolArguments {
     )]
     into: PathBuf,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
 }
 
 #[derive(Deserialize, JsonSchema)]

@@ -1,0 +1,27 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-control-contract"
+description = "engine-free: every operation a StreamLib runtime's control plane serves, declared once, and the versioned contract file generated from them"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "streamlib_control_contract"
+path = "src/lib.rs"
+
+[dependencies]
+schemars = { version = "1.2", features = ["uuid1"] }
+serde.workspace = true
+serde_json.workspace = true
+streamlib-project-repository = { path = "../streamlib-project-repository", default-features = false, features = ["mcp-tool-json-schema"] }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", features = ["json-schema"] }
+uuid = { version = "1.11", features = ["serde"] }
+
+[lints]
+workspace = true

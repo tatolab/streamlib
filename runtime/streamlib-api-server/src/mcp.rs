@@ -50,29 +50,36 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use rmcp::{prompt_handler, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use streamlib::sdk::error::{Error, PrivacyGatedCaptureDevice, Result as StreamlibResult};
+use streamlib::sdk::error::{Error, Result as StreamlibResult};
 use streamlib::sdk::runtime::{
     CreateProjectRequest, OperationsOnTheStreamsLoadedInThisRuntime, OutputPortViewerHeldOpen,
     ProjectOpenOrReloadRequest, ProjectVenvSyncPackage, ProjectVenvSyncPackageKind,
     ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress, RuntimeOperations,
-    StreamAction, StreamActionKind, StreamActionState, StreamActionStep, StreamListingState,
-    StreamLocation,
+    StreamAction, StreamActionKind, StreamActionState,
+};
+use streamlib_control_contract::{
+    ControlOperation, ControlOperationCall, DescribeRuntime, DescribeRuntimeRequest, Graph,
+    GraphRequest, ListStreams, ListStreamsRequest,
 };
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
-    CreateProjectToolResult, DescribeStreamActionToolResult, DescribeStreamActionToolResultStream,
-    ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState, LogsToolResult,
+    CancelStreamActionToolResult, CloseViewerToolResult, CreateProjectToolResult,
+    DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, LogsToolResult,
     OpenViewerToolResult, PausePlaybackToolResult, ProjectStreamActionQueuedToolResult,
     ProjectVenvSyncOnTheWire, ProjectVenvSyncPackageKindOnTheWire, ProjectVenvSyncPackageOnTheWire,
     ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire, RemoveProjectToolResult,
     ResumePlaybackToolResult, SetStreamClockScaleToolResult, StreamActionKindOnTheWire,
-    StreamActionStateOnTheWire, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    StreamActionStateOnTheWire,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
 };
 use tokio_util::sync::CancellationToken;
+
+use crate::control_operation_dispatcher::{
+    ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
+    ControlRequestOrigin, listed_stream_state_on_the_wire, stream_action_step_on_the_wire,
+};
 
 /// The protocol revisions `POST /mcp` serves: the latest `rmcp` implements
 /// alone, since the endpoint demands the per-request metadata no earlier
@@ -110,8 +117,6 @@ const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about,
 const PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str = "The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.";
 
 /// What `graph`'s optional `stream` argument says.
-const GRAPH_STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream whose graph to export, by the stream id `list_streams` reports. Omit it for every loaded stream's graph under the machine's name.";
-
 /// What a stream action's `stream` argument says.
 const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
     "The stream, by the stream id `list_streams` reports: loaded, or recorded and not loaded.";
@@ -241,6 +246,58 @@ impl LocalApiMcpServerHandler {
             .map_err(|refusal| format!("{tool} failed: {refusal}"))
     }
 
+    /// The dispatcher over this handler's runtime services.
+    pub(crate) fn control_operation_dispatcher(&self) -> ControlOperationDispatcher {
+        ControlOperationDispatcher {
+            operations_on_the_loaded_streams: Arc::clone(&self.operations_on_the_loaded_streams),
+            project_repositories: Arc::clone(&self.project_repositories_open_in_this_runtime),
+            project_actions_refused: Arc::clone(
+                &self.project_actions_refused_since_the_runtime_started,
+            ),
+        }
+    }
+
+    /// Run `call` through the dispatcher and answer it as its tool does.
+    pub(crate) async fn a_dispatched_control_operation(
+        &self,
+        call: ControlOperationCall,
+        tool_call_request_context: &RequestContext<RoleServer>,
+    ) -> ToolCallAnswer {
+        let method_name = call.method_name();
+        let answered = self
+            .control_operation_dispatcher()
+            .dispatch(
+                call,
+                &control_request_origin_of_an_mcp_tool_call(tool_call_request_context),
+            )
+            .await;
+        self.the_tool_result_of_a_control_operation(method_name, answered)
+    }
+
+    /// A dispatched operation's answer as the tool `tool_name` answers it.
+    pub(crate) fn the_tool_result_of_a_control_operation(
+        &self,
+        tool_name: &str,
+        answered: Result<ControlOperationAnswer, ControlOperationRefusal>,
+    ) -> ToolCallAnswer {
+        match answered {
+            Ok(ControlOperationAnswer::DescribeRuntime(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::ListStreams(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Ok(ControlOperationAnswer::Graph(graph)) => Ok(json_text_tool_result(&graph)),
+            Ok(ControlOperationAnswer::GraphTransaction(result)) => {
+                serialized_tool_result(tool_name, &result)
+            }
+            Err(ControlOperationRefusal::RefusedAction(refusal)) => Ok(
+                crate::mcp_stream_graph_tools::a_tool_result_of_the_refusal(*refusal),
+            ),
+            Err(ControlOperationRefusal::Failed(why)) => Err(why),
+        }
+    }
+
     /// Run the blocking stream action `action` over the runtime's streams on a
     /// blocking task; a refusal is the engine's own words.
     pub(crate) async fn a_stream_action_off_the_async_runtime<
@@ -258,6 +315,17 @@ impl LocalApiMcpServerHandler {
             .await
             .map_err(|join_failure| format!("the stream action did not finish: {join_failure}"))?
             .map_err(|refusal: Error| refusal.to_string())
+    }
+}
+
+/// Where an MCP tool call came from: the name its client gave in `clientInfo`.
+pub(crate) fn control_request_origin_of_an_mcp_tool_call(
+    tool_call_request_context: &RequestContext<RoleServer>,
+) -> ControlRequestOrigin {
+    ControlRequestOrigin {
+        client_name: tool_call_request_context
+            .client_info()
+            .map(|client| client.name),
     }
 }
 
@@ -283,14 +351,6 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 // ============================================================================
 // Tool arguments
 // ============================================================================
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
-struct GraphToolArguments {
-    #[schemars(description = GRAPH_STREAM_ARGUMENT_DESCRIPTION)]
-    stream: Option<String>,
-}
 
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -418,11 +478,6 @@ struct ResumePlaybackToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct ListStreamsToolArguments {}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
 struct SetStreamClockScaleToolArguments {
     #[schemars(description = STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION)]
     stream: String,
@@ -462,11 +517,6 @@ struct CloseViewerToolArguments {
 #[derive(Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
-struct DescribeRuntimeToolArguments {}
-
-#[derive(Deserialize, JsonSchema)]
-#[schemars(crate = "rmcp::schemars")]
-#[serde(deny_unknown_fields)]
 struct ListSamplesToolArguments {}
 
 /// A tool's answer: its result, or the message an `isError` result carries.
@@ -478,26 +528,17 @@ pub(crate) type ToolCallAnswer = Result<CallToolResult, String>;
 
 #[tool_router]
 impl LocalApiMcpServerHandler {
-    #[tool(
-        description = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph."
-    )]
+    #[tool(description = Graph::AGENT_USAGE_NOTE)]
     async fn graph(
         &self,
-        Parameters(GraphToolArguments { stream }): Parameters<GraphToolArguments>,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<GraphRequest>,
     ) -> ToolCallAnswer {
-        let graph = match stream {
-            Some(stream) => self
-                .the_stream_a_tool_call_names("graph", &stream)?
-                .to_json_async()
-                .await
-                .map_err(|e| format!("graph export failed: {e}"))?,
-            None => {
-                crate::handlers::machine_wide_graph_json(&self.operations_on_the_loaded_streams)
-                    .await
-                    .map_err(|e| format!("graph export failed: {e}"))?
-            }
-        };
-        Ok(json_text_tool_result(&graph))
+        self.a_dispatched_control_operation(
+            ControlOperationCall::Graph(request),
+            &tool_call_request_context,
+        )
+        .await
     }
 
     #[tool(
@@ -826,47 +867,17 @@ impl LocalApiMcpServerHandler {
         )
     }
 
-    #[tool(
-        description = "List every stream the runtime holds: its stream id as `stream`, its `display_name`, its `location` — its project directory, its project's UUID as `project` and its stream asset's UUID as `stream_asset`, `null` for a record an earlier runtime wrote — and its state: `running` (playing, or recorded playing and re-loaded playing at the runtime's next start), `stopped` (open with its playback stopped, its graph loaded to read and edit while its node count is set, until `start_playback`), `paused` (open with its playback paused by `pause_playback`, until `resume_playback`), `closed` (its project closed by `close_project`, not loaded, until `open_project`), `preparing` (an action that loads it — an `open_project`, `reload_project` or `start_playback` — is queued or under way on it, named by `action`, on its `step`: `reading_the_graph_documents`, `making_the_venv` or `starting`, `null` while it waits), `stopping` (a `stop_playback`, `close_project` or `remove_project` of its project is queued or under way on it, named by `action`, on the step `stopping`, `null` while it waits), or `failed` (its code, its venv, its load or its start failed, and held stopped from its document when that reads, its graph there to read and edit, until a play or a `reload_project` retries it; implicated in the runtime's last two crashes in a row, and built at no start until a play or `reload_project` of its project retries it; or recorded by an earlier runtime, never loaded, with `failed_because` saying to run it again and `remove_project` forgetting it), with the node count of its loaded graph (`null` when it is not loaded), `failed_because`, why a failed stream failed (`null` otherwise), and `capture_devices_whose_access_was_never_asked_for`, each of `camera` and `microphone` that a node of the loaded stream refused because nobody has asked the user for its access, as when the runtime re-loaded the stream on its own at its start (empty otherwise): a `close_project` then `open_project` of its project asks."
-    )]
+    #[tool(description = ListStreams::AGENT_USAGE_NOTE)]
     async fn list_streams(
         &self,
-        Parameters(ListStreamsToolArguments {}): Parameters<ListStreamsToolArguments>,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<ListStreamsRequest>,
     ) -> ToolCallAnswer {
-        let listings = self
-            .a_stream_action_off_the_async_runtime(|operations_on_the_loaded_streams| {
-                Ok(operations_on_the_loaded_streams.list_streams())
-            })
-            .await?;
-        serialized_tool_result(
-            "list_streams",
-            &ListStreamsToolResult {
-                streams: listings
-                    .into_iter()
-                    .map(|listing| ListStreamsToolResultStream {
-                        stream: listing.stream_id,
-                        display_name: listing.display_name,
-                        location: listing.stream_location.map(stream_location_on_the_wire),
-                        state: listed_stream_state_on_the_wire(listing.state),
-                        node_count: listing.node_count,
-                        failed_because: listing.failed_because,
-                        capture_devices_whose_access_was_never_asked_for: listing
-                            .capture_devices_whose_access_was_never_asked_for
-                            .into_iter()
-                            .map(capture_device_on_the_wire)
-                            .collect(),
-                        step: listing
-                            .stream_action_under_way
-                            .as_ref()
-                            .and_then(|working_on_it| working_on_it.step)
-                            .map(stream_action_step_on_the_wire),
-                        action: listing
-                            .stream_action_under_way
-                            .map(|working_on_it| working_on_it.action_id),
-                    })
-                    .collect(),
-            },
+        self.a_dispatched_control_operation(
+            ControlOperationCall::ListStreams(request),
+            &tool_call_request_context,
         )
+        .await
     }
 
     #[tool(
@@ -992,49 +1003,17 @@ impl LocalApiMcpServerHandler {
         )
     }
 
-    #[tool(
-        description = "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream."
-    )]
+    #[tool(description = DescribeRuntime::AGENT_USAGE_NOTE)]
     async fn describe_runtime(
         &self,
-        Parameters(DescribeRuntimeToolArguments {}): Parameters<DescribeRuntimeToolArguments>,
+        tool_call_request_context: RequestContext<RoleServer>,
+        Parameters(request): Parameters<DescribeRuntimeRequest>,
     ) -> ToolCallAnswer {
-        serialized_tool_result(
-            "describe_runtime",
-            &self
-                .operations_on_the_loaded_streams
-                .describe_this_runtime(),
+        self.a_dispatched_control_operation(
+            ControlOperationCall::DescribeRuntime(request),
+            &tool_call_request_context,
         )
-    }
-}
-
-fn listed_stream_state_on_the_wire(state: StreamListingState) -> ListedStreamState {
-    match state {
-        StreamListingState::Running => ListedStreamState::Running,
-        StreamListingState::Stopped => ListedStreamState::Stopped,
-        StreamListingState::Paused => ListedStreamState::Paused,
-        StreamListingState::Closed => ListedStreamState::Closed,
-        StreamListingState::Failed => ListedStreamState::Failed,
-        StreamListingState::Preparing => ListedStreamState::Preparing,
-        StreamListingState::Stopping => ListedStreamState::Stopping,
-    }
-}
-
-fn capture_device_on_the_wire(device: PrivacyGatedCaptureDevice) -> CaptureDeviceOnTheWire {
-    match device {
-        PrivacyGatedCaptureDevice::Camera => CaptureDeviceOnTheWire::Camera,
-        PrivacyGatedCaptureDevice::Microphone => CaptureDeviceOnTheWire::Microphone,
-    }
-}
-
-fn stream_action_step_on_the_wire(step: StreamActionStep) -> StreamActionStepOnTheWire {
-    match step {
-        StreamActionStep::MakingTheVenv => StreamActionStepOnTheWire::MakingTheVenv,
-        StreamActionStep::ReadingTheGraphDocuments => {
-            StreamActionStepOnTheWire::ReadingTheGraphDocuments
-        }
-        StreamActionStep::Starting => StreamActionStepOnTheWire::Starting,
-        StreamActionStep::Stopping => StreamActionStepOnTheWire::Stopping,
+        .await
     }
 }
 
@@ -1150,15 +1129,6 @@ fn refuse_a_relative_project_directory(project_directory: &std::path::Path) -> R
         "`project_directory` must be an absolute path; got `{}`",
         project_directory.display()
     ))
-}
-
-/// Where a stream lives, as the local API reports it.
-fn stream_location_on_the_wire(stream_location: StreamLocation) -> StreamLocationOnTheWire {
-    StreamLocationOnTheWire {
-        project_directory: stream_location.project_directory,
-        project: stream_location.project,
-        stream_asset: stream_location.stream_asset,
-    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -1339,6 +1309,7 @@ pub(crate) mod tests {
     use streamlib::sdk::error::Result;
     use streamlib::sdk::runtime::{
         BoxFuture, OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations,
+        StreamListingState, StreamLocation,
     };
     use streamlib_runtime_client_contract::local_api_wire_contract::DescribeRuntimeToolResult;
 
@@ -1902,6 +1873,24 @@ pub(crate) mod tests {
                 tool["inputSchema"]["type"], "object",
                 "tool `{}` must declare an object inputSchema",
                 tool["name"]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_registered_operation_is_a_tool_carrying_its_registry_usage_note() {
+        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
+        for declaration in streamlib_control_contract::CONTROL_OPERATIONS {
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == declaration.method_name)
+                .unwrap_or_else(|| {
+                    panic!("`{}` is registered but no tool", declaration.method_name)
+                });
+            assert_eq!(
+                tool["description"], declaration.agent_usage_note,
+                "tool `{}` must carry the registry's agent usage note",
+                declaration.method_name
             );
         }
     }

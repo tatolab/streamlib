@@ -26,12 +26,12 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use uuid::Uuid;
 
 use crate::mcp::{LocalApiMcpServerHandler, ToolCallAnswer, serialized_tool_result};
-use crate::mcp_project_asset_tools::{
-    AUTHOR_ARGUMENT_DESCRIPTION, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
-    ProjectTransactionAuthorToolArgument, the_author_of_a_change,
-    the_idempotency_key_a_caller_sent,
+use crate::mcp_project_asset_tools::{the_author_of_a_change, the_idempotency_key_a_caller_sent};
+use crate::stream_graph_transaction_executor::StreamGraphTransactionExecutor;
+use streamlib_control_contract::{
+    AUTHOR_ARGUMENT_DESCRIPTION, GraphEditMode, IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION,
+    ProjectTransactionAuthorArgument,
 };
-use crate::mcp_stream_graph_tools::{GraphEditMode, GraphTransactionInFlight};
 
 const IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
     "The project that imports, by absolute path: a folder holding `tatolab-project.json`.";
@@ -51,7 +51,7 @@ struct AddDependencyToolArguments {
     )]
     folder: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -73,7 +73,7 @@ struct UpdateDependencyToolArguments {
     )]
     overwrite_edited_files: Option<bool>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -99,7 +99,7 @@ struct RemoveDependencyToolArguments {
     #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
     project: String,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -117,7 +117,7 @@ struct UseDependencyStreamToolArguments {
     #[schemars(description = DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION)]
     name: Option<String>,
     #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
-    author: Option<ProjectTransactionAuthorToolArgument>,
+    author: Option<ProjectTransactionAuthorArgument>,
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     idempotency_key: Option<String>,
 }
@@ -239,7 +239,7 @@ impl LocalApiMcpServerHandler {
                 project_repository_held.project_directory().to_path_buf();
             drop(project_repository_held);
             if applied_now {
-                GraphTransactionInFlight {
+                StreamGraphTransactionExecutor {
                     operations_on_the_loaded_streams: operations_on_the_loaded_streams.as_ref(),
                     project_repositories: &project_repositories,
                     async_runtime: &async_runtime,
