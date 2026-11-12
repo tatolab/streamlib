@@ -207,29 +207,31 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         state_fields: Vec<String>,
         state_lifetime: NodeValueLifetime,
     ) {
+        if state_fields.is_empty() {
+            self.forget_a_stateful_function_node(breadcrumb_number);
+            return;
+        }
         let noted_now = StatefulFunctionNodeItsFarSideCalls {
             breadcrumb_number,
             function_node_uuid,
             state_fields,
             state_lifetime,
         };
-        let noted_before = self
+        match self
             .stateful_function_nodes_its_far_side_calls
-            .iter()
-            .position(|noted| noted.breadcrumb_number == breadcrumb_number);
-        match (noted_before, noted_now.state_fields.is_empty()) {
-            (Some(index), false) => {
-                self.stateful_function_nodes_its_far_side_calls[index] = noted_now
-            }
-            (Some(index), true) => {
-                self.stateful_function_nodes_its_far_side_calls
-                    .remove(index);
-            }
-            (None, false) => self
+            .iter_mut()
+            .find(|noted| noted.breadcrumb_number == breadcrumb_number)
+        {
+            Some(noted_before) => *noted_before = noted_now,
+            None => self
                 .stateful_function_nodes_its_far_side_calls
                 .push(noted_now),
-            (None, true) => {}
         }
+    }
+
+    fn forget_a_stateful_function_node(&mut self, breadcrumb_number: u32) {
+        self.stateful_function_nodes_its_far_side_calls
+            .retain(|noted| noted.breadcrumb_number != breadcrumb_number);
     }
 
     fn as_setup_command_ports(&self) -> JsonValue {
@@ -639,6 +641,7 @@ impl OutOfProcessLinkWiringEnvelope {
         {
             return Err(crate::core::error::Error::Runtime(reason.clone()));
         }
+        let mut state_lifetimes_the_island_declares = Vec::new();
         if let Some(nodes) = function_node_island
             .get_mut("nodes")
             .and_then(JsonValue::as_array_mut)
@@ -665,13 +668,18 @@ impl OutOfProcessLinkWiringEnvelope {
                     .get("state_lifetime")
                     .and_then(|state_lifetime| serde_json::from_value(state_lifetime.clone()).ok())
                     .unwrap_or(NodeValueLifetime::Reset);
-                if let Some(function_node_uuid) = stateful_function_node_uuid {
-                    recorded.note_a_stateful_function_node(
-                        breadcrumb_number,
-                        function_node_uuid,
-                        state_fields,
-                        state_lifetime,
-                    );
+                match stateful_function_node_uuid {
+                    Some(function_node_uuid) => {
+                        recorded.note_a_stateful_function_node(
+                            breadcrumb_number,
+                            function_node_uuid,
+                            state_fields,
+                            state_lifetime,
+                        );
+                        state_lifetimes_the_island_declares
+                            .push((function_node_uuid, state_lifetime));
+                    }
+                    None => recorded.forget_a_stateful_function_node(breadcrumb_number),
                 }
                 node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
             }
@@ -683,6 +691,16 @@ impl OutOfProcessLinkWiringEnvelope {
         recorded
             .function_node_islands_feeding_its_input_ports
             .push(function_node_island.clone());
+        if let Some(function_node_states) = self
+            .function_node_states_its_far_side_writes
+            .lock()
+            .as_ref()
+        {
+            for (function_node_uuid, state_lifetime) in state_lifetimes_the_island_declares {
+                function_node_states
+                    .note_the_state_lifetime_of_a_function_node(function_node_uuid, state_lifetime);
+            }
+        }
         match &recorded.how_a_link_reaches_the_far_side {
             HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
                 let answer_cell = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
@@ -1639,6 +1657,94 @@ mod tests {
             vec!["phase".to_string(), "depth".to_string()]
         );
         assert_eq!(lfo.state_lifetime, NodeValueLifetime::Kept);
+    }
+
+    fn the_lfo_island_recorded_again_with(lfo: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "link_id": "L-island",
+            "nodes": [{"node": "P-remap", "name": "remap"}, lfo],
+        })
+    }
+
+    #[test]
+    fn a_node_a_live_edit_makes_stateless_is_no_longer_noted_stateful() {
+        let envelope = an_envelope_whose_island_calls_a_stateful_lfo();
+        envelope
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                the_lfo_island_recorded_again_with(serde_json::json!({
+                    "node": "P-lfo",
+                    "name": "lfo",
+                })),
+            )
+            .expect("a far side not yet set up takes its islands");
+
+        assert!(
+            envelope
+                .recorded_links_and_how_the_next_reaches_the_far_side
+                .lock()
+                .stateful_function_nodes_its_far_side_calls
+                .is_empty()
+        );
+    }
+
+    /// A live edit that declares a running node's state kept, with no respawn between, has
+    /// Stop keep the state its helper wrote.
+    #[test]
+    fn a_live_edit_declaring_a_running_nodes_state_kept_has_stop_keep_it() {
+        let envelope = an_envelope_whose_island_calls_a_stateful_lfo();
+        let project_directory = tempfile::tempdir().expect("a temporary project");
+        let project_stores =
+            Arc::new(crate::core::context::ProjectStoresOpenInThisRuntime::default());
+        let function_node_states = Arc::new(FunctionNodeStatesCarriedForOneStream::default());
+        function_node_states.keep_each_state_in({
+            let project_stores = Arc::clone(&project_stores);
+            let project_directory = project_directory.path().to_path_buf();
+            Arc::new(move |node_uuid| {
+                Ok(crate::core::context::StoreScopedToThisNode::of_the_node(
+                    project_stores.the_store_of_the_project_at(&project_directory)?,
+                    node_uuid,
+                ))
+            })
+        });
+        let parent_node = Iceoryx2Node::for_this_test_process();
+        let board = envelope
+            .create_the_loss_count_board_for_this_helper_spawn_on(
+                &parent_node,
+                &function_node_states,
+                "P-reader",
+                Vec::new(),
+            )
+            .expect("the spawn creates its board");
+        let helper_node = Iceoryx2Node::for_this_test_process();
+        let helpers_writer = helper_node
+            .open_helper_process_loss_count_board_writer(
+                board["service_name"].as_str().unwrap(),
+                &[],
+                &[1],
+            )
+            .expect("the helper opens its board");
+        helpers_writer
+            .write_the_state_of_a_function_node(1, &[0.25])
+            .unwrap();
+
+        envelope
+            .record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
+                the_lfo_island_recorded_again_with(serde_json::json!({
+                    "node": "P-lfo",
+                    "name": "lfo",
+                    "node_uuid": the_lfo_uuid(),
+                    "state_fields": ["phase"],
+                    "state_lifetime": "kept",
+                })),
+            )
+            .expect("a far side not yet set up takes its islands");
+        function_node_states.keep_each_kept_state_and_forget_each_reset_one();
+
+        assert_eq!(
+            function_node_states.the_current_state_of(the_lfo_uuid()),
+            Some(the_lfo_at(0.25)),
+            "the state the helper wrote stays in the store past Stop"
+        );
     }
 
     /// Each spawn's board carries an entry for the stateful node alone, and a

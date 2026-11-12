@@ -207,6 +207,21 @@ impl FunctionNodeStatesCarriedForOneStream {
         });
     }
 
+    /// Take the lifetime a live edit declares for the state of a function node already noted.
+    pub fn note_the_state_lifetime_of_a_function_node(
+        &self,
+        function_node_uuid: Uuid,
+        state_lifetime: NodeValueLifetime,
+    ) {
+        if let Some(carried) = self
+            .by_function_node_uuid
+            .lock()
+            .get_mut(&function_node_uuid)
+        {
+            carried.state_lifetime = state_lifetime;
+        }
+    }
+
     /// Read the state of every node the helper whose board `loss_counts` reads
     /// last wrote, and keep it past that board, in memory and in the store: the
     /// helper went away, or a new spawn's board replaces its own.
