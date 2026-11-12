@@ -185,3 +185,20 @@ pub struct OneLinkGraphEditRequest {
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     pub idempotency_key: Option<String>,
 }
+
+/// `discover`'s params.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DiscoverRequest {
+    /// The contract version the client was built against; another version than the runtime's is
+    /// refused naming both.
+    pub contract_version: Option<u32>,
+}
+
+/// `subscribe_project_changes`' params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribeProjectChangesRequest {
+    /// The projects, by UUID, whose changes the connection is sent; refused when empty.
+    pub projects: Vec<Uuid>,
+}

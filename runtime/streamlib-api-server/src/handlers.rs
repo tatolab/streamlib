@@ -34,6 +34,7 @@ use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
+    CONTROL_JSON_RPC_ROUTE_PATH, CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
     MCP_STDIO_UPGRADE_REQUEST_TARGET, MCP_STREAMABLE_HTTP_ROUTE_PATH,
 };
 
@@ -101,7 +102,22 @@ pub(crate) fn build_router(
         .on_request(DefaultOnRequest::new().level(Level::DEBUG))
         .on_response(DefaultOnResponse::new().level(Level::DEBUG));
 
+    let control_operation_dispatcher = local_api_mcp_server_handler.control_operation_dispatcher();
     let router = router
+        .route(
+            CONTROL_JSON_RPC_ROUTE_PATH,
+            crate::control_json_rpc_adapter::control_json_rpc_route(
+                control_operation_dispatcher.clone(),
+            ),
+        )
+        .route(
+            CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
+            crate::control_json_rpc_adapter::control_json_rpc_stream_upgrade_route(
+                control_operation_dispatcher,
+                Arc::clone(&local_api_mcp_server_handler.project_repositories_open_in_this_runtime),
+                local_api_stopping_token.clone(),
+            ),
+        )
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
         .route_service(MCP_STREAMABLE_HTTP_ROUTE_PATH, local_api_mcp_service)

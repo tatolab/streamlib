@@ -5527,7 +5527,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-control-contract"
-version = "0.1.0"
+version = "0.68.71"
 dependencies = [
  "schemars 1.2.2",
  "serde",

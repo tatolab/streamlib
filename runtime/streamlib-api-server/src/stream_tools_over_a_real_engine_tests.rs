@@ -2377,6 +2377,70 @@ async fn a_graph_action_sent_over_mcp_is_the_action_its_commit_records() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_both_doors_agree() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        engine.operations_on_the_loaded_streams(),
+    )
+    .await;
+
+    let mut subscriber = served.control_stream("").await;
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_changes",
+                      "params": { "projects": [project.project] } }),
+        )
+        .await;
+    assert_eq!(
+        subscriber.next_message().await["result"]["projects"],
+        json!([project.project])
+    );
+
+    let applied = tool_answer(
+        &served
+            .mcp_tool_result(
+                "transact",
+                json!({
+                    "author": an_agent_named("alice"),
+                    "operations": [{ "operation": "rename_node", "stream": stream_asset,
+                                     "node": SOURCE_NODE_UUID, "name": "camera" }],
+                }),
+            )
+            .await,
+    )
+    .expect("the transaction applies");
+
+    let notification = subscriber.next_message().await;
+    assert_eq!(notification["method"], "project_changed", "{notification}");
+    assert_eq!(notification["params"]["change"], "applied");
+    assert_eq!(
+        notification["params"]["transaction"]["transaction"],
+        applied["transaction"]
+    );
+    assert_eq!(
+        notification["params"]["transaction"]["author_name"],
+        "alice"
+    );
+
+    let graph_over_mcp = tool_answer(
+        &served
+            .mcp_tool_result("graph", json!({ "stream": stream_id }))
+            .await,
+    )
+    .expect("the graph exports");
+    let graph_over_control = served
+        .control_call("graph", json!({ "stream": stream_id }))
+        .await;
+    assert_eq!(
+        graph_over_control["result"]["nodes"],
+        graph_over_mcp["nodes"]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_reverses_them() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_one_source();

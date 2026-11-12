@@ -103,7 +103,7 @@ fn requests_the_mcp_stdio_upgrade(request_headers: &HeaderMap) -> bool {
 
 /// Whether any `header_name` value, read as HTTP's comma-separated list, holds
 /// `expected_token`, case-insensitively.
-fn header_lists_token(
+pub(crate) fn header_lists_token(
     request_headers: &HeaderMap,
     header_name: HeaderName,
     expected_token: &str,

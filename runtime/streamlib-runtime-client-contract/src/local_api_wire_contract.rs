@@ -19,6 +19,25 @@ pub const MCP_STDIO_UPGRADE_REQUEST_TARGET: &str = "/mcp/stdio";
 /// case-insensitively.
 pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 
+/// The route each control operation is served on as one JSON-RPC 2.0 request per HTTP `POST`.
+pub const CONTROL_JSON_RPC_ROUTE_PATH: &str = "/control";
+
+/// The request target a client upgrades to a connection of newline-delimited JSON-RPC 2.0
+/// messages on, which stays open for notifications.
+pub const CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET: &str = "/control/stream";
+
+/// The `Upgrade` protocol token [`CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET`] switches to,
+/// matched case-insensitively.
+pub const CONTROL_JSON_RPC_STREAM_UPGRADE_PROTOCOL_TOKEN: &str = "control-jsonrpc";
+
+/// The header a control client names the contract version it was built against in; another
+/// version than the runtime's is refused before any call is served.
+pub const CONTROL_CONTRACT_VERSION_HEADER_NAME: &str = "tatolab-control-contract-version";
+
+/// The header a control client names itself in, which a change it makes with no author is
+/// recorded under.
+pub const CONTROL_CLIENT_NAME_HEADER_NAME: &str = "tatolab-control-client-name";
+
 /// The `logs` tool's result: one project's log records after the cursor asked for, read from
 /// the project's log on disk.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -737,6 +756,7 @@ pub struct ListAssetsToolResult {
 
 /// One transaction a project's change feed holds.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectTransactionOnTheWire {
     /// The format the transaction was recorded in, `1` for one recorded before formats were.
     pub format_version: u32,

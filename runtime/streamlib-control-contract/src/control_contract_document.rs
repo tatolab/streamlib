@@ -8,8 +8,10 @@ use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
-use crate::control_operation::ControlOperationDeclaration;
-use crate::control_operations::{CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS};
+use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
+use crate::control_operation::{ControlOperation, ControlOperationDeclaration};
+use crate::control_operation_results::ControlContractVersionMismatch;
+use crate::control_operations::{CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, Discover};
 
 /// The OpenRPC version the contract file is written in.
 pub const OPENRPC_DOCUMENT_VERSION: &str = "1.3.2";
@@ -20,6 +22,14 @@ pub const CONTROL_CONTRACT_FILE_WORKSPACE_PATH: &str =
 
 /// The JSON-RPC error code of an operation the runtime refused, its `data` the refusal.
 pub const CONTROL_OPERATION_REFUSED_ERROR_CODE: i64 = 1;
+
+/// The JSON-RPC error code of an operation that could not be carried out, its message the
+/// runtime's own words.
+pub const CONTROL_OPERATION_FAILED_ERROR_CODE: i64 = 2;
+
+/// The JSON-RPC error code of a `discover` from a client built against another contract version,
+/// its `data` both versions.
+pub const CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE: i64 = 3;
 
 const COMPONENT_SCHEMAS_DEFINITIONS_PATH: &str = "/components/schemas/";
 
@@ -39,9 +49,22 @@ pub fn control_contract_document() -> Value {
         })
         .into_generator();
     let refusal_schema = schema_generator.subschema_for::<ProjectActionRefusalOnTheWire>();
+    let contract_version_mismatch_schema =
+        schema_generator.subschema_for::<ControlContractVersionMismatch>();
     let methods: Vec<Value> = CONTROL_OPERATIONS
         .iter()
-        .map(|declaration| the_method_entry_of(declaration, &mut schema_generator, &refusal_schema))
+        .map(|declaration| {
+            the_method_entry_of(
+                declaration,
+                &mut schema_generator,
+                &refusal_schema,
+                &contract_version_mismatch_schema,
+            )
+        })
+        .collect();
+    let notifications: Vec<Value> = CONTROL_NOTIFICATIONS
+        .iter()
+        .map(|declaration| the_notification_entry_of(declaration, &mut schema_generator))
         .collect();
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
@@ -53,7 +76,7 @@ pub fn control_contract_document() -> Value {
             "x-contract-version": CONTROL_CONTRACT_VERSION,
         },
         "methods": methods,
-        "x-notifications": [],
+        "x-notifications": notifications,
         "components": { "schemas": component_schemas },
     })
 }
@@ -62,6 +85,7 @@ fn the_method_entry_of(
     declaration: &ControlOperationDeclaration,
     schema_generator: &mut schemars::SchemaGenerator,
     refusal_schema: &schemars::Schema,
+    contract_version_mismatch_schema: &schemars::Schema,
 ) -> Value {
     let request_schema = (declaration.request_json_schema)(schema_generator);
     let result_schema = (declaration.result_json_schema)(schema_generator);
@@ -79,14 +103,56 @@ fn the_method_entry_of(
             "name": format!("{}_result", declaration.method_name),
             "schema": result_schema,
         },
-        "errors": [{
-            "code": CONTROL_OPERATION_REFUSED_ERROR_CODE,
-            "message": "refused",
-            "data": refusal_schema,
-        }],
+        "errors": the_errors_of(declaration, refusal_schema, contract_version_mismatch_schema),
         "x-since": declaration.since_contract_version,
         "x-stability": declaration.stability,
         "x-group": declaration.group,
+        "x-exposures": declaration.exposures,
+    })
+}
+
+fn the_errors_of(
+    declaration: &ControlOperationDeclaration,
+    refusal_schema: &schemars::Schema,
+    contract_version_mismatch_schema: &schemars::Schema,
+) -> Vec<Value> {
+    let mut errors = vec![
+        json!({
+            "code": CONTROL_OPERATION_REFUSED_ERROR_CODE,
+            "message": "refused",
+            "data": refusal_schema,
+        }),
+        json!({
+            "code": CONTROL_OPERATION_FAILED_ERROR_CODE,
+            "message": "failed",
+        }),
+    ];
+    if declaration.method_name == Discover::METHOD_NAME {
+        errors.push(json!({
+            "code": CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
+            "message": "contract version mismatch",
+            "data": contract_version_mismatch_schema,
+        }));
+    }
+    errors
+}
+
+fn the_notification_entry_of(
+    declaration: &ControlNotificationDeclaration,
+    schema_generator: &mut schemars::SchemaGenerator,
+) -> Value {
+    json!({
+        "name": declaration.method_name,
+        "summary": declaration.one_line_doc,
+        "paramStructure": "by-name",
+        "params": [{
+            "name": "params",
+            "required": true,
+            "schema": (declaration.params_json_schema)(schema_generator),
+        }],
+        "x-subscribed-by": declaration.subscribed_by_method_name,
+        "x-since": declaration.since_contract_version,
+        "x-stability": declaration.stability,
         "x-exposures": declaration.exposures,
     })
 }

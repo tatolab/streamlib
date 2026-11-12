@@ -8,6 +8,95 @@
   },
   "methods": [
     {
+      "name": "discover",
+      "summary": "Answer the contract version this runtime serves, its version and build id, and every method it serves.",
+      "description": "Answer `contract_version`, the version of the contract this runtime serves, its `runtime_version` and `build_id`, and `operations`, every method it serves. A client sends the `contract_version` it was built against; another version is refused naming both, and the client is not served.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/DiscoverRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "discover_result",
+        "schema": {
+          "$ref": "#/components/schemas/DiscoverResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        },
+        {
+          "code": 3,
+          "message": "contract version mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "stable",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
+    },
+    {
+      "name": "subscribe_project_changes",
+      "summary": "Send this connection a `project_changed` notification for each change on the named projects' feeds.",
+      "description": "Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscribeProjectChangesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "subscribe_project_changes_result",
+        "schema": {
+          "$ref": "#/components/schemas/SubscribeProjectChangesResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 1,
+      "x-stability": "experimental",
+      "x-group": "project",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
+    },
+    {
       "name": "describe_runtime",
       "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
       "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
@@ -34,6 +123,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -72,6 +165,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -108,6 +205,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -146,6 +247,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -184,6 +289,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -222,6 +331,10 @@
           "data": {
             "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
           }
+        },
+        {
+          "code": 2,
+          "message": "failed"
         }
       ],
       "x-since": 1,
@@ -234,7 +347,29 @@
       ]
     }
   ],
-  "x-notifications": [],
+  "x-notifications": [
+    {
+      "name": "project_changed",
+      "summary": "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProjectChangedNotificationParams"
+          }
+        }
+      ],
+      "x-subscribed-by": "subscribe_project_changes",
+      "x-since": 1,
+      "x-stability": "experimental",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
+    }
+  ],
   "components": {
     "schemas": {
       "ProjectActionRefusalOnTheWire": {
@@ -360,6 +495,112 @@
           }
         ],
         "description": "Why a node a refused action reached for does not run."
+      },
+      "ControlContractVersionMismatch": {
+        "type": "object",
+        "properties": {
+          "client_contract_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The version the client sent."
+          },
+          "runtime_contract_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The version this runtime serves."
+          }
+        },
+        "required": [
+          "client_contract_version",
+          "runtime_contract_version"
+        ],
+        "description": "The `data` of a `discover` refused for a client built against another contract version."
+      },
+      "DiscoverRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contract_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The contract version the client was built against; another version than the runtime's is\nrefused naming both."
+          }
+        },
+        "description": "`discover`'s params."
+      },
+      "DiscoverResult": {
+        "type": "object",
+        "properties": {
+          "contract_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The contract version this runtime serves."
+          },
+          "runtime_version": {
+            "type": "string",
+            "description": "The runtime's crate version."
+          },
+          "build_id": {
+            "type": "string",
+            "description": "The runtime's build id, `<version>+<git sha>.<per-build nonce>`."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every method this runtime serves, in registry order."
+          }
+        },
+        "required": [
+          "contract_version",
+          "runtime_version",
+          "build_id",
+          "operations"
+        ],
+        "description": "What `discover` answers: the contract a runtime serves and what it is."
+      },
+      "SubscribeProjectChangesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The projects, by UUID, whose changes the connection is sent; refused when empty."
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "description": "`subscribe_project_changes`' params."
+      },
+      "SubscribeProjectChangesResult": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Every project the connection is subscribed to, by UUID, this call's among them."
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "description": "What `subscribe_project_changes` answers: the projects the connection is now sent changes of."
       },
       "DescribeRuntimeRequest": {
         "type": "object",
@@ -1901,6 +2142,153 @@
           "target"
         ],
         "description": "The params of an edit naming one link: `connect`'s, and `disconnect`'s."
+      },
+      "ProjectChangedNotificationParams": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The project, by UUID."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ProjectChangeKindOnTheWire",
+            "description": "What changed; `missed` when the connection fell behind, and the client reads the project's\nchange feed again."
+          },
+          "transaction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectTransactionOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The transaction that applied, when `change` is `applied`; its `undo_state` is absent."
+          }
+        },
+        "required": [
+          "project",
+          "change"
+        ],
+        "description": "`project_changed`'s params."
+      },
+      "ProjectChangeKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "applied",
+            "description": "A transaction applied and its history records it."
+          },
+          {
+            "type": "string",
+            "const": "refused",
+            "description": "The runtime refused an action on the project, which no history records."
+          },
+          {
+            "type": "string",
+            "const": "media_facts_read",
+            "description": "The runtime finished reading an asset's media facts."
+          },
+          {
+            "type": "string",
+            "const": "missed",
+            "description": "The connection fell behind and missed changes."
+          }
+        ],
+        "description": "What changed on a project's change feed."
+      },
+      "ProjectTransactionOnTheWire": {
+        "type": "object",
+        "properties": {
+          "format_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The format the transaction was recorded in, `1` for one recorded before formats were."
+          },
+          "transaction": {
+            "type": "string",
+            "description": "The transaction's UUID."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit on the project history's `main` that records it."
+          },
+          "parent_commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit history stood at when it applied, absent for a project's first."
+          },
+          "author_kind": {
+            "type": "string",
+            "description": "`person`, `agent` or `runtime`."
+          },
+          "author_name": {
+            "type": "string",
+            "description": "The author's name as history shows it."
+          },
+          "operations": {
+            "type": "array",
+            "items": true,
+            "description": "What it changed, in order, each tagged by its `operation`."
+          },
+          "inverse_operations": {
+            "type": "array",
+            "items": true,
+            "description": "What undoes it, in order."
+          },
+          "undoes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transaction this one undoes, when it is an undo."
+          },
+          "redoes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transaction this one redoes, when it is a redo."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key the caller sent it under, when it sent one."
+          },
+          "actions": {
+            "type": "array",
+            "items": true,
+            "description": "The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for\nan undo, a redo, or a change the runtime made itself."
+          },
+          "undo_state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where an edit or a redo stands with its author's undo and redo now: `applied`,\n`undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;\nabsent for an undo."
+          },
+          "applied_at": {
+            "type": "string",
+            "description": "When the runtime applied it, RFC 3339 in UTC to the second, for display only."
+          }
+        },
+        "required": [
+          "format_version",
+          "transaction",
+          "commit",
+          "author_kind",
+          "author_name",
+          "operations",
+          "inverse_operations",
+          "applied_at"
+        ],
+        "description": "One transaction a project's change feed holds."
       }
     }
   }
