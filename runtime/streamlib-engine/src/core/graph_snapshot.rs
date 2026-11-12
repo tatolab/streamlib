@@ -436,6 +436,7 @@ impl GraphSnapshot {
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
                 studio_as_drawn: self.studio.clone(),
+                links_its_validation_set_aside: Vec::new(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })
@@ -540,6 +541,31 @@ pub struct GraphOnlyNodesAsDrawn {
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     pub groups_as_drawn: Vec<LabelledNodeGroup>,
     pub studio_as_drawn: Option<serde_json::Value>,
+    pub links_its_validation_set_aside: Vec<LinkSetAsideByTheGraphsValidation>,
+}
+
+/// A link of a graph document its validation refused, held as drawn and never wired, so the
+/// stream's graph still reads and edits; the stream does not play while it holds one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkSetAsideByTheGraphsValidation {
+    /// The link as the document draws it.
+    pub link: GraphSnapshotLink,
+    /// Why the graph's validation refused it, in the runtime's words.
+    pub why_its_validation_refused_it: String,
+}
+
+impl LinkSetAsideByTheGraphsValidation {
+    /// The link and why it is refused, as a reader is told it.
+    pub fn described(&self) -> String {
+        format!(
+            "its link `{}/{}` -> `{}/{}` is refused: {}",
+            self.link.source.node,
+            self.link.source.port,
+            self.link.target.node,
+            self.link.target.port,
+            self.why_its_validation_refused_it
+        )
+    }
 }
 
 /// A change to a node that a drawn link naming it by name blocks.
@@ -648,6 +674,30 @@ impl GraphOnlyNodesAsDrawn {
         self.fragments_as_drawn.render_into(graph_response);
         graph_response.groups = self.groups_as_drawn.clone();
         graph_response.studio = self.studio_as_drawn.clone();
+        let cast = |name: &str| {
+            cast_exposed_name_to_url_safe(name)
+                .map(std::borrow::Cow::into_owned)
+                .unwrap_or_else(|_| name.to_string())
+        };
+        for set_aside in &self.links_its_validation_set_aside {
+            graph_response
+                .links
+                .push(crate::core::json_schema::LinkOutput {
+                    id: String::new(),
+                    source: LinkPortRefOutput {
+                        node: cast(&set_aside.link.source.node),
+                        port: set_aside.link.source.port.clone(),
+                    },
+                    target: LinkPortRefOutput {
+                        node: cast(&set_aside.link.target.node),
+                        port: set_aside.link.target.port.clone(),
+                    },
+                    capacity: 0,
+                    state: crate::core::json_schema::LinkStateOutput::Error,
+                    error_reason: Some(set_aside.why_its_validation_refused_it.clone()),
+                    components: serde_json::Map::new(),
+                });
+        }
     }
 }
 
@@ -662,6 +712,37 @@ pub struct GraphSnapshotWithGraphOnlyNodesResolved {
 }
 
 impl GraphSnapshotWithGraphOnlyNodesResolved {
+    /// Check the graph as [`Self::validate`] does, setting aside each link whose addition it
+    /// refuses, in the order the graph holds them, so every node and each other link is kept;
+    /// refused as `validate` refuses it when the graph holding none of its links does not pass.
+    pub fn validated_setting_aside_each_link_it_refuses(
+        mut self,
+        node_types: &NodeTypesOneStreamResolves,
+    ) -> Result<Self> {
+        let Err(refusal) = self.validate(node_types) else {
+            return Ok(self);
+        };
+        let links = std::mem::take(&mut self.graph_the_runtime_runs.links);
+        if self.validate(node_types).is_err() {
+            return Err(refusal);
+        }
+        for link in links {
+            self.graph_the_runtime_runs.links.push(link);
+            let Err(link_refusal) = self.validate(node_types) else {
+                continue;
+            };
+            if let Some(link) = self.graph_the_runtime_runs.links.pop() {
+                self.graph_only_nodes_as_drawn
+                    .links_its_validation_set_aside
+                    .push(LinkSetAsideByTheGraphsValidation {
+                        link,
+                        why_its_validation_refused_it: link_refusal.to_string(),
+                    });
+            }
+        }
+        Ok(self)
+    }
+
     /// Check the graph the runtime runs, that each `SetVariable` holds a node
     /// of that graph, or an output port one of its nodes has, whether or not
     /// a get reads it, and that each interface port is linked to ports of its

@@ -555,7 +555,7 @@ impl LoadedStreamInThisRuntime {
             )));
         }
         if let Some(why_it_cannot_play) =
-            self.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+            self.why_its_graph_as_held_keeps_this_stream_from_playing()
         {
             return Err(Error::Runtime(format!(
                 "the stream `{}` was not started: {why_it_cannot_play}",
@@ -1744,11 +1744,59 @@ impl LoadedStreamInThisRuntime {
         committed
     }
 
-    /// Why this stream cannot play: a node of its graph is of a type its node code did not
-    /// describe, held as a placeholder; `None` when every node's type is described.
-    pub fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(
+    /// Describe every type `graph` names, and those its installed modules declare, in this
+    /// stream's interpreter; why its node code did not describe one, for a stream the runtime
+    /// recorded, which holds it as a placeholder.
+    fn describe_every_type_a_load_names(
         &self,
-    ) -> Option<String> {
+        graph: &GraphSnapshot,
+        lend_directory: Option<&Path>,
+    ) -> Result<Option<String>> {
+        let why_its_node_code_did_not_describe = match self
+            .processor_interpreter_launch_record
+            .describe_and_register_every_type_a_load_names(
+                &graph.node_types_its_running_nodes_name_at_every_level(),
+                lend_directory,
+            ) {
+            Ok(()) => None,
+            Err(not_described @ Error::NodeTypesNotDescribed { .. })
+                if self.holding == LoadedStreamHolding::RecordedByTheRuntime =>
+            {
+                Some(not_described.to_string())
+            }
+            Err(refusal) => return Err(refusal),
+        };
+        self.processor_interpreter_launch_record
+            .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
+        Ok(why_its_node_code_did_not_describe)
+    }
+
+    /// Why this stream cannot play: a node of its graph is of a type its node code did not
+    /// describe, held as a placeholder, or a link of its document is set aside by its
+    /// validation; `None` when neither holds.
+    pub fn why_its_graph_as_held_keeps_this_stream_from_playing(&self) -> Option<String> {
+        self.why_a_node_of_a_type_not_described_keeps_this_stream_from_playing()
+            .or_else(|| {
+                self.graph_only_nodes_as_drawn
+                    .lock()
+                    .links_its_validation_set_aside
+                    .first()
+                    .map(|set_aside| set_aside.described())
+            })
+    }
+
+    /// Why a node of a type its node code did not describe, held as a placeholder, keeps
+    /// this stream from playing.
+    fn why_a_node_of_a_type_not_described_keeps_this_stream_from_playing(&self) -> Option<String> {
+        if let Some(why_none_of_its_node_code_is_read) = self
+            .node_types_this_stream_resolves
+            .why_every_node_type_is_held_as_a_placeholder()
+        {
+            return Some(format!(
+                "it is held as its document is written, none of its node code read: \
+                 {why_none_of_its_node_code_is_read}"
+            ));
+        }
         self.compiler.scope(|graph, _tx| {
             graph.traversal().v(()).iter().find_map(|node| {
                 self.node_types_this_stream_resolves
@@ -1786,35 +1834,34 @@ impl LoadedStreamInThisRuntime {
             .refusal_unless_this_runtime_runs_it(self.stream_id())?;
         let graph_whose_every_node_holds_a_uuid =
             graph.with_a_uuid_minted_for_each_node_holding_none();
-        let described = self
-            .processor_interpreter_launch_record
-            .describe_and_register_every_type_a_load_names(
-                &graph_whose_every_node_holds_a_uuid
-                    .node_types_its_running_nodes_name_at_every_level(),
+        let why_its_node_code_did_not_describe = match self
+            .node_types_this_stream_resolves
+            .why_every_node_type_is_held_as_a_placeholder()
+        {
+            Some(why_none_of_it_is_read) => Some(why_none_of_it_is_read),
+            None => self.describe_every_type_a_load_names(
+                &graph_whose_every_node_holds_a_uuid,
                 lend_directory,
-            );
-        let why_its_node_code_did_not_describe = match described {
-            Ok(()) => None,
-            Err(not_described @ Error::NodeTypesNotDescribed { .. })
-                if self.holding == LoadedStreamHolding::RecordedByTheRuntime =>
-            {
-                Some(not_described.to_string())
-            }
-            Err(refusal) => return Err(refusal),
+            )?,
         };
-        self.processor_interpreter_launch_record
-            .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         let resolution = graph_whose_every_node_holds_a_uuid
             .with_graph_only_nodes_resolved(&self.node_types_this_stream_resolves)?;
-        let graph = &resolution.graph_the_runtime_runs;
         if let Some(why_its_node_code_did_not_describe) = &why_its_node_code_did_not_describe {
             self.node_types_this_stream_resolves
                 .hold_a_placeholder_of_each_node_type_not_described(
-                    graph,
+                    &resolution.graph_the_runtime_runs,
                     why_its_node_code_did_not_describe,
                 );
         }
-        resolution.validate(&self.node_types_this_stream_resolves)?;
+        let resolution = if self.holding == LoadedStreamHolding::RecordedByTheRuntime {
+            resolution.validated_setting_aside_each_link_it_refuses(
+                &self.node_types_this_stream_resolves,
+            )?
+        } else {
+            resolution.validate(&self.node_types_this_stream_resolves)?;
+            resolution
+        };
+        let graph = &resolution.graph_the_runtime_runs;
         let node_names_the_graph_only_nodes_hold =
             resolution.graph_only_nodes_as_drawn.node_names_cast();
         self.compiler.scope(|this_streams_graph, _tx| {

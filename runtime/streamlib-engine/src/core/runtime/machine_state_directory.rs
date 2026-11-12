@@ -155,7 +155,16 @@ impl StreamRecord {
         self.failed_because.is_some()
     }
 
-    /// Whether the stream is failed for crashing the runtime, so a start builds none of it.
+    /// Whether the stream, failed for crashing the runtime, crashed it again held from its
+    /// document with none of its node code read, so a start loads none of it.
+    pub fn crashed_the_runtime_even_held_from_its_document(&self) -> bool {
+        self.is_failed_for_crashing_the_runtime()
+            && self.runtime_crashes_in_a_row_implicating_it
+                > super::RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM
+    }
+
+    /// Whether the stream is failed for crashing the runtime, so a start reads none of its
+    /// node code.
     pub fn is_failed_for_crashing_the_runtime(&self) -> bool {
         self.is_failed()
             && self.runtime_crashes_in_a_row_implicating_it

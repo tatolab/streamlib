@@ -427,6 +427,9 @@ pub struct OptionsForLoadingOneStream {
     /// Whether the stream's capture devices may ask the user for access nobody
     /// has answered yet.
     pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    /// Why none of the stream's node code is read: every node is held as a placeholder of its
+    /// type, drawn from the graph as written; `None` reads its node code as a load does.
+    pub why_none_of_its_node_code_is_read: Option<String>,
 }
 
 impl OptionsForLoadingOneStream {
@@ -442,6 +445,15 @@ impl OptionsForLoadingOneStream {
             display_name: None,
             stream_environment: None,
             capture_device_access_prompting: CaptureDeviceAccessPrompting::default(),
+            why_none_of_its_node_code_is_read: None,
+        }
+    }
+
+    /// These options, reading none of the stream's node code for `why_none_of_it_is_read`.
+    pub fn reading_none_of_its_node_code(self, why_none_of_it_is_read: String) -> Self {
+        Self {
+            why_none_of_its_node_code_is_read: Some(why_none_of_it_is_read),
+            ..self
         }
     }
 
@@ -1342,7 +1354,8 @@ impl Runner {
         self.refuse_a_load_once_the_engine_is_shut_down(&stream_id)?;
         self.refuse_a_stream_id_already_loaded(&stream_id)?;
         let project_directory = load_options.resolved_project_directory(&stream_id)?;
-        LoadedStreamInThisRuntime::new(
+        let why_none_of_its_node_code_is_read = load_options.why_none_of_its_node_code_is_read;
+        let stream = LoadedStreamInThisRuntime::new(
             Arc::clone(&self.engine_resources_shared_by_every_stream),
             LoadedStreamNaming {
                 display_name: load_options
@@ -1356,7 +1369,15 @@ impl Runner {
             load_options.capture_device_access_prompting,
             teardown_watchdog_budget,
             holding,
-        )
+        )?;
+        if let Some(why_none_of_its_node_code_is_read) = why_none_of_its_node_code_is_read {
+            stream
+                .node_types_this_stream_resolves()
+                .hold_every_node_type_as_a_placeholder_reading_no_node_code(
+                    why_none_of_its_node_code_is_read,
+                );
+        }
+        Ok(stream)
     }
 
     /// Load `graph` into `stream`, which is not in the table; a refused load

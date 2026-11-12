@@ -234,7 +234,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   edit is gone on it; picking up a document changed on disk is a `reload`; a
   stream implicated in the runtime's last two crashes in a row — a clean stop of the runtime or
   a manual restart is no crash and resets the count — is `failed`, shown with its reason and
-  built at no start until a play or `tatolab reload` retries it; one that cannot re-load at
+  held at the start from its document with none of its node code read, every node drawn as
+  saved, until `tatolab reload` tries it for real (owner, 2026-11-12), and one that crashes the
+  runtime even so is not loaded at a start at all (session, 2026-11-12); one that cannot re-load at
   start (a venv that cannot be made, a type that will not describe, a refused start) is `failed`
   and held stopped from its document, its graph there to read and edit, because nothing a
   person made ever disappears (owner, 2026-11-11); a first load whose document will
@@ -394,7 +396,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   - create into a directory holding a file the scaffold writes.
 
   A document that will not parse, or names what the runtime refuses, records that stream
-  `failed` with the reason until a reload of the fixed document replaces it. The runtime makes a project's `.venv` as the first step
+  `failed` with the reason until a reload of the fixed document replaces it. A document whose
+  nodes validate holds every link its validation refuses as drawn, never wired: `graph` shows
+  each `error` with the reason in `error_reason`, the stream is held stopped and listed `failed`,
+  Play is refused while one stands, and an edit keeps those links and refuses a new one, so the
+  person fixes each in the graph (owner, 2026-11-11). The runtime makes a project's `.venv` as the first step
   of a load, the runtime's re-load at start and create, whenever `.venv/bin/python`
   does not run. It removes a `.venv` whose interpreter does not run first, and never touches
   one whose interpreter runs. A failed sync records the stream `failed` in uv's own words.
