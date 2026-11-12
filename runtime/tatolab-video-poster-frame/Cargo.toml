@@ -23,15 +23,15 @@ machine-directories-under-a-test-root = []
 hardware-tests = []
 
 [dependencies]
-streamlib-asset-media-facts = { path = "../streamlib-asset-media-facts", version = "0.68.69" }
+streamlib-asset-media-facts = { path = "../streamlib-asset-media-facts", version = "0.68.70" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.69" }
-streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.69" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.68.70" }
+streamlib-vulkan-video = { path = "../streamlib-vulkan-video", version = "0.68.70" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-streamlib-owned-device-video-codec-nodes = { path = "../streamlib-owned-device-video-codec-nodes", version = "0.68.69" }
-streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.69" }
+streamlib-owned-device-video-codec-nodes = { path = "../streamlib-owned-device-video-codec-nodes", version = "0.68.70" }
+streamlib-video-bitstream = { path = "../streamlib-video-bitstream", version = "0.68.70" }
 objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
 
 [dev-dependencies]
