@@ -280,17 +280,19 @@ impl EglFns {
     }
 }
 
+type EglQueryDevicesExt =
+    unsafe extern "C" fn(egl::EGLint, *mut egl::EGLDeviceEXT, *mut egl::EGLint) -> egl::EGLBoolean;
+type EglQueryDeviceStringExt =
+    unsafe extern "C" fn(egl::EGLDeviceEXT, egl::EGLint) -> *const c_char;
+type EglGetPlatformDisplayExt =
+    unsafe extern "C" fn(egl::EGLenum, *mut c_void, *const egl::EGLint) -> egl::EGLDisplay;
+
 /// `EGL_EXT_device_enumeration`'s and `EGL_EXT_platform_device`'s client
 /// functions, resolved through `eglGetProcAddress`.
 struct EglDeviceFns {
-    egl_query_devices: unsafe extern "C" fn(
-        egl::EGLint,
-        *mut egl::EGLDeviceEXT,
-        *mut egl::EGLint,
-    ) -> egl::EGLBoolean,
-    egl_query_device_string: unsafe extern "C" fn(egl::EGLDeviceEXT, egl::EGLint) -> *const c_char,
-    egl_get_platform_display:
-        unsafe extern "C" fn(egl::EGLenum, *mut c_void, *const egl::EGLint) -> egl::EGLDisplay,
+    egl_query_devices: EglQueryDevicesExt,
+    egl_query_device_string: EglQueryDeviceStringExt,
+    egl_get_platform_display: EglGetPlatformDisplayExt,
 }
 
 impl EglDeviceFns {
@@ -323,9 +325,15 @@ impl EglDeviceFns {
         let query_device_string = proc_address(c"eglQueryDeviceStringEXT")?;
         let get_platform_display = proc_address(c"eglGetPlatformDisplayEXT")?;
         Some(Self {
-            egl_query_devices: unsafe { std::mem::transmute(query_devices) },
-            egl_query_device_string: unsafe { std::mem::transmute(query_device_string) },
-            egl_get_platform_display: unsafe { std::mem::transmute(get_platform_display) },
+            egl_query_devices: unsafe {
+                std::mem::transmute::<*mut c_void, EglQueryDevicesExt>(query_devices)
+            },
+            egl_query_device_string: unsafe {
+                std::mem::transmute::<*mut c_void, EglQueryDeviceStringExt>(query_device_string)
+            },
+            egl_get_platform_display: unsafe {
+                std::mem::transmute::<*mut c_void, EglGetPlatformDisplayExt>(get_platform_display)
+            },
         })
     }
 
