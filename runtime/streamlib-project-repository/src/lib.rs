@@ -103,7 +103,8 @@ pub use sample_project::{
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
-    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
+    stream_assets_another_stream_of_the_project_places, the_fragment_a_stream_fragment_places,
+    the_stream_document_of_an_import,
 };
 pub use stream_graph_action::{
     DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,

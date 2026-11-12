@@ -17,7 +17,7 @@ use streamlib_project_repository::{
     PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, assets_a_node_config_references,
     every_asset_uuid_the_project_holds, every_sample_project_in,
     graph_document_with_each_stream_fragment_reference_resolved, project_stream_documents,
-    the_sample_project_named,
+    stream_assets_another_stream_of_the_project_places, the_sample_project_named,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListSamplesToolResult, ListSamplesToolResultSample,
@@ -140,8 +140,11 @@ struct ProjectAsALoadReadsIt {
     project_directory: PathBuf,
     /// What its `tatolab-project.json` holds.
     project_file: TatolabProjectFile,
-    /// Each stream asset's graph document, sorted by path.
+    /// The graph document of each stream asset that runs as its own stream, sorted by path:
+    /// every one no other stream of the project places.
     stream_documents: Vec<ProjectStreamDocument>,
+    /// Each stream asset another stream of the project places, which runs only inside it.
+    stream_assets_another_stream_places: BTreeSet<Uuid>,
     /// Every asset the project holds, by UUID, which a node's config may reference.
     asset_uuids_the_project_holds: BTreeSet<Uuid>,
 }
@@ -160,7 +163,13 @@ impl ProjectAsALoadReadsIt {
         };
         let project_file =
             TatolabProjectFile::read_from_project_directory(&project_directory).map_err(refused)?;
-        let stream_documents = project_stream_documents(&project_directory).map_err(refused)?;
+        let mut stream_documents = project_stream_documents(&project_directory).map_err(refused)?;
+        let stream_assets_another_stream_places =
+            stream_assets_another_stream_of_the_project_places(&stream_documents);
+        stream_documents.retain(|stream_document| {
+            !stream_assets_another_stream_places
+                .contains(&stream_document.stream_asset(project_file.project))
+        });
         let asset_uuids_the_project_holds =
             every_asset_uuid_the_project_holds(&project_directory, project_file.project)
                 .map_err(refused)?;
@@ -168,6 +177,7 @@ impl ProjectAsALoadReadsIt {
             project_directory,
             project_file,
             stream_documents,
+            stream_assets_another_stream_places,
             asset_uuids_the_project_holds,
         })
     }
@@ -1882,6 +1892,64 @@ impl Runner {
         ))
     }
 
+    /// Bring the streams the open project in `project_directory` runs as its own in line with
+    /// what its streams place, as its graph documents are on disk now: each stream another
+    /// stream of the project places is unloaded and forgotten, and the load of each stream asset
+    /// placed nowhere that the runtime records no stream of is queued. `None` when no load is
+    /// queued.
+    pub fn bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+        &self,
+        project_directory: &Path,
+    ) -> Option<StreamActionQueued> {
+        let project_directory = std::fs::canonicalize(project_directory)
+            .unwrap_or_else(|_| project_directory.to_path_buf());
+        if !self.the_project_is_open_once_its_queued_actions_run(&project_directory) {
+            return None;
+        }
+        let stream_records = self.stream_records()?;
+        let project = match ProjectAsALoadReadsIt::read(&project_directory) {
+            Ok(project) => project,
+            Err(not_read) => {
+                tracing::warn!(
+                    project_directory = %project_directory.display(),
+                    %not_read,
+                    "the streams the project runs as its own were not brought in line with what \
+                     its streams place"
+                );
+                return None;
+            }
+        };
+        let stream_assets_the_project_runs_as_its_own = project.stream_assets();
+        let stream_assets_the_runtime_records = {
+            let _one_stream_action_at_a_time =
+                self.stream_actions.one_stream_action_at_a_time.lock();
+            self.forget_every_record_of_the_project_whose_stream_asset_is_gone(
+                stream_records,
+                &project,
+                &stream_assets_the_project_runs_as_its_own,
+            );
+            self.current_records_of_the_project(&project_directory)
+                .into_iter()
+                .map(|record| record.location.stream_asset)
+                .collect::<BTreeSet<Uuid>>()
+        };
+        let stream_assets_to_load: BTreeSet<Uuid> = stream_assets_the_project_runs_as_its_own
+            .into_iter()
+            .filter(|stream_asset| !stream_assets_the_runtime_records.contains(stream_asset))
+            .collect();
+        if stream_assets_to_load.is_empty() {
+            return None;
+        }
+        let playback_after_the_load =
+            self.the_playback_a_load_of_the_open_project_keeps(&project_directory);
+        Some(self.queue_the_load_of_the_stream_assets_of_the_project(
+            project_directory,
+            Some(stream_assets_to_load),
+            playback_after_the_load,
+            StreamActionKind::Load,
+        ))
+    }
+
     /// Why the record of `stream`, a stream the runtime records, holds it failed; `None` when
     /// it records it not failed, or records none.
     fn why_the_record_of_a_loaded_stream_holds_it_failed(
@@ -2832,8 +2900,9 @@ impl Runner {
     }
 
     /// Unload and forget every record of `project` whose stream asset is not among
-    /// `stream_assets_the_project_holds`: its graph document is gone. A record of the project
-    /// that another copy of it holds is left as it is; one that cannot be removed is logged.
+    /// `stream_assets_the_project_holds`: its graph document is gone, or another stream of the
+    /// project places it, so it runs only there. A record of the project that another copy of it
+    /// holds is left as it is; one that cannot be removed is logged.
     fn forget_every_record_of_the_project_whose_stream_asset_is_gone(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,
@@ -2850,18 +2919,28 @@ impl Runner {
             {
                 continue;
             }
+            let why_it_is_forgotten = if project
+                .stream_assets_another_stream_places
+                .contains(&record.location.stream_asset)
+            {
+                "another stream of its project places it, so it runs only inside that stream"
+                    .to_owned()
+            } else {
+                format!(
+                    "no graph document of {} holds its stream asset {} any more",
+                    project.project_directory.display(),
+                    record.location.stream_asset
+                )
+            };
             if let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(&record.stream_id) {
-                unload_a_stream_an_action_took_back(&loaded, "its graph document is gone");
+                unload_a_stream_an_action_took_back(&loaded, &why_it_is_forgotten);
             }
             match stream_records.remove(&record.stream_id) {
                 Ok(_) => {
                     self.forget_the_function_node_states_of_the_stream(&record.stream_id);
                     tracing::info!(
-                        "the stream `{}` is forgotten: no graph document of {} holds its stream \
-                         asset {} any more",
+                        "the stream `{}` is forgotten: {why_it_is_forgotten}",
                         record.stream_id,
-                        project.project_directory.display(),
-                        record.location.stream_asset
                     )
                 }
                 Err(not_removed) => tracing::error!(
@@ -5777,6 +5856,68 @@ mod tests {
         );
         assert_eq!(runner.ids_of_the_loaded_streams(), [hosted.stream_id()]);
         assert!(records_in(state_directory.path()).read_every().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_stream_another_stream_of_the_project_places_runs_only_inside_it() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        project.hold_the_streams(&["look", "main"], &[]);
+        runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("both streams load while neither places the other");
+        assert_eq!(runner.ids_of_the_loaded_streams().len(), 2);
+
+        let mut main_placing_look = the_graph_of_a_stream_named("main");
+        main_placing_look["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "name": "look",
+                "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
+                "config": { "stream": { "asset": project.stream_asset_of("look") } },
+            }));
+        project.write_the_graph_document(main_placing_look);
+        let rerun = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect("the project loads with main placing look");
+
+        let main = project.stream_id_of("main");
+        let streams_the_rerun_loaded: Vec<&str> = rerun
+            .streams
+            .iter()
+            .map(|stream| stream.stream_id.as_str())
+            .collect();
+        assert_eq!(streams_the_rerun_loaded, [main.as_str()]);
+        assert_eq!(
+            runner.ids_of_the_loaded_streams(),
+            std::slice::from_ref(&main)
+        );
+        assert_eq!(
+            the_current_record_in(state_directory.path(), &project.stream_id_of("look")),
+            None,
+            "look is no stream of its own once main places it"
+        );
+        let main_graph = runner
+            .loaded_stream_of_the_id(&main)
+            .unwrap()
+            .to_json()
+            .unwrap();
+        let look_in_main = main_graph["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == "look")
+            .unwrap_or_else(|| panic!("main places look: {main_graph}"));
+        let names_inside_look: Vec<&str> = look_in_main["fragment"]["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|node| node["name"].as_str())
+            .collect();
+        assert_eq!(names_inside_look, ["source"], "{look_in_main}");
     }
 
     #[test]

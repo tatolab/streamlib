@@ -232,7 +232,8 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Bring each loaded stream whose graph holds a stream fragment, of the project at
     /// `edited_project_directory` or of a project enclosing it as an import, to the streams its
     /// fragments reference, as their graph documents are on disk now. A stream that refuses
-    /// keeps its live graph as it was, and the refusal is logged.
+    /// keeps its live graph as it was, and the refusal is logged. The streams the edited project
+    /// runs as its own are then brought in line with what its streams place.
     pub(crate) fn reconcile_each_loaded_stream_holding_a_stream_fragment(
         &self,
         edited_project_directory: &std::path::Path,
@@ -275,6 +276,10 @@ impl StreamGraphTransactionExecutor<'_> {
                 );
             }
         }
+        self.operations_on_the_loaded_streams
+            .bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+                edited_project_directory,
+            );
     }
 
     /// The project of the first of `stream_ids` that is a loaded stream of a project.

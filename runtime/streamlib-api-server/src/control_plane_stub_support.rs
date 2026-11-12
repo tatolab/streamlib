@@ -479,6 +479,12 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> Option<::streamlib::sdk::runtime::StreamActionQueued> {
                 None
             }
+            fn bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> Option<::streamlib::sdk::runtime::StreamActionQueued> {
+                None
+            }
             fn list_streams(&self) -> Vec<::streamlib::sdk::runtime::StreamListing> {
                 vec![::streamlib::sdk::runtime::StreamListing {
                     stream_id: $crate::control_plane_stub_support::STUB_STREAM_ID.to_string(),

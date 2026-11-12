@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::project_file::TatolabProjectFile;
 use crate::project_import_folders::the_folder_of_an_import;
-use crate::project_stream_document::project_stream_documents;
+use crate::project_stream_document::{ProjectStreamDocument, project_stream_documents};
 use crate::stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
     asset_references_made_references_into_the_import,
@@ -20,6 +20,57 @@ use crate::stream_graph_document::{
 
 /// The keys of a held stream's graph document a stream fragment places: its graph.
 const KEYS_OF_A_HELD_STREAM_A_FRAGMENT_PLACES: [&str; 3] = ["nodes", "links", "groups"];
+
+/// The stream asset of each of `stream_documents` that another of them places, at any level, by
+/// a stream fragment naming no `from`: a stream of the same project, which runs only inside the
+/// streams placing it. A document that does not read places nothing.
+pub fn stream_assets_another_stream_of_the_project_places(
+    stream_documents: &[ProjectStreamDocument],
+) -> BTreeSet<Uuid> {
+    let mut placed_stream_assets = BTreeSet::new();
+    for stream_document in stream_documents {
+        let Some(document) = stream_document
+            .bytes
+            .as_ref()
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+        else {
+            continue;
+        };
+        let placing_stream_asset = stream_document.asset_written_in_it().ok();
+        let mut placed_by_this_stream = BTreeSet::new();
+        each_stream_of_the_project_the_level_places(&document, &mut placed_by_this_stream);
+        placed_stream_assets.extend(
+            placed_by_this_stream
+                .into_iter()
+                .filter(|placed| Some(*placed) != placing_stream_asset),
+        );
+    }
+    placed_stream_assets
+}
+
+fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTreeSet<Uuid>) {
+    for node in level
+        .get("nodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if node.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
+            let held_stream = &node["config"][STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
+            if held_stream.get("from").is_none()
+                && let Some(stream_asset) = held_stream
+                    .get("asset")
+                    .and_then(Value::as_str)
+                    .and_then(|asset| Uuid::parse_str(asset).ok())
+            {
+                placed.insert(stream_asset);
+            }
+        } else if let Some(fragment) = node.get("fragment") {
+            each_stream_of_the_project_the_level_places(fragment, placed);
+        }
+    }
+}
 
 /// `graph_document`, a stream of the project at `project_directory`, with each stream fragment
 /// it holds, `{"stream": {"asset", "from"?}}`, given the graph of the stream it names as its
