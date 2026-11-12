@@ -915,7 +915,6 @@ SHADER_NODE_KIND = "shader"
 #: project's venv may predate the stamp, and its attribute name is the wire contract both sides hold.
 DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE = (
     ("category", "__tatolab_node_category__"),
-    ("state_lifetime", "__tatolab_node_function_state_lifetime__"),
 )
 
 

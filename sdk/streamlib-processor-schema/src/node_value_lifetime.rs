@@ -3,8 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
-/// How long a value the runtime keeps for one placed node lives: a `GraphInput`'s value or a
-/// function node's state.
+/// How long a value the runtime keeps for one placed node lives, as a `GraphInput`'s config
+/// declares it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeValueLifetime {
@@ -31,11 +31,6 @@ impl NodeValueLifetime {
         Self::EVERY_LIFETIME
             .into_iter()
             .find(|lifetime| lifetime.wire_name() == wire_name)
-    }
-
-    /// Whether this is [`NodeValueLifetime::Reset`].
-    pub fn is_reset(&self) -> bool {
-        *self == Self::Reset
     }
 }
 

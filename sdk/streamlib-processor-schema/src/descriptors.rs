@@ -9,8 +9,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AudioWindowContract, NodeKind, NodeValueLifetime, PortFamilyDeclaration,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling,
+    AudioWindowContract, NodeKind, PortFamilyDeclaration, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorScheduling,
 };
 
 /// Runtime environment for a processor.
@@ -168,13 +168,6 @@ pub struct ProcessorDescriptor {
     /// values travel in; empty for every other node type.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub function_node_state_fields: Vec<String>,
-    /// How long a stateful function node's state lives: `reset` unless its node declares it
-    /// `kept`.
-    #[serde(
-        default = "the_state_lifetime_a_function_node_declaring_none_has",
-        skip_serializing_if = "NodeValueLifetime::is_reset"
-    )]
-    pub function_node_state_lifetime: NodeValueLifetime,
     /// The palette category an editor files the node type under; absent on a
     /// type that declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,7 +199,6 @@ impl ProcessorDescriptor {
             scheduling: ProcessorScheduling::default(),
             paced_by_real_time: false,
             function_node_state_fields: Vec::new(),
-            function_node_state_lifetime: NodeValueLifetime::Reset,
             category: None,
             function_node_runs_as_python: false,
             inputs: Vec::new(),
@@ -280,8 +272,4 @@ impl ProcessorDescriptor {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
-}
-
-fn the_state_lifetime_a_function_node_declaring_none_has() -> NodeValueLifetime {
-    NodeValueLifetime::Reset
 }

@@ -3765,12 +3765,12 @@ impl Runner {
             .and_then(sample_projects_directory_beside_the_lend)
     }
 
-    /// Keep each `kept` function-node state of `stream_id` in its project's store and forget
-    /// each `reset` one, as its playback ends, its project closes or its record is forgotten.
+    /// Forget every function-node state of `stream_id`, in memory and in its project's
+    /// store, as its playback ends, its project closes or its record is forgotten.
     fn forget_the_function_node_states_of_the_stream(&self, stream_id: &str) {
         self.engine_resources_shared_by_every_stream
             .function_node_states_carried_for_every_stream
-            .forget_the_reset_states_of_the_stream(stream_id);
+            .forget_every_state_of_the_stream(stream_id);
     }
 
     /// Unload and forget the stream of `project`'s stream asset `stream_asset`, whose graph

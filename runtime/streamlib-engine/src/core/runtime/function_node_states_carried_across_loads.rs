@@ -10,8 +10,7 @@
 //! node's state is written now, and what was read of it when the helper
 //! writing it went away; a new helper of the stream resumes each node from
 //! that. Each state read off a board is kept in the node's own keys of its
-//! project's store, so a reload and a restart resume it; at Stop a `kept`
-//! state stays there and a `reset` one is forgotten.
+//! project's store, so a reload and a restart resume it; Stop forgets it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Weak};
@@ -21,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::core::context::StoreScopedToThisNode;
-use crate::core::descriptors::NodeValueLifetime;
 use crate::core::error::Result;
 use crate::iceoryx2::HelperPlacedProcessorLossCounts;
 
@@ -107,7 +105,6 @@ impl FunctionNodeStateWrittenOnAHelpersBoard {
 
 /// One function node's state as its stream carries it.
 struct FunctionNodeStateCarried {
-    state_lifetime: NodeValueLifetime,
     state_read_when_its_last_writer_went_away: Option<FunctionNodeState>,
     written_now_on: Option<FunctionNodeStateWrittenOnAHelpersBoard>,
 }
@@ -176,14 +173,12 @@ impl FunctionNodeStatesCarriedForOneStream {
 
     /// Note that the helper whose board `loss_counts` reads now writes the
     /// state of the node `function_node_uuid`, numbered
-    /// `function_node_breadcrumb_number` on its setup command, its state living as
-    /// `state_lifetime` says; the state its earlier writer left stays until the new
-    /// one writes.
+    /// `function_node_breadcrumb_number` on its setup command; the state its earlier
+    /// writer left stays until the new one writes.
     pub fn note_the_helper_writing_the_state_of_a_function_node(
         &self,
         function_node_uuid: Uuid,
         state_fields: Vec<String>,
-        state_lifetime: NodeValueLifetime,
         loss_counts: &Arc<HelperPlacedProcessorLossCounts>,
         function_node_breadcrumb_number: u32,
     ) {
@@ -191,12 +186,10 @@ impl FunctionNodeStatesCarriedForOneStream {
         let carried = by_function_node_uuid
             .entry(function_node_uuid)
             .or_insert_with(|| FunctionNodeStateCarried {
-                state_lifetime,
                 state_read_when_its_last_writer_went_away: self
                     .the_state_the_store_keeps_for(function_node_uuid),
                 written_now_on: None,
             });
-        carried.state_lifetime = state_lifetime;
         if carried.let_its_writer_go() {
             self.keep_the_state_in_the_store(function_node_uuid, carried);
         }
@@ -205,21 +198,6 @@ impl FunctionNodeStatesCarriedForOneStream {
             loss_counts_of_the_helper_writing_it: Arc::downgrade(loss_counts),
             function_node_breadcrumb_number,
         });
-    }
-
-    /// Take the lifetime a live edit declares for the state of a function node already noted.
-    pub fn note_the_state_lifetime_of_a_function_node(
-        &self,
-        function_node_uuid: Uuid,
-        state_lifetime: NodeValueLifetime,
-    ) {
-        if let Some(carried) = self
-            .by_function_node_uuid
-            .lock()
-            .get_mut(&function_node_uuid)
-        {
-            carried.state_lifetime = state_lifetime;
-        }
     }
 
     /// Read the state of every node the helper whose board `loss_counts` reads
@@ -259,17 +237,11 @@ impl FunctionNodeStatesCarriedForOneStream {
         }
     }
 
-    /// Keep every `kept` state as it stands in the store, forget every `reset` one there,
-    /// and let go of every state held in memory, as the stream's playback ends.
-    pub fn keep_each_kept_state_and_forget_each_reset_one(&self) {
+    /// Forget every state, in memory and in the store, as the stream's playback ends.
+    pub fn forget_every_state(&self) {
         let carried_by_function_node_uuid = std::mem::take(&mut *self.by_function_node_uuid.lock());
-        for (function_node_uuid, carried) in carried_by_function_node_uuid {
-            match carried.state_lifetime {
-                NodeValueLifetime::Kept => {
-                    self.keep_the_state_in_the_store(function_node_uuid, &carried)
-                }
-                NodeValueLifetime::Reset => self.forget_the_state_in_the_store(function_node_uuid),
-            }
+        for function_node_uuid in carried_by_function_node_uuid.into_keys() {
+            self.forget_the_state_in_the_store(function_node_uuid);
         }
     }
 
@@ -370,11 +342,11 @@ impl FunctionNodeStatesCarriedForEveryStream {
         )
     }
 
-    /// Keep each `kept` state of the stream `stream_id` in its store and forget each
-    /// `reset` one, as its playback ends or its record is forgotten.
-    pub fn forget_the_reset_states_of_the_stream(&self, stream_id: &str) {
+    /// Forget every state of the stream `stream_id`, as its playback ends or its record
+    /// is forgotten.
+    pub fn forget_every_state_of_the_stream(&self, stream_id: &str) {
         if let Some(states) = self.by_stream_id.lock().get(stream_id).cloned() {
-            states.keep_each_kept_state_and_forget_each_reset_one();
+            states.forget_every_state();
         }
     }
 
@@ -452,12 +424,11 @@ mod tests {
                 })
         }
 
-        fn note_a_helper_writing(&self, node_uuid: Uuid, state_lifetime: NodeValueLifetime) {
+        fn note_a_helper_writing(&self, node_uuid: Uuid) {
             self.states
                 .note_the_helper_writing_the_state_of_a_function_node(
                     node_uuid,
                     vec!["phase".to_string()],
-                    state_lifetime,
                     &Arc::new(HelperPlacedProcessorLossCounts::default()),
                     1,
                 );
@@ -491,29 +462,15 @@ mod tests {
     }
 
     #[test]
-    fn at_stop_a_kept_state_stays_in_the_store_and_a_reset_one_is_forgotten() {
+    fn stop_forgets_every_state_in_memory_and_in_the_store() {
         let stream = the_states_of_a_stream_of_a_project_on_disk();
-        let kept_lfo = Uuid::new_v4();
-        let reset_lfo = Uuid::new_v4();
-        stream.keep_in_the_store(kept_lfo, &the_lfo_at(0.25));
-        stream.keep_in_the_store(reset_lfo, &the_lfo_at(0.75));
-        stream.note_a_helper_writing(kept_lfo, NodeValueLifetime::Kept);
-        stream.note_a_helper_writing(reset_lfo, NodeValueLifetime::Reset);
+        let lfo = Uuid::new_v4();
+        stream.keep_in_the_store(lfo, &the_lfo_at(0.25));
+        stream.note_a_helper_writing(lfo);
 
-        stream
-            .states
-            .keep_each_kept_state_and_forget_each_reset_one();
-        assert_eq!(
-            stream.the_state_the_store_keeps(kept_lfo),
-            Some(the_lfo_at(0.25))
-        );
-        assert_eq!(stream.the_state_the_store_keeps(reset_lfo), None);
-        assert_eq!(
-            stream.states.the_current_state_of(kept_lfo),
-            Some(the_lfo_at(0.25)),
-            "a stopped stream still shows each kept state"
-        );
-        assert_eq!(stream.states.the_current_state_of(reset_lfo), None);
+        stream.states.forget_every_state();
+        assert_eq!(stream.the_state_the_store_keeps(lfo), None);
+        assert_eq!(stream.states.the_current_state_of(lfo), None);
     }
 
     #[test]
@@ -521,7 +478,7 @@ mod tests {
         let stream = the_states_of_a_stream_of_a_project_on_disk();
         let lfo = Uuid::new_v4();
         stream.keep_in_the_store(lfo, &the_lfo_at(0.5));
-        stream.note_a_helper_writing(lfo, NodeValueLifetime::Reset);
+        stream.note_a_helper_writing(lfo);
         stream.states.keep_every_state_in_the_store();
         stream
             .project_stores
@@ -589,11 +546,10 @@ mod tests {
         states.note_the_helper_writing_the_state_of_a_function_node(
             lfo,
             vec!["phase".to_string()],
-            NodeValueLifetime::Kept,
             &Arc::new(HelperPlacedProcessorLossCounts::default()),
             1,
         );
-        states.keep_each_kept_state_and_forget_each_reset_one();
+        states.forget_every_state();
         assert_eq!(states.the_current_state_of(lfo), None);
     }
 

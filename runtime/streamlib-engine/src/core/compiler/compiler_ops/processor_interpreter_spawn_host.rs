@@ -1964,7 +1964,6 @@ pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
             &node.display_name,
             node.node_uuid,
             descriptor.function_node_state_fields.clone(),
-            descriptor.function_node_state_lifetime,
         );
     host.link_wiring
         .tell_each_function_node_how_its_far_side_ran_it([(

@@ -24,7 +24,6 @@ from tatolab.stream import (
 from tatolab.stream._function_node_declaration import (
     NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP,
     NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP,
-    NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP,
     NODE_DECLARATION_LANGUAGE_STAMP,
 )
 from tatolab.stream._node_declaration import (
@@ -139,30 +138,6 @@ def test_time_and_state_are_found_by_type_and_are_never_pins():
 def test_a_stateful_node_declares_its_state_fields_and_a_stateless_one_none():
     assert getattr(smooth, NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP) == ["value"]
     assert getattr(remap, NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP) == []
-
-
-def count_up_undecorated(*, previous: State[SmoothedValue]) -> Stateful[float, SmoothedValue]:
-    return previous.value + 1, SmoothedValue(previous.value + 1)
-
-
-def test_a_stateful_node_declares_its_state_reset_unless_it_declares_it_kept():
-    assert getattr(smooth, NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP) == "reset"
-    kept_counter = node.function(state_lifetime="kept")(count_up_undecorated)
-    assert getattr(kept_counter, NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP) == "kept"
-
-
-def test_a_state_lifetime_other_than_kept_or_reset_is_refused():
-    with pytest.raises(ValueError, match=_literally('is "kept" or "reset"')):
-        node.function(state_lifetime="forever")(count_up_undecorated)  # pyright: ignore[reportArgumentType]
-
-
-def test_a_node_with_no_state_cannot_declare_its_state_kept():
-    with pytest.raises(TypeError, match="takes no `State"):
-        node.function(state_lifetime="kept")(remap_at_module_level)
-
-
-def remap_at_module_level(x: float) -> float:
-    return x
 
 
 def test_a_returned_dataclass_is_one_output_per_field():

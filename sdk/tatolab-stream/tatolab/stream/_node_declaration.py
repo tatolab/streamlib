@@ -29,11 +29,7 @@ from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
-from ._function_node_declaration import (
-    FunctionNode,
-    FunctionNodeStateLifetime,
-    declare_function_node,
-)
+from ._function_node_declaration import FunctionNode, declare_function_node
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
@@ -306,17 +302,11 @@ class NodeDeclarationDecorator:
         *,
         description: str = "",
         category: str = "",
-        state_lifetime: "FunctionNodeStateLifetime" = "reset",
     ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
 
     @overload
     def function(
-        self,
-        node_function: None = None,
-        *,
-        description: str = "",
-        category: str = "",
-        state_lifetime: "FunctionNodeStateLifetime" = "reset",
+        self, node_function: None = None, *, description: str = "", category: str = ""
     ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
 
     def function(
@@ -325,7 +315,6 @@ class NodeDeclarationDecorator:
         *,
         description: str = "",
         category: str = "",
-        state_lifetime: "FunctionNodeStateLifetime" = "reset",
     ) -> Any:
         """Mark a function as a function node: one that computes its outputs from its inputs.
 
@@ -338,9 +327,7 @@ class NodeDeclarationDecorator:
         Channels, `dict` is Records, and a read type is its family. `config`
         names the node's one config dataclass. A parameter typed `Time` is
         handed the stream time of the read; one typed `State[Record]` the state
-        the last call returned in its `Stateful[Output, Record]`, which
-        `state_lifetime="kept"` keeps across Stop, Play, close and a restart
-        and the default `"reset"` forgets at Stop. A port is
+        the last call returned in its `Stateful[Output, Record]`. A port is
         described on its annotation, `Annotated[float, Description("…")]`, and the
         function's docstring is never the node's description. The decorated
         function is still called as itself.
@@ -353,7 +340,6 @@ class NodeDeclarationDecorator:
                 function_under_decoration,
                 description=description,
                 category=category,
-                state_lifetime=state_lifetime,
                 declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
             )
 

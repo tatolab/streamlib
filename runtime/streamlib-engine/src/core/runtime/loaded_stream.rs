@@ -1002,8 +1002,8 @@ impl LoadedStreamInThisRuntime {
     /// Write this stream's records to its project's log and its function-node
     /// states to its project's store, let go of the stream, then mark it ended — so a
     /// waiter that wakes finds them whole. A stream a restart loads again keeps every
-    /// state to resume from; one that lives with its host process keeps only its
-    /// `kept` states, since nothing loads it again.
+    /// state to resume from; one that lives with its host process forgets them, since
+    /// nothing loads it again.
     fn let_go_of_this_stream_then_mark_it_ended(
         self: Arc<Self>,
         how_it_ended: HowALoadedStreamEnded,
@@ -1015,7 +1015,7 @@ impl LoadedStreamInThisRuntime {
         match self.holding() {
             LoadedStreamHolding::LivesWithTheHostProcess => {
                 function_node_states_carried_for_every_stream
-                    .forget_the_reset_states_of_the_stream(self.stream_id())
+                    .forget_every_state_of_the_stream(self.stream_id())
             }
             LoadedStreamHolding::RecordedByTheRuntime => {
                 function_node_states_carried_for_every_stream

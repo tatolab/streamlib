@@ -11,10 +11,10 @@
 use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AudioWindowContract,
-    AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeKind, NodeValueLifetime,
-    PortDescriptor, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling, refuse_audio_window_beside_a_skipping_delivery_profile,
+    AudioWindowContractDeclaredValues, FunctionNodeLanguage, NodeKind, PortDescriptor,
+    PortFamilyDeclaration, PortFamilyDeclarationDirection, ProcessorClassImportPath,
+    ProcessorClassShortName, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    refuse_audio_window_beside_a_skipping_delivery_profile,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
@@ -34,7 +34,6 @@ const DESCRIBED_CONFIG_SCHEMA_KEY: &str = "config_schema";
 const DESCRIBED_INPUT_PORTS_KEY: &str = "input_ports";
 const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
 const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
-const DESCRIBED_STATE_LIFETIME_KEY: &str = "state_lifetime";
 const DESCRIBED_SHADER_SOURCE_KEY: &str = "shader_source";
 const DESCRIBED_SHADER_SIGNATURE_KEY: &str = "shader_signature";
 
@@ -108,8 +107,6 @@ impl PythonProcessorDeclaration {
                     descriptor.node_kind = function_kind;
                     descriptor.function_node_state_fields =
                         read_function_node_state_fields(described_node_type)?;
-                    descriptor.function_node_state_lifetime =
-                        read_function_node_state_lifetime(described_node_type)?;
                     descriptor.function_node_runs_as_python =
                         read_whether_a_function_node_runs_as_python(
                             described_node_type,
@@ -212,24 +209,6 @@ fn read_function_node_state_fields(
         ));
     }
     Ok(state_fields)
-}
-
-/// How long a described function node's state lives: `reset` when it declares none.
-fn read_function_node_state_lifetime(
-    described_node_type: &serde_json::Value,
-) -> std::result::Result<NodeValueLifetime, String> {
-    let Some(declared) = described_node_type.get(DESCRIBED_STATE_LIFETIME_KEY) else {
-        return Ok(NodeValueLifetime::Reset);
-    };
-    declared
-        .as_str()
-        .and_then(NodeValueLifetime::named)
-        .ok_or_else(|| {
-            format!(
-                "{DESCRIBED_STATE_LIFETIME_KEY} is {declared}, and a state's lifetime is \"kept\" \
-                 or \"reset\""
-            )
-        })
 }
 
 /// The kind a described node type declares: `process`, or `function` beside
@@ -897,28 +876,6 @@ mod tests {
             .expect("an object")
             .remove("state_fields");
         assert!(refusal_of(&described).contains("state_fields"));
-    }
-
-    #[test]
-    fn a_described_function_nodes_state_is_reset_unless_it_is_described_kept() {
-        let mut described = described_node_type_with_input_ports(serde_json::json!([]));
-        described["kind"] = serde_json::json!("function");
-        described["language"] = serde_json::json!("python");
-        described["state_fields"] = serde_json::json!(["phase"]);
-        described["runs_as_python"] = serde_json::json!(false);
-        let lifetime_read = |described: &serde_json::Value| {
-            read(described)
-                .expect("reads")
-                .descriptor
-                .function_node_state_lifetime
-        };
-        assert_eq!(lifetime_read(&described), NodeValueLifetime::Reset);
-
-        described["state_lifetime"] = serde_json::json!("kept");
-        assert_eq!(lifetime_read(&described), NodeValueLifetime::Kept);
-
-        described["state_lifetime"] = serde_json::json!("forever");
-        assert!(refusal_of(&described).contains("\"kept\" or \"reset\""));
     }
 
     #[test]

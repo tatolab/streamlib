@@ -96,15 +96,16 @@ as stated until the owner says otherwise (session, 2026-11-11).
 3. **Save as default stays a commit.** Keeping a value as the Input's `default` is a
    `set_node_config` a client sends; this change adds no verb for it.
 4. **Only Graph Inputs in the first ticket.** Function-node `State` moving to UUID keys and the
-   project store, with a declared `kept` lifetime, is the second ticket.
-5. **A function node declares its `State` kept on its decorator,**
-   `@node.function(state_lifetime="kept")`, in GraphInput's word set; the default is `"reset"`, and
-   a node with no `State` that declares `"kept"` is refused (session, 2026-11-12).
-6. **Every function-node state reaches the store, `reset` too,** where the stream record took it:
-   when its helper's writer goes away, on a respawn, and when the stream ends. Stop, close and
-   `rm` then keep each `kept` state and drop each `reset` one, so a runtime restart resumes a
-   playing stream's state as it did from the record. The stream record no longer holds state, and
-   its schema moves to 9, so a record an earlier runtime wrote lists as an earlier runtime's
+   project store is the second ticket.
+5. **A function node declares no lifetime.** Its `State` is always `reset`: Pause keeps it, Stop,
+   close and `rm` forget it, and a value that must outlive a run is a kept `GraphInput` or a
+   process node's `ctx.store()` key. A `state_lifetime` on `@node.function`, or a marker on
+   `State[...]`, was rejected as mixing the operating model into node code (owner, 2026-11-12).
+6. **Every function-node state reaches the store** where the stream record took it: when its
+   helper's writer goes away, on a respawn, and when a recorded stream ends, so a runtime restart
+   resumes a playing stream's state as it did from the record. A stream that lives with its host
+   process forgets its states when it ends. The stream record no longer holds state, and its
+   schema moves to 9, so a record an earlier runtime wrote lists as an earlier runtime's
    (session, 2026-11-12).
 
 ## Tickets
@@ -120,7 +121,7 @@ as stated until the owner says otherwise (session, 2026-11-11).
    returns to its `default`; 1,000 writes in one second commit at most four write transactions and
    the database holds the last; a restart restores the kept value.
 2. **Function-node state in the store** — the board keyed by UUID, carried state moved from the
-   stream record to the store, `kept` declarable on `State`.
+   stream record to the store.
 
 ## Consumers
 
