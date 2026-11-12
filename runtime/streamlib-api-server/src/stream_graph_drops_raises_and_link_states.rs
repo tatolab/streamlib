@@ -53,22 +53,31 @@ pub(crate) struct StreamGraphDropsRaisesAndLinkStatesLastSampled {
 
 impl StreamGraphDropsRaisesAndLinkStatesLastSampled {
     /// Keep `sampled_by_stream` as the last sample, answering each stream whose sample differs
-    /// from the one before it. A stream sampled for the first time is answered by none, and a
-    /// stream left out is forgotten.
+    /// from the one before it or that is sampled for the first time, so a change made before a
+    /// stream's first sample still reaches the client. A stream whose graph did not export, `None`,
+    /// keeps its last sample; a stream left out is forgotten.
     pub(crate) fn streams_whose_sample_changed(
         &mut self,
-        sampled_by_stream: BTreeMap<String, Value>,
+        sampled_by_stream: BTreeMap<String, Option<Value>>,
     ) -> Vec<String> {
-        let streams_whose_sample_changed = sampled_by_stream
-            .iter()
-            .filter(|(stream, sampled)| {
-                self.last_sampled_by_stream
-                    .get(*stream)
-                    .is_some_and(|last_sampled| last_sampled != *sampled)
-            })
-            .map(|(stream, _)| stream.clone())
-            .collect();
-        self.last_sampled_by_stream = sampled_by_stream;
+        let mut streams_whose_sample_changed = Vec::new();
+        let mut last_sampled_by_stream = BTreeMap::new();
+        for (stream, sampled) in sampled_by_stream {
+            let last_sampled = self.last_sampled_by_stream.remove(&stream);
+            let kept = match (sampled, last_sampled) {
+                (Some(sampled), last_sampled) => {
+                    if last_sampled.as_ref() != Some(&sampled) {
+                        streams_whose_sample_changed.push(stream.clone());
+                    }
+                    Some(sampled)
+                }
+                (None, last_sampled) => last_sampled,
+            };
+            if let Some(kept) = kept {
+                last_sampled_by_stream.insert(stream, kept);
+            }
+        }
+        self.last_sampled_by_stream = last_sampled_by_stream;
         streams_whose_sample_changed
     }
 }
@@ -103,11 +112,17 @@ mod tests {
         })
     }
 
-    fn sampled(stream_graph: &Value) -> BTreeMap<String, Value> {
+    fn sampled(stream_graph: &Value) -> BTreeMap<String, Option<Value>> {
         BTreeMap::from([(
             "s-main-1".to_owned(),
-            the_drops_raises_and_link_states_of_a_stream_graph(stream_graph),
+            Some(the_drops_raises_and_link_states_of_a_stream_graph(
+                stream_graph,
+            )),
         )])
+    }
+
+    fn not_exported() -> BTreeMap<String, Option<Value>> {
+        BTreeMap::from([("s-main-1".to_owned(), None)])
     }
 
     /// A new drop count, a new raise and a new link state each change the sample; a written
@@ -139,19 +154,25 @@ mod tests {
         }
     }
 
-    /// A stream's first sample answers nothing, a changed one answers the stream, and a stream no
-    /// longer sampled is sampled afresh when it comes back.
+    /// A stream's first sample answers it, an unchanged one does not, a changed one does, a
+    /// graph that did not export keeps the sample before it, and a stream no longer sampled is
+    /// answered afresh when it comes back.
     ///
-    /// Mental-revert: answering a first sample sends every new subscriber a change it already
-    /// read; keeping a stream no longer sampled answers a stale difference when it is loaded again.
+    /// Mental-revert: a first sample kept silently hides a raise that began between a client's
+    /// graph read and that sample; a failed export that forgets the sample hides a change made
+    /// across it.
     #[test]
-    fn a_stream_is_answered_only_when_its_sample_differs_from_the_one_before() {
+    fn a_stream_is_answered_on_its_first_sample_and_each_time_its_sample_differs() {
         let mut last_sampled = StreamGraphDropsRaisesAndLinkStatesLastSampled::default();
+        let answered = vec!["s-main-1".to_owned()];
 
-        assert!(
-            last_sampled
-                .streams_whose_sample_changed(sampled(&stream_graph(0, Value::Null, "wired")))
-                .is_empty()
+        assert_eq!(
+            last_sampled.streams_whose_sample_changed(sampled(&stream_graph(
+                0,
+                Value::Null,
+                "wired"
+            ))),
+            answered
         );
         assert!(
             last_sampled
@@ -164,17 +185,33 @@ mod tests {
                 Value::Null,
                 "wired"
             ))),
-            vec!["s-main-1".to_owned()]
+            answered
+        );
+        assert!(
+            last_sampled
+                .streams_whose_sample_changed(not_exported())
+                .is_empty()
+        );
+        assert_eq!(
+            last_sampled.streams_whose_sample_changed(sampled(&stream_graph(
+                5,
+                Value::Null,
+                "wired"
+            ))),
+            answered
         );
         assert!(
             last_sampled
                 .streams_whose_sample_changed(BTreeMap::new())
                 .is_empty()
         );
-        assert!(
-            last_sampled
-                .streams_whose_sample_changed(sampled(&stream_graph(9, Value::Null, "wired")))
-                .is_empty()
+        assert_eq!(
+            last_sampled.streams_whose_sample_changed(sampled(&stream_graph(
+                5,
+                Value::Null,
+                "wired"
+            ))),
+            answered
         );
     }
 }
