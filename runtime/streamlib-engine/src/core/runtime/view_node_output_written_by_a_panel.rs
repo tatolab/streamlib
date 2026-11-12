@@ -56,7 +56,8 @@ impl LoadedStreamInThisRuntime {
 
     /// Hand `value` to this stream's top-level `GraphInput` declaring the Input `input_name`,
     /// which publishes it on its `value` output to every reader, answering the Input's family.
-    /// Refused for a name no running top-level `GraphInput` declares.
+    /// While the project is stopped, a kept Input keeps the value for its next Play and a reset
+    /// one refuses it. Refused for a name no top-level `GraphInput` declares.
     pub(crate) async fn hand_a_value_written_to_a_top_level_graph_input(
         &self,
         input_name: String,

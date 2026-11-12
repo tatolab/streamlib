@@ -49,7 +49,7 @@ struct WriteStudioViewOutputToolArguments {
 #[schemars(crate = "rmcp::schemars")]
 #[serde(deny_unknown_fields)]
 struct WriteGraphInputToolArguments {
-    #[schemars(description = "The stream id of the running stream.")]
+    #[schemars(description = "The stream id of a loaded stream.")]
     stream: String,
     #[schemars(
         description = "The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is."

@@ -214,6 +214,8 @@ impl ProjectStore {
         &self,
         table: ProjectStoreTableName,
     ) -> Result<Vec<String>, ProjectStoreRefusal> {
+        let _no_batch_lands_between_the_two_reads =
+            self.shared_with_its_writer.commit_in_progress.lock();
         let mut held: std::collections::BTreeSet<String> = self
             .shared_with_its_writer
             .keys_committed_in(table)?

@@ -318,7 +318,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
                     ),
                 }
             }
-            Some(GraphInputValueLifetime::Reset) => store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY),
+            Some(GraphInputValueLifetime::Reset) => self.forget_the_kept_value_in(&store),
             None => return,
         }
         self.store_scoped_to_this_graph_input = Some(store);
@@ -357,7 +357,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
                     );
                 }
             }
-            GraphInputValueLifetime::Reset => store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY),
+            GraphInputValueLifetime::Reset => self.forget_the_kept_value_in(store),
         }
         Ok(())
     }
@@ -398,8 +398,17 @@ impl NodeWhoseOutputsAClientWritesProcessor {
                     self.node_name,
                     family.declaration_name()
                 );
-                store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY);
+                self.forget_the_kept_value_in(store);
             }
+        }
+    }
+
+    fn forget_the_kept_value_in(&self, store: &StoreScopedToThisNode) {
+        if let Err(not_removed) = store.remove(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
+            tracing::warn!(
+                "`GraphInput` node `{}` could not forget the value it kept: {not_removed}",
+                self.node_name
+            );
         }
     }
 

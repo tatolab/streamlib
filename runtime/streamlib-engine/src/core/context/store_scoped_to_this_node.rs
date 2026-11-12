@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Weak};
 
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
@@ -19,46 +19,60 @@ use crate::core::error::{Error, Result};
 /// The table every node's own keys live in, each key prefixed by the node's UUID.
 const NODE_STORE_TABLE: ProjectStoreTableName = ProjectStoreTableName::named("node_store");
 
-/// The keys one placed node keeps in its project's store; no other node reaches them.
+/// The keys one placed node keeps in its project's store; no other node reaches them. It holds
+/// the store only while its project does, so a handle that outlives its project's close keeps no
+/// store file open and refuses every call.
 #[derive(Clone)]
 pub struct StoreScopedToThisNode {
-    project_store: Arc<ProjectStore>,
+    project_store_while_its_project_is_open: Weak<ProjectStore>,
     node_uuid: Uuid,
 }
 
 impl StoreScopedToThisNode {
     pub(crate) fn of_the_node(project_store: Arc<ProjectStore>, node_uuid: Uuid) -> Self {
         Self {
-            project_store,
+            project_store_while_its_project_is_open: Arc::downgrade(&project_store),
             node_uuid,
         }
     }
 
     /// The value this node keeps under `key`, the latest written.
     pub fn read(&self, key: &str) -> Result<Option<JsonValue>> {
-        self.project_store
+        self.the_project_store()?
             .read(NODE_STORE_TABLE, &self.the_key_in_the_table(key))
             .map_err(|refusal| Error::Runtime(refusal.to_string()))
     }
 
     /// Keep `value` under `key`: readable at once, on disk within the store's debounce window.
     pub fn write(&self, key: &str, value: &JsonValue) -> Result<()> {
-        self.project_store
+        self.the_project_store()?
             .write(NODE_STORE_TABLE, &self.the_key_in_the_table(key), value)
             .map_err(|refusal| Error::Runtime(refusal.to_string()))
     }
 
     /// Stop keeping `key`.
-    pub fn remove(&self, key: &str) {
-        self.project_store
+    pub fn remove(&self, key: &str) -> Result<()> {
+        self.the_project_store()?
             .remove(NODE_STORE_TABLE, &self.the_key_in_the_table(key));
+        Ok(())
     }
 
     /// Commit every write the project's store holds waiting, without waiting for its window.
     pub(crate) fn commit_every_waiting_write_now(&self) -> Result<()> {
-        self.project_store
+        self.the_project_store()?
             .commit_every_waiting_write_now()
             .map_err(|refusal| Error::Runtime(refusal.to_string()))
+    }
+
+    fn the_project_store(&self) -> Result<Arc<ProjectStore>> {
+        self.project_store_while_its_project_is_open
+            .upgrade()
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "the project of the node {} closed, and its store with it",
+                    self.node_uuid
+                ))
+            })
     }
 
     fn the_key_in_the_table(&self, key: &str) -> String {
@@ -189,9 +203,10 @@ impl ProjectStoresOpenInThisRuntime {
         Ok(open_in_this_process)
     }
 
-    /// Drop the keys of every node `node_uuids_the_project_holds` leaves out, when it is known,
-    /// commit what the store of the project at `project_directory` holds waiting and let it go,
-    /// closing it unless another runtime in this process still holds it, as its project closes.
+    /// Commit what the store of the project at `project_directory` holds waiting and let it go,
+    /// as its project closes, closing it unless another runtime in this process still holds it;
+    /// a runtime that holds it alone first drops the keys of every node
+    /// `node_uuids_the_project_holds` leaves out, when it is known.
     pub(crate) fn close_the_store_of_the_project_at(
         &self,
         project_directory: &Path,
@@ -207,11 +222,21 @@ impl ProjectStoresOpenInThisRuntime {
             return;
         };
         if let Some(node_uuids_the_project_holds) = node_uuids_the_project_holds {
-            drop_the_keys_of_every_node_not_held(
-                &held_by_this_runtime,
-                &resolved_project_directory,
-                node_uuids_the_project_holds,
-            );
+            let project_store_open_in_this_process_by_resolved_directory =
+                PROJECT_STORE_OPEN_IN_THIS_PROCESS_BY_RESOLVED_DIRECTORY.lock();
+            let no_other_runtime_holds_it =
+                project_store_open_in_this_process_by_resolved_directory
+                    .get(&resolved_project_directory)
+                    .is_some_and(|open| {
+                        Arc::ptr_eq(open, &held_by_this_runtime) && Arc::strong_count(open) == 2
+                    });
+            if no_other_runtime_holds_it {
+                drop_the_keys_of_every_node_not_held(
+                    &held_by_this_runtime,
+                    &resolved_project_directory,
+                    node_uuids_the_project_holds,
+                );
+            }
         }
         if let Err(not_committed) = held_by_this_runtime.commit_every_waiting_write_now() {
             tracing::error!(
