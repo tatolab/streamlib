@@ -27,6 +27,22 @@ pub struct SubscribeProjectChangesResult {
     pub projects: Vec<Uuid>,
 }
 
+/// What `subscribe_stream_graph_changes` answers: the streams the connection is now sent graph
+/// changes of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeStreamGraphChangesResult {
+    /// Every stream the connection is subscribed to, by stream id, this call's among them.
+    pub streams: Vec<String>,
+}
+
+/// What `subscribe_stream_action_changes` answers: the actions under way when the subscription
+/// began, which the client describes once to follow from.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeStreamActionChangesResult {
+    /// The id of each stream action queued or running as the subscription began.
+    pub actions_under_way: Vec<String>,
+}
+
 /// The `data` of a `discover` refused for a client built against another contract version.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ControlContractVersionMismatch {

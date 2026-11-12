@@ -661,6 +661,20 @@ pub struct SubscribeProjectChangesRequest {
     pub projects: Vec<Uuid>,
 }
 
+/// `subscribe_stream_graph_changes`' params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribeStreamGraphChangesRequest {
+    /// The loaded streams, by stream id, whose graph changes the connection is sent; refused when
+    /// empty or when one is not loaded.
+    pub streams: Vec<String>,
+}
+
+/// `subscribe_stream_action_changes`' params, which name nothing.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribeStreamActionChangesRequest {}
+
 /// The params of an operation on one project, named by its directory.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

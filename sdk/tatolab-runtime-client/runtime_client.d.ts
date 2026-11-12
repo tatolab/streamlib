@@ -27,12 +27,18 @@ export interface TatolabRuntimeClientConnectOptions {
   signal?: ControlOperationAbortSignal;
 }
 
+/** A client opened with `connect`, which holds what `discover` answered. */
+export interface TatolabRuntimeClientDiscovered {
+  /** What `discover` answered when the client connected. */
+  readonly discovered: DiscoverResult;
+}
+
 /** The calls every generated method makes: each request is checked against the contract before it is sent, and each answer and notification before it is handed on. */
 export declare class TatolabRuntimeClientCallsOverATransport {
   /** A client over `transport`, which it closes on {@link close}. */
   constructor(transport: ControlTransport);
-  /** What `discover` answered, when the client was opened with `connect`. */
-  discovered: DiscoverResult;
+  /** What `discover` answered, when the client was opened with `connect`; undefined for a client made over a transport. */
+  readonly discovered: DiscoverResult | undefined;
   /** Call one operation: rejects with `ControlRequestInvalid` before sending params that do not match the contract, `ControlOperationError` for the runtime's refusal or failure, and `ControlAnswerInvalid` for an answer that does not match. */
   call<Method extends ControlOperationMethodName>(
     method: Method,
@@ -44,7 +50,7 @@ export declare class TatolabRuntimeClientCallsOverATransport {
     method: Method,
     listener: (params: ControlNotifications[Method]) => void,
   ): () => void;
-  /** Hear each notification that did not match the contract, which no listener heard; the returned function stops it. */
+  /** Hear, once each, every notification that did not match the contract, which no listener heard; the returned function stops it. */
   onNotificationInvalid(listener: (notificationInvalid: ControlNotificationInvalid) => void): () => void;
   /** Resolves once the transport has closed, by either side; never, for a transport that holds no connection. */
   readonly closed: Promise<void>;

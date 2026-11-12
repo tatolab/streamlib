@@ -101,6 +101,92 @@
       "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
+      "name": "subscribe_stream_graph_changes",
+      "summary": "Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.",
+      "description": "Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscribeStreamGraphChangesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "subscribe_stream_graph_changes_result",
+        "schema": {
+          "$ref": "#/components/schemas/SubscribeStreamGraphChangesResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
+      "name": "subscribe_stream_action_changes",
+      "summary": "Send this connection a `stream_action_changed` notification each time a stream action changes.",
+      "description": "Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscribeStreamActionChangesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "subscribe_stream_action_changes_result",
+        "schema": {
+          "$ref": "#/components/schemas/SubscribeStreamActionChangesResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-group": "stream",
+      "x-exposures": [
+        "studio",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
       "name": "describe_runtime",
       "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
       "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
@@ -2873,7 +2959,7 @@
     {
       "name": "open_viewer",
       "summary": "Open a viewer of a node's output port, held open for the connection that opened it.",
-      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
+      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -3244,6 +3330,48 @@
         "studio",
         "public"
       ]
+    },
+    {
+      "name": "stream_graph_changed",
+      "summary": "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/StreamGraphChangedNotificationParams"
+          }
+        }
+      ],
+      "x-subscribed-by": "subscribe_stream_graph_changes",
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
+    },
+    {
+      "name": "stream_action_changed",
+      "summary": "A stream action changed, which `describe_stream_action` describes, or `missed`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/StreamActionChangedNotificationParams"
+          }
+        }
+      ],
+      "x-subscribed-by": "subscribe_stream_action_changes",
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
     }
   ],
   "x-agent-discovery-tools": [
@@ -3512,6 +3640,60 @@
           "projects"
         ],
         "description": "What `subscribe_project_changes` answers: the projects the connection is now sent changes of."
+      },
+      "SubscribeStreamGraphChangesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "streams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The loaded streams, by stream id, whose graph changes the connection is sent; refused when\nempty or when one is not loaded."
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "description": "`subscribe_stream_graph_changes`' params."
+      },
+      "SubscribeStreamGraphChangesResult": {
+        "type": "object",
+        "properties": {
+          "streams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every stream the connection is subscribed to, by stream id, this call's among them."
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "description": "What `subscribe_stream_graph_changes` answers: the streams the connection is now sent graph\nchanges of."
+      },
+      "SubscribeStreamActionChangesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`subscribe_stream_action_changes`' params, which name nothing."
+      },
+      "SubscribeStreamActionChangesResult": {
+        "type": "object",
+        "properties": {
+          "actions_under_way": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The id of each stream action queued or running as the subscription began."
+          }
+        },
+        "required": [
+          "actions_under_way"
+        ],
+        "description": "What `subscribe_stream_action_changes` answers: the actions under way when the subscription\nbegan, which the client describes once to follow from."
       },
       "DescribeRuntimeRequest": {
         "type": "object",
@@ -9582,6 +9764,147 @@
           }
         ],
         "description": "What changed on a project's change feed."
+      },
+      "StreamGraphChangedNotificationParams": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream, by stream id."
+          },
+          "change": {
+            "$ref": "#/components/schemas/StreamGraphChangeKindOnTheWire",
+            "description": "What changed; `missed` when the client reads the graph again."
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node whose state changed, by its graph `id`, when `change` is `node_state_changed`."
+          },
+          "node_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NodeStateOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node's new state, when `change` is `node_state_changed`."
+          }
+        },
+        "required": [
+          "stream",
+          "change"
+        ],
+        "description": "`stream_graph_changed`'s params."
+      },
+      "StreamGraphChangeKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "edited",
+            "description": "A node or a link was added, removed or reconfigured."
+          },
+          {
+            "type": "string",
+            "const": "node_state_changed",
+            "description": "One node's state changed, named by `node` and `node_state`."
+          },
+          {
+            "type": "string",
+            "const": "playback_state_changed",
+            "description": "The stream's playback started, stopped, paused or resumed, or failed to."
+          },
+          {
+            "type": "string",
+            "const": "missed",
+            "description": "The connection missed changes, or the stream was loaded again or unloaded, and the client\nreads the graph again."
+          }
+        ],
+        "description": "What changed in a loaded stream's live graph."
+      },
+      "NodeStateOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "Pending",
+            "description": "Waiting to be started."
+          },
+          {
+            "type": "string",
+            "const": "Idle",
+            "description": "Prepared, its `setup` not yet run."
+          },
+          {
+            "type": "string",
+            "const": "Running",
+            "description": "Running."
+          },
+          {
+            "type": "string",
+            "const": "Paused",
+            "description": "Paused with its stream."
+          },
+          {
+            "type": "string",
+            "const": "Stopping",
+            "description": "Shutting down."
+          },
+          {
+            "type": "string",
+            "const": "Stopped",
+            "description": "Stopped."
+          },
+          {
+            "type": "string",
+            "const": "Error",
+            "description": "Failed; `graph` says why."
+          },
+          {
+            "type": "string",
+            "const": "Restarting",
+            "description": "Its helper process died on its own and a new one starts after a backoff."
+          }
+        ],
+        "description": "A node's state as `graph` renders it."
+      },
+      "StreamActionChangedNotificationParams": {
+        "type": "object",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/StreamActionChangeKindOnTheWire",
+            "description": "What happened; `missed` when the client calls `describe_stream_action` for each action it\nfollows."
+          },
+          "action": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The action that changed, by id, when `change` is `changed`."
+          }
+        },
+        "required": [
+          "change"
+        ],
+        "description": "`stream_action_changed`'s params."
+      },
+      "StreamActionChangeKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "changed",
+            "description": "The action named by `action` changed."
+          },
+          {
+            "type": "string",
+            "const": "missed",
+            "description": "The connection missed changes, and the client describes each action it follows again."
+          }
+        ],
+        "description": "What happened to the stream actions a connection follows."
       },
       "ListOperationGroupsRequest": {
         "type": "object",

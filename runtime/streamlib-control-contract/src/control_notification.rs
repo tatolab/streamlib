@@ -113,9 +113,114 @@ impl ControlNotification for ProjectChanged {
     ];
 }
 
+/// What changed in a loaded stream's live graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamGraphChangeKindOnTheWire {
+    /// A node or a link was added, removed or reconfigured.
+    Edited,
+    /// One node's state changed, named by `node` and `node_state`.
+    NodeStateChanged,
+    /// The stream's playback started, stopped, paused or resumed, or failed to.
+    PlaybackStateChanged,
+    /// The connection missed changes, or the stream was loaded again or unloaded, and the client
+    /// reads the graph again.
+    Missed,
+}
+
+/// A node's state as `graph` renders it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum NodeStateOnTheWire {
+    /// Waiting to be started.
+    Pending,
+    /// Prepared, its `setup` not yet run.
+    Idle,
+    /// Running.
+    Running,
+    /// Paused with its stream.
+    Paused,
+    /// Shutting down.
+    Stopping,
+    /// Stopped.
+    Stopped,
+    /// Failed; `graph` says why.
+    Error,
+    /// Its helper process died on its own and a new one starts after a backoff.
+    Restarting,
+}
+
+/// `stream_graph_changed`'s params.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StreamGraphChangedNotificationParams {
+    /// The stream, by stream id.
+    pub stream: String,
+    /// What changed; `missed` when the client reads the graph again.
+    pub change: StreamGraphChangeKindOnTheWire,
+    /// The node whose state changed, by its graph `id`, when `change` is `node_state_changed`.
+    pub node: Option<String>,
+    /// The node's new state, when `change` is `node_state_changed`.
+    pub node_state: Option<NodeStateOnTheWire>,
+}
+
+/// `stream_graph_changed`: one change in the live graph of a stream the connection subscribed to.
+pub struct StreamGraphChanged;
+
+impl ControlNotification for StreamGraphChanged {
+    type Params = StreamGraphChangedNotificationParams;
+    const METHOD_NAME: &'static str = "stream_graph_changed";
+    const ONE_LINE_DOC: &'static str = "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.";
+    const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_stream_graph_changes";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const EXPOSURES: &'static [ControlOperationExposure] = &[
+        ControlOperationExposure::Studio,
+        ControlOperationExposure::Public,
+    ];
+}
+
+/// What happened to the stream actions a connection follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamActionChangeKindOnTheWire {
+    /// The action named by `action` changed.
+    Changed,
+    /// The connection missed changes, and the client describes each action it follows again.
+    Missed,
+}
+
+/// `stream_action_changed`'s params.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct StreamActionChangedNotificationParams {
+    /// What happened; `missed` when the client calls `describe_stream_action` for each action it
+    /// follows.
+    pub change: StreamActionChangeKindOnTheWire,
+    /// The action that changed, by id, when `change` is `changed`.
+    pub action: Option<String>,
+}
+
+/// `stream_action_changed`: one stream action changed.
+pub struct StreamActionChanged;
+
+impl ControlNotification for StreamActionChanged {
+    type Params = StreamActionChangedNotificationParams;
+    const METHOD_NAME: &'static str = "stream_action_changed";
+    const ONE_LINE_DOC: &'static str =
+        "A stream action changed, which `describe_stream_action` describes, or `missed`.";
+    const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_stream_action_changes";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const EXPOSURES: &'static [ControlOperationExposure] = &[
+        ControlOperationExposure::Studio,
+        ControlOperationExposure::Public,
+    ];
+}
+
 /// Every notification the contract declares.
-pub const CONTROL_NOTIFICATIONS: &[ControlNotificationDeclaration] =
-    &[ControlNotificationDeclaration::of::<ProjectChanged>()];
+pub const CONTROL_NOTIFICATIONS: &[ControlNotificationDeclaration] = &[
+    ControlNotificationDeclaration::of::<ProjectChanged>(),
+    ControlNotificationDeclaration::of::<StreamGraphChanged>(),
+    ControlNotificationDeclaration::of::<StreamActionChanged>(),
+];
 
 #[cfg(test)]
 mod tests {

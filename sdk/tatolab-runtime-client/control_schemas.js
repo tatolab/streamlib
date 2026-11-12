@@ -57,12 +57,30 @@ const DiscoverResult = z.looseObject({
 
 /** @type {z.ZodType<ControlContract.SubscribeProjectChangesRequest>} */
 const SubscribeProjectChangesRequest = z.strictObject({
-  projects: z.array(z.string()),
+  projects: z.array(z.guid()),
 });
 
 /** @type {z.ZodType<ControlContract.SubscribeProjectChangesResult>} */
 const SubscribeProjectChangesResult = z.looseObject({
-  projects: z.array(z.string()),
+  projects: z.array(z.guid()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamGraphChangesRequest>} */
+const SubscribeStreamGraphChangesRequest = z.strictObject({
+  streams: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamGraphChangesResult>} */
+const SubscribeStreamGraphChangesResult = z.looseObject({
+  streams: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamActionChangesRequest>} */
+const SubscribeStreamActionChangesRequest = z.strictObject({});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamActionChangesResult>} */
+const SubscribeStreamActionChangesResult = z.looseObject({
+  actions_under_way: z.array(z.string()),
 });
 
 /** @type {z.ZodType<ControlContract.DescribeRuntimeRequest>} */
@@ -82,8 +100,8 @@ const ListStreamsRequest = z.strictObject({});
 /** @type {z.ZodType<ControlContract.StreamLocationOnTheWire>} */
 const StreamLocationOnTheWire = z.looseObject({
   project_directory: z.string(),
-  project: z.string(),
-  stream_asset: z.string(),
+  project: z.guid(),
+  stream_asset: z.guid(),
 });
 
 /** @type {z.ZodType<ControlContract.ListedStreamState>} */
@@ -126,8 +144,8 @@ const StreamGraphActionLinkEnd = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.StreamGraphAction>} */
 const StreamGraphAction = z.union([z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   type: z.string(),
   name: z.string().nullable().optional(),
   config: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -137,115 +155,115 @@ const StreamGraphAction = z.union([z.strictObject({
   as: z.string().nullable().optional(),
   operation: z.literal("add_node"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   operation: z.literal("remove_node"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   source: StreamGraphActionLinkEnd,
   target: StreamGraphActionLinkEnd,
   operation: z.literal("connect"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   source: StreamGraphActionLinkEnd,
   target: StreamGraphActionLinkEnd,
   operation: z.literal("disconnect"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   config: z.record(z.string(), z.unknown()),
   operation: z.literal("set_node_config"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   input: z.string(),
   value: z.unknown().optional(),
   operation: z.literal("set_pin_value"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   name: z.string(),
   operation: z.literal("rename_node"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   studio: z.record(z.string(), z.unknown()),
   operation: z.literal("set_studio_fields"),
 }), z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   generator: z.string(),
   name: z.string().nullable().optional(),
   config: z.record(z.string(), z.unknown()).nullable().optional(),
   as: z.string().nullable().optional(),
   operation: z.literal("import_graph_generator"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   node: z.string(),
   exposed_config_fields: z.array(z.string()),
   operation: z.literal("set_exposed_config_fields"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   title: z.string(),
   description: z.string().nullable().optional(),
   colour: z.string().nullable().optional(),
   nodes: z.array(z.string()),
   operation: z.literal("add_group"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   group: z.string(),
   title: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
   colour: z.string().nullable().optional(),
   operation: z.literal("set_group_fields"),
 }), z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   project: z.string(),
   dependency_stream: z.string(),
   name: z.string().nullable().optional(),
   as: z.string().nullable().optional(),
   operation: z.literal("use_dependency_stream"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   nodes: z.array(z.string()),
   name: z.string(),
   as: z.string().nullable().optional(),
   operation: z.literal("collapse_selection_into_subgraph"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   fragment: z.string(),
   operation: z.literal("unlock_subgraph"),
 }), z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   text: z.string(),
   position: z.tuple([z.number(), z.number()]),
   size: z.tuple([z.number(), z.number()]),
   operation: z.literal("add_note"),
 }), z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   note: z.string(),
   text: z.string().nullable().optional(),
   position: z.tuple([z.number(), z.number()]).nullable().optional(),
   size: z.tuple([z.number(), z.number()]).nullable().optional(),
   operation: z.literal("set_note_fields"),
 }), z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   note: z.string(),
   operation: z.literal("remove_note"),
 }), z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
   group: z.string(),
   operation: z.literal("remove_group"),
 })]);
@@ -314,8 +332,8 @@ const GraphTransactionToolResult = z.looseObject({
 
 /** @type {z.ZodType<ControlContract.AddNodeRequest>} */
 const AddNodeRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   type: z.string(),
   name: z.string().nullable().optional(),
   config: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -329,8 +347,8 @@ const AddNodeRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.OneLinkGraphEditRequest>} */
 const OneLinkGraphEditRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   source: StreamGraphActionLinkEnd,
   target: StreamGraphActionLinkEnd,
   mode: GraphEditMode.nullable().optional(),
@@ -340,7 +358,7 @@ const OneLinkGraphEditRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.ImportGraphGeneratorRequest>} */
 const ImportGraphGeneratorRequest = z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   generator: z.string(),
   name: z.string().nullable().optional(),
   config: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -351,8 +369,8 @@ const ImportGraphGeneratorRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.OneNodeGraphEditRequest>} */
 const OneNodeGraphEditRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   mode: GraphEditMode.nullable().optional(),
   author: ProjectTransactionAuthorArgument.nullable().optional(),
@@ -361,8 +379,8 @@ const OneNodeGraphEditRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetNodeConfigRequest>} */
 const SetNodeConfigRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   config: z.record(z.string(), z.unknown()),
   mode: GraphEditMode.nullable().optional(),
@@ -372,8 +390,8 @@ const SetNodeConfigRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetPinValueRequest>} */
 const SetPinValueRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   input: z.string(),
   value: z.unknown().optional(),
@@ -384,8 +402,8 @@ const SetPinValueRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.RenameNodeRequest>} */
 const RenameNodeRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   name: z.string(),
   mode: GraphEditMode.nullable().optional(),
@@ -395,8 +413,8 @@ const RenameNodeRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetStudioFieldsRequest>} */
 const SetStudioFieldsRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   studio: z.record(z.string(), z.unknown()),
   mode: GraphEditMode.nullable().optional(),
@@ -406,8 +424,8 @@ const SetStudioFieldsRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetExposedConfigFieldsRequest>} */
 const SetExposedConfigFieldsRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
   exposed_config_fields: z.array(z.string()),
   mode: GraphEditMode.nullable().optional(),
@@ -417,8 +435,8 @@ const SetExposedConfigFieldsRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.AddGroupRequest>} */
 const AddGroupRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   title: z.string(),
   description: z.string().nullable().optional(),
   colour: z.string().nullable().optional(),
@@ -430,8 +448,8 @@ const AddGroupRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetGroupFieldsRequest>} */
 const SetGroupFieldsRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   group: z.string(),
   title: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
@@ -443,8 +461,8 @@ const SetGroupFieldsRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.CollapseSelectionIntoSubgraphRequest>} */
 const CollapseSelectionIntoSubgraphRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   nodes: z.array(z.string()),
   name: z.string(),
   mode: GraphEditMode.nullable().optional(),
@@ -454,8 +472,8 @@ const CollapseSelectionIntoSubgraphRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.UnlockSubgraphRequest>} */
 const UnlockSubgraphRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   fragment: z.string(),
   mode: GraphEditMode.nullable().optional(),
   author: ProjectTransactionAuthorArgument.nullable().optional(),
@@ -464,7 +482,7 @@ const UnlockSubgraphRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.AddNoteRequest>} */
 const AddNoteRequest = z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   text: z.string(),
   position: z.tuple([z.number(), z.number()]),
   size: z.tuple([z.number(), z.number()]),
@@ -475,7 +493,7 @@ const AddNoteRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetNoteFieldsRequest>} */
 const SetNoteFieldsRequest = z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   note: z.string(),
   text: z.string().nullable().optional(),
   position: z.tuple([z.number(), z.number()]).nullable().optional(),
@@ -487,7 +505,7 @@ const SetNoteFieldsRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.RemoveNoteRequest>} */
 const RemoveNoteRequest = z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   note: z.string(),
   mode: GraphEditMode.nullable().optional(),
   author: ProjectTransactionAuthorArgument.nullable().optional(),
@@ -496,8 +514,8 @@ const RemoveNoteRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.RemoveGroupRequest>} */
 const RemoveGroupRequest = z.strictObject({
-  stream: z.string(),
-  level: z.array(z.string()).nullable().optional(),
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
   group: z.string(),
   mode: GraphEditMode.nullable().optional(),
   author: ProjectTransactionAuthorArgument.nullable().optional(),
@@ -931,7 +949,7 @@ const RemoveDependencyRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.UseDependencyStreamRequest>} */
 const UseDependencyStreamRequest = z.strictObject({
-  stream: z.string(),
+  stream: z.guid(),
   project: z.string(),
   dependency_stream: z.string(),
   name: z.string().nullable().optional(),
@@ -1294,9 +1312,32 @@ const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("ref
 
 /** @type {z.ZodType<ControlContract.ProjectChangedNotificationParams>} */
 const ProjectChangedNotificationParams = z.looseObject({
-  project: z.string(),
+  project: z.guid(),
   change: ProjectChangeKindOnTheWire,
   transaction: ProjectTransactionOnTheWire.nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>} */
+const StreamGraphChangeKindOnTheWire = z.union([z.literal("edited"), z.literal("node_state_changed"), z.literal("playback_state_changed"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.NodeStateOnTheWire>} */
+const NodeStateOnTheWire = z.union([z.literal("Pending"), z.literal("Idle"), z.literal("Running"), z.literal("Paused"), z.literal("Stopping"), z.literal("Stopped"), z.literal("Error"), z.literal("Restarting")]);
+
+/** @type {z.ZodType<ControlContract.StreamGraphChangedNotificationParams>} */
+const StreamGraphChangedNotificationParams = z.looseObject({
+  stream: z.string(),
+  change: StreamGraphChangeKindOnTheWire,
+  node: z.string().nullable().optional(),
+  node_state: NodeStateOnTheWire.nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>} */
+const StreamActionChangeKindOnTheWire = z.union([z.literal("changed"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.StreamActionChangedNotificationParams>} */
+const StreamActionChangedNotificationParams = z.looseObject({
+  change: StreamActionChangeKindOnTheWire,
+  action: z.string().nullable().optional(),
 });
 
 /** @type {z.ZodType<ControlContract.ListOperationGroupsRequest>} */
@@ -1371,6 +1412,10 @@ export const ControlSchemas = Object.freeze({
     DiscoverResult,
     SubscribeProjectChangesRequest,
     SubscribeProjectChangesResult,
+    SubscribeStreamGraphChangesRequest,
+    SubscribeStreamGraphChangesResult,
+    SubscribeStreamActionChangesRequest,
+    SubscribeStreamActionChangesResult,
     DescribeRuntimeRequest,
     DescribeRuntimeToolResult,
     ListStreamsRequest,
@@ -1512,6 +1557,11 @@ export const ControlSchemas = Object.freeze({
     ProjectTransactionOnTheWire,
     ProjectChangedNotificationParams,
     ProjectChangeKindOnTheWire,
+    StreamGraphChangedNotificationParams,
+    StreamGraphChangeKindOnTheWire,
+    NodeStateOnTheWire,
+    StreamActionChangedNotificationParams,
+    StreamActionChangeKindOnTheWire,
     ListOperationGroupsRequest,
     ListOperationGroupsResult,
     AgentOperationGroup,
@@ -1532,6 +1582,14 @@ export const ControlSchemas = Object.freeze({
     subscribe_project_changes: Object.freeze({
       params: SubscribeProjectChangesRequest,
       result: SubscribeProjectChangesResult,
+    }),
+    subscribe_stream_graph_changes: Object.freeze({
+      params: SubscribeStreamGraphChangesRequest,
+      result: SubscribeStreamGraphChangesResult,
+    }),
+    subscribe_stream_action_changes: Object.freeze({
+      params: SubscribeStreamActionChangesRequest,
+      result: SubscribeStreamActionChangesResult,
     }),
     describe_runtime: Object.freeze({
       params: DescribeRuntimeRequest,
@@ -1820,5 +1878,7 @@ export const ControlSchemas = Object.freeze({
   }),
   notifications: Object.freeze({
     project_changed: ProjectChangedNotificationParams,
+    stream_graph_changed: StreamGraphChangedNotificationParams,
+    stream_action_changed: StreamActionChangedNotificationParams,
   }),
 });

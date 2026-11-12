@@ -276,7 +276,7 @@ mod tests {
             .unwrap();
         let head = response_head_over_the_socket(
             &mut stream,
-            "GET /ws/events HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
+            "GET /control/ws HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n\
              Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
         )

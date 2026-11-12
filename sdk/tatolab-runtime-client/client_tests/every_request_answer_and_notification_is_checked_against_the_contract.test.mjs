@@ -128,3 +128,26 @@ test("a notification is heard checked, and one that does not match reaches only 
     await localApi.stop();
   }
 });
+
+test("a node's new state is heard as a stream graph change, and a state the contract does not name reaches only the invalid listener", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const streamGraphChangesHeard = [];
+    const invalidNotificationsHeard = [];
+    client.on_stream_graph_changed((change) => streamGraphChangesHeard.push(change));
+    client.onNotificationInvalid((notificationInvalid) => invalidNotificationsHeard.push(notificationInvalid));
+    const nodeStateChange = { stream: "rig-main-94d871", change: "node_state_changed", node: "camera", node_state: "Running" };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", method: "stream_graph_changed", params: { ...nodeStateChange, node_state: "Sleeping" } }),
+    );
+    await untilTrue(() => invalidNotificationsHeard.length === 1);
+    assert.equal(invalidNotificationsHeard[0].method, "stream_graph_changed");
+    localApi.writeOnTheConnection(JSON.stringify({ jsonrpc: "2.0", method: "stream_graph_changed", params: nodeStateChange }));
+    await untilTrue(() => streamGraphChangesHeard.length === 1);
+    assert.deepEqual(streamGraphChangesHeard, [nodeStateChange]);
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});

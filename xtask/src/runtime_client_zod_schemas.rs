@@ -277,6 +277,7 @@ impl ZodSourceWriter<'_> {
     ) -> String {
         let minimum = schema["minimum"].as_f64();
         match type_name {
+            "string" if schema["format"] == "uuid" => "z.guid()".to_owned(),
             "string" => "z.string()".to_owned(),
             "integer" if is_a_wide_integer_format(schema) => {
                 let (number_minimum, bigint_minimum) = match minimum {
@@ -452,6 +453,20 @@ mod tests {
                 &json!({ "type": "integer", "format": "uint32", "minimum": 0 })
             ),
             "z.number().int().min(0)"
+        );
+    }
+
+    #[test]
+    fn a_uuid_string_is_checked_as_one_and_any_other_string_is_not() {
+        assert_eq!(
+            expression_outside_any_component(
+                &json!({ "type": ["string", "null"], "format": "uuid" })
+            ),
+            "z.guid().nullable()"
+        );
+        assert_eq!(
+            expression_outside_any_component(&json!({ "type": "string" })),
+            "z.string()"
         );
     }
 

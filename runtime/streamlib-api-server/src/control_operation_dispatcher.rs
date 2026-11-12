@@ -4,7 +4,6 @@
 //! The one dispatcher every adapter calls: it runs a registered operation against the runtime
 //! and answers its result or its refusal, holding no adapter's wire shape.
 
-use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -24,7 +23,9 @@ use streamlib_control_contract::{
     ProjectTransactionAuthorArgument, ProjectTransactionAuthorKindArgument, RemoveGroupRequest,
     RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
-    SubscribeProjectChangesRequest, SubscribeProjectChangesResult, TransactRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectChangesResult,
+    SubscribeStreamActionChangesRequest, SubscribeStreamActionChangesResult,
+    SubscribeStreamGraphChangesRequest, SubscribeStreamGraphChangesResult, TransactRequest,
     UnlockSubgraphRequest,
 };
 use streamlib_project_repository::{
@@ -32,7 +33,7 @@ use streamlib_project_repository::{
     ProjectTransactionAuthor, ProjectTransactionAuthorKind, StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetTransactionToolResult, CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
+    AssetTransactionToolResult, CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET,
     CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
     CreateNodeFileToolResult, CreateProjectToolResult, DeleteProjectToolResult,
     DependencyTransactionToolResult, DescribeAssetToolResult, DescribeRuntimeToolResult,
@@ -53,6 +54,7 @@ use uuid::Uuid;
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
 use crate::control_operations_on_loaded_streams::ViewersOneConnectionHoldsOpen;
 use crate::control_operations_on_project_assets::the_idempotency_key_a_caller_sent;
+use crate::control_subscriptions_of_one_connection::ControlSubscriptionsOfOneConnection;
 use crate::mcp::{describe_stream_action_tool_result_of, stream_action_state_on_the_wire};
 use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
@@ -69,35 +71,11 @@ const AUTHOR_NAME_OF_AN_UNNAMED_CLIENT: &str = "an MCP client";
 pub(crate) struct ControlRequestOrigin {
     /// The name the client gave itself, if it gave one.
     pub(crate) client_name: Option<String>,
-    /// The project change subscriptions of the connection it arrived on, when that connection
-    /// stays open to be sent notifications.
-    pub(crate) project_change_subscriptions: Option<Arc<ProjectChangeSubscriptionsOfOneConnection>>,
+    /// The subscriptions of the connection it arrived on, when that connection stays open to be
+    /// sent notifications.
+    pub(crate) subscriptions: Option<Arc<ControlSubscriptionsOfOneConnection>>,
     /// The viewers the connection it arrived on holds open, when that connection stays open.
     pub(crate) viewers_held_open: Option<Arc<ViewersOneConnectionHoldsOpen>>,
-}
-
-/// The projects one open connection is sent `project_changed` notifications for.
-#[derive(Debug, Default)]
-pub(crate) struct ProjectChangeSubscriptionsOfOneConnection {
-    subscribed_projects: parking_lot::Mutex<BTreeSet<Uuid>>,
-}
-
-impl ProjectChangeSubscriptionsOfOneConnection {
-    /// Whether the connection subscribed to `project`.
-    pub(crate) fn holds(&self, project: Uuid) -> bool {
-        self.subscribed_projects.lock().contains(&project)
-    }
-
-    /// Every project the connection subscribed to.
-    pub(crate) fn every_subscribed_project(&self) -> Vec<Uuid> {
-        self.subscribed_projects.lock().iter().copied().collect()
-    }
-
-    fn subscribe_to(&self, projects: Vec<Uuid>) -> Vec<Uuid> {
-        let mut subscribed_projects = self.subscribed_projects.lock();
-        subscribed_projects.extend(projects);
-        subscribed_projects.iter().copied().collect()
-    }
 }
 
 /// What a registered operation answers when it is not refused; it serializes as the result it
@@ -109,6 +87,10 @@ pub(crate) enum ControlOperationAnswer {
     Discover(DiscoverResult),
     /// `subscribe_project_changes`'.
     SubscribeProjectChanges(SubscribeProjectChangesResult),
+    /// `subscribe_stream_graph_changes`'.
+    SubscribeStreamGraphChanges(SubscribeStreamGraphChangesResult),
+    /// `subscribe_stream_action_changes`'.
+    SubscribeStreamActionChanges(SubscribeStreamActionChangesResult),
     /// `describe_runtime`'s.
     DescribeRuntime(DescribeRuntimeToolResult),
     /// `list_streams`'s.
@@ -240,6 +222,18 @@ impl ControlOperationDispatcher {
                 projects,
             }) => subscribe_to_project_changes(projects, request_origin)
                 .map(ControlOperationAnswer::SubscribeProjectChanges),
+            ControlOperationCall::SubscribeStreamGraphChanges(
+                SubscribeStreamGraphChangesRequest { streams },
+            ) => self
+                .subscribe_to_stream_graph_changes(streams, request_origin)
+                .await
+                .map(ControlOperationAnswer::SubscribeStreamGraphChanges),
+            ControlOperationCall::SubscribeStreamActionChanges(
+                SubscribeStreamActionChangesRequest {},
+            ) => self
+                .subscribe_to_stream_action_changes(request_origin)
+                .await
+                .map(ControlOperationAnswer::SubscribeStreamActionChanges),
             ControlOperationCall::DescribeRuntime(DescribeRuntimeRequest {}) => {
                 Ok(ControlOperationAnswer::DescribeRuntime(
                     self.operations_on_the_loaded_streams
@@ -1288,24 +1282,110 @@ pub(crate) fn refuse_another_contract_version(
     }
 }
 
+/// The subscriptions of the connection a subscription by `method_name` arrived on, refused for a
+/// connection that does not stay open.
+fn the_subscriptions_of_the_connection_a_subscription_arrived_on<'origin>(
+    method_name: &str,
+    request_origin: &'origin ControlRequestOrigin,
+) -> Result<&'origin Arc<ControlSubscriptionsOfOneConnection>, ControlOperationRefusal> {
+    request_origin.subscriptions.as_ref().ok_or_else(|| {
+        ControlOperationRefusal::Failed(format!(
+            "{method_name} failed: it is served only on a connection that stays open to be sent \
+             notifications, `{CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET}`"
+        ))
+    })
+}
+
 fn subscribe_to_project_changes(
     projects: Vec<Uuid>,
     request_origin: &ControlRequestOrigin,
 ) -> Result<SubscribeProjectChangesResult, ControlOperationRefusal> {
-    let Some(project_change_subscriptions) = &request_origin.project_change_subscriptions else {
-        return Err(ControlOperationRefusal::Failed(format!(
-            "subscribe_project_changes failed: it is served only on a connection that stays open \
-             to be sent notifications, `{CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET}`"
-        )));
-    };
+    let subscriptions = the_subscriptions_of_the_connection_a_subscription_arrived_on(
+        "subscribe_project_changes",
+        request_origin,
+    )?;
     if projects.is_empty() {
         return Err(ControlOperationRefusal::Failed(
             "subscribe_project_changes failed: `projects` names no project".to_owned(),
         ));
     }
     Ok(SubscribeProjectChangesResult {
-        projects: project_change_subscriptions.subscribe_to(projects),
+        projects: subscriptions.subscribe_to_the_projects(projects),
     })
+}
+
+impl ControlOperationDispatcher {
+    async fn subscribe_to_stream_graph_changes(
+        &self,
+        streams: Vec<String>,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<SubscribeStreamGraphChangesResult, ControlOperationRefusal> {
+        let subscriptions = Arc::clone(
+            the_subscriptions_of_the_connection_a_subscription_arrived_on(
+                "subscribe_stream_graph_changes",
+                request_origin,
+            )?,
+        );
+        if streams.is_empty() {
+            return Err(ControlOperationRefusal::Failed(
+                "subscribe_stream_graph_changes failed: `streams` names no stream".to_owned(),
+            ));
+        }
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        tokio::task::spawn_blocking(move || {
+            let streams_as_loaded_now = streams
+                .iter()
+                .map(|stream| {
+                    operations_on_the_loaded_streams
+                        .loaded_stream_identity_of_the_stream_a_call_names(stream)
+                })
+                .collect::<streamlib::sdk::error::Result<Vec<_>>>()
+                .map_err(|refusal| {
+                    ControlOperationRefusal::Failed(format!(
+                        "subscribe_stream_graph_changes failed: {refusal}"
+                    ))
+                })?;
+            subscriptions
+                .follow_the_stream_graphs(streams_as_loaded_now)
+                .map(|streams| SubscribeStreamGraphChangesResult { streams })
+                .map_err(|not_subscribed| {
+                    ControlOperationRefusal::Failed(format!(
+                        "subscribe_stream_graph_changes failed: {not_subscribed}"
+                    ))
+                })
+        })
+        .await
+        .map_err(|not_run| {
+            ControlOperationRefusal::Failed(format!(
+                "subscribe_stream_graph_changes failed: {not_run}"
+            ))
+        })?
+    }
+
+    async fn subscribe_to_stream_action_changes(
+        &self,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<SubscribeStreamActionChangesResult, ControlOperationRefusal> {
+        let subscriptions = the_subscriptions_of_the_connection_a_subscription_arrived_on(
+            "subscribe_stream_action_changes",
+            request_origin,
+        )?;
+        subscriptions.subscribe_to_stream_actions();
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        tokio::task::spawn_blocking(move || SubscribeStreamActionChangesResult {
+            actions_under_way: operations_on_the_loaded_streams
+                .stream_actions_under_way()
+                .into_iter()
+                .map(|action| action.action_id)
+                .collect(),
+        })
+        .await
+        .map_err(|not_run| {
+            ControlOperationRefusal::Failed(format!(
+                "subscribe_stream_action_changes failed: {not_run}"
+            ))
+        })
+    }
 }
 
 /// Refuses a `project_directory` that is not absolute, since the runtime cannot see the caller's
@@ -1431,7 +1511,7 @@ mod tests {
     fn an_origin_named(client_name: Option<&str>) -> ControlRequestOrigin {
         ControlRequestOrigin {
             client_name: client_name.map(str::to_owned),
-            project_change_subscriptions: None,
+            subscriptions: None,
             viewers_held_open: None,
         }
     }

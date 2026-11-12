@@ -22,13 +22,9 @@ pub const MCP_STDIO_UPGRADE_PROTOCOL_TOKEN: &str = "mcp-stdio";
 /// The route each control operation is served on as one JSON-RPC 2.0 request per HTTP `POST`.
 pub const CONTROL_JSON_RPC_ROUTE_PATH: &str = "/control";
 
-/// The request target a client upgrades to a connection of newline-delimited JSON-RPC 2.0
-/// messages on, which stays open for notifications.
-pub const CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET: &str = "/control/stream";
-
-/// The `Upgrade` protocol token [`CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET`] switches to,
-/// matched case-insensitively.
-pub const CONTROL_JSON_RPC_STREAM_UPGRADE_PROTOCOL_TOKEN: &str = "control-jsonrpc";
+/// The request target a client opens a WebSocket on that carries one JSON-RPC 2.0 message per
+/// text frame both ways, and stays open for notifications.
+pub const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: &str = "/control/ws";
 
 /// The header a control client names the contract version it was built against in; another
 /// version than the runtime's is refused before any call is served.

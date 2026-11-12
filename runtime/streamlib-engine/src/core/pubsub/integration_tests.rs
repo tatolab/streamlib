@@ -32,6 +32,10 @@ impl EventListener for ForwardingListener {
         let _ = self.forward_to_test.send(event.clone());
         Ok(())
     }
+
+    fn on_events_lost(&mut self, _lost_event_count: u64) -> crate::core::error::Result<()> {
+        Ok(())
+    }
 }
 
 fn forwarding_listener() -> (Arc<Mutex<dyn EventListener>>, mpsc::Receiver<Event>) {
@@ -310,10 +314,16 @@ fn a_sixty_four_kibibyte_event_arrives_whole() {
     assert_eq!(received.recv_timeout(DELIVERY_DEADLINE), Ok(event));
 }
 
+#[derive(Debug, PartialEq)]
+enum HeardByTheHeldListener {
+    NumberedEvent(usize),
+    EventsLost(u64),
+}
+
 struct ListenerHeldInsideItsFirstEvent {
     entered_first_event: mpsc::Sender<()>,
     release_first_event: Option<mpsc::Receiver<()>>,
-    forward_to_test: mpsc::Sender<Event>,
+    forward_to_test: mpsc::Sender<HeardByTheHeldListener>,
 }
 
 impl EventListener for ListenerHeldInsideItsFirstEvent {
@@ -322,16 +332,27 @@ impl EventListener for ListenerHeldInsideItsFirstEvent {
             let _ = self.entered_first_event.send(());
             let _ = release.recv();
         }
-        let _ = self.forward_to_test.send(event.clone());
+        let _ = self
+            .forward_to_test
+            .send(HeardByTheHeldListener::NumberedEvent(number_of(event)));
+        Ok(())
+    }
+
+    fn on_events_lost(&mut self, lost_event_count: u64) -> crate::core::error::Result<()> {
+        let _ = self
+            .forward_to_test
+            .send(HeardByTheHeldListener::EventsLost(lost_event_count));
         Ok(())
     }
 }
 
 /// A publish never waits on a listener: past a full queue the event is
-/// dropped and counted, and what was queued still arrives in order.
+/// dropped and counted, what was queued still arrives in order, and the
+/// listener is told how many it lost once, after the event it was hearing.
 ///
 /// Mental-revert: a blocking send parks the publishing thread on the held
-/// listener and the publishing deadline below fails.
+/// listener and the publishing deadline below fails; a bus that tells the
+/// listener nothing leaves `EventsLost` out of what it heard.
 #[test]
 fn a_full_listener_queue_drops_and_counts_rather_than_blocking_the_publisher() {
     const DROPPED_PAST_THE_FULL_QUEUE: usize = 3;
@@ -373,18 +394,23 @@ fn a_full_listener_queue_drops_and_counts_rather_than_blocking_the_publisher() {
     );
 
     release_first_event.send(()).expect("release the listener");
-    let numbers: Vec<usize> = (0..=EVENTS_QUEUED_PER_SUBSCRIPTION)
+    let heard: Vec<HeardByTheHeldListener> = (0..=EVENTS_QUEUED_PER_SUBSCRIPTION + 1)
         .map(|_| {
-            number_of(
-                &received
-                    .recv_timeout(DELIVERY_DEADLINE)
-                    .expect("a queued event was lost"),
-            )
+            received
+                .recv_timeout(DELIVERY_DEADLINE)
+                .expect("a queued event was lost")
         })
         .collect();
-    assert_eq!(
-        numbers,
-        (0..=EVENTS_QUEUED_PER_SUBSCRIPTION).collect::<Vec<_>>()
+    let mut expected = vec![
+        HeardByTheHeldListener::NumberedEvent(0),
+        HeardByTheHeldListener::EventsLost(DROPPED_PAST_THE_FULL_QUEUE as u64),
+    ];
+    expected
+        .extend((1..=EVENTS_QUEUED_PER_SUBSCRIPTION).map(HeardByTheHeldListener::NumberedEvent));
+    assert_eq!(heard, expected);
+    assert!(
+        received.recv_timeout(Duration::from_millis(100)).is_err(),
+        "the listener was told of a loss twice"
     );
 }
 
@@ -398,6 +424,10 @@ impl EventListener for RepublishingListener {
             "downstream",
             &numbered_event("downstream", number_of(event)),
         );
+        Ok(())
+    }
+
+    fn on_events_lost(&mut self, _lost_event_count: u64) -> crate::core::error::Result<()> {
         Ok(())
     }
 }

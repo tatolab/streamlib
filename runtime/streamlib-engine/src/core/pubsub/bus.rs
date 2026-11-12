@@ -26,6 +26,7 @@ struct EventSubscription {
     listener: Weak<Mutex<dyn EventListener>>,
     queued_events_for_listener: SyncSender<Arc<Event>>,
     events_dropped_at_this_full_queue: u64,
+    events_lost_since_the_listener_was_last_told: Arc<AtomicU64>,
 }
 
 impl EventSubscription {
@@ -82,12 +83,15 @@ impl PubSub {
         let listener = Arc::downgrade(&listener);
         let listener_for_delivery = Weak::clone(&listener);
         let topic_for_delivery = topic.to_string();
+        let events_lost_since_the_listener_was_last_told = Arc::new(AtomicU64::new(0));
+        let events_lost_for_delivery = Arc::clone(&events_lost_since_the_listener_was_last_told);
         std::thread::Builder::new()
             .name(format!("pubsub-{topic}"))
             .spawn(move || {
                 deliver_queued_events_to_listener(
                     queued_events_from_bus,
                     &listener_for_delivery,
+                    &events_lost_for_delivery,
                     &topic_for_delivery,
                 )
             })
@@ -105,6 +109,7 @@ impl PubSub {
             listener,
             queued_events_for_listener,
             events_dropped_at_this_full_queue: 0,
+            events_lost_since_the_listener_was_last_told,
         });
         Ok(())
     }
@@ -112,7 +117,7 @@ impl PubSub {
     /// Publish an event to every listener of `topic` and every listener of [`topics::ALL`].
     ///
     /// Never blocks: a listener whose queue is full loses this event, and the
-    /// loss is counted and logged.
+    /// loss is counted, logged and told to the listener after the next event it is handed.
     pub fn publish(&self, topic: &str, event: &Event) {
         let mut shared_event: Option<Arc<Event>> = None;
         let mut full_queues_to_report: Vec<(String, u64)> = Vec::new();
@@ -135,6 +140,9 @@ impl PubSub {
                     Err(TrySendError::Disconnected(_)) => false,
                     Err(TrySendError::Full(_)) => {
                         subscription.events_dropped_at_this_full_queue += 1;
+                        subscription
+                            .events_lost_since_the_listener_was_last_told
+                            .fetch_add(1, Ordering::Relaxed);
                         self.events_dropped_at_full_subscription_queues
                             .fetch_add(1, Ordering::Relaxed);
                         if subscription
@@ -175,21 +183,38 @@ impl PubSub {
     }
 }
 
-/// Hand each queued event to the listener, in order, until the bus drops the
+/// Hand each queued event to the listener, in order, then the count of events
+/// lost at its full queue since it was last told, until the bus drops the
 /// subscription or the listener is gone.
+///
+/// An event is lost only while the queue is full, so an event is still queued
+/// to be handed when one is lost, and each loss is told after the handing of
+/// an event published before it.
 fn deliver_queued_events_to_listener(
     queued_events_from_bus: Receiver<Arc<Event>>,
     listener: &Weak<Mutex<dyn EventListener>>,
+    events_lost_since_the_listener_was_last_told: &AtomicU64,
     topic: &str,
 ) {
     for event in queued_events_from_bus {
         let Some(listener_held_for_this_event) = listener.upgrade() else {
             return;
         };
-        if let Err(failure) = listener_held_for_this_event.lock().on_event(&event) {
+        let mut listener_hearing_this_event = listener_held_for_this_event.lock();
+        if let Err(failure) = listener_hearing_this_event.on_event(&event) {
             tracing::warn!(
                 "a listener subscribed to '{topic}' failed on {}: {failure}",
                 event.log_name()
+            );
+        }
+        let lost_event_count =
+            events_lost_since_the_listener_was_last_told.swap(0, Ordering::Relaxed);
+        if lost_event_count > 0
+            && let Err(failure) = listener_hearing_this_event.on_events_lost(lost_event_count)
+        {
+            tracing::warn!(
+                "a listener subscribed to '{topic}' failed on hearing it lost {lost_event_count} \
+                 events: {failure}"
             );
         }
     }

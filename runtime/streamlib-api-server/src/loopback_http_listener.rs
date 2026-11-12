@@ -242,7 +242,7 @@ pub(crate) mod tests {
             "/api/graph",
             "/mcp",
             "/health",
-            "/ws/events",
+            "/control/ws",
         ] {
             assert_eq!(
                 http_get_naming_the_host(served.bound_address(), &host, path)

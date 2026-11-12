@@ -392,6 +392,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         self.engine
             .runtime_operations_of_the_stream_a_call_names(stream_id)
     }
+    fn loaded_stream_identity_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<streamlib::sdk::pubsub::LoadedStreamIdentity> {
+        self.engine
+            .loaded_stream_identity_of_the_stream_a_call_names(stream_id)
+    }
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
@@ -2394,7 +2401,7 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
     )
     .await;
 
-    let mut subscriber = served.control_stream("").await;
+    let mut subscriber = served.control_websocket().await;
     subscriber
         .send(
             json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_changes",
@@ -2445,6 +2452,180 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
         graph_over_control["result"]["nodes"],
         graph_over_mcp["nodes"]
     );
+}
+
+/// The next notification `subscriber` is sent under `method`, skipping any other.
+async fn the_next_notification_under(
+    subscriber: &mut crate::control_json_rpc_adapter::tests::ControlWebSocketMessages,
+    method: &str,
+) -> Value {
+    loop {
+        let message = subscriber.next_message().await;
+        if message["method"] == method {
+            return message["params"].clone();
+        }
+    }
+}
+
+/// A subscriber to a loaded stream's graph is sent each edit another client makes, is sent
+/// `missed` when the stream is unloaded and again when it is loaded once more, and follows it to
+/// its new load; a subscriber to the stream actions is sent each change of the close and the
+/// open.
+///
+/// Mental-revert: a subscription left on the first load's topic hears nothing of the edit after
+/// the open, and the last wait below fails.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_its_next_load() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+    let opened =
+        the_run_of_the_project_once_finished(&operations_on_the_loaded_streams, project.path())
+            .await;
+    assert_eq!(opened["streams"][0]["state"], "stopped", "{opened}");
+    let stream_id = project.stream_id_of("main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        Arc::clone(&operations_on_the_loaded_streams),
+    )
+    .await;
+
+    let mut subscriber = served.control_websocket().await;
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_stream_graph_changes",
+                      "params": { "streams": [stream_id] } }),
+        )
+        .await;
+    assert_eq!(
+        subscriber.next_message().await["result"]["streams"],
+        json!([stream_id])
+    );
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "subscribe_stream_action_changes",
+                      "params": {} }),
+        )
+        .await;
+    assert_eq!(
+        subscriber.next_message().await["result"],
+        json!({ "actions_under_way": [] })
+    );
+
+    let added = served
+        .control_call(
+            "add_node",
+            json!({ "stream": stream_asset, "type": sink_type.as_str(), "name": "monitor" }),
+        )
+        .await;
+    assert!(added.get("result").is_some(), "{added}");
+    assert_eq!(
+        the_next_notification_under(&mut subscriber, "stream_graph_changed").await,
+        json!({ "stream": stream_id, "change": "edited", "node": null, "node_state": null })
+    );
+
+    for (project_action, how_the_stream_graph_is_left) in [
+        ("close_project", "unloaded"),
+        ("open_project", "loaded again"),
+    ] {
+        let queued = served
+            .control_call(
+                project_action,
+                json!({ "project_directory": project.path() }),
+            )
+            .await;
+        let action = queued["result"]["action"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{project_action} is queued: {queued}"))
+            .to_owned();
+        let finished =
+            the_stream_action_once_finished(&operations_on_the_loaded_streams, &action).await;
+        assert_eq!(finished["state"], "done", "{project_action}: {finished}");
+        loop {
+            let stream_action_change =
+                the_next_notification_under(&mut subscriber, "stream_action_changed").await;
+            assert_eq!(
+                stream_action_change["change"], "changed",
+                "{stream_action_change}"
+            );
+            if stream_action_change["action"] == action {
+                break;
+            }
+        }
+        loop {
+            let stream_graph_change =
+                the_next_notification_under(&mut subscriber, "stream_graph_changed").await;
+            if stream_graph_change["change"] == "missed" {
+                assert_eq!(
+                    stream_graph_change["stream"], stream_id,
+                    "the stream's graph {how_the_stream_graph_is_left}"
+                );
+                break;
+            }
+        }
+    }
+
+    let added_on_the_new_load = served
+        .control_call(
+            "add_node",
+            json!({ "stream": stream_asset, "type": sink_type.as_str(), "name": "second-monitor" }),
+        )
+        .await;
+    assert!(
+        added_on_the_new_load.get("result").is_some(),
+        "{added_on_the_new_load}"
+    );
+    loop {
+        let stream_graph_change =
+            the_next_notification_under(&mut subscriber, "stream_graph_changed").await;
+        if stream_graph_change["change"] == "edited" {
+            assert_eq!(stream_graph_change["stream"], stream_id);
+            break;
+        }
+    }
+}
+
+/// `subscribe_stream_graph_changes` is refused on a one-shot `POST /control`, for no stream, and
+/// for a stream not loaded, and `subscribe_stream_action_changes` on a one-shot `POST /control`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_subscription_is_refused_off_the_websocket_and_for_a_stream_not_loaded() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        engine.operations_on_the_loaded_streams(),
+    )
+    .await;
+
+    for (method, params) in [
+        (
+            "subscribe_stream_graph_changes",
+            json!({ "streams": [stream_id] }),
+        ),
+        ("subscribe_stream_action_changes", json!({})),
+    ] {
+        let refused = served.control_call(method, params).await;
+        let refusal = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(refusal.contains("/control/ws"), "{refused}");
+    }
+
+    let mut subscriber = served.control_websocket().await;
+    for (id, streams, refusal_names) in [
+        (1, json!([]), "names no stream".to_owned()),
+        (2, json!(["no-such-stream"]), "no-such-stream".to_owned()),
+    ] {
+        subscriber
+            .send(
+                json!({ "jsonrpc": "2.0", "id": id, "method": "subscribe_stream_graph_changes",
+                          "params": { "streams": streams } }),
+            )
+            .await;
+        let refused = subscriber.next_message().await;
+        assert_eq!(refused["id"], id, "{refused}");
+        let refusal = refused["error"]["message"].as_str().unwrap_or_default();
+        assert!(refusal.contains(&refusal_names), "{refused}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

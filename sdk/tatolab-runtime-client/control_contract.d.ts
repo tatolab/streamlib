@@ -139,6 +139,44 @@ export interface SubscribeProjectChangesResult {
 }
 
 /**
+ * `subscribe_stream_graph_changes`' params.
+ */
+export interface SubscribeStreamGraphChangesRequest {
+  /**
+   * The loaded streams, by stream id, whose graph changes the connection is sent; refused when
+   * empty or when one is not loaded.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * What `subscribe_stream_graph_changes` answers: the streams the connection is now sent graph
+ * changes of.
+ */
+export interface SubscribeStreamGraphChangesResult {
+  /**
+   * Every stream the connection is subscribed to, by stream id, this call's among them.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * `subscribe_stream_action_changes`' params, which name nothing.
+ */
+export type SubscribeStreamActionChangesRequest = Record<string, never>;
+
+/**
+ * What `subscribe_stream_action_changes` answers: the actions under way when the subscription
+ * began, which the client describes once to follow from.
+ */
+export interface SubscribeStreamActionChangesResult {
+  /**
+   * The id of each stream action queued or running as the subscription began.
+   */
+  actions_under_way: Array<string>;
+}
+
+/**
  * `describe_runtime`'s params: none.
  */
 export type DescribeRuntimeRequest = Record<string, never>;
@@ -3624,6 +3662,58 @@ export interface ProjectChangedNotificationParams {
 export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
 
 /**
+ * `stream_graph_changed`'s params.
+ */
+export interface StreamGraphChangedNotificationParams {
+  /**
+   * The stream, by stream id.
+   */
+  stream: string;
+  /**
+   * What changed; `missed` when the client reads the graph again.
+   */
+  change: StreamGraphChangeKindOnTheWire;
+  /**
+   * The node whose state changed, by its graph `id`, when `change` is `node_state_changed`.
+   */
+  node?: string | null;
+  /**
+   * The node's new state, when `change` is `node_state_changed`.
+   */
+  node_state?: NodeStateOnTheWire | null;
+}
+
+/**
+ * What changed in a loaded stream's live graph.
+ */
+export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "playback_state_changed" | "missed";
+
+/**
+ * A node's state as `graph` renders it.
+ */
+export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
+
+/**
+ * `stream_action_changed`'s params.
+ */
+export interface StreamActionChangedNotificationParams {
+  /**
+   * What happened; `missed` when the client calls `describe_stream_action` for each action it
+   * follows.
+   */
+  change: StreamActionChangeKindOnTheWire;
+  /**
+   * The action that changed, by id, when `change` is `changed`.
+   */
+  action?: string | null;
+}
+
+/**
+ * What happened to the stream actions a connection follows.
+ */
+export type StreamActionChangeKindOnTheWire = "changed" | "missed";
+
+/**
  * `list_operation_groups`' params: none.
  */
 export type ListOperationGroupsRequest = Record<string, never>;
@@ -3788,6 +3878,28 @@ export interface ControlOperations {
   subscribe_project_changes: {
     params: SubscribeProjectChangesRequest;
     result: SubscribeProjectChangesResult;
+  };
+  /**
+   * Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.
+   *
+   * Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+   *
+   * Since contract version 2, experimental.
+   */
+  subscribe_stream_graph_changes: {
+    params: SubscribeStreamGraphChangesRequest;
+    result: SubscribeStreamGraphChangesResult;
+  };
+  /**
+   * Send this connection a `stream_action_changed` notification each time a stream action changes.
+   *
+   * Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.
+   *
+   * Since contract version 2, experimental.
+   */
+  subscribe_stream_action_changes: {
+    params: SubscribeStreamActionChangesRequest;
+    result: SubscribeStreamActionChangesResult;
   };
   /**
    * Describe this runtime: its version, its build id, how long it has been up and where it logs.
@@ -4483,7 +4595,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */
@@ -4578,6 +4690,18 @@ export interface ControlNotifications {
    * Since contract version 1, experimental.
    */
   project_changed: ProjectChangedNotificationParams;
+  /**
+   * A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+   *
+   * Since contract version 2, experimental.
+   */
+  stream_graph_changed: StreamGraphChangedNotificationParams;
+  /**
+   * A stream action changed, which `describe_stream_action` describes, or `missed`.
+   *
+   * Since contract version 2, experimental.
+   */
+  stream_action_changed: StreamActionChangedNotificationParams;
 }
 
 /** A method name the runtime serves. */
@@ -4595,11 +4719,8 @@ export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMe
 /** The route one JSON-RPC request is POSTed to. */
 export declare const CONTROL_JSON_RPC_ROUTE_PATH: "/control";
 
-/** The route a connection is upgraded at to carry newline-delimited JSON-RPC both ways. */
-export declare const CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET: "/control/stream";
-
-/** The `Upgrade` token the stream route takes. */
-export declare const CONTROL_JSON_RPC_STREAM_UPGRADE_PROTOCOL_TOKEN: "control-jsonrpc";
+/** The route a WebSocket is opened at to carry one JSON-RPC message per text frame both ways. */
+export declare const CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET: "/control/ws";
 
 /** The header naming the contract version a client was built against. */
 export declare const CONTROL_CONTRACT_VERSION_HEADER_NAME: "tatolab-control-contract-version";

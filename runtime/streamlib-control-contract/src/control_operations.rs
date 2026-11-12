@@ -40,11 +40,15 @@ use crate::control_operation_requests::{
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
     SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
-    SetStudioFieldsRequest, SubscribeProjectChangesRequest, TransactRequest, UndoOrRedoRequest,
-    UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetStudioFieldsRequest, SubscribeProjectChangesRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
+    WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
-use crate::control_operation_results::{DiscoverResult, SubscribeProjectChangesResult};
+use crate::control_operation_results::{
+    DiscoverResult, SubscribeProjectChangesResult, SubscribeStreamActionChangesResult,
+    SubscribeStreamGraphChangesResult,
+};
 
 /// The contract's version: bumped only by a breaking change to an operation already in it.
 pub const CONTROL_CONTRACT_VERSION: u32 = 2;
@@ -90,6 +94,43 @@ impl ControlOperation for SubscribeProjectChanges {
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Project;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `subscribe_stream_graph_changes`: the connection is sent each change in some loaded streams'
+/// live graphs.
+pub struct SubscribeStreamGraphChanges;
+
+impl ControlOperation for SubscribeStreamGraphChanges {
+    type Request = SubscribeStreamGraphChangesRequest;
+    type Result = SubscribeStreamGraphChangesResult;
+    const METHOD_NAME: &'static str = "subscribe_stream_graph_changes";
+    const ONE_LINE_DOC: &'static str = "Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `subscribe_stream_action_changes`: the connection is sent each change of a stream action.
+pub struct SubscribeStreamActionChanges;
+
+impl ControlOperation for SubscribeStreamActionChanges {
+    type Request = SubscribeStreamActionChangesRequest;
+    type Result = SubscribeStreamActionChangesResult;
+    const METHOD_NAME: &'static str = "subscribe_stream_action_changes";
+    const ONE_LINE_DOC: &'static str = "Send this connection a `stream_action_changed` notification each time a stream action changes.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Stream;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
@@ -1270,7 +1311,7 @@ impl ControlOperation for OpenViewer {
     const METHOD_NAME: &'static str = "open_viewer";
     const ONE_LINE_DOC: &'static str =
         "Open a viewer of a node's output port, held open for the connection that opened it.";
-    const AGENT_USAGE_NOTE: &'static str = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.";
+    const AGENT_USAGE_NOTE: &'static str = "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
@@ -1417,6 +1458,8 @@ impl ControlOperation for Redo {
 pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Discover>(),
     ControlOperationDeclaration::of::<SubscribeProjectChanges>(),
+    ControlOperationDeclaration::of::<SubscribeStreamGraphChanges>(),
+    ControlOperationDeclaration::of::<SubscribeStreamActionChanges>(),
     ControlOperationDeclaration::of::<DescribeRuntime>(),
     ControlOperationDeclaration::of::<ListStreams>(),
     ControlOperationDeclaration::of::<Graph>(),
@@ -1498,6 +1541,10 @@ pub enum ControlOperationCall {
     Discover(DiscoverRequest),
     /// A `subscribe_project_changes` call.
     SubscribeProjectChanges(SubscribeProjectChangesRequest),
+    /// A `subscribe_stream_graph_changes` call.
+    SubscribeStreamGraphChanges(SubscribeStreamGraphChangesRequest),
+    /// A `subscribe_stream_action_changes` call.
+    SubscribeStreamActionChanges(SubscribeStreamActionChangesRequest),
     /// A `describe_runtime` call.
     DescribeRuntime(DescribeRuntimeRequest),
     /// A `list_streams` call.
@@ -1689,6 +1736,14 @@ impl ControlOperationCall {
             Discover::METHOD_NAME => the_request_of::<Discover>(params).map(Self::Discover),
             SubscribeProjectChanges::METHOD_NAME => {
                 the_request_of::<SubscribeProjectChanges>(params).map(Self::SubscribeProjectChanges)
+            }
+            SubscribeStreamGraphChanges::METHOD_NAME => {
+                the_request_of::<SubscribeStreamGraphChanges>(params)
+                    .map(Self::SubscribeStreamGraphChanges)
+            }
+            SubscribeStreamActionChanges::METHOD_NAME => {
+                the_request_of::<SubscribeStreamActionChanges>(params)
+                    .map(Self::SubscribeStreamActionChanges)
             }
             DescribeRuntime::METHOD_NAME => {
                 the_request_of::<DescribeRuntime>(params).map(Self::DescribeRuntime)
@@ -1885,6 +1940,8 @@ impl ControlOperationCall {
         match self {
             Self::Discover(_) => Discover::METHOD_NAME,
             Self::SubscribeProjectChanges(_) => SubscribeProjectChanges::METHOD_NAME,
+            Self::SubscribeStreamGraphChanges(_) => SubscribeStreamGraphChanges::METHOD_NAME,
+            Self::SubscribeStreamActionChanges(_) => SubscribeStreamActionChanges::METHOD_NAME,
             Self::DescribeRuntime(_) => DescribeRuntime::METHOD_NAME,
             Self::ListStreams(_) => ListStreams::METHOD_NAME,
             Self::Graph(_) => Graph::METHOD_NAME,

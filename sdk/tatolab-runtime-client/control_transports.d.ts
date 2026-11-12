@@ -44,10 +44,10 @@ export declare class ControlPostTransport implements ControlTransport {
   close(): Promise<void>;
 }
 
-/** One connection upgraded at `/control/stream` on the runtime's local API socket, carrying requests, answers and notifications. */
-export declare class ControlStreamTransport implements ControlTransport {
-  /** Upgrade a connection; aborting `signal` before it is open closes it and rejects with the signal's reason. */
-  static open(address: ControlLocalApiSocketAddress & { signal?: ControlOperationAbortSignal }): Promise<ControlStreamTransport>;
+/** One WebSocket opened at `/control/ws` on the runtime's local API socket, one JSON-RPC message per text frame, carrying requests, answers and notifications. */
+export declare class ControlWebSocketTransport implements ControlTransport {
+  /** Open the WebSocket; aborting `signal` before it is open closes it and rejects with the signal's reason. */
+  static open(address: ControlLocalApiSocketAddress & { signal?: ControlOperationAbortSignal }): Promise<ControlWebSocketTransport>;
   sendRequest(requestMessage: ControlRequestMessage, sendOptions?: ControlTransportSendOptions): Promise<unknown>;
   onNotificationMessage(listener: (notificationMessage: unknown) => void): () => void;
   readonly closed: Promise<void>;
