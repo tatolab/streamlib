@@ -4392,7 +4392,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-lives-with-tato-studio — SHIPPED #3192]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ control-api-contract, playback-controls)
+## Control plane & observability — IN-FLIGHT (→ control-api-contract, playback-controls, control-client-sdk-and-push)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
@@ -4572,8 +4572,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   named one the runtime does not know. `POST /mcp` serves the latest revision alone, since
   it demands the per-request metadata no earlier revision carries; a request at an earlier
   revision is refused with the protocol's own unsupported-version error naming it.
-  `subscriptions/listen` is acknowledged with an empty set — `listChanged` stays `false` —
-  and held until cancelled or the local API stops. Agents hosted in a cloud, which can
+  `subscriptions/listen` accepts only a project's transactions resource and the stream-action
+  resources, acknowledging any other request with an empty set — `listChanged` stays `false` —
+  and is held until cancelled or the local API stops. Agents hosted in a cloud, which can
   neither launch a command nor reach a machine's loopback, are not served by the local API.
   Owner, 2026-10-01; `rmcp`, owner, 2026-10-06; earlier revisions over `/mcp/stdio`, owner,
   2026-10-27. [local-api — SHIPPED #2665, #2667]
