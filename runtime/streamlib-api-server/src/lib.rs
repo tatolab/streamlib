@@ -34,6 +34,7 @@ mod new_node_file_template;
 #[cfg(test)]
 mod project_asset_tools_tests;
 mod state;
+mod stream_graph_drops_raises_and_link_states;
 mod stream_graph_transaction_executor;
 #[cfg(test)]
 mod stream_tools_over_a_real_engine_tests;

@@ -324,7 +324,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   on_project_changed(listener: (params: ControlNotifications["project_changed"]) => void): () => void;
   /**
-   * Hear each `stream_graph_changed` the connection is sent, checked against the contract; the returned function stops it. A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+   * Hear each `stream_graph_changed` the connection is sent, checked against the contract; the returned function stops it. A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.
    */
   on_stream_graph_changed(listener: (params: ControlNotifications["stream_graph_changed"]) => void): () => void;
   /**

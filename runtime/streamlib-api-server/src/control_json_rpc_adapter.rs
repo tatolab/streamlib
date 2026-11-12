@@ -6,6 +6,7 @@
 //! which also carries the notifications a subscription asks for. The adapter parses, calls the
 //! dispatcher and renders; it holds no operation logic.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -42,6 +43,11 @@ use crate::control_operation_dispatcher::{
 };
 use crate::control_subscriptions_of_one_connection::ControlSubscriptionsOfOneConnection;
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
+use crate::stream_graph_drops_raises_and_link_states::{
+    STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY,
+    StreamGraphDropsRaisesAndLinkStatesLastSampled,
+    the_drops_raises_and_link_states_of_a_stream_graph,
+};
 
 const JSON_RPC_VERSION: &str = "2.0";
 const JSON_RPC_PARSE_ERROR_CODE: i64 = -32700;
@@ -371,7 +377,8 @@ async fn send_a_notification<Notification: ControlNotification>(
 }
 
 /// Send each change heard in a followed stream's graph as a `stream_graph_changed`
-/// notification, and each stream action change as a `stream_action_changed` once the
+/// notification, each followed stream whose drops, raises or link states changed since the last
+/// sample as one too, and each stream action change as a `stream_action_changed` once the
 /// connection subscribed to them, until the connection ends. Each stream action change also
 /// moves each followed stream to the load it has now, sending `missed` for one whose load
 /// changed.
@@ -384,9 +391,38 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
 ) {
     let mut stream_action_changes =
         operations_on_the_loaded_streams.listen_for_each_stream_action_change();
+    let mut drops_raises_and_link_states_sampling =
+        tokio::time::interval(STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY);
+    drops_raises_and_link_states_sampling
+        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut drops_raises_and_link_states_last_sampled =
+        StreamGraphDropsRaisesAndLinkStatesLastSampled::default();
     loop {
         tokio::select! {
             () = connection_ended.cancelled() => return,
+            _ = drops_raises_and_link_states_sampling.tick() => {
+                let sampled_by_stream = the_drops_raises_and_link_states_of_each_followed_stream(
+                    operations_on_the_loaded_streams.as_ref(),
+                    &subscriptions,
+                )
+                .await;
+                for stream in drops_raises_and_link_states_last_sampled
+                    .streams_whose_sample_changed(sampled_by_stream)
+                {
+                    let changed = StreamGraphChangedNotificationParams {
+                        stream,
+                        change: StreamGraphChangeKindOnTheWire::DropsRaisesOrLinkStatesChanged,
+                        node: None,
+                        node_state: None,
+                    };
+                    if send_a_notification::<StreamGraphChanged>(&outgoing_message_sender, changed)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
             stream_graph_change = stream_graph_changes_heard.recv() => {
                 let Some(stream_graph_change) = stream_graph_change else {
                     return;
@@ -454,6 +490,36 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
             }
         }
     }
+}
+
+/// The drops, raises and link states of each stream graph the connection follows that is loaded
+/// now; a stream whose graph does not export is left out until it does.
+async fn the_drops_raises_and_link_states_of_each_followed_stream(
+    operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
+    subscriptions: &ControlSubscriptionsOfOneConnection,
+) -> BTreeMap<String, Value> {
+    let mut sampled_by_stream = BTreeMap::new();
+    for stream in subscriptions.every_followed_stream_graph_loaded_now() {
+        let Ok(runtime_operations) =
+            operations_on_the_loaded_streams.runtime_operations_of_the_stream_a_call_names(&stream)
+        else {
+            continue;
+        };
+        match runtime_operations.to_json_async().await {
+            Ok(stream_graph) => {
+                sampled_by_stream.insert(
+                    stream,
+                    the_drops_raises_and_link_states_of_a_stream_graph(&stream_graph),
+                );
+            }
+            Err(not_exported) => tracing::debug!(
+                %not_exported,
+                stream,
+                "a followed stream's graph did not export for its drops, raises and link states"
+            ),
+        }
+    }
+    sampled_by_stream
 }
 
 fn the_notification_of_an_announcement(

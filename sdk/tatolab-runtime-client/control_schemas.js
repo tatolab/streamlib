@@ -1347,7 +1347,7 @@ const ProjectChangedNotificationParams = z.looseObject({
 });
 
 /** @type {z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>} */
-const StreamGraphChangeKindOnTheWire = z.union([z.literal("edited"), z.literal("node_state_changed"), z.literal("playback_state_changed"), z.literal("missed")]);
+const StreamGraphChangeKindOnTheWire = z.union([z.literal("edited"), z.literal("node_state_changed"), z.literal("playback_state_changed"), z.literal("drops_raises_or_link_states_changed"), z.literal("missed")]);
 
 /** @type {z.ZodType<ControlContract.NodeStateOnTheWire>} */
 const NodeStateOnTheWire = z.union([z.literal("Pending"), z.literal("Idle"), z.literal("Running"), z.literal("Paused"), z.literal("Stopping"), z.literal("Stopped"), z.literal("Error"), z.literal("Restarting")]);

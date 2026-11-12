@@ -2644,6 +2644,113 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
     }
 }
 
+/// A native source whose every `process()` raises the same words.
+#[streamlib::sdk::processor(execution = continuous(interval_ms = 5), output("video", family = Image))]
+pub struct StreamToolsTestSourceWhoseProcessRaises;
+
+/// What [`StreamToolsTestSourceWhoseProcessRaises`] raises.
+const WHAT_THE_RAISING_SOURCE_RAISES: &str = "the test source raises on every process";
+
+impl streamlib::sdk::processors::ContinuousProcessor
+    for StreamToolsTestSourceWhoseProcessRaises::Processor
+{
+    fn process(
+        &mut self,
+        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+    ) -> Result<()> {
+        Err(streamlib::sdk::error::Error::Runtime(
+            WHAT_THE_RAISING_SOURCE_RAISES.to_owned(),
+        ))
+    }
+}
+
+/// A subscriber to a played stream's graph is sent `drops_raises_or_link_states_changed` once a
+/// node's `process()` starts raising, which no graph event reports, and the graph it reads then
+/// carries the raise.
+///
+/// Mental-revert: without the sampling, the raise reaches a pushed client only on its next
+/// unrelated change, and the wait below times out.
+#[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — a stream's start creates the engine's GPU context; run with --features hardware-tests"
+)]
+async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        PROCESSOR_REGISTRY.register::<StreamToolsTestSourceWhoseProcessRaises::Processor>()
+    });
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "raising",
+        "nodes": [{
+            "id": SOURCE_NODE_UUID,
+            "name": "source",
+            "type": StreamToolsTestSourceWhoseProcessRaises::processor_class_import_path().as_str(),
+            "config": {},
+        }],
+        "links": [],
+    }));
+    let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+    let opened =
+        the_run_of_the_project_once_finished(&operations_on_the_loaded_streams, project.path())
+            .await;
+    assert_eq!(opened["streams"][0]["state"], "stopped", "{opened}");
+    let stream_id = project.stream_id_of("raising");
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        Arc::clone(&operations_on_the_loaded_streams),
+    )
+    .await;
+    let mut subscriber = served.control_websocket().await;
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_stream_graph_changes",
+                      "params": { "streams": [stream_id] } }),
+        )
+        .await;
+    assert_eq!(
+        subscriber.next_message().await["result"]["streams"],
+        json!([stream_id])
+    );
+
+    let queued = served
+        .control_call(
+            "start_playback",
+            json!({ "project_directory": project.path() }),
+        )
+        .await;
+    let action = queued["result"]["action"]
+        .as_str()
+        .unwrap_or_else(|| panic!("start_playback is queued: {queued}"))
+        .to_owned();
+    let started = the_stream_action_once_finished(&operations_on_the_loaded_streams, &action).await;
+    assert_eq!(started["state"], "done", "{started}");
+
+    let changed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let stream_graph_change =
+                the_next_notification_under(&mut subscriber, "stream_graph_changed").await;
+            if stream_graph_change["change"] == "drops_raises_or_link_states_changed" {
+                return stream_graph_change;
+            }
+        }
+    })
+    .await
+    .expect("the raise is pushed within a few samples");
+    assert_eq!(changed["stream"], stream_id, "{changed}");
+    let graph = served
+        .control_call("graph", json!({ "stream": stream_id }))
+        .await;
+    let raising_because = graph["result"]["nodes"][0]["components"]["process_raising_because"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        raising_because.contains(WHAT_THE_RAISING_SOURCE_RAISES),
+        "{graph}"
+    );
+}
+
 /// `subscribe_stream_graph_changes` is refused on a one-shot `POST /control`, for no stream, and
 /// for a stream not loaded, and `subscribe_stream_action_changes` on a one-shot `POST /control`.
 #[tokio::test(flavor = "multi_thread")]

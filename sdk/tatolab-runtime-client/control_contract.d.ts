@@ -3766,7 +3766,7 @@ export interface StreamGraphChangedNotificationParams {
 /**
  * What changed in a loaded stream's live graph.
  */
-export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "playback_state_changed" | "missed";
+export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "playback_state_changed" | "drops_raises_or_link_states_changed" | "missed";
 
 /**
  * A node's state as `graph` renders it.
@@ -4782,7 +4782,7 @@ export interface ControlNotifications {
    */
   project_changed: ProjectChangedNotificationParams;
   /**
-   * A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+   * A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.
    *
    * Since contract version 2, experimental.
    */

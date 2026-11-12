@@ -109,6 +109,16 @@ impl ControlSubscriptionsOfOneConnection {
         Ok(followed_stream_graphs.keys().cloned().collect())
     }
 
+    /// Every followed stream that is loaded now, by stream id.
+    pub(crate) fn every_followed_stream_graph_loaded_now(&self) -> Vec<String> {
+        self.followed_stream_graphs
+            .lock()
+            .iter()
+            .filter(|(_, followed)| followed.is_some())
+            .map(|(stream_id, _)| stream_id.clone())
+            .collect()
+    }
+
     /// Move each followed stream's subscription to the load it has now, answering each stream
     /// whose load changed: loaded again, unloaded, or loaded once more after it was unloaded.
     pub(crate) fn follow_each_stream_graph_to_its_current_load(

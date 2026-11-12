@@ -123,6 +123,9 @@ pub enum StreamGraphChangeKindOnTheWire {
     NodeStateChanged,
     /// The stream's playback started, stopped, paused or resumed, or failed to.
     PlaybackStateChanged,
+    /// A node's dropped or refused bag counts, the raise its `process()` keeps, or a link's state
+    /// changed; sent at most once every 500 ms per stream, and the client reads the graph again.
+    DropsRaisesOrLinkStatesChanged,
     /// The connection missed changes, or the stream was loaded again or unloaded, and the client
     /// reads the graph again.
     Missed,
@@ -168,7 +171,7 @@ pub struct StreamGraphChanged;
 impl ControlNotification for StreamGraphChanged {
     type Params = StreamGraphChangedNotificationParams;
     const METHOD_NAME: &'static str = "stream_graph_changed";
-    const ONE_LINE_DOC: &'static str = "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.";
+    const ONE_LINE_DOC: &'static str = "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_stream_graph_changes";
     const SINCE_CONTRACT_VERSION: u32 = 2;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;

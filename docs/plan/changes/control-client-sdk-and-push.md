@@ -139,7 +139,8 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
 - **Push for a loaded stream's live graph.** The contract gains
   `subscribe_stream_graph_changes(streams)` and the notification `stream_graph_changed`
   (`{ stream, change }`, where `change` is `edited`, `node_state_changed`,
-  `playback_state_changed` or `missed`, with the node and its new state where one applies).
+  `playback_state_changed`, `drops_raises_or_link_states_changed` or `missed`, with the node and
+  its new state where one applies).
   - The adapter reads it from `PUBSUB`, the engine's one event system, on each subscribed
     stream's topic: `GraphDidChange`, the playback events, and `ProcessorStateDidChange`.
   - The engine starts publishing `ProcessorStateDidChange` from `ObservableProcessorState`
@@ -155,6 +156,13 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   - A subscription names stream ids. A stream loaded again gets a new stream tag and so a new
     topic (`runtime.rs:3830`); the adapter moves the subscription to the new topic and sends
     `change: "missed"`, so the client reads the graph again.
+  - A node's dropped and refused bag counts, the raise its `process()` keeps, and a link's
+    state change without a `PUBSUB` event: they are counted live, some in a helper process's
+    board, on paths that run every frame. They reach a subscriber all the same, so Studio drops
+    its slow `graph` read (owner, 2026-11-12). Each connection samples them from each followed
+    stream's graph every 500 ms and sends `drops_raises_or_link_states_changed` for a stream
+    whose sample differs from the one before; a written count, which grows with every bag, is
+    not sampled. The kind's name and the 500 ms are the implementer's (session, 2026-11-12).
 - **Push for stream actions.** The contract gains `subscribe_stream_action_changes` and
   `stream_action_changed` (`{ action }`), read from the stream-action queue's broadcast
   (`project_stream_action_queue.rs:232`), so a client follows an action without the MCP
