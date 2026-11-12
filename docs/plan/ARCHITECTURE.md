@@ -2279,10 +2279,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   change; a placed stream runs only where it is placed (§Product, loading a project).
   `unlock_subgraph` turns a generator's fragment or a placed stream back into plain nodes of the
   graph placing it, a placed stream's as a copy with the reference dropped, which no refresh or
-  edit of that stream then reaches; each is a graph action with an inverse. Owner, 2026-11-11:
-  collapse saving a placed stream, edits inside reaching every placement, a placed stream running
-  only where it is placed; any stream of the project placeable and unlock copying a placed
-  stream, session, 2026-11-11.
+  edit of that stream then reaches; each is a graph action with an inverse. Owner, 2026-11-11.
   Every graph edit but `import_graph_generator`, `use_dependency_stream` and the canvas-note
   edits takes an optional `level`, the path of fragment node UUIDs from the stream's own level
   inward, and applies to the stream the last placed stream on the path references, an Input or
@@ -2290,9 +2287,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   name is unique within its level. Inside a generator's output it is refused until
   `unlock_subgraph`. A link onto a port an edit inside renames follows it to the new name in every
   stream placing it, and one onto a port an edit inside removes goes with it, the edit's inverse
-  putting each back. Owner, 2026-11-11: the level named as a path of UUIDs; the edit at a level
-  made on the placed stream's own document, the port links followed in every stream placing it
-  and the name `unlock_subgraph`, session, 2026-11-11.
+  putting each back. Owner, 2026-11-11.
   Rejected: an authored subgraph held inline in the stream that places it — a subgraph is one
   stream placed by reference, the same everywhere it is placed (owner, 2026-11-11).
   [#3519; amended by subgraphs-as-placed-streams: collapse saves a stream and places it, an edit

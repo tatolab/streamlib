@@ -6,9 +6,7 @@
 > edits that stream, and every stream placing it takes the change. A stream another stream of the
 > project places runs only where it is placed. Unlock copies a placed stream's nodes back into the
 > parent as plain nodes. The inline authored subgraph is retired; a graph generator's frozen output
-> stays as it is. The owner chose the first, third and fourth of these on decision cards; any
-> project stream being placeable and Unlock copying a placed stream are session proposals
-> (session, 2026-11-11).
+> stays as it is. The owner chose these on decision cards and approved the plan text as written.
 
 ## Current state (recon, `main` `66b2277`)
 
