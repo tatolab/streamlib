@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "audio-mixer-demo",
+  "description": "Three sine voices through a mixer to the speaker, playing a C major chord.",
+  "name": "Audio mixer",
   "project": "7a203f22-0ad2-4497-976d-789ef81383fa"
 }

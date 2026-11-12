@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-python-effects",
+  "description": "A cyberpunk broadcast look over the camera from six Python nodes: Slang kernels, MediaPipe pose tracking, a ModernGL avatar and a skia overlay.",
+  "name": "Camera Python effects",
   "project": "0a03d87f-e158-4a18-8db1-045a1bff3d70"
 }

@@ -104,17 +104,21 @@ enum TatolabVerb {
     #[command(
         long_about = "Create a project in DIRECTORY, or with none in a folder <adjective>-<noun> \
                       the runtime draws under ~/streams, and queue its open: the runtime writes \
-                      tatolab-project.json, streams/main.graph.json, nodes/, pyproject.toml, \
-                      .python-version and .gitignore — one stream wiring the sample animation \
-                      through a GPU effect, with a meter on a fan-out — commits it as the \
-                      project's first revision, then makes its .venv and loads the stream, \
-                      held stopped until `tatolab play`, under the folder's name. A DIRECTORY already \
-                      holding one of those files fails the action with nothing written. Needs \
-                      the runtime running."
+                      the starter — tatolab-project.json, streams/main.graph.json holding the \
+                      test pattern's one source, pyproject.toml, .python-version and \
+                      .gitignore — or, with --sample, copies that sample project the runtime \
+                      carries, commits it as the project's first revision, then makes its .venv \
+                      and loads the stream, held stopped until `tatolab play`, under the \
+                      folder's name. A DIRECTORY already holding one of those files fails the \
+                      action with nothing written, and a sample the runtime does not carry is \
+                      refused, naming the ones it does. Needs the runtime running."
     )]
     New {
         /// Where to create the project (default: a new folder under ~/streams).
         directory: Option<PathBuf>,
+        /// The sample project the runtime carries to start from, by name.
+        #[arg(long = "sample", value_name = "NAME")]
+        sample_name: Option<String>,
     },
     /// Open this project: queue the load of its streams, held stopped, print the action, and return.
     #[command(
@@ -391,14 +395,16 @@ fn finite_stream_clock_scale(scale_argument: &str) -> Result<f64, String> {
 
 fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
     match verb {
-        TatolabVerb::New { directory } => {
-            caller_working_directory().and_then(|caller_working_directory| {
-                stream_actions_on_the_runtime::create_project(
-                    &caller_working_directory,
-                    directory.as_deref(),
-                )
-            })
-        }
+        TatolabVerb::New {
+            directory,
+            sample_name,
+        } => caller_working_directory().and_then(|caller_working_directory| {
+            stream_actions_on_the_runtime::create_project(
+                &caller_working_directory,
+                directory.as_deref(),
+                sample_name.as_deref(),
+            )
+        }),
         TatolabVerb::Open {
             project_directory,
             play_once_open,

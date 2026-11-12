@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "camera-webrtc-publish",
+  "description": "The camera and microphone encoded as H.264 and Opus and published as one WHIP session.",
+  "name": "Camera WebRTC publish",
   "project": "f7f9001b-88a2-4d61-860a-bbfada349e28"
 }

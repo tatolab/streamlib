@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "fisheye-object-detection",
+  "description": "The camera through a fisheye lens, rectified and run through an object detector, with both views seen in Tato Studio's viewer.",
+  "name": "Fisheye object detection",
   "project": "35ff6216-33e1-43f6-bcbf-f0f37dbc776b"
 }
