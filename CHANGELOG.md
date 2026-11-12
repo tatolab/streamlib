@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.68.76](https://github.com/tatolab/streamlib/compare/v0.68.75...v0.68.76) (2026-11-12)
+
+
+### Features
+
+* **runtime-client:** a call can stop waiting, and read its result's numbers as written ([4f65318](https://github.com/tatolab/streamlib/commit/4f65318e5599992681faaec53754d79c8ece1f6b))
+* **runtime-client:** let a call stop waiting through an AbortSignal ([fcf34be](https://github.com/tatolab/streamlib/commit/fcf34be512d78cebbc52349ce490a018a12120d7)), closes [#3613](https://github.com/tatolab/streamlib/issues/3613)
+* **runtime-client:** read a call's result with a JSON reviver ([41fb071](https://github.com/tatolab/streamlib/commit/41fb07192bdeac6783e46bb716e625176c7d4bcc))
+
 ## [0.68.75](https://github.com/tatolab/streamlib/compare/v0.68.74...v0.68.75) (2026-11-12)
 
 

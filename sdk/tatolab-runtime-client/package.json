@@ -1,6 +1,6 @@
 {
   "name": "@tatolab/runtime-client",
-  "version": "0.68.75",
+  "version": "0.68.76",
   "description": "The TypeScript client of the Tatolab runtime's control API, generated from its contract file.",
   "license": "BUSL-1.1",
   "private": true,
