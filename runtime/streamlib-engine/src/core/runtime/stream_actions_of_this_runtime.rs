@@ -7,7 +7,7 @@
 //! remove a project; rename a stream; list what the runtime holds; and re-load the recorded streams
 //! at start.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -45,11 +45,11 @@ use super::runtime::{
     what_interrupted_a_load,
 };
 use super::{
-    CrashOfThePreviousRuntimeRun, FunctionNodeState, HowThePreviousRuntimeRunEnded,
-    LoadedStreamInThisRuntime, LoadedStreamTag, OptionsForLoadingOneStream,
-    PendingStreamActionKind, Runner, RuntimeStatus, StreamEnvironment,
-    StreamLoadObservingInterrupts, StreamLocation, StreamRecord, StreamRecordAsRead,
-    StreamRecordReadFailure, StreamRecordsInTheStateDirectory, is_the_machines_shutdown_requested,
+    CrashOfThePreviousRuntimeRun, HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime,
+    LoadedStreamTag, OptionsForLoadingOneStream, PendingStreamActionKind, Runner, RuntimeStatus,
+    StreamEnvironment, StreamLoadObservingInterrupts, StreamLocation, StreamRecord,
+    StreamRecordAsRead, StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
+    is_the_machines_shutdown_requested,
 };
 use crate::core::compiler::compiler_ops::cross_floor_check_in_the_projects_interpreter::warn_of_what_binds_the_project_to_one_floor;
 use crate::core::context::{CaptureDeviceAccessPrompting, StreamClockReading};
@@ -300,8 +300,10 @@ fn the_graph_the_recorded_stream_holds(
     )
 }
 
-/// Every UUID the graph documents of the project in `project_directory` name, a superset of the
-/// node UUIDs they hold; `None` when a document does not read, since a node it holds is unknown.
+/// Every UUID the graph documents of the project in `project_directory` name, each placed
+/// stream's held nodes among them under the UUIDs their placements give them, a superset of the
+/// node UUIDs they hold; `None` when a document does not read or resolve, since a node it holds
+/// is unknown.
 fn every_node_uuid_the_graph_documents_of_the_project_hold(
     project_directory: &Path,
 ) -> Option<std::collections::HashSet<Uuid>> {
@@ -325,7 +327,13 @@ fn every_node_uuid_the_graph_documents_of_the_project_hold(
     for stream_document in project_stream_documents(project_directory).ok()? {
         let bytes = stream_document.bytes.ok()?;
         let document: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-        every_uuid_named_in(&document, &mut uuids);
+        let with_each_placed_stream_resolved =
+            streamlib_project_repository::graph_document_with_each_stream_fragment_reference_resolved(
+                project_directory,
+                &document,
+            )
+            .ok()?;
+        every_uuid_named_in(&with_each_placed_stream_resolved, &mut uuids);
     }
     Some(uuids)
 }
@@ -602,8 +610,6 @@ struct OneStreamAStreamActionLoads<'load> {
     graph: &'load GraphSnapshot,
     stream_environment: StreamEnvironment,
     capture_device_access_prompting: CaptureDeviceAccessPrompting,
-    /// The function-node states the record kept at the stream's last end.
-    function_node_states_recorded: BTreeMap<String, FunctionNodeState>,
     /// Why none of the stream's node code is read, every node held as written.
     why_none_of_its_node_code_is_read: Option<String>,
     /// Abandons the load once it reports true.
@@ -625,7 +631,6 @@ impl<'load> OneStreamAStreamActionLoads<'load> {
             graph,
             stream_environment: record.stream_environment(),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
-            function_node_states_recorded: record.function_node_states(),
             why_none_of_its_node_code_is_read: None,
             is_interrupted: &is_the_machines_shutdown_requested,
         }
@@ -675,7 +680,7 @@ impl Runner {
         let stream_records = Arc::new(StreamRecordsInTheStateDirectory::open(streams_directory)?);
         self.stream_actions
             .stream_records
-            .set(Arc::clone(&stream_records))
+            .set(stream_records)
             .map_err(|_| {
                 Error::Configuration(format!(
                     "this runtime was handed a streams directory twice at once; it records its \
@@ -683,23 +688,6 @@ impl Runner {
                     streams_directory.display()
                 ))
             })?;
-        self.engine_resources_shared_by_every_stream
-            .function_node_states_carried_for_every_stream
-            .record_the_states_of_each_stream_at_its_end_through(Arc::new(
-                move |stream_id, states| {
-                    if let Err(not_recorded) = stream_records
-                        .change_the_record(stream_id, |record| {
-                            record.keep_the_function_node_states(&states)
-                        })
-                    {
-                        tracing::warn!(
-                            "the stream `{stream_id}` ended, and its function nodes' state was \
-                             not recorded, so a restart of this runtime starts them from their \
-                             defaults: {not_recorded}"
-                        );
-                    }
-                },
-            ));
         Ok(())
     }
 
@@ -1819,7 +1807,7 @@ impl Runner {
     }
 
     /// Record the stream `stream_id` stopped, finishing the pending stop
-    /// `action_id` on its record, its function-node states forgotten.
+    /// `action_id` on its record.
     fn record_the_stream_stopped_finishing_its_pending_stop(
         &self,
         stream_id: &str,
@@ -1827,7 +1815,6 @@ impl Runner {
     ) -> Result<()> {
         self.change_the_record_of_the_stream(stream_id, |record| {
             record.stopped = true;
-            record.function_node_states_by_node_name.clear();
             if let Some(action_id) = action_id {
                 record.finish_the_pending_stream_action(action_id);
             }
@@ -3132,7 +3119,6 @@ impl Runner {
             graph,
             stream_environment,
             capture_device_access_prompting,
-            function_node_states_recorded,
             why_none_of_its_node_code_is_read,
             is_interrupted,
         } = stream_to_load;
@@ -3149,12 +3135,6 @@ impl Runner {
             }
             None => load_options,
         };
-        self.engine_resources_shared_by_every_stream
-            .function_node_states_carried_for_every_stream
-            .carry_the_recorded_states_unless_some_are_carried(
-                stream_id,
-                function_node_states_recorded,
-            );
         let stream = match self.load_stream_held_as_unless_interrupted(
             graph,
             load_options,
@@ -3548,7 +3528,6 @@ impl Runner {
                 Some(stream_records) => stream_records
                     .change_the_record(stream_id, |record| {
                         record.mark_closed();
-                        record.function_node_states_by_node_name.clear();
                         record.finish_the_pending_stream_action(action_id);
                     })
                     .map(|_| ()),
@@ -3786,13 +3765,12 @@ impl Runner {
             .and_then(sample_projects_directory_beside_the_lend)
     }
 
-    /// Forget the function node states this runtime carries for `stream_id`,
-    /// whose record is gone, so a stream recorded again under that id starts
-    /// its function nodes from their defaults.
+    /// Forget every function-node state of `stream_id`, in memory and in its project's
+    /// store, as its playback ends, its project closes or its record is forgotten.
     fn forget_the_function_node_states_of_the_stream(&self, stream_id: &str) {
         self.engine_resources_shared_by_every_stream
             .function_node_states_carried_for_every_stream
-            .forget_the_stream(stream_id);
+            .forget_every_state_of_the_stream(stream_id);
     }
 
     /// Unload and forget the stream of `project`'s stream asset `stream_asset`, whose graph
@@ -4584,6 +4562,48 @@ mod tests {
     use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
 
     const LEND_DIRECTORY_FOR_TEST: &str = "/opt/tatolab/lib/tatolab/lend";
+
+    #[test]
+    fn the_node_uuids_a_project_holds_take_each_placed_streams_nodes_under_their_placements_uuids()
+    {
+        let project_directory = tempfile::tempdir().expect("a temporary project");
+        let main =
+            crate::core::runtime::a_project_on_disk_for_a_test::the_location_of_a_stream_of_the_test_project_at(
+                project_directory.path(),
+                "main",
+            );
+        let held_stream_asset = Uuid::new_v4();
+        let node_inside_the_placed_stream = Uuid::new_v4();
+        let placement_of_the_held_stream = Uuid::new_v4();
+        let streams_directory = project_directory.path().join("streams");
+        std::fs::create_dir_all(&streams_directory).expect("a streams directory");
+        std::fs::write(
+            streams_directory.join("held.graph.json"),
+            serde_json::json!({ "asset": held_stream_asset, "links": [], "nodes": [{
+                "id": node_inside_the_placed_stream, "name": "lfo", "type": "nodes.lfo:Lfo",
+                "config": {} }] })
+            .to_string(),
+        )
+        .expect("the held stream's document");
+        std::fs::write(
+            streams_directory.join("main.graph.json"),
+            serde_json::json!({ "asset": main.stream_asset, "links": [], "nodes": [{
+                "id": placement_of_the_held_stream, "name": "held",
+                "type": streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE,
+                "config": { "stream": { "asset": held_stream_asset } } }] })
+            .to_string(),
+        )
+        .expect("the placing stream's document");
+
+        let node_uuids = super::every_node_uuid_the_graph_documents_of_the_project_hold(
+            project_directory.path(),
+        )
+        .expect("every document reads and resolves");
+        assert!(node_uuids.contains(&Uuid::new_v5(
+            &placement_of_the_held_stream,
+            node_inside_the_placed_stream.as_bytes(),
+        )));
+    }
 
     /// A runner handed a lend directory, recording its streams in
     /// `streams_directory` when one is given.

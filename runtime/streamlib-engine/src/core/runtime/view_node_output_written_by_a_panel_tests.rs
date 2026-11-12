@@ -762,10 +762,11 @@ fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
 #[test]
 #[serial]
 fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused() {
-    let refusal = crate::core::graph_interface_resolution::GraphInputValueLifetime::declared_in(
-        Some(&json!({ "lifetime": "forever" })),
-    )
-    .unwrap_err();
+    let refusal =
+        crate::core::graph_interface_resolution::the_value_lifetime_a_graph_input_config_declares(
+            Some(&json!({ "lifetime": "forever" })),
+        )
+        .unwrap_err();
     assert!(
         refusal.contains("\"forever\"") && refusal.contains("\"kept\""),
         "{refusal}"

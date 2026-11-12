@@ -11,12 +11,12 @@ use parking_lot::Mutex;
 
 use super::LoadedStreamInThisRuntime;
 use super::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
-use crate::core::descriptors::PortFamily;
+use crate::core::descriptors::{NodeValueLifetime, PortFamily};
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorInstanceComponent};
 use crate::core::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphInputValueLifetime,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
 };
 use crate::core::processors::{
     NodeTypesOneStreamResolves, NodeWhoseOutputsAClientWritesProcessor, ProcessorInstance,
@@ -104,9 +104,9 @@ impl LoadedStreamInThisRuntime {
                 compiler.scope(|graph, _tx| {
                     let node = the_top_level_graph_input_declaring(graph, &stream_id, &input_name)?;
                     let family = the_family_a_graph_input_carries(node)?;
-                    let lifetime = GraphInputValueLifetime::declared_in(node.config.as_ref())
+                    let lifetime = the_value_lifetime_a_graph_input_config_declares(node.config.as_ref())
                         .map_err(Error::Configuration)?;
-                    if lifetime == GraphInputValueLifetime::Reset {
+                    if lifetime == NodeValueLifetime::Reset {
                         return Err(Error::NodeOfAStreamIsNotRunning {
                             not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
                             runtime_words: format!(

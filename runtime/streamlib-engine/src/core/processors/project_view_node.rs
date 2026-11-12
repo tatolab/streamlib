@@ -22,7 +22,7 @@ use crate::core::context::{
     RuntimeContextFullAccess, RuntimeContextLimitedAccess, StoreScopedToThisNode,
 };
 use crate::core::descriptors::{
-    PortDescriptor, PortFamily, PortFamilyDeclaration, ProcessorClassImportPath,
+    NodeValueLifetime, PortDescriptor, PortFamily, PortFamilyDeclaration, ProcessorClassImportPath,
     ProcessorClassShortName, ProcessorDescriptor,
 };
 use crate::core::error::{Error, Result};
@@ -30,7 +30,7 @@ use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorNode;
 use crate::core::graph_interface_resolution::{
     GRAPH_INPUT_DEFAULT_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME, GraphInputValueLifetime,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
 };
 use crate::core::processors::DynGeneratedProcessor;
 use crate::iceoryx2::{
@@ -157,7 +157,7 @@ pub(crate) struct NodeWhoseOutputsAClientWritesProcessor {
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
-    graph_input_value_lifetime: Option<GraphInputValueLifetime>,
+    graph_input_value_lifetime: Option<NodeValueLifetime>,
     store_scoped_to_this_graph_input: Option<StoreScopedToThisNode>,
 }
 
@@ -177,7 +177,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         descriptor.outputs[0].family = PortFamilyDeclaration::of_family(family);
         let mut processor = Self::for_the_node(node, descriptor);
         processor.graph_input_value_lifetime = Some(
-            GraphInputValueLifetime::declared_in(Some(&config)).map_err(|why| {
+            the_value_lifetime_a_graph_input_config_declares(Some(&config)).map_err(|why| {
                 Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
             })?,
         );
@@ -216,7 +216,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         value: &JsonValue,
     ) -> Result<()> {
         let processor = Self::for_a_top_level_graph_input(node)?;
-        if processor.graph_input_value_lifetime != Some(GraphInputValueLifetime::Kept) {
+        if processor.graph_input_value_lifetime != Some(NodeValueLifetime::Kept) {
             return Err(Error::Configuration(format!(
                 "`GraphInput` node `{}` returns to its default at Stop and keeps nothing",
                 node.display_name
@@ -274,7 +274,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         value: &JsonValue,
     ) -> Result<()> {
         self.publish_a_value_written_onto_an_output(port, value)?;
-        if self.graph_input_value_lifetime == Some(GraphInputValueLifetime::Kept)
+        if self.graph_input_value_lifetime == Some(NodeValueLifetime::Kept)
             && let Some(store) = &self.store_scoped_to_this_graph_input
             && let Err(not_kept) = store.write(GRAPH_INPUT_KEPT_VALUE_STORE_KEY, value)
         {
@@ -307,18 +307,16 @@ impl NodeWhoseOutputsAClientWritesProcessor {
     /// there; a reset one forgets what it kept.
     pub(crate) fn keep_the_graph_input_value_in(&mut self, store: StoreScopedToThisNode) {
         match self.graph_input_value_lifetime {
-            Some(GraphInputValueLifetime::Kept) => {
-                match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
-                    Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
-                    Ok(None) => {}
-                    Err(not_read) => tracing::warn!(
-                        "`GraphInput` node `{}` could not read the value it kept, so it starts \
+            Some(NodeValueLifetime::Kept) => match store.read(GRAPH_INPUT_KEPT_VALUE_STORE_KEY) {
+                Ok(Some(kept)) => self.take_a_kept_value_its_family_carries(kept, &store),
+                Ok(None) => {}
+                Err(not_read) => tracing::warn!(
+                    "`GraphInput` node `{}` could not read the value it kept, so it starts \
                          from its default: {not_read}",
-                        self.node_name
-                    ),
-                }
-            }
-            Some(GraphInputValueLifetime::Reset) => self.forget_the_kept_value_in(&store),
+                    self.node_name
+                ),
+            },
+            Some(NodeValueLifetime::Reset) => self.forget_the_kept_value_in(&store),
             None => return,
         }
         self.store_scoped_to_this_graph_input = Some(store);
@@ -333,9 +331,10 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         if self.graph_input_value_lifetime.is_none() {
             return Ok(());
         }
-        let lifetime = GraphInputValueLifetime::declared_in(Some(config_json)).map_err(|why| {
-            Error::Configuration(format!("`GraphInput` node `{}`: {why}", self.node_name))
-        })?;
+        let lifetime = the_value_lifetime_a_graph_input_config_declares(Some(config_json))
+            .map_err(|why| {
+                Error::Configuration(format!("`GraphInput` node `{}`: {why}", self.node_name))
+            })?;
         if self.graph_input_value_lifetime == Some(lifetime) {
             return Ok(());
         }
@@ -344,7 +343,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
             return Ok(());
         };
         match lifetime {
-            GraphInputValueLifetime::Kept => {
+            NodeValueLifetime::Kept => {
                 if let Some(current) = self
                     .current_value_of_each_output
                     .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
@@ -357,7 +356,7 @@ impl NodeWhoseOutputsAClientWritesProcessor {
                     );
                 }
             }
-            GraphInputValueLifetime::Reset => self.forget_the_kept_value_in(store),
+            NodeValueLifetime::Reset => self.forget_the_kept_value_in(store),
         }
         Ok(())
     }

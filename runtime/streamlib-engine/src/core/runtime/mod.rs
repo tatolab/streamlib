@@ -66,7 +66,7 @@ pub(crate) use engine_teardown_watchdog::{
 };
 pub use function_node_states_carried_across_loads::{
     FunctionNodeState, FunctionNodeStatesCarriedForEveryStream,
-    FunctionNodeStatesCarriedForOneStream, RecordTheFunctionNodeStatesOfAStreamAtItsEnd,
+    FunctionNodeStatesCarriedForOneStream, TheStoreOfEachNodeOfAStream,
 };
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
@@ -78,9 +78,9 @@ pub(crate) use helper_process_group_registry::{
 pub use loaded_stream::{HowALoadedStreamEnded, LoadedStreamInThisRuntime, LoadedStreamTag};
 pub use machine_name::MachineName;
 pub use machine_state_directory::{
-    PendingStreamActionKind, PendingStreamActionOnTheRecord, RecordedFunctionNodeState,
-    STREAM_RECORD_SCHEMA_VERSION, StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime,
-    StreamRecordReadFailure, StreamRecordsInTheStateDirectory,
+    PendingStreamActionKind, PendingStreamActionOnTheRecord, STREAM_RECORD_SCHEMA_VERSION,
+    StreamRecord, StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
+    StreamRecordsInTheStateDirectory,
 };
 pub use open_descriptor_soft_limit::{
     OpenDescriptorSoftLimitRaise, raise_the_open_descriptor_soft_limit_to_its_ceiling,
