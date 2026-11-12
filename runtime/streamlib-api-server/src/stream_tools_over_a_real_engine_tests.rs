@@ -567,6 +567,15 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             stream_asset,
         )
     }
+    fn bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+        &self,
+        project_directory: &Path,
+    ) -> Option<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::bring_the_streams_the_project_runs_as_its_own_in_line_with_what_it_places(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn list_streams(&self) -> Vec<StreamListing> {
         OperationsOnTheStreamsLoadedInThisRuntime::list_streams(self.engine.as_ref())
     }
@@ -4442,6 +4451,79 @@ async fn a_stream_fragment_that_would_close_a_cycle_is_refused_naming_each_strea
     assert_eq!(
         sorted_node_names_in(&engine.the_live_graph_of(&main_id)),
         ["source"]
+    );
+}
+
+/// An open project runs `look` as its own stream until an edit places it in `main`, when it runs
+/// only there; undoing the placement runs `look` as its own stream again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_an_edit_places_runs_only_where_it_is_placed_until_the_edit_is_undone() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let operations_on_the_loaded_streams = &engine.operations_on_the_loaded_streams();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let mut look = the_graph_of_a_stream_named("look");
+    look["nodes"][0]["id"] = json!(Uuid::new_v4());
+    project.write_the_graph_document(look);
+    let look_id = project.stream_id_of("look");
+    let main_id = project.stream_id_of("main");
+    let opened =
+        the_run_of_the_project_once_finished(operations_on_the_loaded_streams, project.path())
+            .await;
+    assert!(
+        operations_on_the_loaded_streams
+            .ids_of_the_loaded_streams()
+            .contains(&look_id),
+        "look runs as its own stream while nothing places it: {opened}"
+    );
+
+    tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "add_node",
+            json!({ "stream": project.stream_asset_of("main"), "type": STREAM_FRAGMENT_NODE_TYPE,
+                    "name": "look",
+                    "config": { "stream": { "asset": project.stream_asset_of("look") } },
+                    "author": an_agent_named("alice") }),
+        )
+        .await,
+    )
+    .expect("main places look");
+    let loaded_once_placed = operations_on_the_loaded_streams.ids_of_the_loaded_streams();
+    assert!(
+        !loaded_once_placed.contains(&look_id) && loaded_once_placed.contains(&main_id),
+        "{loaded_once_placed:?}"
+    );
+    assert!(
+        !engine
+            .stream_records()
+            .read_every()
+            .into_iter()
+            .flatten()
+            .any(|record| record.stream_id() == look_id),
+        "look is no stream of its own once main places it"
+    );
+
+    tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await,
+    )
+    .expect("the undo applies");
+    for action_under_way in operations_on_the_loaded_streams.stream_actions_under_way() {
+        the_stream_action_once_finished(
+            operations_on_the_loaded_streams,
+            &action_under_way.action_id,
+        )
+        .await;
+    }
+    assert!(
+        operations_on_the_loaded_streams
+            .ids_of_the_loaded_streams()
+            .contains(&look_id),
+        "look runs as its own stream again once nothing places it"
     );
 }
 
