@@ -31,6 +31,9 @@ import tatolab.runtime
 from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 from tatolab.stream._node_config_schema import json_schema_for_a_node_declaring_no_config
+from tatolab.stream._function_node_declaration import (
+    NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP,
+)
 from tatolab.stream._node_declaration import NODE_DECLARATION_CATEGORY_STAMP
 
 #: The directory holding the `tatolab/runtime/` this process imported.
@@ -232,7 +235,43 @@ def test_a_node_paced_by_real_time_is_described_as_one(project_directory: Path):
 def test_the_bootstrap_spells_each_stamp_an_older_tatolab_stream_lacks_as_tatolab_stream_does():
     assert dict(
         processor_interpreter_bootstrap.DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE
-    ) == {"category": NODE_DECLARATION_CATEGORY_STAMP}
+    ) == {
+        "category": NODE_DECLARATION_CATEGORY_STAMP,
+        "state_lifetime": NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP,
+    }
+
+
+KEPT_COUNTER_SOURCE = '''
+from dataclasses import dataclass
+
+from tatolab.stream import State, Stateful, node
+
+
+@dataclass(frozen=True)
+class Count:
+    calls: int = 0
+
+
+@node.function(state_lifetime="kept", description="counts its calls")
+def kept_counter(x: float, *, previous: State[Count]) -> Stateful[float, Count]:
+    return x, Count(previous.calls + 1)
+
+
+@node.function(description="counts its calls")
+def reset_counter(x: float, *, previous: State[Count]) -> Stateful[float, Count]:
+    return x, Count(previous.calls + 1)
+'''
+
+
+def test_a_function_node_is_described_with_the_state_lifetime_it_declares(tmp_path: Path):
+    write_project_module(tmp_path, "counters", KEPT_COUNTER_SOURCE)
+
+    described = describe(tmp_path, "counters:kept_counter", "counters:reset_counter")
+
+    assert described.returncode == 0, described.stderr
+    kept_counter, reset_counter = described_document(described)["described_node_types"]
+    assert kept_counter["state_lifetime"] == "kept"
+    assert reset_counter["state_lifetime"] == "reset"
 
 
 def test_a_node_its_tatolab_stream_stamped_no_category_is_described_without_one(

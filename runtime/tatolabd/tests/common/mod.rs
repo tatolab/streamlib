@@ -427,7 +427,6 @@ pub fn a_stream_record(
         failed_because: None,
         runtime_crashes_in_a_row_implicating_it: 0,
         pending_stream_actions: Vec::new(),
-        function_node_states_by_node_name: Default::default(),
     }
 }
 

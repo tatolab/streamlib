@@ -293,9 +293,12 @@ impl LoadedStreamInThisRuntime {
                 teardown_progress_note: TeardownProgressNoteOfOneStream::default(),
                 log_route: Arc::clone(&log_route),
                 capture_device_access_prompting,
-                function_node_states: engine_resources_shared_by_every_stream
-                    .function_node_states_carried_for_every_stream
-                    .of_the_stream(&stream_id),
+                function_node_states:
+                    Self::the_function_node_states_of_the_stream_kept_in_its_store(
+                        &engine_resources_shared_by_every_stream,
+                        &stream_id,
+                        &project_directory,
+                    ),
                 project_stores: Arc::clone(
                     &engine_resources_shared_by_every_stream.project_stores_open_in_this_runtime,
                 ),
@@ -359,7 +362,30 @@ impl LoadedStreamInThisRuntime {
         &self.stream_location
     }
 
-    /// The directory the stream's project lives in.
+    /// The function-node states the stream `stream_id` carries, each kept in its node's own
+    /// keys of the store of the project at `project_directory`.
+    fn the_function_node_states_of_the_stream_kept_in_its_store(
+        engine_resources_shared_by_every_stream: &EngineResourcesSharedByEveryStream,
+        stream_id: &str,
+        project_directory: &Path,
+    ) -> Arc<super::FunctionNodeStatesCarriedForOneStream> {
+        let function_node_states = engine_resources_shared_by_every_stream
+            .function_node_states_carried_for_every_stream
+            .of_the_stream(stream_id);
+        let project_stores = Arc::clone(
+            &engine_resources_shared_by_every_stream.project_stores_open_in_this_runtime,
+        );
+        let project_directory = project_directory.to_path_buf();
+        function_node_states.keep_each_state_in(Arc::new(move |node_uuid| {
+            Ok(crate::core::context::StoreScopedToThisNode::of_the_node(
+                project_stores.the_store_of_the_project_at(&project_directory)?,
+                node_uuid,
+            ))
+        }));
+        function_node_states
+    }
+
+    /// The handles every runtime context of this stream's processors holds.
     pub(crate) fn the_handles_a_runtime_context_of_this_stream_belongs_to(
         &self,
     ) -> Arc<LoadedStreamARuntimeContextBelongsTo> {
@@ -974,8 +1000,8 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Write this stream's records to its project's log and its function-node
-    /// states to its record, let go of the stream, then mark it ended — so a
-    /// waiter that wakes finds them on disk whole.
+    /// states to its project's store, let go of the stream, then mark it ended — so a
+    /// waiter that wakes finds them whole.
     fn let_go_of_this_stream_then_mark_it_ended(
         self: Arc<Self>,
         how_it_ended: HowALoadedStreamEnded,
@@ -983,7 +1009,7 @@ impl LoadedStreamInThisRuntime {
         self.log_route().write_every_record_it_emitted_and_sync();
         self.engine_resources_shared_by_every_stream
             .function_node_states_carried_for_every_stream
-            .record_the_states_of_a_stream_that_ended(self.stream_id());
+            .keep_the_states_of_a_stream_that_ended(self.stream_id());
         let the_end_of_this_stream = Arc::clone(&self.the_end_of_this_stream);
         drop(self);
         the_end_of_this_stream.mark(how_it_ended);
@@ -1388,7 +1414,7 @@ impl LoadedStreamInThisRuntime {
             .to_string();
         let (mut graph_response, stateful_function_nodes_by_node_uuid, current_value_of_each_graph_input) =
             self.compiler.scope(|graph, _tx| {
-                let stateful_function_nodes_by_node_uuid: HashMap<String, (String, Vec<String>)> =
+                let stateful_function_nodes_by_node_uuid: HashMap<uuid::Uuid, Vec<String>> =
                     graph
                         .traversal()
                         .v(())
@@ -1401,17 +1427,14 @@ impl LoadedStreamInThisRuntime {
                         })
                         .map(|node| {
                             (
-                                node.node_uuid.to_string(),
-                                (
-                                    node.display_name.clone(),
-                                    crate::core::compiler::compiler_ops::function_node_island::the_state_fields_of_a_function_node(
-                                        graph,
-                                        &node.processor_type,
-                                    ),
+                                node.node_uuid,
+                                crate::core::compiler::compiler_ops::function_node_island::the_state_fields_of_a_function_node(
+                                    graph,
+                                    &node.processor_type,
                                 ),
                             )
                         })
-                        .filter(|(_, (_, state_fields))| !state_fields.is_empty())
+                        .filter(|(_, state_fields)| !state_fields.is_empty())
                         .collect();
                 (
                     graph.to_graph_response(machine_name),
@@ -1444,17 +1467,16 @@ impl LoadedStreamInThisRuntime {
     fn render_the_state_of_each_stateful_function_node_into(
         &self,
         nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
-        stateful_function_nodes_by_node_uuid: &HashMap<String, (String, Vec<String>)>,
+        stateful_function_nodes_by_node_uuid: &HashMap<uuid::Uuid, Vec<String>>,
     ) {
         let function_node_states = &self.this_streams_identity_and_handles.function_node_states;
         for node in nodes {
-            let Some(state) = stateful_function_nodes_by_node_uuid.get(&node.id).and_then(
-                |(function_node_name, state_fields)| {
-                    function_node_states
-                        .the_current_state_of(function_node_name)
-                        .filter(|state| &state.state_fields == state_fields)
-                },
-            ) else {
+            let Some(state) = node.id.parse::<uuid::Uuid>().ok().and_then(|node_uuid| {
+                let state_fields = stateful_function_nodes_by_node_uuid.get(&node_uuid)?;
+                function_node_states
+                    .the_current_state_of(node_uuid)
+                    .filter(|state| &state.state_fields == state_fields)
+            }) else {
                 continue;
             };
             let state_by_field: serde_json::Map<String, serde_json::Value> = state

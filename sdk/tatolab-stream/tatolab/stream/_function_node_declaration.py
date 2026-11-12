@@ -23,7 +23,7 @@ import dataclasses
 import functools
 import inspect
 import typing
-from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
+from typing import Any, Callable, Generic, Literal, Optional, ParamSpec, TypeVar
 
 from ._description import (
     description_and_annotation_without_it,
@@ -38,6 +38,7 @@ from ._node_config_schema import (
 
 __all__ = [
     "FunctionNode",
+    "FunctionNodeStateLifetime",
     "State",
     "Stateful",
     "Time",
@@ -55,6 +56,11 @@ type State[StateRecord] = StateRecord
 type Stateful[FunctionNodeOutput, StateRecord] = tuple[FunctionNodeOutput, StateRecord]
 """What a stateful function node returns: its output, then the state its next call takes."""
 
+FunctionNodeStateLifetime = Literal["kept", "reset"]
+"""How long a stateful function node's state lives: `kept` survives Stop, Play, close and a restart; `reset` is forgotten at Stop."""
+
+EVERY_FUNCTION_NODE_STATE_LIFETIME: "tuple[str, ...]" = typing.get_args(FunctionNodeStateLifetime)
+
 FUNCTION_NODE_KIND = "function"
 PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 
@@ -63,6 +69,7 @@ PYTHON_FUNCTION_NODE_LANGUAGE = "python"
 NODE_DECLARATION_LANGUAGE_STAMP = "__tatolab_node_language__"
 NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP = "__tatolab_node_function_signature__"
 NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP = "__tatolab_node_function_state_fields__"
+NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP = "__tatolab_node_function_state_lifetime__"
 
 # The value a scalar pin carries, by the annotation that names it.
 _SCALAR_PIN_VALUE_TYPES: "dict[Any, str]" = {float: "float", int: "int", bool: "bool"}
@@ -105,6 +112,7 @@ def declare_function_node(
     *,
     description: str,
     category: str,
+    state_lifetime: str,
     declaration_stamps: "dict[str, str]",
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
@@ -115,6 +123,9 @@ def declare_function_node(
     _refuse_what_is_not_a_plain_module_level_function(function)
     signature_reading = _FunctionNodeSignatureReading(function)
     refuse_a_function_node_body_with_side_effects(function)
+    _refuse_a_state_lifetime_the_node_cannot_have(
+        function, state_lifetime, node_takes_state=bool(signature_reading.state_fields)
+    )
     function_node = FunctionNode(function)
     config_class = signature_reading.config_class
     stamps: "dict[str, Any]" = {
@@ -135,10 +146,26 @@ def declare_function_node(
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
         NODE_DECLARATION_FUNCTION_STATE_FIELDS_STAMP: signature_reading.state_fields,
+        NODE_DECLARATION_FUNCTION_STATE_LIFETIME_STAMP: state_lifetime,
     }
     for stamp, value in stamps.items():
         setattr(function_node, stamp, value)
     return function_node
+
+
+def _refuse_a_state_lifetime_the_node_cannot_have(
+    function: Callable[..., Any], state_lifetime: object, *, node_takes_state: bool
+) -> None:
+    if state_lifetime not in EVERY_FUNCTION_NODE_STATE_LIFETIME:
+        raise ValueError(
+            f"@node.function on {function.__name__} declares the state lifetime "
+            f"{state_lifetime!r}; a state's lifetime is \"kept\" or \"reset\"."
+        )
+    if state_lifetime == "kept" and not node_takes_state:
+        raise TypeError(
+            f"@node.function on {function.__name__} declares its state kept, and it takes "
+            f"no `State[...]`; only a stateful function node has a state to keep."
+        )
 
 
 def _refuse_what_is_not_a_plain_module_level_function(function: object) -> None:

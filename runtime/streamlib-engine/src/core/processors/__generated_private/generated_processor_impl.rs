@@ -12,6 +12,7 @@ use crate::core::ProcessorDescriptor;
 use crate::core::Result;
 use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::descriptors::NodeValueLifetime;
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::HowItsHelpersRanAFunctionNode;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
@@ -202,8 +203,9 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
     fn note_a_stateful_function_node(
         &mut self,
         breadcrumb_number: u32,
-        function_node_name: &str,
+        function_node_uuid: uuid::Uuid,
         state_fields: Vec<String>,
+        state_lifetime: NodeValueLifetime,
     ) {
         if state_fields.is_empty()
             || self
@@ -216,8 +218,9 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
         self.stateful_function_nodes_its_far_side_calls
             .push(StatefulFunctionNodeItsFarSideCalls {
                 breadcrumb_number,
-                function_node_name: function_node_name.to_string(),
+                function_node_uuid,
                 state_fields,
+                state_lifetime,
             });
     }
 
@@ -267,13 +270,14 @@ struct FunctionNodeNumberedOnTheBreadcrumb {
 }
 
 /// One stateful function node a far side calls: its breadcrumb number, which
-/// keys its state entry, its name in the graph, which keys the state its
-/// stream carries, and its state record's fields.
+/// keys its state entry, its UUID, which keys the state its stream carries, its
+/// state record's fields and how long its state lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatefulFunctionNodeItsFarSideCalls {
     breadcrumb_number: u32,
-    function_node_name: String,
+    function_node_uuid: uuid::Uuid,
     state_fields: Vec<String>,
+    state_lifetime: NodeValueLifetime,
 }
 
 /// Where the request to promote a function node out of one far side's islands
@@ -517,7 +521,7 @@ impl OutOfProcessLinkWiringEnvelope {
             .iter()
             .map(|stateful| {
                 let resumes_from = function_node_states.the_state_a_function_node_resumes_from(
-                    &stateful.function_node_name,
+                    stateful.function_node_uuid,
                     &stateful.state_fields,
                 );
                 serde_json::json!({
@@ -536,8 +540,9 @@ impl OutOfProcessLinkWiringEnvelope {
         self.loss_counts.hold_the_board_of_this_spawn(board);
         for stateful in stateful_function_nodes {
             function_node_states.note_the_helper_writing_the_state_of_a_function_node(
-                &stateful.function_node_name,
+                stateful.function_node_uuid,
                 stateful.state_fields,
+                stateful.state_lifetime,
                 &self.loss_counts,
                 stateful.breadcrumb_number,
             );
@@ -644,8 +649,22 @@ impl OutOfProcessLinkWiringEnvelope {
                     .get("state_fields")
                     .and_then(|state_fields| serde_json::from_value(state_fields.clone()).ok())
                     .unwrap_or_default();
-                let node_name = node_name.to_string();
-                recorded.note_a_stateful_function_node(breadcrumb_number, &node_name, state_fields);
+                let stateful_function_node_uuid = node
+                    .get("node_uuid")
+                    .and_then(JsonValue::as_str)
+                    .and_then(|node_uuid| node_uuid.parse::<uuid::Uuid>().ok());
+                let state_lifetime = node
+                    .get("state_lifetime")
+                    .and_then(|state_lifetime| serde_json::from_value(state_lifetime.clone()).ok())
+                    .unwrap_or(NodeValueLifetime::Reset);
+                if let Some(function_node_uuid) = stateful_function_node_uuid {
+                    recorded.note_a_stateful_function_node(
+                        breadcrumb_number,
+                        function_node_uuid,
+                        state_fields,
+                        state_lifetime,
+                    );
+                }
                 node["breadcrumb_number"] = JsonValue::from(breadcrumb_number);
             }
         }
@@ -794,14 +813,21 @@ impl OutOfProcessLinkWiringEnvelope {
         &self,
         function_node_id: &str,
         function_node_name: &str,
+        function_node_uuid: uuid::Uuid,
         state_fields: Vec<String>,
+        state_lifetime: NodeValueLifetime,
     ) {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
         let breadcrumb_number =
             recorded.the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
-        recorded.note_a_stateful_function_node(breadcrumb_number, function_node_name, state_fields);
+        recorded.note_a_stateful_function_node(
+            breadcrumb_number,
+            function_node_uuid,
+            state_fields,
+            state_lifetime,
+        );
         recorded.runs_a_function_node_as_its_processor = true;
         debug_assert_eq!(
             breadcrumb_number,
@@ -1544,12 +1570,22 @@ mod tests {
                     "link_id": "L-island",
                     "nodes": [
                         {"node": "P-remap", "name": "remap"},
-                        {"node": "P-lfo", "name": "lfo", "state_fields": ["phase"]},
+                        {
+                            "node": "P-lfo",
+                            "name": "lfo",
+                            "node_uuid": the_lfo_uuid(),
+                            "state_fields": ["phase"],
+                            "state_lifetime": "reset",
+                        },
                     ],
                 }),
             )
             .expect("a far side not yet set up takes its islands");
         envelope
+    }
+
+    fn the_lfo_uuid() -> uuid::Uuid {
+        uuid::Uuid::from_u128(0x1f0)
     }
 
     fn the_lfo_at(phase: f64) -> crate::core::runtime::FunctionNodeState {
@@ -1592,7 +1628,7 @@ mod tests {
             .write_the_state_of_a_function_node(1, &[0.25])
             .unwrap();
         assert_eq!(
-            function_node_states.the_current_state_of("lfo"),
+            function_node_states.the_current_state_of(the_lfo_uuid()),
             Some(the_lfo_at(0.25)),
             "the stream reads the state live off the board its helper writes"
         );
@@ -1615,7 +1651,7 @@ mod tests {
             }])
         );
         assert_eq!(
-            function_node_states.the_current_state_of("lfo"),
+            function_node_states.the_current_state_of(the_lfo_uuid()),
             Some(the_lfo_at(0.25)),
             "the state the first spawn left stands until the second writes"
         );
@@ -1652,7 +1688,9 @@ mod tests {
         promoted.number_the_function_node_its_far_side_runs_as_its_processor(
             "P-lfo",
             "lfo",
+            the_lfo_uuid(),
             vec!["phase".to_string()],
+            NodeValueLifetime::Reset,
         );
         let promoted_board = promoted
             .create_the_loss_count_board_for_this_helper_spawn_on(
@@ -1680,7 +1718,7 @@ mod tests {
 
         reader.keep_every_function_node_state_its_far_side_wrote();
         assert_eq!(
-            function_node_states.the_current_state_of("lfo"),
+            function_node_states.the_current_state_of(the_lfo_uuid()),
             Some(the_lfo_at(0.75)),
             "the reader letting its helper go never takes the state back"
         );
@@ -1700,7 +1738,9 @@ mod tests {
         promoted.number_the_function_node_its_far_side_runs_as_its_processor(
             "P-lfo",
             "lfo",
+            the_lfo_uuid(),
             vec!["phase".to_string()],
+            NodeValueLifetime::Reset,
         );
         promoted.forget_a_function_node_island("L-an-island-feeding-the-promoted-node");
         let promoted_board = promoted
@@ -1737,7 +1777,7 @@ mod tests {
             "the reader evaluates the moved node no more"
         );
         assert_eq!(
-            function_node_states.the_current_state_of("lfo"),
+            function_node_states.the_current_state_of(the_lfo_uuid()),
             Some(the_lfo_at(0.25)),
             "the moved node's own helper stays the one whose state the stream carries"
         );

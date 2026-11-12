@@ -15,6 +15,7 @@ pub mod error;
 pub mod exposed_name_cast;
 pub mod node_kind;
 pub mod node_reference_in_config;
+pub mod node_value_lifetime;
 pub mod port_family;
 pub mod port_stream_facts;
 pub mod processor_class_import_path;
@@ -46,6 +47,7 @@ pub use node_reference_in_config::{
     NodeReferenceToNodeType, NodeTypeANodeReferenceNames, config_keys_holding_a_node_reference,
     node_name_a_config_value_references,
 };
+pub use node_value_lifetime::NodeValueLifetime;
 pub use port_family::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,

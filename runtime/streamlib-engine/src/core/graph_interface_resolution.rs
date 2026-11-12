@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::core::descriptors::{
-    PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
+    NodeValueLifetime, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
     refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -50,42 +50,23 @@ pub const GRAPH_INPUT_RANGE_CONFIG_KEY: &str = "range";
 /// The config key of a top-level `GraphInput` naming how long a value a client writes lasts.
 pub const GRAPH_INPUT_LIFETIME_CONFIG_KEY: &str = "lifetime";
 
-/// How long a value a client writes to a top-level `GraphInput` lasts.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum GraphInputValueLifetime {
-    /// Kept in the project's store: it survives Stop, Play, a reload and a restart.
-    #[default]
-    Kept,
-    /// Forgotten at Stop: the next Play starts from the `default`.
-    Reset,
-}
-
-impl GraphInputValueLifetime {
-    const EVERY_LIFETIME: [Self; 2] = [Self::Kept, Self::Reset];
-
-    /// The lifetime's name in a `GraphInput`'s config.
-    pub const fn wire_name(self) -> &'static str {
-        match self {
-            Self::Kept => "kept",
-            Self::Reset => "reset",
-        }
-    }
-
-    /// The lifetime a `GraphInput`'s config declares, `kept` when it declares none.
-    pub fn declared_in(config: Option<&serde_json::Value>) -> std::result::Result<Self, String> {
-        let Some(declared) = config.and_then(|config| config.get(GRAPH_INPUT_LIFETIME_CONFIG_KEY))
-        else {
-            return Ok(Self::default());
-        };
-        Self::EVERY_LIFETIME
-            .into_iter()
-            .find(|lifetime| declared.as_str() == Some(lifetime.wire_name()))
-            .ok_or_else(|| {
-                format!(
-                    "its `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` is {declared}, and a lifetime is \"kept\" or \"reset\""
-                )
-            })
-    }
+/// The lifetime a top-level `GraphInput`'s config declares for the value a client writes,
+/// `kept` when it declares none.
+pub fn the_value_lifetime_a_graph_input_config_declares(
+    config: Option<&serde_json::Value>,
+) -> std::result::Result<NodeValueLifetime, String> {
+    let Some(declared) = config.and_then(|config| config.get(GRAPH_INPUT_LIFETIME_CONFIG_KEY))
+    else {
+        return Ok(NodeValueLifetime::Kept);
+    };
+    declared
+        .as_str()
+        .and_then(NodeValueLifetime::named)
+        .ok_or_else(|| {
+            format!(
+                "its `{GRAPH_INPUT_LIFETIME_CONFIG_KEY}` is {declared}, and a lifetime is \"kept\" or \"reset\""
+            )
+        })
 }
 
 /// Whether the graph being resolved is a stream's top level, whose `GraphInput`s a client
@@ -771,7 +752,7 @@ fn refuse_a_default_or_range_its_family_does_not_take(
     node: &GraphSnapshotNode,
     family: PortFamily,
 ) -> Result<()> {
-    GraphInputValueLifetime::declared_in(Some(&node.config))
+    the_value_lifetime_a_graph_input_config_declares(Some(&node.config))
         .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
     if let Some(default) = node.config.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
         && let Err(why) = crate::core::processors::the_message_a_value_written_onto_an_output_is(
