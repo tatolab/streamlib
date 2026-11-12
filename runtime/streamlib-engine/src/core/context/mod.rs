@@ -83,7 +83,9 @@ pub(crate) use one_off_acquisitions_held_for_one_node::{
 pub use processor_output_pixel_buffer_pool_of_one_native_node::{
     NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
 };
-pub(crate) use runtime_context::LoadedStreamARuntimeContextBelongsTo;
+pub(crate) use runtime_context::{
+    LoadedStreamARuntimeContextBelongsTo, StoreOfOneNodeOpenedOnFirstUse,
+};
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use store_scoped_to_this_node::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
 // Exported rather than crate-private so a test about deviceless pacing can open

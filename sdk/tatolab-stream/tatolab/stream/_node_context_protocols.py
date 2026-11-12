@@ -439,6 +439,26 @@ class NodeLinkDataAccess(Protocol):
         ...
 
 
+@runtime_backed_protocol
+class StoreScopedToThisNode(Protocol):
+    """The values this node keeps in its project's store, by key, as `ctx.store()`.
+
+    A value outlives the run and a restart of the runtime.
+    """
+
+    def read(self, key: str) -> Any | None:
+        """The value kept under `key`, or `None` when the node keeps none."""
+        ...
+
+    def write(self, key: str, value: Any) -> None:
+        """Keep `value`, anything JSON can hold, under `key`, replacing what was there."""
+        ...
+
+    def remove(self, key: str) -> None:
+        """Forget the value kept under `key`; forgetting an absent key does nothing."""
+        ...
+
+
 class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     """The runtime-context members the limited and the full context both carry."""
 
@@ -474,6 +494,10 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
     @property
     def gpu_limited_access(self) -> GpuContextLimitedAccess:
         """The non-allocating GPU capability."""
+        ...
+
+    def store(self) -> StoreScopedToThisNode:
+        """The values this node keeps in its project's store, by key."""
         ...
 
     @property

@@ -58,6 +58,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "read_inbound_link_stream_facts")]
     ReadInboundLinkStreamFacts(EscalateRequestReadInboundLinkStreamFacts),
 
+    #[serde(rename = "read_node_store_key")]
+    ReadNodeStoreKey(EscalateRequestReadNodeStoreKey),
+
     #[serde(rename = "refill_device_export_staging")]
     RefillDeviceExportStaging(EscalateRequestRefillDeviceExportStaging),
 
@@ -82,6 +85,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "release_handle")]
     ReleaseHandle(EscalateRequestReleaseHandle),
 
+    #[serde(rename = "remove_node_store_key")]
+    RemoveNodeStoreKey(EscalateRequestRemoveNodeStoreKey),
+
     #[serde(rename = "run_compute_kernel")]
     RunComputeKernel(EscalateRequestRunComputeKernel),
 
@@ -105,6 +111,9 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
+
+    #[serde(rename = "write_node_store_key")]
+    WriteNodeStoreKey(EscalateRequestWriteNodeStoreKey),
 }
 
 /// Lease a native service the runtime's host offers every node, starting it
@@ -1998,6 +2007,42 @@ pub(crate) struct EscalateRequestSetOutputPortStreamFacts {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestWaitDeviceIdle {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// Read the value the helper's node keeps under `key` in its project's store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestReadNodeStoreKey {
+    /// The key, one of the node's own.
+    pub(crate) key: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// Keep `value` under `key` in the helper's node's own keys of its project's store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestWriteNodeStoreKey {
+    /// The key, one of the node's own.
+    pub(crate) key: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// Any JSON value.
+    pub(crate) value: Value,
+}
+
+/// Stop keeping `key` in the helper's node's own keys of its project's store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestRemoveNodeStoreKey {
+    /// The key, one of the node's own.
+    pub(crate) key: String,
+
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 }

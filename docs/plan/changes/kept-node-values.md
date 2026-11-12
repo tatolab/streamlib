@@ -51,7 +51,8 @@
   `StoreScopedToThisNode`: `read`, `write` and `remove` of keys under the node's UUID in the
   store's `node_store` table, so no node reaches another's, as a Durable Object reaches only its
   own storage (owner, 2026-11-11, the name `store()`). A kept `GraphInput` keeps its value there
-  under `value`. Python nodes are handed it with ticket 2, with its Protocol in `tatolab.stream`.
+  under `value`. A Python process node is handed it too, each call an escalate op to its parent,
+  with its Protocol `StoreScopedToThisNode` in `tatolab.stream`.
 - **Memory at full rate, a debounced writer to disk.** A write changes the value in memory at
   once and readers take every change, at whatever rate a control moves. One writer per held
   project commits the latest value of each changed kept key at most once per debounce window,

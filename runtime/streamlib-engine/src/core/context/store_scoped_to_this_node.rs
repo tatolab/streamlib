@@ -22,7 +22,7 @@ const NODE_STORE_TABLE: ProjectStoreTableName = ProjectStoreTableName::named("no
 /// The keys one placed node keeps in its project's store; no other node reaches them. It holds
 /// the store only while its project does, so a handle that outlives its project's close keeps no
 /// store file open and refuses every call.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StoreScopedToThisNode {
     project_store_while_its_project_is_open: Weak<ProjectStore>,
     node_uuid: Uuid,

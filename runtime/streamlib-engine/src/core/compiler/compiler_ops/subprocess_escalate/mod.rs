@@ -30,6 +30,7 @@ mod helper_log_record;
 mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
+mod node_store;
 mod port_stream_facts;
 pub(crate) mod process_raising_the_node_reports;
 mod ray_tracing;
@@ -95,13 +96,17 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::ReleaseHandle(p) => Some(&p.request_id),
         EscalateRequest::SetOutputPortStreamFacts(p) => Some(&p.request_id),
         EscalateRequest::FailTheNode(p) => Some(&p.request_id),
+        EscalateRequest::ReadNodeStoreKey(p) => Some(&p.request_id),
+        EscalateRequest::WriteNodeStoreKey(p) => Some(&p.request_id),
+        EscalateRequest::RemoveNodeStoreKey(p) => Some(&p.request_id),
         EscalateRequest::SetProcessRaisingBecause(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
 
 /// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a stream-facts,
-/// node failure or shared native service lease op — against what the helper's node reaches. Returns
+/// node failure, shared native service lease or node store op — against what the helper's node
+/// reaches. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
 /// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
@@ -156,6 +161,21 @@ pub(crate) fn handle_escalate_op(
                 req,
             ))
         }
+        EscalateRequest::ReadNodeStoreKey(req) => Some(node_store::handle_read_node_store_key(
+            what_the_node_reaches,
+            rid,
+            req,
+        )),
+        EscalateRequest::WriteNodeStoreKey(req) => Some(node_store::handle_write_node_store_key(
+            what_the_node_reaches,
+            rid,
+            req,
+        )),
+        EscalateRequest::RemoveNodeStoreKey(req) => Some(node_store::handle_remove_node_store_key(
+            what_the_node_reaches,
+            rid,
+            req,
+        )),
         EscalateRequest::FailTheNode(req) => {
             Some(failure_the_node_reported_of_itself::handle_fail_the_node(
                 what_the_node_reaches,
