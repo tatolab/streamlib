@@ -3,25 +3,15 @@
 
 //! The runtime's MCP server, served by the official SDK, `rmcp`.
 //!
-//! [`LocalApiMcpServerHandler`] is the runtime's whole MCP surface: its tools
-//! are the control vocabulary — the observation verbs `graph`, `logs` and
-//! `describe_runtime`; the graph-mutation verbs `add_node`, `remove_node`,
-//! `connect` and `disconnect`, each naming a node by its name; and the stream
-//! actions `open_project`, `reload_project`, `close_project`,
-//! `start_playback`, `stop_playback`, `pause_playback`, `resume_playback`,
-//! `describe_stream_action`, `cancel_stream_action`, `remove_project`,
-//! `list_streams` and `set_stream_clock_scale`; and the viewer verbs
-//! `open_viewer` and `close_viewer` — and beside them it serves the node
-//! catalog and the live graph as resources ([`crate::mcp_resources`]) and
-//! recipes over those tools as prompts ([`crate::mcp_prompts`]). `rmcp` owns
-//! the protocol; this module owns only what the runtime says through it.
+//! [`LocalApiMcpServerHandler`] is the runtime's whole MCP surface. Its tools are generated from
+//! the control operation registry's agent surface ([`crate::mcp_agent_tools`]): the operations
+//! the registry lists as tools of their own, and `list_operation_groups`,
+//! `describe_operations` and `call_operation`, which reach every other operation. Beside them
+//! it serves the node catalog and the live graph as resources ([`crate::mcp_resources`]) and
+//! recipes over those operations as prompts ([`crate::mcp_prompts`]). `rmcp` owns the
+//! protocol; this module owns only what the runtime says through it.
 //!
-//! The runtime loads any number of streams. Every tool that reads or changes
-//! one stream takes a required `stream`, refused naming the loaded streams
-//! when it is not loaded; `graph` takes it optionally and renders every loaded
-//! stream without it. `list_streams` names no stream.
-//!
-//! A mutation tool answers when the engine accepted the change into its graph;
+//! A graph edit answers when the engine accepted the change into its graph;
 //! the wiring itself commits on the engine's own compile task, whose failure
 //! `graph` and `logs` show rather than this call.
 //!
@@ -33,18 +23,17 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use rmcp::handler::server::router::prompt::PromptRouter;
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock,
+    Implementation, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
     PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
-    ServerCapabilities, ServerConfig, SubscriptionFilter,
+    ResultType, ServerCapabilities, ServerConfig, SubscriptionFilter, Tool,
 };
+use rmcp::prompt_handler;
 use rmcp::service::{RequestContext, SubscriptionContext};
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
-use rmcp::{prompt_handler, tool, tool_handler, tool_router};
 use serde::Serialize;
 use serde_json::Value;
 use streamlib::sdk::runtime::{
@@ -52,15 +41,7 @@ use streamlib::sdk::runtime::{
     ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress, StreamAction,
     StreamActionKind, StreamActionState,
 };
-use streamlib_control_contract::{
-    CancelStreamAction, CloseProject, CloseViewer, CloseViewerRequest, ControlOperation,
-    ControlOperationCall, CreateProject, CreateProjectRequest, DescribeRuntime,
-    DescribeRuntimeRequest, DescribeStreamAction, Graph, GraphRequest, ListSamples,
-    ListSamplesRequest, ListStreams, ListStreamsRequest, Logs, LogsRequest,
-    OneProjectByItsDirectoryRequest, OneStreamActionRequest, OpenProject, OpenViewer,
-    OpenViewerRequest, PausePlayback, ReloadProject, RemoveProject, ResumePlayback,
-    SetStreamClockScale, SetStreamClockScaleRequest, StartPlayback, StopPlayback,
-};
+use streamlib_control_contract::ControlOperationCall;
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ProjectVenvSyncOnTheWire,
@@ -95,7 +76,7 @@ const MCP_SERVER_NAME: &str = env!("CARGO_PKG_NAME");
 const MCP_SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The guidance `server/discover` hands an agent before its first call.
-pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. A project is open or closed, and an open project's playback is stopped, playing or paused; its graph reads and edits whatever its playback does. `open_project` opens a project from its absolute `project_directory`, and `reload_project` softly re-reads an open one from disk, keeping its playback: each answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` when it does not run, however long uv takes, and loads each stream — an open holding each stopped — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled` — its `venv_sync` naming each package uv downloads, builds and installs as it goes — or live through the resource `streamlib://stream-action/<action>`, and every action queued or under way, whoever queued it, through `streamlib://stream-actions`, each of which a `subscriptions/listen` naming it over `/mcp/stdio` is sent `notifications/resources/updated` for as an action it covers changes; end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates, the starter or a copy of a sample project `list_samples` lists — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its open the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name, which its graph document writes as its `display_name`. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, paused, closed, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row is failed, carries why in `failed_because`, and is held stopped at the start from its document with none of its node code read, each node drawn as saved, until `reload_project` tries it for real; any other failed stream is held stopped from its document at the start, as at an open. Each stream a load takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Reloaded, a project keeps each stream under the same id: its graph brought to its document in place while the project's node code is unchanged, and loaded again otherwise. A stream is shown under the `display_name` its graph document writes, or the document's file name while it writes none. A load describes each node type its graph names in the stream's own interpreter, which imports that node code, and never fails for what a document holds: a stream whose graph document does not load, or whose load is refused, is listed failed with the reason in `failed_because` until a reload of the fixed document replaces it; one whose nodes validate and some of whose links do not is listed failed and held stopped, each link its validation refuses kept as drawn and never wired, reading `error` in `graph` with the reason in `error_reason`, so `start_playback` refuses it until an edit takes each out or fixes it — an edit keeps those links and refuses a new one; one whose start is refused, or whose project's `.venv` is not made, is listed failed and held stopped, its graph there to read and edit, and `start_playback` tries it again; one whose node code does not describe a type its graph names is listed failed and held stopped from its document, each node of that type held as written with its saved config and ports and reading `Error`, so its graph reads and edits while `start_playback` refuses it until a reload of the fixed code replaces it; and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. A project plays and stops as a whole, never one stream of it: every stream a load takes in is recorded, and an open project is re-loaded, held stopped or playing as it was, whenever the runtime starts, until `close_project` or `remove_project` ends it; closing the connection that carried the call unloads nothing. `start_playback` queues the playback of an open project, each stream starting fresh from the graph it holds, reading no document; `stop_playback` queues its end — every processor instance, device claim, function-node state and the clock torn down — keeping each stream's graph loaded to read and edit and recording each stopped; `close_project` queues the end of its playback and the unload of every stream, recording each closed and deleting nothing; a verb refuses a project in a state it does not fit and names the verb that does — `open_project` on an open project names `reload_project`, `start_playback` on a paused one `resume_playback`, any playback verb on a closed one `open_project`; `pause_playback` pauses every loaded stream of a project at once, never waiting behind an action, each listed `paused` with its processors holding their state, a stream a reload loads meanwhile starting paused, each scaled or stepped stream clock held where it stands, until `resume_playback` resumes them and compiles the graph edits made meanwhile — recorded, so a runtime restart re-loads the project paused; `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its project's queue; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. `set_stream_clock_scale` names a stream by its stream id with a required `stream`, never by its display name; a graph edit names it by its stream asset's UUID, the `stream_asset` `list_streams` reports under its `location`, which is the same on every machine the project is on; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by UUID and name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end; a node that does not run is refused with `not_running_because` in the result's `structuredContent.refusal` — `playback_stopped`, `playback_paused`, `preparing` or `node_failed` — so a stopped project is told apart from a broken one. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its graph with `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields` and `remove_note`, or several of them as one `transact`, each naming a node by its UUID, which `add_node` answers and `graph` lists as `id`, and each one transaction by its `author`, applied whole or refused whole in the runtime's own words: with `mode` `commit`, the default, it is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load; with `mode` `live`, applied to the running stream alone. `import_graph_generator` runs one of the project's `@graph_generator` functions, `<module>:<function>`, in the stream's own interpreter and places what it builds as a fragment node, the nodes and links it built stored inside it; run again under the name of a fragment the graph holds, it refreshes that fragment, each node keeping its UUID by name; `refresh_fragments` refreshes, as one transaction, every fragment of a project's loaded streams whose generator a changed module defines, which `tatolab dev` asks for on each save of a `.py` file. `collapse_selection_into_subgraph` moves nodes of a stream's own level into one subgraph node, an authored fragment no refresh touches, each link that crossed the selection carried through a `GraphInput` or `GraphOutput` inside it; `unlock_generator_fragment` turns a fragment's nodes back into plain nodes of the stream, so a generator's output stops being refreshed. `add_group` makes a labelled group of nodes — a title, a description and a colour, listed under `graph`'s `groups` and joined by a node holding its UUID as `studio.group` — which changes nothing that runs; `set_group_fields` edits one and `remove_group` takes one out, its nodes left ungrouped. `add_note` places a canvas note — text at a position and size, listed under `graph`'s `studio.notes` — beside the nodes, which changes nothing that runs; `set_note_fields` edits one and `remove_note` takes one out. A node's `studio` and the graph's are the studio contract, versioned by `studio.contract`: a node's takes `position`, `group`, `comment`, `colour`, `collapsed` and a client's own `metadata`, and a key of the wrong shape or outside it is refused by name. `undo` reverses an author's latest transaction in a project as a new transaction and `redo` reapplies it, each reversing only that author's own. A config value `{\"asset\": \"<uuid>\"}` references an asset the project must hold, which cannot then be deleted. A Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path, and a class of an import's own node code by `imports/<folder>/module:ClassName`, imported from that folder ahead of the project's own code, and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for UUIDs and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `reload_project` starts it afresh. A node that reads `Error` carries why in `components.failed_because`, in the words of what failed it — a `start()` that raised among them; a node that has not failed carries `null` there. A node whose `process()` raised, or returned an error, and has not run cleanly since keeps running and carries what it raised in `components.process_raising_because` — the first raise of the run, in its own words, and for a Python node where in its code — and `null` once a call runs cleanly again. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every relocation, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset`, which also answer what the runtime read from each asset's bytes, its `media_facts` and `preview`, and `read_asset_preview` answers its preview picture; they are changed with `import_asset`, `relocate_asset`, `delete_asset`, `set_asset_settings` and `replace_asset`, which puts new bytes at an asset's path keeping its UUID, and a stream is created, deleted and given its display name with `create_stream`, `delete_stream` and `set_stream_display_name`, naming it by its stream asset's UUID — a created stream loaded, a deleted one unloaded and a named one shown under its new name at once while its project runs — each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`; an asset's bytes are the one file at its path, which a node reads with `asset_content_path` and history never holds: history records a media, scene or data asset by its sidecar alone, so an undo of a delete brings its bytes back only while its file is still at its path. Any other file of a project — its node code, its `stream.py`, a view's sources — is read with `list_project_files` and `read_project_file` and written with `write_project_file`, one transaction an undo reverses, never inside `.tatolab/` or outside the project; `create_node_file` creates a new Python node file from the runtime's node template, a node type of the project with no edits, named after the file, and answers the `node_type` `add_node` takes. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse, each edit and redo with its `undo_state` — `applied`, `undone_redoable` or `undone_not_redoable` — as its author's `undo` and `redo` stand now; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. A project is renamed with `rename_project`, described with `set_project_description` and given a cover — a media asset it holds, by UUID — with `set_project_cover`, each one transaction on its history that undoes like any edit, its folder and UUID untouched; `list_assets` serves them with `project_last_edited_at`, when its history last changed. `duplicate_project` copies a project with its whole history into a new folder under a new UUID, and `delete_project` queues, like `remove_project`, the unload and forgetting of every stream of a project and then moves its folder to the Trash. Another project is imported with `add_dependency`: the project a folder or a `.zip` on this machine holds — a GitHub archive downloaded first — is copied whole into `imports/<folder>/` and recorded in `tatolab-project.json` with the `version` its copy carries, and nothing reaches the network. The copy is this project's own: its assets are referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read from its folder, which a node reads with `asset_content_path(asset, from_project)`; `use_dependency_stream` places one of its streams in a loaded stream's graph as a fragment referencing it, which every load places as the stream's graph document is on disk, each node type the import's own node code defines led by its folder, `imports/<folder>/<module>:<class>`, so it runs that code from there; to edit an import, open `imports/<folder>/` as a project of its own, whose transactions also commit on this project's history. `update_dependency` copies an import again as one transaction, listing the files of its folder edited since its copy and overwriting them only with `overwrite_edited_files`; `list_dependencies` lists each import with its edited files and, with `check_for_newer`, the version its source holds now; `remove_dependency` stops importing a project no node references any longer. `list_project_node_types` lists the node types and graph generators a project offers — its own node code outside `imports/`, each import's and each installed distribution's `tatolab.nodes` — read from source without running any of it, a module that does not parse listed with why and where while the rest still lists. `list_project_views` lists the Tato Studio views a project and its imports bring — each folder of their `views/`, by its `view_type` `<project name>:<view folder>`, with what its `tatolab_view.json` declares — reading each manifest and running nothing, a folder whose manifest does not read listed with why it does not open. Each such view that opens and whose `placement` is `node` is a node type of every stream the project runs, named by its `view_type`, whose ports are the view's declared inputs and outputs and whose config is the view's settings, listed in the node catalog with the manifest's description; a stream holds one node of each view, and a view that does not open is no type. A panel reads a view node's inputs with `open_viewer` on the port linked into each, and `write_studio_view_output` hands the node a value for one of its Array, Channels or Records outputs, which it publishes there as live data: the last write wins, and nothing is recorded. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
+pub(crate) const LOCAL_API_MCP_SERVER_INSTRUCTIONS: &str = "StreamLib's runtime control plane: this machine's one runtime, which loads any number of streams, each a stream asset of a project: its graph document, `streams/<name>.graph.json`, which holds each node by the UUID the runtime gave it. Every name in backticks below that is not in the tool list is an operation called through `call_operation`, with its name as `operation` and what it takes as `params`: `list_operation_groups` lists every operation by group, and `describe_operations` states each one's params and result. A project is open or closed, and an open project's playback is stopped, playing or paused; its graph reads and edits whatever its playback does. `open_project` opens a project from its absolute `project_directory`, and `reload_project` softly re-reads an open one from disk, keeping its playback: each answers at once with an `action` id while the project's own queue reads each stream asset's graph document, makes its `.venv` when it does not run, however long uv takes, and loads each stream — an open holding each stopped — one action at a time per project, projects side by side; follow it with `describe_stream_action` until its `state` is `done`, `failed` or `cancelled` — its `venv_sync` naming each package uv downloads, builds and installs as it goes — or live through the resource `streamlib://stream-action/<action>`, and every action queued or under way, whoever queued it, through `streamlib://stream-actions`, each of which a `subscriptions/listen` naming it over `/mcp/stdio` is sent `notifications/resources/updated` for as an action it covers changes; end it early with `cancel_stream_action`, and read what it wrote with `logs` given its `action`; `list_assets` narrowed to the `kind` `stream` lists the project's stream assets, running none of its code. `create_project` creates a project — the one `tatolab new` creates, the starter or a copy of a sample project `list_samples` lists — in an absolute `project_directory`, or with none in a new folder `<adjective>-<noun>` under `~/streams`, and queues its open the same way, answering its `action`, the `stream` id its `main` runs under, and the `project_directory`; the stream is shown under the folder's name, which its graph document writes as its `display_name`. `list_streams` lists every stream, each by its stream id with its display name and location, running, stopped, paused, closed, failed or `preparing` — a stream an action is working on, with the `action` and its `step` — a stream implicated in the runtime's last two crashes in a row is failed, carries why in `failed_because`, and is held stopped at the start from its document with none of its node code read, each node drawn as saved, until `reload_project` tries it for real; any other failed stream is held stopped from its document at the start, as at an open. Each stream a load takes in is listed under its stream id, `<project>-<stream>-<hash>`: the project's name, the stream asset's name and a hash over the project's UUID and the stream asset's UUID, kept while the stream is recorded, so moving the project or renaming its document keeps it. Reloaded, a project keeps each stream under the same id: its graph brought to its document in place while the project's node code is unchanged, and loaded again otherwise. A stream is shown under the `display_name` its graph document writes, or the document's file name while it writes none. A load describes each node type its graph names in the stream's own interpreter, which imports that node code, and never fails for what a document holds: a stream whose graph document does not load, or whose load is refused, is listed failed with the reason in `failed_because` until a reload of the fixed document replaces it; one whose nodes validate and some of whose links do not is listed failed and held stopped, each link its validation refuses kept as drawn and never wired, reading `error` in `graph` with the reason in `error_reason`, so `start_playback` refuses it until an edit takes each out or fixes it — an edit keeps those links and refuses a new one; one whose start is refused, or whose project's `.venv` is not made, is listed failed and held stopped, its graph there to read and edit, and `start_playback` tries it again; one whose node code does not describe a type its graph names is listed failed and held stopped from its document, each node of that type held as written with its saved config and ports and reading `Error`, so its graph reads and edits while `start_playback` refuses it until a reload of the fixed code replaces it; and a stream whose document is gone is unloaded and forgotten; only the caller's own mistakes — a directory holding no `tatolab-project.json`, an id another stream holds — fail the action. A project plays and stops as a whole, never one stream of it: every stream a load takes in is recorded, and an open project is re-loaded, held stopped or playing as it was, whenever the runtime starts, until `close_project` or `remove_project` ends it; closing the connection that carried the call unloads nothing. `start_playback` queues the playback of an open project, each stream starting fresh from the graph it holds, reading no document; `stop_playback` queues its end — every processor instance, device claim, function-node state and the clock torn down — keeping each stream's graph loaded to read and edit and recording each stopped; `close_project` queues the end of its playback and the unload of every stream, recording each closed and deleting nothing; a verb refuses a project in a state it does not fit and names the verb that does — `open_project` on an open project names `reload_project`, `start_playback` on a paused one `resume_playback`, any playback verb on a closed one `open_project`; `pause_playback` pauses every loaded stream of a project at once, never waiting behind an action, each listed `paused` with its processors holding their state, a stream a reload loads meanwhile starting paused, each scaled or stepped stream clock held where it stands, until `resume_playback` resumes them and compiles the graph edits made meanwhile — recorded, so a runtime restart re-loads the project paused; `remove_project` queues the unload and forgetting of every stream of a project — each answering at once with its `action`, which `describe_stream_action` follows, and each on its project's queue; `set_stream_clock_scale` runs a started stream's scaled clock at a new `scale` live, its stream time carrying on from where it stands. `set_stream_clock_scale` names a stream by its stream id with a required `stream`, never by its display name; a graph edit names it by its stream asset's UUID, the `stream_asset` `list_streams` reports under its `location`, which is the same on every machine the project is on; `graph` names one optionally, and without it returns every loaded stream's graph under `machine`, this machine's name; `logs` takes the project's absolute `project_directory` and names a stream or a stream action optionally. `describe_runtime` names no stream and answers this runtime's `version`, its `build_id`, `up_for_ms` since its engine started (a restart resets it) and `runtime_log_directory`, the folder of its own log, `null` when it keeps none. Observe a stream with `graph` (nodes by UUID and name, their types and port names, links, and each node's `metrics`: the bags each output port wrote and each inbound link dropped) and `logs` (the project's one log, every stream's records and its runs' venv lines, read from disk so they outlive the stream and the runtime's restarts: pass the result's `next_after` back as `after` to read on). What an output port carries is read from outside its stream in two ways. `open_viewer` holds a node's output port open for a viewer on this machine, naming the node by the `id` `graph` lists, and answers the channel the viewer reads it from with no copy, until `close_viewer` or the connection's end; a node that does not run is refused with `not_running_because` in the result's `structuredContent.refusal` — `playback_stopped`, `playback_paused`, `preparing` or `node_failed` — so a stopped project is told apart from a broken one. A stream sends a port off itself through the `tatolab-moq` gateway nodes: a `MoqTrackSend` linked from the port publishes it as a track at the relay a `MoqGateway` node joins, which any MoQ client reads, and another stream reads that track through a `MoqTrackReceive`. Change its graph with `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields` and `remove_note`, or several of them as one `transact`, each naming a node by its UUID, which `add_node` answers and `graph` lists as `id`, and each one transaction by its `author`, applied whole or refused whole in the runtime's own words: with `mode` `commit`, the default, it is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load; with `mode` `live`, applied to the running stream alone. `import_graph_generator` runs one of the project's `@graph_generator` functions, `<module>:<function>`, in the stream's own interpreter and places what it builds as a fragment node, the nodes and links it built stored inside it; run again under the name of a fragment the graph holds, it refreshes that fragment, each node keeping its UUID by name; `refresh_fragments` refreshes, as one transaction, every fragment of a project's loaded streams whose generator a changed module defines, which `tatolab dev` asks for on each save of a `.py` file. `collapse_selection_into_subgraph` moves nodes of a stream's own level into one subgraph node, an authored fragment no refresh touches, each link that crossed the selection carried through a `GraphInput` or `GraphOutput` inside it; `unlock_generator_fragment` turns a fragment's nodes back into plain nodes of the stream, so a generator's output stops being refreshed. `add_group` makes a labelled group of nodes — a title, a description and a colour, listed under `graph`'s `groups` and joined by a node holding its UUID as `studio.group` — which changes nothing that runs; `set_group_fields` edits one and `remove_group` takes one out, its nodes left ungrouped. `add_note` places a canvas note — text at a position and size, listed under `graph`'s `studio.notes` — beside the nodes, which changes nothing that runs; `set_note_fields` edits one and `remove_note` takes one out. A node's `studio` and the graph's are the studio contract, versioned by `studio.contract`: a node's takes `position`, `group`, `comment`, `colour`, `collapsed` and a client's own `metadata`, and a key of the wrong shape or outside it is refused by name. `undo` reverses an author's latest transaction in a project as a new transaction and `redo` reapplies it, each reversing only that author's own. A config value `{\"asset\": \"<uuid>\"}` references an asset the project must hold, which cannot then be deleted. A Python class written to a module the stream's own interpreter can import — a file in the stream's project, or a package installed in its venv — is added by its `module:ClassName` path, and a class of an import's own node code by `imports/<folder>/module:ClassName`, imported from that folder ahead of the project's own code, and runs in its own processor interpreter; a link is spliced in by connecting the new node on both sides, then disconnecting the link it replaces. Read `graph` first for UUIDs and port names, and again afterwards to confirm a link's state is `wired` and the node is `Running`. A `connect` onto a node in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A Python node whose helper process died on its own reads `Restarting` while a new helper process, with a new instance of its class, starts in its place after a backoff, and its `components.helper_process_restarts` counts the restarts and carries `last_exit_reason`; one whose helper died five times in a row, each within a minute of starting, is left `Error`, and `reload_project` starts it afresh. A node that reads `Error` carries why in `components.failed_because`, in the words of what failed it — a `start()` that raised among them; a node that has not failed carries `null` there. A node whose `process()` raised, or returned an error, and has not run cleanly since keeps running and carries what it raised in `components.process_raising_because` — the first raise of the run, in its own words, and for a Python node where in its code — and `null` once a call runs cleanly again. Both ends of a `connect` are ports in the one stream it names; a stream reads another stream's track at a relay, on this machine or another, through a `MoqTrackReceive` node. A project's assets — media, scenes and data such as an FMU or a LUT, each a file beside its sidecar `<file>.asset.json`, which holds the UUID the runtime made at its import and keeps across every relocation, and streams, each its graph document alone with its UUID inside it — are read with `list_assets` and `describe_asset`, which also answer what the runtime read from each asset's bytes, its `media_facts` and `preview`, and `read_asset_preview` answers its preview picture; they are changed with `import_asset`, `relocate_asset`, `delete_asset`, `set_asset_settings` and `replace_asset`, which puts new bytes at an asset's path keeping its UUID, and a stream is created, deleted and given its display name with `create_stream`, `delete_stream` and `set_stream_display_name`, naming it by its stream asset's UUID — a created stream loaded, a deleted one unloaded and a named one shown under its new name at once while its project runs — each naming the project by its absolute `project_directory`, a folder holding `tatolab-project.json`, and an asset by its UUID; each change is one transaction by its `author`, applied whole or refused whole in the runtime's own words, and one commit on the project's own history at `.tatolab/history.git`; an asset's bytes are the one file at its path, which a node reads with `asset_content_path` and history never holds: history records a media, scene or data asset by its sidecar alone, so an undo of a delete brings its bytes back only while its file is still at its path. Any other file of a project — its node code, its `stream.py`, a view's sources — is read with `list_project_files` and `read_project_file` and written with `write_project_file`, one transaction an undo reverses, never inside `.tatolab/` or outside the project; `create_node_file` creates a new Python node file from the runtime's node template, a node type of the project with no edits, named after the file, and answers the `node_type` `add_node` takes. A project's change feed is the resource `list_assets` names as `transactions_resource_uri`, `streamlib://project/<project>/transactions`, holding its newest transactions with their author, operations and inverse, each edit and redo with its `undo_state` — `applied`, `undone_redoable` or `undone_not_redoable` — as its author's `undo` and `redo` stand now; name it in `subscriptions/listen` over `/mcp/stdio` to be sent `notifications/resources/updated` each time a transaction applies, then read it. The resource `streamlib://node-catalog` lists the native types every stream can add, then each loaded stream's Python types under that stream, each with its config schema and ports; `streamlib://graph` is every loaded stream's live graph. A project is renamed with `rename_project`, described with `set_project_description` and given a cover — a media asset it holds, by UUID — with `set_project_cover`, each one transaction on its history that undoes like any edit, its folder and UUID untouched; `list_assets` serves them with `project_last_edited_at`, when its history last changed. `duplicate_project` copies a project with its whole history into a new folder under a new UUID, and `delete_project` queues, like `remove_project`, the unload and forgetting of every stream of a project and then moves its folder to the Trash. Another project is imported with `add_dependency`: the project a folder or a `.zip` on this machine holds — a GitHub archive downloaded first — is copied whole into `imports/<folder>/` and recorded in `tatolab-project.json` with the `version` its copy carries, and nothing reaches the network. The copy is this project's own: its assets are referenced as `{\"asset\": \"<uuid>\", \"from\": \"<project uuid>\"}` and read from its folder, which a node reads with `asset_content_path(asset, from_project)`; `use_dependency_stream` places one of its streams in a loaded stream's graph as a fragment referencing it, which every load places as the stream's graph document is on disk, each node type the import's own node code defines led by its folder, `imports/<folder>/<module>:<class>`, so it runs that code from there; to edit an import, open `imports/<folder>/` as a project of its own, whose transactions also commit on this project's history. `update_dependency` copies an import again as one transaction, listing the files of its folder edited since its copy and overwriting them only with `overwrite_edited_files`; `list_dependencies` lists each import with its edited files and, with `check_for_newer`, the version its source holds now; `remove_dependency` stops importing a project no node references any longer. `list_project_node_types` lists the node types and graph generators a project offers — its own node code outside `imports/`, each import's and each installed distribution's `tatolab.nodes` — read from source without running any of it, a module that does not parse listed with why and where while the rest still lists. `list_project_views` lists the Tato Studio views a project and its imports bring — each folder of their `views/`, by its `view_type` `<project name>:<view folder>`, with what its `tatolab_view.json` declares — reading each manifest and running nothing, a folder whose manifest does not read listed with why it does not open. Each such view that opens and whose `placement` is `node` is a node type of every stream the project runs, named by its `view_type`, whose ports are the view's declared inputs and outputs and whose config is the view's settings, listed in the node catalog with the manifest's description; a stream holds one node of each view, and a view that does not open is no type. A panel reads a view node's inputs with `open_viewer` on the port linked into each, and `write_studio_view_output` hands the node a value for one of its Array, Channels or Records outputs, which it publishes there as live data: the last write wins, and nothing is recorded. The prompts are step-by-step recipes over these tools, each rendered against the `stream` it names: inserting a node into a link, fanning an output to another consumer, and showing a channel on a virtual camera.";
 
 /// Which local API connection a handler serves, and so which MCP protocol
 /// versions it answers with.
@@ -120,7 +101,7 @@ pub(crate) struct LocalApiMcpServerHandler {
         Arc<crate::mcp_project_change_feed::ProjectActionsRefusedSinceTheRuntimeStarted>,
     pub(crate) asset_media_facts_reads_in_this_runtime:
         Arc<crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime>,
-    tool_router: Arc<ToolRouter<Self>>,
+    agent_tools_listed: Arc<Vec<Tool>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
 
@@ -162,17 +143,7 @@ impl LocalApiMcpServerHandler {
             project_repositories_open_in_this_runtime,
             project_actions_refused_since_the_runtime_started: Arc::default(),
             asset_media_facts_reads_in_this_runtime,
-            tool_router: Arc::new(
-                Self::tool_router()
-                    + Self::project_archive_tool_router()
-                    + Self::project_asset_tool_router()
-                    + Self::project_dependency_tool_router()
-                    + Self::project_file_tool_router()
-                    + Self::project_node_type_tool_router()
-                    + Self::project_tool_router()
-                    + Self::project_view_tool_router()
-                    + Self::stream_graph_tool_router(),
-            ),
+            agent_tools_listed: Arc::new(crate::mcp_agent_tools::the_agent_tools_listed_over_mcp()),
             prompt_router: Arc::new(Self::prompt_router()),
         }
     }
@@ -226,7 +197,7 @@ impl LocalApiMcpServerHandler {
         match answered {
             Ok(answer) => serialized_tool_result(tool_name, &answer),
             Err(ControlOperationRefusal::RefusedAction(refusal)) => Ok(
-                crate::mcp_stream_graph_tools::a_tool_result_of_the_refusal(*refusal),
+                crate::mcp_agent_tools::a_tool_result_of_the_refusal(*refusal),
             ),
             Err(ControlOperationRefusal::Failed(why)) => Err(why),
             Err(ControlOperationRefusal::ContractVersionMismatch(mismatch)) => {
@@ -274,260 +245,6 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 
 /// A tool's answer: its result, or the message an `isError` result carries.
 pub(crate) type ToolCallAnswer = Result<CallToolResult, String>;
-
-// ============================================================================
-// Tools
-// ============================================================================
-
-#[tool_router]
-impl LocalApiMcpServerHandler {
-    #[tool(description = Graph::AGENT_USAGE_NOTE)]
-    async fn graph(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<GraphRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::Graph(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = Logs::AGENT_USAGE_NOTE)]
-    async fn logs(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<LogsRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::Logs(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = OpenProject::AGENT_USAGE_NOTE)]
-    async fn open_project(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::OpenProject(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = StartPlayback::AGENT_USAGE_NOTE)]
-    async fn start_playback(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::StartPlayback(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = ReloadProject::AGENT_USAGE_NOTE)]
-    async fn reload_project(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::ReloadProject(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = CreateProject::AGENT_USAGE_NOTE)]
-    async fn create_project(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<CreateProjectRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::CreateProject(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = ListSamples::AGENT_USAGE_NOTE)]
-    async fn list_samples(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<ListSamplesRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::ListSamples(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = DescribeStreamAction::AGENT_USAGE_NOTE)]
-    async fn describe_stream_action(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneStreamActionRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::DescribeStreamAction(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = CancelStreamAction::AGENT_USAGE_NOTE)]
-    async fn cancel_stream_action(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneStreamActionRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::CancelStreamAction(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = StopPlayback::AGENT_USAGE_NOTE)]
-    async fn stop_playback(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::StopPlayback(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = CloseProject::AGENT_USAGE_NOTE)]
-    async fn close_project(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::CloseProject(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = PausePlayback::AGENT_USAGE_NOTE)]
-    async fn pause_playback(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::PausePlayback(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = ResumePlayback::AGENT_USAGE_NOTE)]
-    async fn resume_playback(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::ResumePlayback(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = RemoveProject::AGENT_USAGE_NOTE)]
-    async fn remove_project(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OneProjectByItsDirectoryRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::RemoveProject(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = ListStreams::AGENT_USAGE_NOTE)]
-    async fn list_streams(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<ListStreamsRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::ListStreams(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = OpenViewer::AGENT_USAGE_NOTE)]
-    async fn open_viewer(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<OpenViewerRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::OpenViewer(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = CloseViewer::AGENT_USAGE_NOTE)]
-    async fn close_viewer(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<CloseViewerRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::CloseViewer(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = SetStreamClockScale::AGENT_USAGE_NOTE)]
-    async fn set_stream_clock_scale(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<SetStreamClockScaleRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::SetStreamClockScale(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-
-    #[tool(description = DescribeRuntime::AGENT_USAGE_NOTE)]
-    async fn describe_runtime(
-        &self,
-        tool_call_request_context: RequestContext<RoleServer>,
-        Parameters(request): Parameters<DescribeRuntimeRequest>,
-    ) -> ToolCallAnswer {
-        self.a_dispatched_control_operation(
-            ControlOperationCall::DescribeRuntime(request),
-            &tool_call_request_context,
-        )
-        .await
-    }
-}
 
 /// A stream action's state as the local API spells it.
 pub(crate) fn stream_action_state_on_the_wire(
@@ -633,7 +350,6 @@ pub(crate) fn describe_stream_action_tool_result_of(
     }
 }
 
-#[tool_handler(router = self.tool_router)]
 #[prompt_handler(router = self.prompt_router)]
 impl ServerHandler for LocalApiMcpServerHandler {
     fn get_info(&self) -> ServerConfig {
@@ -703,6 +419,47 @@ impl ServerHandler for LocalApiMcpServerHandler {
         Ok(())
     }
 
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        Ok(ListToolsResult {
+            result_type: Some(ResultType::COMPLETE),
+            tools: self.agent_tools_listed.to_vec(),
+            meta: None,
+            next_cursor: None,
+            ttl_ms: supports_cache_hints.then_some(0),
+            cache_scope: supports_cache_hints.then_some(CacheScope::Public),
+        })
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.agent_tools_listed
+            .iter()
+            .find(|tool| tool.name == name)
+            .cloned()
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, McpError> {
+        Ok(
+            match self
+                .the_answer_to_an_agent_tool_call(request, &context)
+                .await?
+            {
+                Ok(tool_result) => tool_result.into(),
+                Err(why) => CallToolResult::error(vec![ContentBlock::text(why)]).into(),
+            },
+        )
+    }
+
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -767,13 +524,17 @@ pub(crate) fn serialized_tool_result(
 ) -> ToolCallAnswer {
     let tool_result_json = serde_json::to_value(tool_result)
         .map_err(|e| format!("{tool_name} result serialization failed: {e}"))?;
-    Ok(json_text_tool_result(&tool_result_json))
+    Ok(json_text_tool_result(tool_result_json))
 }
 
-/// A successful tool result: the value as one pretty-JSON text block, the form
-/// every tool here states a result a caller parses in.
-fn json_text_tool_result(value: &Value) -> CallToolResult {
-    CallToolResult::success(vec![json_text_content_block(value)])
+/// A successful tool result: the value as one pretty-JSON text block, and a JSON object also as
+/// `structuredContent`, which a tool with an `outputSchema` answers.
+fn json_text_tool_result(value: Value) -> CallToolResult {
+    let mut tool_result = CallToolResult::success(vec![json_text_content_block(&value)]);
+    if value.is_object() {
+        tool_result.structured_content = Some(value);
+    }
+    tool_result
 }
 
 fn json_text_content_block(value: &Value) -> ContentBlock {
@@ -879,122 +640,59 @@ pub(crate) mod tests {
         ControlPlaneMcpDispatchStubRuntime
     );
 
-    /// The control vocabulary. This is the whole of it —
-    /// `tools/list` is asserted equal to this, not merely a superset.
-    const CONTROL_TOOL_NAMES: &[&str] = &[
-        "graph",
-        "logs",
-        "add_node",
-        "remove_node",
-        "connect",
-        "disconnect",
-        "set_node_config",
-        "set_pin_value",
-        "rename_node",
-        "set_studio_fields",
-        "set_exposed_config_fields",
-        "import_graph_generator",
-        "refresh_fragments",
-        "add_group",
-        "set_group_fields",
-        "remove_group",
-        "add_note",
-        "set_note_fields",
-        "remove_note",
-        "collapse_selection_into_subgraph",
-        "unlock_generator_fragment",
-        "transact",
-        "undo",
-        "redo",
-        "open_project",
-        "reload_project",
-        "close_project",
-        "start_playback",
-        "create_project",
-        "list_samples",
-        "import_project",
-        "describe_stream_action",
-        "cancel_stream_action",
-        "stop_playback",
-        "pause_playback",
-        "resume_playback",
-        "remove_project",
-        "list_streams",
-        "open_viewer",
-        "close_viewer",
-        "set_stream_clock_scale",
-        "describe_runtime",
-        "list_assets",
-        "describe_asset",
-        "read_asset_preview",
-        "import_asset",
-        "relocate_asset",
-        "delete_asset",
-        "set_asset_settings",
-        "replace_asset",
-        "create_stream",
-        "delete_stream",
-        "set_stream_display_name",
-        "list_project_files",
-        "read_project_file",
-        "write_project_file",
-        "create_node_file",
-        "add_dependency",
-        "update_dependency",
-        "list_dependencies",
-        "remove_dependency",
-        "use_dependency_stream",
-        "list_project_node_types",
-        "rename_project",
-        "set_project_description",
-        "set_project_cover",
-        "duplicate_project",
-        "delete_project",
-        "list_project_views",
-        "write_studio_view_output",
-        "write_graph_input",
-    ];
+    /// The committed contract file, which every expectation of the served surface is read from.
+    pub(crate) fn the_committed_control_contract() -> Value {
+        serde_json::from_str(include_str!(
+            "../../streamlib-control-contract/contract.json"
+        ))
+        .expect("contract.json is JSON")
+    }
 
-    /// The tools that act on one stream, each naming it with a required
-    /// `stream`.
-    const TOOLS_THAT_REQUIRE_A_STREAM: &[&str] = &[
-        "add_node",
-        "remove_node",
-        "connect",
-        "disconnect",
-        "set_node_config",
-        "set_pin_value",
-        "rename_node",
-        "set_studio_fields",
-        "set_exposed_config_fields",
-        "import_graph_generator",
-        "add_group",
-        "set_group_fields",
-        "remove_group",
-        "add_note",
-        "set_note_fields",
-        "remove_note",
-        "collapse_selection_into_subgraph",
-        "unlock_generator_fragment",
-        "use_dependency_stream",
-        "open_viewer",
-        "set_stream_clock_scale",
-        "write_studio_view_output",
-        "write_graph_input",
-    ];
+    /// The operations `contract.json` exposes on the agent surface.
+    pub(crate) fn the_operations_the_contract_serves_to_agents() -> Vec<Value> {
+        the_committed_control_contract()["methods"]
+            .as_array()
+            .expect("the contract lists its methods")
+            .iter()
+            .filter(|method| {
+                method["x-exposures"]
+                    .as_array()
+                    .is_some_and(|exposures| exposures.contains(&json!("agent")))
+            })
+            .cloned()
+            .collect()
+    }
 
-    /// Exact, not a superset: the catalog IS the control vocabulary, so a
-    /// tool appearing that is not in this list is a surface the plan does not
-    /// grant.
-    pub(crate) fn assert_names_exactly_the_control_vocabulary(
-        mut advertised_tool_names: Vec<&str>,
+    /// The tools `contract.json` says `tools/list` holds: each operation it lists as a tool of
+    /// its own, then its discovery tools.
+    pub(crate) fn the_tools_the_contract_lists() -> Vec<Value> {
+        let contract = the_committed_control_contract();
+        the_operations_the_contract_serves_to_agents()
+            .into_iter()
+            .filter(|method| method["x-agent-tool-listing"] == "listed_as_a_tool")
+            .chain(
+                contract["x-agent-discovery-tools"]
+                    .as_array()
+                    .expect("the contract lists its discovery tools")
+                    .iter()
+                    .cloned(),
+            )
+            .collect()
+    }
+
+    /// Exact, not a superset: a tool appearing that `contract.json` does not list is a surface
+    /// the contract does not grant.
+    pub(crate) fn assert_names_exactly_the_tools_the_contract_lists(
+        advertised_tool_names: Vec<&str>,
     ) {
-        advertised_tool_names.sort_unstable();
-        let mut control_tool_names = CONTROL_TOOL_NAMES.to_vec();
-        control_tool_names.sort_unstable();
+        let tools_the_contract_lists = the_tools_the_contract_lists();
+        let contract_tool_names: Vec<&str> = tools_the_contract_lists
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
         assert_eq!(
-            advertised_tool_names, control_tool_names,
-            "tools/list must advertise exactly the control vocabulary"
+            advertised_tool_names, contract_tool_names,
+            "tools/list must advertise exactly the tools contract.json lists, in its order"
         );
     }
 
@@ -1047,9 +745,37 @@ pub(crate) mod tests {
         arguments: Value,
     ) -> std::result::Result<Value, McpError> {
         let (_served, client) = connected_mcp_client(runtime).await;
-        let request = CallToolRequestParams::new(tool_name.to_string())
+        wire_outcome(
+            client
+                .call_tool(the_tool_call_that_reaches(tool_name, &arguments))
+                .await,
+        )
+    }
+
+    /// One `tools/call` of the tool `tool_name` itself, never rerouted through `call_operation`.
+    async fn tool_call_outcome_of_the_tool(
+        runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+        tool_name: &'static str,
+        arguments: Value,
+    ) -> std::result::Result<Value, McpError> {
+        let (_served, client) = connected_mcp_client(runtime).await;
+        let request = CallToolRequestParams::new(tool_name)
             .with_arguments(arguments.as_object().cloned().unwrap_or_default());
         wire_outcome(client.call_tool(request).await)
+    }
+
+    /// The `tools/call` an agent sends to run `operation_name` with `arguments`: the operation's
+    /// own tool when the server lists it, `call_operation` otherwise.
+    pub(crate) fn the_tool_call_that_reaches(
+        operation_name: &str,
+        arguments: &Value,
+    ) -> CallToolRequestParams {
+        let (tool_name, tool_arguments) =
+            streamlib_control_contract::the_agent_tool_call_that_reaches(
+                operation_name,
+                arguments.as_object().cloned().unwrap_or_default(),
+            );
+        CallToolRequestParams::new(tool_name).with_arguments(tool_arguments)
     }
 
     /// A result or refusal as it crossed the wire.
@@ -1095,7 +821,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) async fn listed_tools(
+    async fn listed_tools(
         runtime: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     ) -> Vec<Value> {
         let (_served, client) = connected_mcp_client(runtime).await;
@@ -1362,46 +1088,162 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_advertises_exactly_the_control_vocabulary() {
+    async fn tools_list_is_exactly_what_the_contract_lists_each_tool_as_the_contract_states_it() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        assert_names_exactly_the_control_vocabulary(
+        assert_names_exactly_the_tools_the_contract_lists(
             tools
                 .iter()
                 .filter_map(|tool| tool["name"].as_str())
                 .collect(),
         );
-        for tool in tools {
+        for (tool, contract_tool) in tools.iter().zip(the_tools_the_contract_lists()) {
+            let tool_name = &tool["name"];
             assert_eq!(
-                tool["inputSchema"]["type"], "object",
-                "tool `{}` must declare an object inputSchema",
-                tool["name"]
+                tool["description"], contract_tool["description"],
+                "{tool_name}"
+            );
+            assert_eq!(tool["inputSchema"]["type"], "object", "{tool_name}");
+            let (read_only_hint, destructive_hint) = match contract_tool["x-effect"].as_str() {
+                Some("reads_only") => (json!(true), Value::Null),
+                Some("changes") => (json!(false), json!(false)),
+                Some("destroys") => (json!(false), json!(true)),
+                effect => panic!("{tool_name} states the effect {effect:?}"),
+            };
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"], read_only_hint,
+                "{tool_name}"
+            );
+            assert_eq!(
+                tool["annotations"]
+                    .get("destructiveHint")
+                    .cloned()
+                    .unwrap_or(Value::Null),
+                destructive_hint,
+                "{tool_name}"
             );
         }
     }
 
     #[tokio::test]
-    async fn every_operation_on_the_agent_surface_is_a_tool_carrying_its_registry_usage_note() {
+    async fn a_listed_tool_with_one_result_shape_states_it_and_answers_it_as_structured_content() {
         let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        for declaration in streamlib_control_contract::CONTROL_OPERATIONS
+        let list_streams = tools
             .iter()
-            .filter(|declaration| {
-                declaration
-                    .exposures
-                    .contains(&streamlib_control_contract::ControlOperationExposure::Agent)
-            })
-        {
-            let tool = tools
-                .iter()
-                .find(|tool| tool["name"] == declaration.method_name)
-                .unwrap_or_else(|| {
-                    panic!("`{}` is registered but no tool", declaration.method_name)
-                });
-            assert_eq!(
-                tool["description"], declaration.agent_usage_note,
-                "tool `{}` must carry the registry's agent usage note",
-                declaration.method_name
-            );
+            .find(|tool| tool["name"] == "list_streams")
+            .expect("`list_streams` is listed");
+        assert_eq!(list_streams["outputSchema"]["type"], "object");
+
+        let answered = tool_call_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "list_streams",
+            json!({}),
+        )
+        .await;
+        assert_eq!(
+            answered["structuredContent"],
+            first_text_block_json(&answered)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_discovery_tools_list_and_describe_every_operation_the_contract_serves_to_agents() {
+        let runtime = || Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let served_to_agents = the_operations_the_contract_serves_to_agents();
+
+        let grouped = first_text_block_json(
+            &tool_call_result(runtime(), "list_operation_groups", json!({})).await,
+        );
+        let mut listed_in_a_group: Vec<(Value, Value)> = Vec::new();
+        for group in grouped["groups"].as_array().expect("the groups") {
+            for operation in group["operations"].as_array().expect("its operations") {
+                listed_in_a_group.push((operation["name"].clone(), group["group"].clone()));
+            }
         }
+        let mut contract_operations_by_group: Vec<(Value, Value)> = served_to_agents
+            .iter()
+            .map(|method| (method["name"].clone(), method["x-group"].clone()))
+            .collect();
+        let by_name = |operation: &(Value, Value)| operation.0.to_string();
+        listed_in_a_group.sort_by_key(by_name);
+        contract_operations_by_group.sort_by_key(by_name);
+        assert_eq!(listed_in_a_group, contract_operations_by_group);
+
+        for method in &served_to_agents {
+            let described = first_text_block_json(
+                &tool_call_result(
+                    runtime(),
+                    "describe_operations",
+                    json!({ "operations": [method["name"]] }),
+                )
+                .await,
+            );
+            let [operation] = described["operations"]
+                .as_array()
+                .expect("the operations")
+                .as_slice()
+            else {
+                panic!("one operation was asked for: {described}");
+            };
+            assert_eq!(operation["name"], method["name"]);
+            assert_eq!(operation["usage"], method["description"]);
+            assert_eq!(operation["effect"], method["x-effect"]);
+            assert_eq!(operation["params_schema"]["type"], "object", "{operation}");
+        }
+    }
+
+    #[tokio::test]
+    async fn call_operation_reaches_an_operation_that_has_no_tool_of_its_own() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded = runtime.recorded_graph_mutations.clone();
+        let add_node_params = json!({
+            "stream": STUB_STREAM_ASSET,
+            "type": "effects:Blur",
+            "mode": "live",
+        });
+
+        let answered_directly =
+            tool_call_outcome_of_the_tool(runtime.clone(), "add_node", add_node_params.clone())
+                .await
+                .expect("a tool result");
+        assert_eq!(answered_directly["isError"], true, "{answered_directly}");
+        assert!(
+            answered_directly["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("`call_operation`")),
+            "{answered_directly}"
+        );
+        assert!(recorded_stream_graph_operations(&recorded).is_empty());
+
+        let answered_through_call_operation = tool_call_outcome_of_the_tool(
+            runtime,
+            "call_operation",
+            json!({ "operation": "add_node", "params": add_node_params }),
+        )
+        .await
+        .expect("a tool result");
+        assert_eq!(
+            answered_through_call_operation["isError"], false,
+            "{answered_through_call_operation}"
+        );
+        assert_eq!(recorded_stream_graph_operations(&recorded).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn call_operation_refuses_an_operation_the_agent_surface_does_not_serve() {
+        let answered = tool_call_outcome_of_the_tool(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "call_operation",
+            json!({ "operation": "discover" }),
+        )
+        .await
+        .expect("a tool result");
+        assert_eq!(answered["isError"], true, "{answered}");
+        assert!(
+            answered["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("`discover`")),
+            "{answered}"
+        );
     }
 
     /// The operations the stub was handed live, in call order.
@@ -2391,93 +2233,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// The `stream` argument each tool advertises: required on every tool
-    /// that acts on one stream, optional on `graph` and `logs`, and absent from the tools
-    /// that name none.
-    #[tokio::test]
-    async fn every_tool_acting_on_one_stream_requires_its_stream_and_graph_takes_it_optionally() {
-        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        for tool in &tools {
-            let tool_name = tool["name"].as_str().expect("a named tool");
-            let advertises_stream = tool["inputSchema"]["properties"]["stream"].is_object();
-            let requires_stream = tool["inputSchema"]["required"]
-                .as_array()
-                .is_some_and(|required| required.contains(&json!("stream")));
-            let (must_advertise, must_require) = if TOOLS_THAT_REQUIRE_A_STREAM.contains(&tool_name)
-            {
-                (true, true)
-            } else if tool_name == "graph" || tool_name == "logs" {
-                (true, false)
-            } else {
-                (false, false)
-            };
-            assert_eq!(
-                (advertises_stream, requires_stream),
-                (must_advertise, must_require),
-                "`{tool_name}`: {}",
-                tool["inputSchema"]
-            );
-        }
-        for tool_name in TOOLS_THAT_REQUIRE_A_STREAM {
-            assert!(
-                tools.iter().any(|tool| tool["name"] == *tool_name),
-                "`{tool_name}` is listed"
-            );
-        }
-    }
-
-    /// `open_project`'s and `logs`' schemas say what each takes: a required
-    /// project directory and nothing else, and a count with no maximum, since
-    /// a larger one is clamped.
-    #[tokio::test]
-    async fn the_open_project_and_logs_schemas_state_what_each_takes() {
-        let tools = listed_tools(Arc::new(ControlPlaneMcpDispatchStubRuntime::new())).await;
-        let input_schema_of = |tool_name: &str| {
-            tools
-                .iter()
-                .find(|tool| tool["name"] == tool_name)
-                .unwrap_or_else(|| panic!("the `{tool_name}` tool is listed"))["inputSchema"]
-                .clone()
-        };
-        let required_of = |input_schema: &Value| {
-            let mut required: Vec<String> = input_schema["required"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|name| name.as_str().map(str::to_string))
-                .collect();
-            required.sort_unstable();
-            required
-        };
-
-        let open_project = input_schema_of("open_project");
-        assert_eq!(required_of(&open_project), ["project_directory"]);
-        let open_project_arguments: Vec<&String> = open_project["properties"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .collect();
-        assert_eq!(open_project_arguments, ["project_directory"]);
-
-        assert_eq!(
-            required_of(&input_schema_of("list_streams")),
-            Vec::<String>::new()
-        );
-
-        let logs_count = &input_schema_of("logs")["properties"]["count"];
-        assert_eq!(logs_count["minimum"], json!(1), "{logs_count}");
-        assert!(
-            logs_count.get("maximum").is_none(),
-            "a count past the most the runtime returns is clamped, never refused: {logs_count}"
-        );
-        assert!(
-            logs_count["description"]
-                .as_str()
-                .is_some_and(|description| description.contains("clamped")),
-            "{logs_count}"
-        );
-    }
-
     // ------------------------------------------------------------------------
     // Resources and prompts
     // ------------------------------------------------------------------------
@@ -2737,12 +2492,9 @@ pub(crate) mod tests {
     }
 
     fn served_tool_names() -> Vec<String> {
-        (LocalApiMcpServerHandler::tool_router()
-            + LocalApiMcpServerHandler::stream_graph_tool_router())
-        .list_all()
-        .into_iter()
-        .map(|tool| tool.name.into_owned())
-        .collect()
+        streamlib_control_contract::the_operations_served_to_agents()
+            .map(|declaration| declaration.method_name.to_owned())
+            .collect()
     }
 
     #[tokio::test]

@@ -1303,7 +1303,6 @@ pub struct ImportProjectRequest {
 /// What every required `stream` argument says.
 pub const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
 
-/// What `graph`'s optional `stream` argument says.
 /// What a stream action's `stream` argument says.
 pub const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
     "The stream, by the stream id `list_streams` reports: loaded, or recorded and not loaded.";

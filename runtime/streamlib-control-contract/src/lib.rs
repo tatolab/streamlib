@@ -5,6 +5,7 @@
 //! [`ControlOperation`] impl, and the contract file every adapter, SDK and reference page is
 //! generated from.
 
+mod agent_surface;
 mod control_contract_document;
 mod control_notification;
 mod control_operation;
@@ -12,6 +13,16 @@ mod control_operation_requests;
 mod control_operation_results;
 mod control_operations;
 
+pub use agent_surface::{
+    AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration, AgentOperationDescribed,
+    AgentOperationGroup, AgentOperationInItsGroup, AgentToolListed, CALL_OPERATION_TOOL_NAME,
+    CallOperationRequest, DESCRIBE_OPERATIONS_TOOL_NAME, DescribeOperationsRequest,
+    DescribeOperationsResult, LIST_OPERATION_GROUPS_TOOL_NAME, ListOperationGroupsRequest,
+    ListOperationGroupsResult, a_json_schema_carrying_its_own_definitions,
+    the_agent_tool_call_that_reaches, the_agent_tools_listed,
+    the_operation_groups_served_to_agents, the_operation_served_to_agents_as,
+    the_operations_described_for, the_operations_served_to_agents,
+};
 pub use control_contract_document::{
     CONTROL_CONTRACT_FILE_WORKSPACE_PATH, CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
     CONTROL_OPERATION_FAILED_ERROR_CODE, CONTROL_OPERATION_REFUSED_ERROR_CODE,
@@ -22,7 +33,8 @@ pub use control_notification::{
     ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
 };
 pub use control_operation::{
-    ControlOperation, ControlOperationDeclaration, ControlOperationExposure, ControlOperationGroup,
+    ControlOperation, ControlOperationAgentToolListing, ControlOperationDeclaration,
+    ControlOperationEffect, ControlOperationExposure, ControlOperationGroup,
     ControlOperationStability,
 };
 pub use control_operation_requests::{

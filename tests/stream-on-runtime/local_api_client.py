@@ -53,6 +53,20 @@ LINK_ERROR_STATE = "error"
 McpAnswer = TypeVar("McpAnswer")
 
 
+#: The JSON-RPC route every control operation is a method of.
+CONTROL_JSON_RPC_ROUTE = "/control"
+
+#: The MCP tool that runs any operation the runtime serves to agents, by name.
+CALL_OPERATION_TOOL_NAME = "call_operation"
+
+
+def call_operation_tool_call(
+    operation_name: str, params: "dict[str, Any] | None" = None
+) -> "tuple[str, dict[str, Any]]":
+    """The MCP tool and arguments that run `operation_name` with `params`."""
+    return CALL_OPERATION_TOOL_NAME, {"operation": operation_name, "params": params or {}}
+
+
 class LocalApiRefusedTheRequest(Exception):
     """A local API route answered with a status other than 200."""
 
@@ -101,6 +115,32 @@ class LocalApiClient:
         if response.status != 200:
             raise LocalApiRefusedTheRequest(f"GET {route} answered {response.status}: {body}")
         return body
+
+    def control_call(self, method: str, params: "dict[str, Any] | None" = None) -> Any:
+        """One JSON-RPC call on `POST /control`; its result, and a JSON-RPC error raises."""
+        connection = _HttpConnectionOverUnixSocket(
+            self.local_api_socket_path, LOCAL_API_REQUEST_TIMEOUT_SECONDS
+        )
+        request = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}}
+        try:
+            connection.request(
+                "POST",
+                CONTROL_JSON_RPC_ROUTE,
+                body=json.dumps(request),
+                headers={"Content-Type": "application/json"},
+            )
+            response = connection.getresponse()
+            body = response.read().decode(errors="replace")
+        finally:
+            connection.close()
+        if response.status != 200:
+            raise LocalApiRefusedTheRequest(
+                f"POST {CONTROL_JSON_RPC_ROUTE} answered {response.status}: {body}"
+            )
+        answered = json.loads(body)
+        if "error" in answered:
+            raise LocalApiRefusedTheRequest(f"`{method}` was refused: {answered['error']}")
+        return answered["result"]
 
     def get_json(self, route: str) -> Any:
         """GET `route` and return its JSON body; any status but 200 raises."""
@@ -180,9 +220,13 @@ class LocalApiClient:
         *,
         timeout: float = LOCAL_API_REQUEST_TIMEOUT_SECONDS,
     ) -> Any:
-        """MCP `tools/call`, its first text content parsed as JSON; a tool error raises."""
+        """The operation `tool_name` run through the MCP tool `call_operation`.
+
+        Its first text content parsed as JSON; a tool error raises.
+        """
         result = self.answer_over_mcp(
-            lambda client: client.call_tool(tool_name, arguments or {}), timeout=timeout
+            lambda client: client.call_tool(*call_operation_tool_call(tool_name, arguments)),
+            timeout=timeout,
         )
         assert result.is_error is False, f"`{tool_name}` failed: {result.content}"
         stated = result.content[0]
@@ -196,14 +240,17 @@ class LocalApiClient:
         *,
         timeout: float = LOCAL_API_REQUEST_TIMEOUT_SECONDS,
     ) -> str:
-        """MCP `tools/call` that must fail; returns why, and a success raises.
+        """The operation `tool_name` run through `call_operation`, which must fail.
+
+        Returns why, and a success raises.
 
         The reason is the protocol error's message when the server refused the
         request, else the text of the tool error it answered with.
         """
         try:
             result = self.answer_over_mcp(
-                lambda client: client.call_tool(tool_name, arguments or {}), timeout=timeout
+                lambda client: client.call_tool(*call_operation_tool_call(tool_name, arguments)),
+                timeout=timeout,
             )
         except Exception as raised:
             return str(mcp_error_raised_in(raised))

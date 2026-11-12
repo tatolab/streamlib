@@ -9,8 +9,7 @@ use std::sync::Arc;
 
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation, ProtocolVersion,
-    ReadResourceRequestParams,
+    ClientCapabilities, ClientConfig, Implementation, ProtocolVersion, ReadResourceRequestParams,
 };
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt, RunningService};
 use serde_json::{Value, json};
@@ -70,8 +69,7 @@ impl AssetToolsServedOverAProject {
 
     async fn tool_call(&self, tool_name: &str, mut arguments: Value) -> Value {
         arguments["project_directory"] = json!(self.project_directory());
-        let request = CallToolRequestParams::new(tool_name.to_string())
-            .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+        let request = crate::mcp::tests::the_tool_call_that_reaches(tool_name, &arguments);
         serde_json::to_value(self.client.call_tool(request).await.unwrap()).unwrap()
     }
 
@@ -458,11 +456,9 @@ async fn each_refusal_is_the_runtimes_own_words_and_writes_nothing() {
 async fn a_folder_with_no_project_file_and_a_relative_directory_are_refused() {
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     let request = |project_directory: Value| {
-        CallToolRequestParams::new("list_assets").with_arguments(
-            json!({ "project_directory": project_directory })
-                .as_object()
-                .cloned()
-                .unwrap(),
+        crate::mcp::tests::the_tool_call_that_reaches(
+            "list_assets",
+            &json!({ "project_directory": project_directory }),
         )
     };
     let not_a_project = serde_json::to_value(
@@ -640,15 +636,13 @@ async fn an_authorless_edit_over_mcp_and_mcp_stdio_is_recorded_under_the_request
 
     for (transport, client) in clients_by_transport {
         let source = served.a_file_outside_the_project("intro.mp4", transport.as_bytes());
-        let request = CallToolRequestParams::new("import_asset").with_arguments(
-            json!({
+        let request = crate::mcp::tests::the_tool_call_that_reaches(
+            "import_asset",
+            &json!({
                 "project_directory": served.project_directory(),
                 "source": source,
                 "asset_path": format!("media/intro-over-{}.mp4", transport.replace('/', "-")),
-            })
-            .as_object()
-            .cloned()
-            .unwrap(),
+            }),
         );
         let imported = first_text_block_json(
             &serde_json::to_value(client.call_tool(request).await.unwrap()).unwrap(),

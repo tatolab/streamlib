@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The MCP prompts the runtime serves: recipes an agent follows with the tools
+//! The MCP prompts the runtime serves: recipes an agent follows with the operations
 //! it already serves, rendered against the live graph and node catalog of the
 //! loaded stream each names, at the moment one is requested. A stream not
 //! loaded is refused naming the loaded ones.
 //!
-//! A prompt is text, never a mutation path — every step it lists is a call to
-//! a served tool, so the tool set stays the whole of the control vocabulary.
+//! A prompt is text, never a mutation path — every step it lists runs an operation the agent
+//! surface serves, so the registry stays the whole of the control vocabulary.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -27,6 +27,7 @@ use streamlib::sdk::json_schema::{
     ProcessorNodeOutput,
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
+use streamlib_control_contract::CALL_OPERATION_TOOL_NAME;
 use uuid::Uuid;
 
 use crate::mcp::LocalApiMcpServerHandler;
@@ -228,8 +229,7 @@ async fn exported_live_graph_json(
         .map_err(|e| McpError::internal_error(format!("graph export failed: {e}"), None))
 }
 
-/// One numbered step of a recipe: the served tool it calls on the recipe's
-/// stream, and what to pass.
+/// One numbered step of a recipe: the operation it runs on the recipe's stream, and what to pass.
 struct GraphRecipeStep {
     tool_name: &'static str,
     instruction: String,
@@ -259,10 +259,12 @@ impl GraphRecipe {
         .with_description(description)
     }
 
-    /// The text an agent follows. Each step is its own line, `N. `tool` — …`.
+    /// The text an agent follows. Each step is its own line, `N. `operation` — …`.
     fn rendered_text(&self, stream_id: &str, stream_asset: Uuid) -> String {
         let mut text = format!(
-            "{}\n\nSteps — each calls one tool this runtime serves:\n",
+            "{}\n\nSteps — each runs one operation this runtime serves: call it as a tool when the \
+             tool list holds it, and otherwise through `{CALL_OPERATION_TOOL_NAME}`, with its \
+             name as `operation` and what the step passes as `params`:\n",
             self.introduction_text
         );
         for (index, step) in self.steps.iter().enumerate() {

@@ -185,7 +185,7 @@ pub(crate) mod tests {
     };
     use crate::mcp::tests::{
         ControlPlaneMcpDispatchStubRuntime, HandshakeRevisionMcpClient,
-        assert_names_exactly_the_control_vocabulary,
+        assert_names_exactly_the_tools_the_contract_lists,
     };
     use crate::mcp_resources::LIVE_GRAPH_RESOURCE_URI;
 
@@ -266,7 +266,10 @@ pub(crate) mod tests {
             self.send_request(
                 id,
                 "tools/call",
-                json!({ "name": tool_name, "arguments": arguments }),
+                serde_json::to_value(crate::mcp::tests::the_tool_call_that_reaches(
+                    tool_name, &arguments,
+                ))
+                .unwrap(),
             )
             .await;
         }
@@ -360,7 +363,7 @@ pub(crate) mod tests {
         let client = rmcp_client_over_the_upgraded_stream(&served).await;
 
         let tools = client.list_all_tools().await.unwrap();
-        assert_names_exactly_the_control_vocabulary(
+        assert_names_exactly_the_tools_the_contract_lists(
             tools.iter().map(|tool| tool.name.as_ref()).collect(),
         );
 
@@ -421,7 +424,7 @@ pub(crate) mod tests {
                 Some(handshake_protocol_version.clone())
             );
             let tools = client.list_all_tools().await.unwrap();
-            assert_names_exactly_the_control_vocabulary(
+            assert_names_exactly_the_tools_the_contract_lists(
                 tools.iter().map(|tool| tool.name.as_ref()).collect(),
             );
             client.cancel().await.unwrap();

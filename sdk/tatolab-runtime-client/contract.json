@@ -53,7 +53,9 @@
       "x-exposures": [
         "studio",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "subscribe_project_changes",
@@ -94,7 +96,9 @@
       "x-exposures": [
         "studio",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "describe_runtime",
@@ -136,7 +140,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "list_streams",
@@ -178,7 +184,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "graph",
@@ -218,7 +226,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "transact",
@@ -260,7 +270,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "add_node",
@@ -302,7 +314,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "connect",
@@ -344,7 +358,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "import_graph_generator",
@@ -386,7 +402,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "remove_node",
@@ -428,7 +446,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "disconnect",
@@ -470,7 +490,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_node_config",
@@ -512,7 +534,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_pin_value",
@@ -554,7 +578,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "rename_node",
@@ -596,7 +622,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_studio_fields",
@@ -638,7 +666,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_exposed_config_fields",
@@ -680,7 +710,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "add_group",
@@ -722,7 +754,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_group_fields",
@@ -764,7 +798,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "collapse_selection_into_subgraph",
@@ -806,7 +842,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "unlock_generator_fragment",
@@ -848,7 +886,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "add_note",
@@ -890,7 +930,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_note_fields",
@@ -932,7 +974,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "remove_note",
@@ -974,7 +1018,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "remove_group",
@@ -1016,7 +1062,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "open_project",
@@ -1058,7 +1106,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "reload_project",
@@ -1100,7 +1150,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "close_project",
@@ -1142,7 +1194,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "remove_project",
@@ -1184,7 +1238,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "start_playback",
@@ -1226,7 +1282,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "stop_playback",
@@ -1268,7 +1326,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "pause_playback",
@@ -1310,7 +1370,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "resume_playback",
@@ -1352,7 +1414,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "describe_stream_action",
@@ -1394,7 +1458,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "cancel_stream_action",
@@ -1436,7 +1502,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "rename_project",
@@ -1478,7 +1546,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_project_description",
@@ -1520,7 +1590,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_project_cover",
@@ -1562,7 +1634,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "duplicate_project",
@@ -1604,7 +1678,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "delete_project",
@@ -1646,7 +1722,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_assets",
@@ -1688,7 +1766,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "describe_asset",
@@ -1730,7 +1810,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "read_asset_preview",
@@ -1772,7 +1854,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "import_asset",
@@ -1814,7 +1898,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "relocate_asset",
@@ -1856,7 +1942,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "delete_asset",
@@ -1898,7 +1986,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_asset_settings",
@@ -1940,7 +2030,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "replace_asset",
@@ -1982,7 +2074,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "create_stream",
@@ -2024,7 +2118,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "delete_stream",
@@ -2066,7 +2162,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_stream_display_name",
@@ -2108,7 +2206,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "add_dependency",
@@ -2150,7 +2250,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "update_dependency",
@@ -2192,7 +2294,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_dependencies",
@@ -2234,7 +2338,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "remove_dependency",
@@ -2276,7 +2382,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "use_dependency_stream",
@@ -2318,7 +2426,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_project_files",
@@ -2360,7 +2470,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "read_project_file",
@@ -2402,7 +2514,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "create_node_file",
@@ -2444,7 +2558,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "write_project_file",
@@ -2486,7 +2602,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_project_node_types",
@@ -2528,7 +2646,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_project_views",
@@ -2570,7 +2690,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "write_studio_view_output",
@@ -2612,7 +2734,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "write_graph_input",
@@ -2654,12 +2778,14 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "import_project",
       "summary": "Import a project from an archive into a folder that does not exist yet.",
-      "description": "Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: follow it with `run_project`. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.",
+      "description": "Make a new project in `project_directory` from the `.zip` of a project at `source`, as a Marketplace entry or a GitHub archive is handed over. Its files are unpacked as `add_dependency` copies a zip — every file its history would record and every asset, its `imports/` included, never a hidden folder such as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link — under a new project UUID of its own, so the same zip imported twice makes two projects, and committed by `author` as the first commit of a history of its own. Nothing reaches the network and nothing runs: open it with `open_project`, and `start_playback` plays it. Answers the new `project_directory`, its `project` UUID, its `name` and the `commit`. Refused, nothing left behind, for a relative path, a `source` that is a folder or no zip archive, a zip holding no `tatolab-project.json` or no project UUID in it, naming what is missing, or a `project_directory` that already exists.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -2696,7 +2822,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "logs",
@@ -2738,12 +2866,14 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "open_viewer",
       "summary": "Open a viewer of a node's output port, held open for the connection that opened it.",
-      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the `/mcp/stdio` connection that opened it, so it is opened only over `/mcp/stdio`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
+      "description": "Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/stream`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -2780,7 +2910,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "close_viewer",
@@ -2822,7 +2954,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "set_stream_clock_scale",
@@ -2864,7 +2998,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "create_project",
@@ -2906,7 +3042,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "list_samples",
@@ -2948,7 +3086,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "refresh_fragments",
@@ -2990,7 +3130,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
       "name": "undo",
@@ -3032,7 +3174,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "listed_as_a_tool"
     },
     {
       "name": "redo",
@@ -3074,7 +3218,9 @@
         "studio",
         "agent",
         "public"
-      ]
+      ],
+      "x-effect": "destroys",
+      "x-agent-tool-listing": "reached_through_call_operation"
     }
   ],
   "x-notifications": [
@@ -3098,6 +3244,41 @@
         "studio",
         "public"
       ]
+    }
+  ],
+  "x-agent-discovery-tools": [
+    {
+      "name": "list_operation_groups",
+      "summary": "List every operation the runtime serves, by group.",
+      "description": "List every operation this runtime serves, by group, each with its name and one sentence saying what it does. The tools in this tool list are the ones used most; every other operation — a project's assets, files, dependencies, node types and views, each single graph edit, redo, viewers — is reached through `call_operation`. Start here when no listed tool does what you need, then read the operation's params with `describe_operations`.",
+      "params": {
+        "$ref": "#/components/schemas/ListOperationGroupsRequest"
+      },
+      "x-effect": "reads_only",
+      "result": {
+        "$ref": "#/components/schemas/ListOperationGroupsResult"
+      }
+    },
+    {
+      "name": "describe_operations",
+      "summary": "Describe operations: what each does, the params it takes and what it answers.",
+      "description": "Describe operations by name, or every operation of one group: what each reads, changes and answers, the JSON Schema of its params and of its result, whether it only reads, and the contract version it arrived in. Call it before the first `call_operation` of an operation, and send the params exactly as its `params_schema` states them.",
+      "params": {
+        "$ref": "#/components/schemas/DescribeOperationsRequest"
+      },
+      "x-effect": "reads_only",
+      "result": {
+        "$ref": "#/components/schemas/DescribeOperationsResult"
+      }
+    },
+    {
+      "name": "call_operation",
+      "summary": "Call any operation the runtime serves, by name.",
+      "description": "Call any operation `list_operation_groups` lists, by name, with its `params`. It answers exactly what the operation answers, and a refusal is the operation's own. An operation that is also a listed tool answers the same either way.",
+      "params": {
+        "$ref": "#/components/schemas/CallOperationRequest"
+      },
+      "x-effect": "destroys"
     }
   ],
   "components": {
@@ -9401,6 +9582,275 @@
           }
         ],
         "description": "What changed on a project's change feed."
+      },
+      "ListOperationGroupsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "`list_operation_groups`' params: none."
+      },
+      "ListOperationGroupsResult": {
+        "type": "object",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentOperationGroup"
+            },
+            "description": "Every group holding an operation the agent surface serves."
+          }
+        },
+        "required": [
+          "groups"
+        ],
+        "description": "`list_operation_groups`' result."
+      },
+      "AgentOperationGroup": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "$ref": "#/components/schemas/ControlOperationGroup",
+            "description": "The group."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentOperationInItsGroup"
+            },
+            "description": "The group's operations, in the order the contract lists them."
+          }
+        },
+        "required": [
+          "group",
+          "operations"
+        ],
+        "description": "One group of the operations the agent surface serves."
+      },
+      "ControlOperationGroup": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "project",
+            "description": "A project as a whole."
+          },
+          {
+            "type": "string",
+            "const": "stream",
+            "description": "The streams a runtime holds."
+          },
+          {
+            "type": "string",
+            "const": "graph",
+            "description": "The edits of a stream's graph."
+          },
+          {
+            "type": "string",
+            "const": "asset",
+            "description": "A project's assets."
+          },
+          {
+            "type": "string",
+            "const": "file",
+            "description": "A project's other files."
+          },
+          {
+            "type": "string",
+            "const": "dependency",
+            "description": "A project's imports of other projects."
+          },
+          {
+            "type": "string",
+            "const": "node_type",
+            "description": "The node types a project offers."
+          },
+          {
+            "type": "string",
+            "const": "view",
+            "description": "The Tato Studio views a project brings."
+          },
+          {
+            "type": "string",
+            "const": "observe",
+            "description": "Reading what a runtime and its streams are doing."
+          }
+        ],
+        "description": "The reference docs' group an operation is listed under."
+      },
+      "AgentOperationInItsGroup": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The operation's name, as `call_operation` and `describe_operations` take it."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence saying what it does."
+          },
+          "listed_as_a_tool": {
+            "type": "boolean",
+            "description": "Whether it is also a tool of its own, callable without `call_operation`."
+          }
+        },
+        "required": [
+          "name",
+          "summary",
+          "listed_as_a_tool"
+        ],
+        "description": "One operation as its group lists it."
+      },
+      "DescribeOperationsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The operations to describe, by the names `list_operation_groups` lists. Send this or `group`."
+          },
+          "group": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ControlOperationGroup"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Describe every operation of this group. Send this or `operations`."
+          }
+        },
+        "description": "`describe_operations`' params."
+      },
+      "DescribeOperationsResult": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentOperationDescribed"
+            },
+            "description": "Each operation asked for, in the order the contract lists them."
+          }
+        },
+        "required": [
+          "operations"
+        ],
+        "description": "`describe_operations`' result."
+      },
+      "AgentOperationDescribed": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The operation's name."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One sentence saying what it does."
+          },
+          "usage": {
+            "type": "string",
+            "description": "What it reads, what it changes and what it answers."
+          },
+          "group": {
+            "$ref": "#/components/schemas/ControlOperationGroup",
+            "description": "Its group."
+          },
+          "since_contract_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The contract version it first appeared in."
+          },
+          "stability": {
+            "$ref": "#/components/schemas/ControlOperationStability",
+            "description": "Whether its shape is settled."
+          },
+          "effect": {
+            "$ref": "#/components/schemas/ControlOperationEffect",
+            "description": "What it does to what the runtime holds."
+          },
+          "params_schema": {
+            "description": "The JSON Schema of the `params` `call_operation` takes for it."
+          },
+          "result_schema": {
+            "description": "The JSON Schema of what it answers."
+          }
+        },
+        "required": [
+          "name",
+          "summary",
+          "usage",
+          "group",
+          "since_contract_version",
+          "stability",
+          "effect",
+          "params_schema",
+          "result_schema"
+        ],
+        "description": "One operation described for an agent about to call it."
+      },
+      "ControlOperationStability": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "stable",
+            "description": "Changing it breaks the contract and bumps its version."
+          },
+          {
+            "type": "string",
+            "const": "experimental",
+            "description": "It may change before it turns stable, with no version bump."
+          }
+        ],
+        "description": "Whether an operation's shape is settled."
+      },
+      "ControlOperationEffect": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "reads_only",
+            "description": "It changes nothing a project or a stream holds."
+          },
+          {
+            "type": "string",
+            "const": "changes",
+            "description": "It adds to or changes what a project or a stream holds."
+          },
+          {
+            "type": "string",
+            "const": "destroys",
+            "description": "It can take away or overwrite what a project or a stream holds."
+          }
+        ],
+        "description": "What an operation does to what the runtime holds."
+      },
+      "CallOperationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "The operation to call, by the name `list_operation_groups` lists."
+          },
+          "params": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true,
+            "description": "The operation's params, as the `params_schema` `describe_operations` answers for it states them. Omit for an operation that takes none."
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "description": "`call_operation`'s params."
       }
     }
   }

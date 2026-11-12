@@ -26,7 +26,7 @@ from mcp.types import TextContent, TextResourceContents
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
-from runtime_unit_under_test import RuntimeUnitUnderTest
+from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_TEST_PATTERN_SOURCE
 
@@ -37,77 +37,23 @@ VERB_EXIT_AFTER_STDIN_CLOSES_TIMEOUT_SECONDS = 5.0
 VERB_EXIT_AFTER_THE_RUNTIME_DIES_TIMEOUT_SECONDS = 10.0
 MCP_SESSION_TIMEOUT_SECONDS = 60.0
 
-CONTROL_TOOL_NAMES = {
-    "graph",
-    "logs",
-    "add_node",
-    "remove_node",
-    "connect",
-    "disconnect",
-    "set_node_config",
-    "set_pin_value",
-    "rename_node",
-    "set_studio_fields",
-    "import_graph_generator",
-    "refresh_fragments",
-    "set_exposed_config_fields",
-    "add_group",
-    "set_group_fields",
-    "remove_group",
-    "add_note",
-    "set_note_fields",
-    "remove_note",
-    "collapse_selection_into_subgraph",
-    "unlock_generator_fragment",
-    "transact",
-    "undo",
-    "redo",
-    "open_project",
-    "reload_project",
-    "close_project",
-    "start_playback",
-    "create_project",
-    "import_project",
-    "describe_stream_action",
-    "cancel_stream_action",
-    "stop_playback",
-    "pause_playback",
-    "resume_playback",
-    "remove_project",
-    "list_streams",
-    "describe_runtime",
-    "set_stream_clock_scale",
-    "open_viewer",
-    "close_viewer",
-    "list_assets",
-    "describe_asset",
-    "read_asset_preview",
-    "import_asset",
-    "relocate_asset",
-    "delete_asset",
-    "set_asset_settings",
-    "replace_asset",
-    "create_stream",
-    "delete_stream",
-    "set_stream_display_name",
-    "list_project_files",
-    "read_project_file",
-    "write_project_file",
-    "create_node_file",
-    "add_dependency",
-    "update_dependency",
-    "list_dependencies",
-    "remove_dependency",
-    "use_dependency_stream",
-    "list_project_node_types",
-    "rename_project",
-    "set_project_description",
-    "set_project_cover",
-    "duplicate_project",
-    "delete_project",
-    "list_project_views",
-    "write_studio_view_output",
-}
+CONTROL_CONTRACT_FILE = REPOSITORY_ROOT / "runtime" / "streamlib-control-contract" / "contract.json"
+
+
+def the_committed_control_contract() -> "dict[str, Any]":
+    return json.loads(CONTROL_CONTRACT_FILE.read_text())
+
+
+def the_tool_names_the_contract_lists(contract: "dict[str, Any]") -> "list[str]":
+    """The tools `contract.json` says `tools/list` holds, in its order."""
+    return [
+        method["name"]
+        for method in contract["methods"]
+        if "agent" in method["x-exposures"]
+        and method["x-agent-tool-listing"] == "listed_as_a_tool"
+    ] + [tool["name"] for tool in contract["x-agent-discovery-tools"]]
+
+
 NODE_CATALOG_RESOURCE_URI = "streamlib://node-catalog"
 LIVE_GRAPH_RESOURCE_URI = "streamlib://graph"
 
@@ -186,7 +132,7 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
             )
             return {
                 "protocol_version": client.protocol_version,
-                "tool_names": {tool.name for tool in tools.tools},
+                "tool_names": [tool.name for tool in tools.tools],
                 "machine_graph": machine_graph,
                 "stream_graph": stream_graph,
                 "source_name": source_name,
@@ -199,7 +145,11 @@ def test_a_stdio_client_through_the_verb_reaches_the_runtimes_tools_resources_an
     )
 
     assert answered["protocol_version"] == LATEST_PROTOCOL_VERSION
-    assert answered["tool_names"] == CONTROL_TOOL_NAMES
+    contract = the_committed_control_contract()
+    assert answered["tool_names"] == the_tool_names_the_contract_lists(contract)
+    discovered = tatolabd.local_api_client().control_call("discover")
+    assert discovered["contract_version"] == contract["info"]["x-contract-version"]
+    assert discovered["operations"] == [method["name"] for method in contract["methods"]]
     assert answered["stream_graph"]["stream"] == stream_id
     assert answered["machine_graph"]["machine"], answered["machine_graph"]
     for uri, contents in answered["resources"].items():

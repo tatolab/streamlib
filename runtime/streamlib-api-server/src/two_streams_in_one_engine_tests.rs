@@ -22,9 +22,7 @@ use streamlib::sdk::runtime::{
 use streamlib_runtime_client_contract::machine_directories_test_root::TestMachineRoot;
 use uuid::Uuid;
 
-use crate::mcp::tests::{
-    first_text_block_json, listed_tools, prompt_text, resource_document, tool_call_result,
-};
+use crate::mcp::tests::{first_text_block_json, prompt_text, resource_document, tool_call_result};
 
 /// A native node with nothing to do, added to each stream so each graph has a
 /// node of its own to tell it apart; its one output gives a prompt a port.
@@ -322,39 +320,6 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
             && recipe.contains("idle-in-second")
             && !recipe.contains("`stream`: `first`"),
         "{recipe}"
-    );
-}
-
-/// `connect` takes `stream`, the `level` inside it, its two ends, `mode`, `author` and
-/// `idempotency_key`, and nothing else.
-#[tokio::test(flavor = "multi_thread")]
-async fn the_connect_schema_takes_the_stream_its_level_its_two_ends_mode_author_and_key_and_nothing_else()
- {
-    let loaded = AnEngineLoadingTwoStreams::load();
-
-    let tools = listed_tools(loaded.operations_on_the_loaded_streams()).await;
-    let connect = tools
-        .iter()
-        .find(|tool| tool["name"] == "connect")
-        .expect("`connect` is listed");
-    let mut arguments: Vec<&str> = connect["inputSchema"]["properties"]
-        .as_object()
-        .expect("`connect` lists its arguments")
-        .keys()
-        .map(String::as_str)
-        .collect();
-    arguments.sort_unstable();
-    assert_eq!(
-        arguments,
-        [
-            "author",
-            "idempotency_key",
-            "level",
-            "mode",
-            "source",
-            "stream",
-            "target"
-        ]
     );
 }
 

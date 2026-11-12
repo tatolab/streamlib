@@ -137,7 +137,10 @@ def answer_of(method, params):
 
 
 def tool_answer(tool_name, arguments):
-    message = answer_of("tools/call", {"name": tool_name, "arguments": arguments})
+    message = answer_of(
+        "tools/call",
+        {"name": "call_operation", "arguments": {"operation": tool_name, "params": arguments}},
+    )
     result = message.get("result") or {}
     if "error" in message or result.get("isError"):
         raise SystemExit(f"{tool_name} failed: {message}")

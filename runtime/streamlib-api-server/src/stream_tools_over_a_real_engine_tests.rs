@@ -20,7 +20,6 @@ use std::time::Duration;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use rmcp::RoleClient;
-use rmcp::model::CallToolRequestParams;
 use rmcp::service::RunningService;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
@@ -339,8 +338,7 @@ async fn tool_call_over_the_connection(
     tool_name: &str,
     arguments: Value,
 ) -> Value {
-    let request = CallToolRequestParams::new(tool_name.to_string())
-        .with_arguments(arguments.as_object().cloned().unwrap_or_default());
+    let request = crate::mcp::tests::the_tool_call_that_reaches(tool_name, &arguments);
     serde_json::to_value(
         client
             .call_tool(request)

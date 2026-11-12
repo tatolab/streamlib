@@ -8,6 +8,7 @@ use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
+use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
 use crate::control_operation::{ControlOperation, ControlOperationDeclaration};
 use crate::control_operation_results::ControlContractVersionMismatch;
@@ -66,6 +67,10 @@ pub fn control_contract_document() -> Value {
         .iter()
         .map(|declaration| the_notification_entry_of(declaration, &mut schema_generator))
         .collect();
+    let agent_discovery_tools: Vec<Value> = AGENT_DISCOVERY_TOOLS
+        .iter()
+        .map(|declaration| the_agent_discovery_tool_entry_of(declaration, &mut schema_generator))
+        .collect();
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -77,6 +82,7 @@ pub fn control_contract_document() -> Value {
         },
         "methods": methods,
         "x-notifications": notifications,
+        "x-agent-discovery-tools": agent_discovery_tools,
         "components": { "schemas": component_schemas },
     })
 }
@@ -108,7 +114,26 @@ fn the_method_entry_of(
         "x-stability": declaration.stability,
         "x-group": declaration.group,
         "x-exposures": declaration.exposures,
+        "x-effect": declaration.effect,
+        "x-agent-tool-listing": declaration.agent_tool_listing,
     })
+}
+
+fn the_agent_discovery_tool_entry_of(
+    declaration: &AgentDiscoveryToolDeclaration,
+    schema_generator: &mut schemars::SchemaGenerator,
+) -> Value {
+    let mut entry = json!({
+        "name": declaration.tool_name,
+        "summary": declaration.one_line_doc,
+        "description": declaration.agent_usage_note,
+        "params": (declaration.request_json_schema)(schema_generator),
+        "x-effect": declaration.effect,
+    });
+    if let Some(result_json_schema) = declaration.result_json_schema {
+        entry["result"] = result_json_schema(schema_generator).to_value();
+    }
+    entry
 }
 
 fn the_errors_of(
