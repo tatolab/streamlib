@@ -63,7 +63,7 @@ pub use control_operation_requests::{
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
     SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
     SetStudioFieldsRequest, SubscribeProjectChangesRequest, TransactRequest, UndoOrRedoRequest,
-    UnlockGeneratorFragmentRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
     WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 pub use control_operation_results::{
@@ -83,6 +83,6 @@ pub use control_operations::{
     SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNoteFields, SetPinValue,
     SetProjectCover, SetProjectDescription, SetStreamClockScale, SetStreamDisplayName,
     SetStudioFields, StartPlayback, StopPlayback, SubscribeProjectChanges, Transact, Undo,
-    UnlockGeneratorFragment, UpdateDependency, UseDependencyStream, WriteGraphInput,
-    WriteProjectFile, WriteStudioViewOutput,
+    UnlockSubgraph, UpdateDependency, UseDependencyStream, WriteGraphInput, WriteProjectFile,
+    WriteStudioViewOutput,
 };

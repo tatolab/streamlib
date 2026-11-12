@@ -690,6 +690,14 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn the_name_a_node_added_with_none_takes(
+        &self,
+        node_type: &str,
+        names_at_the_level: &std::collections::HashSet<String>,
+    ) -> Result<String> {
+        self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
+    }
+
     fn reconcile_each_stream_fragment_to_the_stream_it_references_live(
         &self,
     ) -> BoxFuture<'_, Result<()>> {

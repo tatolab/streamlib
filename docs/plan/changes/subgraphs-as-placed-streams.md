@@ -44,7 +44,8 @@
   the selection. It then places that stream where the nodes were, with a `StreamFragment` node
   whose ports are those Inputs and Outputs, the crossing links moved onto them. It is one graph
   action with an inverse that removes the stream asset again. A name a stream asset already holds
-  is refused, naming it.
+  is refused, naming it. The undo is refused while another stream of the project places the
+  saved stream, or after it was edited, the refusal naming that stream (owner, 2026-11-12).
 - **A placed stream runs only where it is placed.** Loading a project skips each stream asset
   another stream of the project places, as it skips an import's streams. A stream placed nowhere
   loads as before. `dev` re-places each stream that places a stream whose document changed on disk.
@@ -64,14 +65,16 @@
   graph placing it. A placed stream's nodes come back as a copy under fresh UUIDs, its reference
   dropped. The placed stream's asset stays, and it loads on its own again once nothing places it.
 
-- **An inline subgraph is refused at load.** A graph document holding an `AuthoredFragment` node is
-  refused, naming the node. Pre-1.0 there is no conversion; such documents exist only from
-  collapses made since #3459.
+- **An inline subgraph is refused at load.** A graph document holding an inline `fragment` under a
+  node type the runtime defines (the `tatolab.` namespace), at any level, is refused, naming the
+  node; only a graph generator's frozen output is held inline. Pre-1.0 there is no conversion;
+  such documents exist only from collapses made since #3459.
 
 ## MODIFIED
 
 - `unlock_generator_fragment` is renamed `unlock_subgraph`, in the MCP tool set, the control
-  contract, `StreamGraphAction` and its CLI verb, and its description covers both kinds.
+  contract, `StreamGraphAction` and its CLI verb, and its description covers both kinds. The
+  rename is a breaking change to the control contract, so it bumps `contract_version` to 2.
 - `the_edit_at_the_level` resolves a path through placed streams. A path through a generator's
   output is refused as today, until it is unlocked.
 

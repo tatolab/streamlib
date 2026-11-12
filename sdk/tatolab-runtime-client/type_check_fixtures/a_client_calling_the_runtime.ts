@@ -17,7 +17,7 @@ import {
 
 export async function aClientCallingEveryOperation(socketPath: string, project: string): Promise<void> {
   const client = await TatolabRuntimeControlClient.connect({ socketPath, clientName: "type check" });
-  const discovered: DiscoverResult = await client.call("discover", { contract_version: 1 });
+  const discovered: DiscoverResult = await client.call("discover", { contract_version: 2 });
   const subscribed: SubscribeProjectChangesResult = await client.call("subscribe_project_changes", {
     projects: [project],
   });

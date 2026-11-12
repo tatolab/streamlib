@@ -25,7 +25,7 @@ use streamlib_control_contract::{
     RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
     SubscribeProjectChangesRequest, SubscribeProjectChangesResult, TransactRequest,
-    UnlockGeneratorFragmentRequest,
+    UnlockSubgraphRequest,
 };
 use streamlib_project_repository::{
     ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
@@ -602,7 +602,7 @@ impl ControlOperationDispatcher {
                 )
                 .await
                 .map(ControlOperationAnswer::GraphTransaction),
-            ControlOperationCall::UnlockGeneratorFragment(UnlockGeneratorFragmentRequest {
+            ControlOperationCall::UnlockSubgraph(UnlockSubgraphRequest {
                 stream,
                 level,
                 fragment,
@@ -611,8 +611,8 @@ impl ControlOperationDispatcher {
                 idempotency_key,
             }) => self
                 .apply_a_graph_transaction(
-                    "unlock_generator_fragment",
-                    vec![StreamGraphAction::UnlockGeneratorFragment {
+                    "unlock_subgraph",
+                    vec![StreamGraphAction::UnlockSubgraph {
                         stream,
                         level: level.unwrap_or_default(),
                         fragment,

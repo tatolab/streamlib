@@ -276,7 +276,7 @@ export interface GraphRequest {
  */
 export interface TransactRequest {
   /**
-   * The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_generator_fragment` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project.
+   * The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project.
    */
   operations: Array<StreamGraphAction>;
   /**
@@ -302,7 +302,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -340,7 +340,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -354,7 +354,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -372,7 +372,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -390,7 +390,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -408,7 +408,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -430,7 +430,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -448,7 +448,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -488,7 +488,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -506,7 +506,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -532,7 +532,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -580,7 +580,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -588,7 +588,7 @@ export type StreamGraphAction = ({
    */
   nodes: Array<string>;
   /**
-   * The subgraph node's name, lowercase URL-safe, refused when a node outside the selection has it.
+   * The subgraph node's name, lowercase URL-safe, and the new stream's, `streams/<name>.graph.json`; refused when a node outside the selection or a stream of the project has it.
    */
   name: string;
   /**
@@ -602,14 +602,14 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
-   * The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's.
+   * The subgraph node, by its UUID: one holding a graph generator's output, or one placing a stream, whose nodes come back as a copy under new UUIDs.
    */
   fragment: string;
-  operation: "unlock_generator_fragment";
+  operation: "unlock_subgraph";
 } | {
   /**
    * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
@@ -666,7 +666,7 @@ export type StreamGraphAction = ({
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string>;
   /**
@@ -843,7 +843,7 @@ export interface AddNodeRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -893,7 +893,7 @@ export interface OneLinkGraphEditRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -961,7 +961,7 @@ export interface OneNodeGraphEditRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -991,7 +991,7 @@ export interface SetNodeConfigRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1025,7 +1025,7 @@ export interface SetPinValueRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1063,7 +1063,7 @@ export interface RenameNodeRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1097,7 +1097,7 @@ export interface SetStudioFieldsRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1131,7 +1131,7 @@ export interface SetExposedConfigFieldsRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1165,7 +1165,7 @@ export interface AddGroupRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1207,7 +1207,7 @@ export interface SetGroupFieldsRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1249,7 +1249,7 @@ export interface CollapseSelectionIntoSubgraphRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -1257,7 +1257,7 @@ export interface CollapseSelectionIntoSubgraphRequest {
    */
   nodes: Array<string>;
   /**
-   * The subgraph node's name, cast to lowercase URL-safe and refused when a node outside the selection has it.
+   * The subgraph node's name, cast to lowercase URL-safe, and the new stream's, `streams/<name>.graph.json`; refused when a node outside the selection or a stream of the project has it.
    */
   name: string;
   /**
@@ -1275,19 +1275,19 @@ export interface CollapseSelectionIntoSubgraphRequest {
 }
 
 /**
- * `unlock_generator_fragment`'s params.
+ * `unlock_subgraph`'s params.
  */
-export interface UnlockGeneratorFragmentRequest {
+export interface UnlockSubgraphRequest {
   /**
    * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
-   * The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's.
+   * The subgraph node, by its UUID: one holding a graph generator's output, or one placing a stream, whose nodes come back as a copy under new UUIDs.
    */
   fragment: string;
   /**
@@ -1411,7 +1411,7 @@ export interface RemoveGroupRequest {
    */
   stream: string;
   /**
-   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Only an authored subgraph is edited inside: a graph generator's output is refused until `unlock_generator_fragment`, and a placed stream is edited as its own stream.
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
    */
   level?: Array<string> | null;
   /**
@@ -3966,7 +3966,7 @@ export interface ControlOperations {
   /**
    * Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.
    *
-   * Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.
+   * Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction with `mode` `commit`: the nodes and the links between them are saved as a new stream of the project, `streams/<name>.graph.json`, and placed by reference where they were, so editing inside the subgraph edits that stream everywhere it is placed, and it runs only where it is placed. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` of the new stream, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`) and the UUID its placement gives it. Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document and takes the new stream out again, refused while another stream places it.
    *
    * Since contract version 1, stable.
    */
@@ -3975,14 +3975,14 @@ export interface ControlOperations {
     result: GraphTransactionToolResult;
   };
   /**
-   * Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+   * Unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
    *
-   * Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.
+   * Unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. A placed stream's nodes come back as a copy under new UUIDs that no edit of that stream then reaches, and the stream stays in the project, running as its own stream once nothing places it. Refused for a node of the subgraph named as a node of the level is; undo gives back the exact earlier graph document.
    *
-   * Since contract version 1, stable.
+   * Since contract version 2, stable.
    */
-  unlock_generator_fragment: {
-    params: UnlockGeneratorFragmentRequest;
+  unlock_subgraph: {
+    params: UnlockSubgraphRequest;
     result: GraphTransactionToolResult;
   };
   /**
@@ -4587,7 +4587,7 @@ export type ControlOperationMethodName = keyof ControlOperations;
 export type ControlNotificationMethodName = keyof ControlNotifications;
 
 /** The contract version this package was generated from. */
-export declare const CONTROL_CONTRACT_VERSION: 1;
+export declare const CONTROL_CONTRACT_VERSION: 2;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

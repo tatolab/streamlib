@@ -110,7 +110,7 @@ pub struct GraphRequest {
 pub struct TransactRequest {
     /// The operations, applied in order and whole or not at all.
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_generator_fragment` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     pub operations: Vec<StreamGraphAction>,
     /// Whether the edit is kept.
@@ -546,9 +546,9 @@ pub struct CollapseSelectionIntoSubgraphRequest {
         description = "The nodes collapsed, each by its UUID, all of the level `level` names and none of that level's own `GraphInput` or `GraphOutput` nodes."
     )]
     pub nodes: Vec<String>,
-    /// The subgraph node's name, cast to lowercase URL-safe and refused when a node outside the selection has it.
+    /// The subgraph node's name, and the new stream's.
     #[schemars(
-        description = "The subgraph node's name, cast to lowercase URL-safe and refused when a node outside the selection has it."
+        description = "The subgraph node's name, cast to lowercase URL-safe, and the new stream's, `streams/<name>.graph.json`; refused when a node outside the selection or a stream of the project has it."
     )]
     pub name: String,
     /// Whether the edit is kept.
@@ -562,10 +562,10 @@ pub struct CollapseSelectionIntoSubgraphRequest {
     pub idempotency_key: Option<String>,
 }
 
-/// `unlock_generator_fragment`'s params.
+/// `unlock_subgraph`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct UnlockGeneratorFragmentRequest {
+pub struct UnlockSubgraphRequest {
     /// The stream asset the edit is in.
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     pub stream: Uuid,
@@ -573,9 +573,9 @@ pub struct UnlockGeneratorFragmentRequest {
     /// level when omitted.
     #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
     pub level: Option<Vec<Uuid>>,
-    /// The fragment node, by its UUID.
+    /// The subgraph node, by its UUID.
     #[schemars(
-        description = "The fragment node, by its UUID: a graph generator's or a collapsed selection's, never a placed stream's."
+        description = "The subgraph node, by its UUID: one holding a graph generator's output, or one placing a stream, whose nodes come back as a copy under new UUIDs."
     )]
     pub fragment: String,
     /// Whether the edit is kept.

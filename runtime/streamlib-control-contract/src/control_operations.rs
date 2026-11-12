@@ -41,13 +41,13 @@ use crate::control_operation_requests::{
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
     SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
     SetStudioFieldsRequest, SubscribeProjectChangesRequest, TransactRequest, UndoOrRedoRequest,
-    UnlockGeneratorFragmentRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
     WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 use crate::control_operation_results::{DiscoverResult, SubscribeProjectChangesResult};
 
 /// The contract's version: bumped only by a breaking change to an operation already in it.
-pub const CONTROL_CONTRACT_VERSION: u32 = 1;
+pub const CONTROL_CONTRACT_VERSION: u32 = 2;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -400,7 +400,7 @@ impl ControlOperation for CollapseSelectionIntoSubgraph {
     type Result = GraphTransactionToolResult;
     const METHOD_NAME: &'static str = "collapse_selection_into_subgraph";
     const ONE_LINE_DOC: &'static str = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction: an authored fragment holding the nodes and the links between them, which no refresh touches and whose inside is edited like any graph. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` inside it, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`). Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document.";
+    const AGENT_USAGE_NOTE: &'static str = "Collapse nodes of one level of a loaded stream, its own or the subgraph `level` names, into one subgraph node, as one transaction with `mode` `commit`: the nodes and the links between them are saved as a new stream of the project, `streams/<name>.graph.json`, and placed by reference where they were, so editing inside the subgraph edits that stream everywhere it is placed, and it runs only where it is placed. Each link that crossed the selection is carried through a `GraphInput` or `GraphOutput` of the new stream, named `<node>-<port>` and of the family the running stream declares at the link's source, so the stream runs the same nodes, each under the subgraph's name (`sub/blur`) and the UUID its placement gives it. Answers as `transact` does, the subgraph node under `added_nodes`; undo gives back the exact earlier graph document and takes the new stream out again, refused while another stream places it.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
@@ -410,16 +410,16 @@ impl ControlOperation for CollapseSelectionIntoSubgraph {
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
 }
 
-/// `unlock_generator_fragment`: unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
-pub struct UnlockGeneratorFragment;
+/// `unlock_subgraph`: unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.
+pub struct UnlockSubgraph;
 
-impl ControlOperation for UnlockGeneratorFragment {
-    type Request = UnlockGeneratorFragmentRequest;
+impl ControlOperation for UnlockSubgraph {
+    type Request = UnlockSubgraphRequest;
     type Result = GraphTransactionToolResult;
-    const METHOD_NAME: &'static str = "unlock_generator_fragment";
-    const ONE_LINE_DOC: &'static str = "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Unlock a fragment node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. Refused for a placed stream, and for a node of the fragment named as a node of the stream is; undo gives back the exact earlier graph document.";
-    const SINCE_CONTRACT_VERSION: u32 = 1;
+    const METHOD_NAME: &'static str = "unlock_subgraph";
+    const ONE_LINE_DOC: &'static str = "Unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Unlock a subgraph node of one level of a loaded stream, its own or the subgraph `level` names, as one transaction: its nodes and the links between them become plain nodes of its level, its `GraphInput` and `GraphOutput` nodes go, and each link into or out of one of its ports is carried straight to the node it fed or read. A graph generator's output unlocked this way is no longer refreshed. A placed stream's nodes come back as a copy under new UUIDs that no edit of that stream then reaches, and the stream stays in the project, running as its own stream once nothing places it. Refused for a node of the subgraph named as a node of the level is; undo gives back the exact earlier graph document.";
+    const SINCE_CONTRACT_VERSION: u32 = 2;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
@@ -1434,7 +1434,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<AddGroup>(),
     ControlOperationDeclaration::of::<SetGroupFields>(),
     ControlOperationDeclaration::of::<CollapseSelectionIntoSubgraph>(),
-    ControlOperationDeclaration::of::<UnlockGeneratorFragment>(),
+    ControlOperationDeclaration::of::<UnlockSubgraph>(),
     ControlOperationDeclaration::of::<AddNote>(),
     ControlOperationDeclaration::of::<SetNoteFields>(),
     ControlOperationDeclaration::of::<RemoveNote>(),
@@ -1532,8 +1532,8 @@ pub enum ControlOperationCall {
     SetGroupFields(SetGroupFieldsRequest),
     /// A `collapse_selection_into_subgraph` call.
     CollapseSelectionIntoSubgraph(CollapseSelectionIntoSubgraphRequest),
-    /// A `unlock_generator_fragment` call.
-    UnlockGeneratorFragment(UnlockGeneratorFragmentRequest),
+    /// A `unlock_subgraph` call.
+    UnlockSubgraph(UnlockSubgraphRequest),
     /// A `add_note` call.
     AddNote(AddNoteRequest),
     /// A `set_note_fields` call.
@@ -1726,8 +1726,8 @@ impl ControlOperationCall {
                 the_request_of::<CollapseSelectionIntoSubgraph>(params)
                     .map(Self::CollapseSelectionIntoSubgraph)
             }
-            UnlockGeneratorFragment::METHOD_NAME => {
-                the_request_of::<UnlockGeneratorFragment>(params).map(Self::UnlockGeneratorFragment)
+            UnlockSubgraph::METHOD_NAME => {
+                the_request_of::<UnlockSubgraph>(params).map(Self::UnlockSubgraph)
             }
             AddNote::METHOD_NAME => the_request_of::<AddNote>(params).map(Self::AddNote),
             SetNoteFields::METHOD_NAME => {
@@ -1902,7 +1902,7 @@ impl ControlOperationCall {
             Self::AddGroup(_) => AddGroup::METHOD_NAME,
             Self::SetGroupFields(_) => SetGroupFields::METHOD_NAME,
             Self::CollapseSelectionIntoSubgraph(_) => CollapseSelectionIntoSubgraph::METHOD_NAME,
-            Self::UnlockGeneratorFragment(_) => UnlockGeneratorFragment::METHOD_NAME,
+            Self::UnlockSubgraph(_) => UnlockSubgraph::METHOD_NAME,
             Self::AddNote(_) => AddNote::METHOD_NAME,
             Self::SetNoteFields(_) => SetNoteFields::METHOD_NAME,
             Self::RemoveNote(_) => RemoveNote::METHOD_NAME,

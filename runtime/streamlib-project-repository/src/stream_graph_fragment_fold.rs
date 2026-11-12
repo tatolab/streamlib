@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! A selection of a stream's nodes folded into one authored fragment, and a fragment unfolded
-//! back into the plain nodes it holds.
+//! A selection of a stream's nodes saved as a stream of its own and placed where they were, and
+//! a fragment unfolded back into the plain nodes it holds.
 
 use std::collections::HashSet;
 
@@ -10,16 +10,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
 use crate::stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphDocument, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
-    StreamGraphDocumentNode, is_a_graph_interface_node_type, node_name_of, node_uuid_of,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
+    STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    is_a_graph_interface_node_type, node_name_of, node_uuid_of,
 };
-
-/// The `type` of a fragment node a person authored by collapsing a selection: it names no graph
-/// generator, so no refresh touches it.
-pub const AUTHORED_FRAGMENT_NODE_TYPE: &str = "tatolab.project:AuthoredFragment";
 
 /// A node or a link as the stream's own level of a graph document holds it, at its position
 /// among that level's nodes or links.
@@ -33,7 +31,8 @@ pub struct StreamGraphDocumentValueAtItsPosition {
 
 /// One fragment node of the stream's own level and the plain nodes it stands for: folded, the
 /// level holds `fragment` and `fragment_links`; unfolded, it holds `nodes` and `links`. Each at
-/// the position it takes, so folding and unfolding give back the exact document.
+/// the position it takes, so folding and unfolding give back the exact document. A fragment node
+/// placing a stream holds only its reference; the nodes it stands for are that stream's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct StreamGraphFragmentFold {
     /// The fragment node, its `fragment` holding what it places.
@@ -64,20 +63,31 @@ impl StreamGraphFragmentFold {
     }
 }
 
+/// A selection of a stream's nodes collapsed into a subgraph: the new stream's graph document,
+/// and the fold placing that stream where the nodes were.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreamGraphSelectionCollapsedIntoAPlacedStream {
+    /// The graph document of the new stream, holding its stream asset's UUID under `asset`.
+    pub placed_stream_document: Value,
+    /// The fold of the selection into the fragment node placing the new stream.
+    pub fold: StreamGraphFragmentFold,
+}
+
 impl StreamGraphDocument {
-    /// The fold of the nodes `nodes`, each of the stream's own level, into a new authored
-    /// fragment node `fragment` named `fragment_name`: each link between two of them kept inside
-    /// it, and each link that crossed the selection carried through a `GraphInput` or
-    /// `GraphOutput` node inside it, of the family `family_of_an_output_port` reads at the link's
-    /// source.
-    pub fn the_fold_of_nodes_into_an_authored_fragment(
+    /// The collapse of the nodes `nodes`, each of this level, into a new stream of the project,
+    /// the stream asset `placed_stream`, placed by a new fragment node `fragment` named
+    /// `fragment_name`: each link between two of them kept in the new stream, and each link that
+    /// crossed the selection carried through a `GraphInput` or `GraphOutput` node of it, of the
+    /// family `family_of_an_output_port` reads at the link's source.
+    pub fn the_collapse_of_nodes_into_a_placed_stream(
         &self,
         nodes: &[Uuid],
         fragment: Uuid,
         fragment_name: &str,
+        placed_stream: Uuid,
         family_of_an_output_port: &dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, String>,
         new_node_uuid: &mut dyn FnMut() -> Uuid,
-    ) -> Result<StreamGraphFragmentFold, String> {
+    ) -> Result<StreamGraphSelectionCollapsedIntoAPlacedStream, String> {
         if nodes.is_empty() {
             return Err("a selection collapsed into a subgraph holds at least one node".to_owned());
         }
@@ -222,42 +232,62 @@ impl StreamGraphDocument {
             }
         }
 
-        let mut fragment_nodes: Vec<Value> =
+        let mut placed_stream_nodes: Vec<Value> =
             folded_nodes.iter().map(|node| node.value.clone()).collect();
-        fragment_nodes.extend(interface_nodes);
+        for node in placed_stream_nodes
+            .iter_mut()
+            .filter_map(Value::as_object_mut)
+        {
+            if let Some(Value::Object(studio)) = node.get_mut("studio") {
+                studio.remove(crate::stream_graph_document::STUDIO_GROUP_KEY);
+            }
+        }
+        placed_stream_nodes.extend(interface_nodes);
         let fragment_node = StreamGraphDocumentNode {
             id: fragment,
             name: fragment_name.to_owned(),
-            node_type: AUTHORED_FRAGMENT_NODE_TYPE.to_owned(),
-            config: Value::Object(Map::new()),
+            node_type: STREAM_FRAGMENT_NODE_TYPE.to_owned(),
+            config: json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: {
+                "asset": placed_stream.to_string(),
+            }}),
             pins: Map::new(),
             exposed_config_fields: Vec::new(),
             studio: Default::default(),
-            fragment: Some(Box::new(
-                json!({ "nodes": fragment_nodes, "links": inner_links }),
-            )),
+            fragment: None,
         };
         let first_link_position = folded_links
             .first()
             .map_or(self.link_values().len(), |link| link.position);
-        Ok(StreamGraphFragmentFold {
-            fragment: StreamGraphDocumentValueAtItsPosition {
-                position: folded_nodes[0].position,
-                value: serde_json::to_value(&fragment_node)
-                    .map_err(|not_written| format!("the subgraph does not write: {not_written}"))?,
+        Ok(StreamGraphSelectionCollapsedIntoAPlacedStream {
+            placed_stream_document: json!({
+                STREAM_DOCUMENT_ASSET_KEY: placed_stream.to_string(),
+                "nodes": placed_stream_nodes,
+                "links": inner_links,
+            }),
+            fold: StreamGraphFragmentFold {
+                fragment: StreamGraphDocumentValueAtItsPosition {
+                    position: folded_nodes[0].position,
+                    value: serde_json::to_value(&fragment_node).map_err(|not_written| {
+                        format!("the subgraph does not write: {not_written}")
+                    })?,
+                },
+                fragment_links: at_positions_from(first_link_position, fragment_links),
+                nodes: folded_nodes,
+                links: folded_links,
             },
-            fragment_links: at_positions_from(first_link_position, fragment_links),
-            nodes: folded_nodes,
-            links: folded_links,
         })
     }
 
     /// The fold the fragment node `fragment` of the stream's own level unfolds: its nodes as
     /// plain nodes of the level, its `GraphInput` and `GraphOutput` nodes gone, and each link
     /// into or out of one of its ports carried straight to the node its interface fed or read.
+    /// A node placing a stream unfolds a copy of the document `document_of_the_placed_stream`
+    /// reads from its config's `stream`, each node and group under a UUID `new_uuid` makes.
     pub fn the_fold_a_fragment_unfolds(
         &self,
         fragment: Uuid,
+        document_of_the_placed_stream: &dyn Fn(&Value) -> Result<StreamGraphDocument, String>,
+        new_uuid: &mut dyn FnMut() -> Uuid,
     ) -> Result<StreamGraphFragmentFold, String> {
         let (fragment_position, fragment_value) = self
             .node_values_of_the_level()
@@ -268,15 +298,24 @@ impl StreamGraphDocument {
         let fragment_object = fragment_value
             .as_object()
             .ok_or("a node is a JSON object")?;
-        if fragment_object.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
-            return Err(format!(
-                "node {fragment} places another stream, read from that stream's document at \
-                 each load, and is not unlocked"
-            ));
-        }
-        let stored = fragment_object
-            .get("fragment")
-            .ok_or_else(|| format!("node {fragment} is not a fragment"))?;
+        let copy_of_the_placed_stream;
+        let stored = if fragment_object.get("type").and_then(Value::as_str)
+            == Some(STREAM_FRAGMENT_NODE_TYPE)
+        {
+            let held_stream = fragment_object
+                .get("config")
+                .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
+                .ok_or_else(|| format!("node {fragment} names no stream it places"))?;
+            copy_of_the_placed_stream = a_copy_under_new_uuids(
+                document_of_the_placed_stream(held_stream)?.to_value(),
+                new_uuid,
+            );
+            &copy_of_the_placed_stream
+        } else {
+            fragment_object
+                .get("fragment")
+                .ok_or_else(|| format!("node {fragment} is not a fragment"))?
+        };
         let inner_node_values: Vec<&Value> =
             stored["nodes"].as_array().into_iter().flatten().collect();
         let inner_uuid_of_the_name = |named: &str| -> Option<Uuid> {
@@ -500,6 +539,36 @@ impl StreamGraphDocument {
         }
         Ok(())
     }
+}
+
+/// The nodes and links of `level`'s own level, each node under a UUID `new_uuid` makes and each
+/// link end following its node's; a node's membership of one of `level`'s groups is left behind
+/// with the groups.
+fn a_copy_under_new_uuids(level: Value, new_uuid: &mut dyn FnMut() -> Uuid) -> Value {
+    let mut new_uuid_of_each_held_node = std::collections::HashMap::new();
+    let mut nodes = level["nodes"].as_array().cloned().unwrap_or_default();
+    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
+        if let Some(Value::String(id)) = node.get_mut("id") {
+            let fresh = new_uuid().to_string();
+            new_uuid_of_each_held_node.insert(id.clone(), fresh.clone());
+            *id = fresh;
+        }
+        if let Some(Value::Object(studio)) = node.get_mut("studio") {
+            studio.remove(crate::stream_graph_document::STUDIO_GROUP_KEY);
+        }
+    }
+    let mut links = level["links"].as_array().cloned().unwrap_or_default();
+    for link in &mut links {
+        for end_key in ["source", "target"] {
+            if let Some(Value::String(node)) =
+                link.get_mut(end_key).and_then(|end| end.get_mut("node"))
+                && let Some(fresh) = new_uuid_of_each_held_node.get(node.as_str())
+            {
+                *node = fresh.clone();
+            }
+        }
+    }
+    json!({ "nodes": nodes, "links": links })
 }
 
 fn push_the_end_under(

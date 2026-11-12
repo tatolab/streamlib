@@ -132,7 +132,7 @@ pub struct StreamGraphDocumentGroup {
 }
 
 /// The `studio` key a node names its labelled group's UUID under.
-const STUDIO_GROUP_KEY: &str = "group";
+pub(crate) const STUDIO_GROUP_KEY: &str = "group";
 
 /// The graph document's key holding its labelled groups.
 const GROUPS_KEY: &str = "groups";
@@ -239,12 +239,11 @@ pub enum StreamGraphOperation {
     FoldIntoFragment { fold: StreamGraphFragmentFold },
     /// The fold's fragment node was replaced with the plain nodes and links it stands for.
     UnfoldFragment { fold: StreamGraphFragmentFold },
-    /// `edit` was made inside the authored fragment node `fragment` of this level, each link of
-    /// this level in `port_links_taken_out` taken out and each in `port_links_put_back` put
-    /// back, at its position.
-    EditInsideFragment {
-        fragment: Uuid,
-        edit: Box<StreamGraphOperation>,
+    /// The links of this level onto the ports of each node placing the stream asset
+    /// `placed_stream` followed an edit inside that stream: each in `port_links_taken_out` taken
+    /// out and each in `port_links_put_back` put back, at its position.
+    CarryTheLinksOntoThePortsOfAPlacedStream {
+        placed_stream: Uuid,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         port_links_taken_out: Vec<StreamGraphDocumentValueAtItsPosition>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -312,14 +311,12 @@ impl StreamGraphOperation {
             },
             Self::FoldIntoFragment { fold } => Self::UnfoldFragment { fold },
             Self::UnfoldFragment { fold } => Self::FoldIntoFragment { fold },
-            Self::EditInsideFragment {
-                fragment,
-                edit,
+            Self::CarryTheLinksOntoThePortsOfAPlacedStream {
+                placed_stream,
                 port_links_taken_out,
                 port_links_put_back,
-            } => Self::EditInsideFragment {
-                fragment,
-                edit: Box::new(edit.inverse()),
+            } => Self::CarryTheLinksOntoThePortsOfAPlacedStream {
+                placed_stream,
                 port_links_taken_out: port_links_put_back,
                 port_links_put_back: port_links_taken_out,
             },
@@ -369,44 +366,24 @@ impl StreamGraphOperation {
                 fold.fragment_node().unwrap_or_default(),
                 fold.fragment_name()
             ),
-            Self::EditInsideFragment { fragment, edit, .. } => {
-                format!("inside {fragment}: {}", edit.summary())
+            Self::CarryTheLinksOntoThePortsOfAPlacedStream { placed_stream, .. } => {
+                format!("carry_the_links_onto_the_ports_of_the_placed_stream {placed_stream}")
             }
         }
     }
 
-    /// The operation as made at its own level, with the path of fragment nodes from the stream's
-    /// own level to that level: an `EditInsideFragment`'s edit, or this operation at an empty
-    /// path.
-    pub fn the_edit_at_its_own_level(&self) -> (Vec<Uuid>, &StreamGraphOperation) {
-        let mut level = Vec::new();
-        let mut edit = self;
-        while let Self::EditInsideFragment {
-            fragment,
-            edit: inner,
-            ..
-        } = edit
-        {
-            level.push(*fragment);
-            edit = inner;
+    /// Whether a running stream can take the operation only once the project's graph documents
+    /// hold it: it places a stream, or follows an edit inside one, and a running stream places a
+    /// stream as that stream's document is on disk.
+    pub fn reaches_a_running_stream_once_the_documents_hold_it(&self) -> bool {
+        match self {
+            Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => {
+                fold.fragment.value.get("type").and_then(Value::as_str)
+                    == Some(STREAM_FRAGMENT_NODE_TYPE)
+            }
+            Self::CarryTheLinksOntoThePortsOfAPlacedStream { .. } => true,
+            _ => false,
         }
-        (level, edit)
-    }
-
-    /// [`Self::the_edit_at_its_own_level`], the edit to change in place.
-    pub fn the_edit_at_its_own_level_mut(&mut self) -> (Vec<Uuid>, &mut StreamGraphOperation) {
-        let mut level = Vec::new();
-        let mut edit = self;
-        while let Self::EditInsideFragment {
-            fragment,
-            edit: inner,
-            ..
-        } = edit
-        {
-            level.push(*fragment);
-            edit = inner;
-        }
-        (level, edit)
     }
 
     /// The node the operation acts on; none for an operation on a labelled group.
@@ -421,8 +398,8 @@ impl StreamGraphOperation {
             | Self::RefreshFragment { node, .. }
             | Self::SetExposedConfigFields { node, .. } => Some(*node),
             Self::FoldIntoFragment { fold } | Self::UnfoldFragment { fold } => fold.fragment_node(),
-            Self::EditInsideFragment { edit, .. } => edit.node(),
             Self::AddGroup { .. }
+            | Self::CarryTheLinksOntoThePortsOfAPlacedStream { .. }
             | Self::SetGroupFields { .. }
             | Self::RemoveGroup { .. }
             | Self::AddNote { .. }
@@ -461,7 +438,6 @@ impl StreamGraphOperation {
                     );
                 }
             }
-            Self::EditInsideFragment { edit, .. } => return edit.configs_it_sets(),
             _ => {}
         }
         configs
@@ -513,6 +489,7 @@ impl StreamGraphDocument {
         };
         let node_values = array_under("nodes")?;
         let link_values = array_under("links")?;
+        refuse_a_node_of_a_tatolab_type_holding_an_inline_graph(&node_values)?;
         let mut document = Self {
             node_values,
             link_values,
@@ -807,14 +784,12 @@ impl StreamGraphDocument {
                 &fold.nodes,
                 &fold.links,
             ),
-            StreamGraphOperation::EditInsideFragment {
-                fragment,
-                edit,
+            StreamGraphOperation::CarryTheLinksOntoThePortsOfAPlacedStream {
+                placed_stream,
                 port_links_taken_out,
                 port_links_put_back,
-            } => self.apply_the_edit_inside_a_fragment(
-                *fragment,
-                edit,
+            } => self.carry_the_links_onto_the_ports_of_a_placed_stream(
+                *placed_stream,
                 port_links_taken_out,
                 port_links_put_back,
             ),
@@ -1275,6 +1250,45 @@ fn groups_with_each_uuid_kept_by_its_title(
 /// The `type` of a fragment node that references a stream, this project's or an import's, whose
 /// graph each load reads from that stream's document.
 pub const STREAM_FRAGMENT_NODE_TYPE: &str = "tatolab.project:StreamFragment";
+
+/// The namespace of the node types the runtime itself defines, none of which is a graph
+/// generator, so none holds an inline graph of its own.
+const NODE_TYPE_NAMESPACE_THE_RUNTIME_DEFINES: &str = "tatolab.";
+
+/// Refused for a node at any level of `node_values` holding an inline `fragment` under a node
+/// type the runtime defines: only a graph generator's frozen output is held inline, and a
+/// subgraph is a stream of the project a stream fragment places.
+fn refuse_a_node_of_a_tatolab_type_holding_an_inline_graph(
+    node_values: &[Value],
+) -> Result<(), String> {
+    for node_object in node_values.iter().filter_map(Value::as_object) {
+        let Some(fragment) = node_object.get("fragment") else {
+            continue;
+        };
+        let node_type = node_object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if node_type.starts_with(NODE_TYPE_NAMESPACE_THE_RUNTIME_DEFINES)
+            && node_type != STREAM_FRAGMENT_NODE_TYPE
+        {
+            return Err(format!(
+                "node {} `{}` of type `{node_type}` holds an inline subgraph, which only a graph \
+                 generator's output holds; a subgraph is a stream of the project placed with a \
+                 `{STREAM_FRAGMENT_NODE_TYPE}` node",
+                node_object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                node_name_of(node_object).unwrap_or_default()
+            ));
+        }
+        if let Some(inner_nodes) = fragment.get("nodes").and_then(Value::as_array) {
+            refuse_a_node_of_a_tatolab_type_holding_an_inline_graph(inner_nodes)?;
+        }
+    }
+    Ok(())
+}
 
 /// The config key of a stream's fragment node naming the stream it holds.
 pub const STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: &str = "stream";
