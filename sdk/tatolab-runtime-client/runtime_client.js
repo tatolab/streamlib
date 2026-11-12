@@ -35,11 +35,11 @@ export class TatolabRuntimeControlClient {
   #unfinishedLineFromTheRuntime = "";
   #whyTheConnectionClosed = undefined;
 
-  static async connect({ socketPath, clientName }) {
-    const upgradedSocket = await upgradeAControlStreamConnection(socketPath, clientName);
+  static async connect({ socketPath, clientName, signal }) {
+    const upgradedSocket = await upgradeAControlStreamConnection(socketPath, clientName, signal);
     const client = new TatolabRuntimeControlClient(upgradedSocket.socket, upgradedSocket.bytesAlreadyRead);
     try {
-      client.discovered = await client.call("discover", { contract_version: CONTROL_CONTRACT_VERSION });
+      client.discovered = await client.call("discover", { contract_version: CONTROL_CONTRACT_VERSION }, { signal });
     } catch (discoverRefusal) {
       await client.close();
       throw discoverRefusal;
@@ -67,13 +67,33 @@ export class TatolabRuntimeControlClient {
     }
   }
 
-  call(method, params) {
+  call(method, params, { signal, resultReviver } = {}) {
     if (this.#upgradedSocket.destroyed || this.#upgradedSocket.writableEnded) {
       return Promise.reject(new Error(`the control connection is closed; \`${method}\` was not sent`));
     }
+    if (signal?.aborted) {
+      return Promise.reject(signal.reason);
+    }
     const requestId = this.#nextRequestId++;
     return new Promise((resolveResult, rejectResult) => {
-      this.#callsAwaitingAnAnswerById.set(requestId, { method, resolveResult, rejectResult });
+      const forgetTheCallWhenAborted = () => {
+        this.#callsAwaitingAnAnswerById.delete(requestId);
+        rejectResult(signal.reason);
+      };
+      const stopListeningForAnAbort = () => signal?.removeEventListener("abort", forgetTheCallWhenAborted);
+      signal?.addEventListener("abort", forgetTheCallWhenAborted, { once: true });
+      this.#callsAwaitingAnAnswerById.set(requestId, {
+        method,
+        resultReviver,
+        resolveResult: (result) => {
+          stopListeningForAnAbort();
+          resolveResult(result);
+        },
+        rejectResult: (whyNoResult) => {
+          stopListeningForAnAbort();
+          rejectResult(whyNoResult);
+        },
+      });
       this.#upgradedSocket.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params })}\n`);
     });
   }
@@ -126,8 +146,10 @@ export class TatolabRuntimeControlClient {
     this.#callsAwaitingAnAnswerById.delete(message.id);
     if (message.error !== undefined) {
       callAwaitingThisAnswer.rejectResult(new ControlOperationError(callAwaitingThisAnswer.method, message.error));
-    } else {
+    } else if (callAwaitingThisAnswer.resultReviver === undefined) {
       callAwaitingThisAnswer.resolveResult(message.result);
+    } else {
+      callAwaitingThisAnswer.resolveResult(resultOfTheAnswerRevivedWith(line, callAwaitingThisAnswer.resultReviver));
     }
   }
 
@@ -139,7 +161,11 @@ export class TatolabRuntimeControlClient {
   }
 }
 
-export function callOneControlOperation({ socketPath, clientName }, method, params) {
+function resultOfTheAnswerRevivedWith(answerText, resultReviver) {
+  return JSON.parse(answerText, resultReviver).result;
+}
+
+export function callOneControlOperation({ socketPath, clientName }, method, params, { signal, resultReviver } = {}) {
   const requestBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
   return new Promise((resolveResult, rejectResult) => {
     const postRequest = sendAnHttpRequest(
@@ -147,6 +173,7 @@ export function callOneControlOperation({ socketPath, clientName }, method, para
         socketPath,
         path: CONTROL_JSON_RPC_ROUTE_PATH,
         method: "POST",
+        signal,
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(requestBody),
@@ -155,6 +182,7 @@ export function callOneControlOperation({ socketPath, clientName }, method, para
         },
       },
       (postResponse) => {
+        postResponse.once("error", (responseError) => rejectResult(signal?.aborted ? signal.reason : responseError));
         let answerText = "";
         postResponse.setEncoding("utf8");
         postResponse.on("data", (answerTextPart) => {
@@ -173,17 +201,17 @@ export function callOneControlOperation({ socketPath, clientName }, method, para
           if (answer.error !== undefined) {
             rejectResult(new ControlOperationError(method, answer.error));
           } else {
-            resolveResult(answer.result);
+            resolveResult(resultReviver === undefined ? answer.result : resultOfTheAnswerRevivedWith(answerText, resultReviver));
           }
         });
       },
     );
-    postRequest.once("error", rejectResult);
+    postRequest.once("error", (requestError) => rejectResult(signal?.aborted ? signal.reason : requestError));
     postRequest.end(requestBody);
   });
 }
 
-function upgradeAControlStreamConnection(socketPath, clientName) {
+function upgradeAControlStreamConnection(socketPath, clientName, signal) {
   return new Promise((resolveUpgradedSocket, rejectUpgrade) => {
     const upgradeRequest = sendAnHttpRequest({
       socketPath,
@@ -196,10 +224,19 @@ function upgradeAControlStreamConnection(socketPath, clientName) {
         [CONTROL_CLIENT_NAME_HEADER_NAME]: clientName,
       },
     });
+    if (signal?.aborted) {
+      rejectUpgrade(signal.reason);
+      return;
+    }
+    const giveUpTheUpgradeWhenAborted = () => upgradeRequest.destroy();
+    signal?.addEventListener("abort", giveUpTheUpgradeWhenAborted, { once: true });
+    const stopListeningForAnAbort = () => signal?.removeEventListener("abort", giveUpTheUpgradeWhenAborted);
     upgradeRequest.once("upgrade", (_upgradeResponse, socket, bytesAlreadyRead) => {
+      stopListeningForAnAbort();
       resolveUpgradedSocket({ socket, bytesAlreadyRead });
     });
     upgradeRequest.once("response", (refusalResponse) => {
+      stopListeningForAnAbort();
       let refusalWords = "";
       refusalResponse.setEncoding("utf8");
       refusalResponse.on("data", (refusalText) => {
@@ -213,7 +250,10 @@ function upgradeAControlStreamConnection(socketPath, clientName) {
         );
       });
     });
-    upgradeRequest.once("error", rejectUpgrade);
+    upgradeRequest.once("error", (upgradeError) => {
+      stopListeningForAnAbort();
+      rejectUpgrade(signal?.aborted ? signal.reason : upgradeError);
+    });
     upgradeRequest.end();
   });
 }

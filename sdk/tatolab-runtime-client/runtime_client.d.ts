@@ -10,12 +10,35 @@ import type {
   ProjectActionRefusalOnTheWire,
 } from "./control_contract.js";
 
+/** The parts of an `AbortSignal` the client listens to; a DOM or Node `AbortSignal` is one. */
+export interface ControlOperationAbortSignal {
+  readonly aborted: boolean;
+  readonly reason: unknown;
+  addEventListener(type: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: () => void): void;
+}
+
+/** The source text `JSON.parse` hands a reviver beside a primitive value. */
+export interface ControlOperationResultReviverContext {
+  readonly source?: string;
+}
+
+/** How one call waits and reads its answer. */
+export interface ControlOperationCallOptions {
+  /** Aborting it rejects the call with the signal's reason and drops a late answer. */
+  signal?: ControlOperationAbortSignal;
+  /** Parses the answer with this `JSON.parse` reviver, so a caller can keep a number's digits as written; each value in the result is what the reviver returned for it. */
+  resultReviver?: (key: string, value: unknown, context?: ControlOperationResultReviverContext) => unknown;
+}
+
 /** How to reach a runtime's local API and who the client is. */
 export interface TatolabRuntimeControlClientConnectOptions {
   /** The runtime's local API socket. */
   socketPath: string;
   /** The client's name, the author of a change it sends with no author. */
   clientName: string;
+  /** Aborting it before the connection is open closes it and rejects with the signal's reason; it has no effect after. */
+  signal?: ControlOperationAbortSignal;
 }
 
 /** A JSON-RPC error the runtime answered a call with, in the runtime's own words. */
@@ -32,9 +55,10 @@ export declare class ControlOperationError extends Error {
 
 /** Call one operation in one `POST` to the runtime's control route; a subscription needs a {@link TatolabRuntimeControlClient}. */
 export declare function callOneControlOperation<Method extends ControlOperationMethodName>(
-  options: TatolabRuntimeControlClientConnectOptions,
+  connectOptions: TatolabRuntimeControlClientConnectOptions,
   method: Method,
   params: ControlOperations[Method]["params"],
+  callOptions?: ControlOperationCallOptions,
 ): Promise<ControlOperations[Method]["result"]>;
 
 /** One connection to a runtime's control API, upgraded on its local API socket. */
@@ -47,6 +71,7 @@ export declare class TatolabRuntimeControlClient {
   call<Method extends ControlOperationMethodName>(
     method: Method,
     params: ControlOperations[Method]["params"],
+    callOptions?: ControlOperationCallOptions,
   ): Promise<ControlOperations[Method]["result"]>;
   /** Hear each notification of `method` the connection is sent; the returned function stops it. */
   onNotification<Method extends ControlNotificationMethodName>(
