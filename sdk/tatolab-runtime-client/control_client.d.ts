@@ -32,6 +32,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   subscribe_stream_action_changes(params?: ControlOperations["subscribe_stream_action_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_stream_action_changes"]["result"]>;
   /**
+   * Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
+   */
+  subscribe_project_log_records(params: ControlOperations["subscribe_project_log_records"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_project_log_records"]["result"]>;
+  /**
    * Describe this runtime: its version, its build id, how long it has been up and where it logs.
    */
   describe_runtime(params?: ControlOperations["describe_runtime"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_runtime"]["result"]>;
@@ -331,4 +335,8 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * Hear each `stream_action_changed` the connection is sent, checked against the contract; the returned function stops it. A stream action changed, which `describe_stream_action` describes, or `missed`.
    */
   on_stream_action_changed(listener: (params: ControlNotifications["stream_action_changed"]) => void): () => void;
+  /**
+   * Hear each `project_log_records_written` the connection is sent, checked against the contract; the returned function stops it. A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.
+   */
+  on_project_log_records_written(listener: (params: ControlNotifications["project_log_records_written"]) => void): () => void;
 }

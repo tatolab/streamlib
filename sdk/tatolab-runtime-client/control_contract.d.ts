@@ -177,6 +177,29 @@ export interface SubscribeStreamActionChangesResult {
 }
 
 /**
+ * `subscribe_project_log_records`' params.
+ */
+export interface SubscribeProjectLogRecordsRequest {
+  /**
+   * The projects, by absolute directory, whose new log records the connection is told of;
+   * refused when empty or when one is relative.
+   */
+  project_directories: Array<string>;
+}
+
+/**
+ * What `subscribe_project_log_records` answers: the projects the connection is now told of new
+ * log records of.
+ */
+export interface SubscribeProjectLogRecordsResult {
+  /**
+   * Every project the connection is subscribed to, by its directory as the connection spelled
+   * it, this call's among them.
+   */
+  project_directories: Array<string>;
+}
+
+/**
  * `describe_runtime`'s params: none.
  */
 export type DescribeRuntimeRequest = Record<string, never>;
@@ -3794,6 +3817,27 @@ export interface StreamActionChangedNotificationParams {
 export type StreamActionChangeKindOnTheWire = "changed" | "missed";
 
 /**
+ * `project_log_records_written`'s params.
+ */
+export interface ProjectLogRecordsWrittenNotificationParams {
+  /**
+   * The project, by its directory as the connection spelled it to
+   * `subscribe_project_log_records`; once for each spelling of one project subscribed.
+   */
+  project_directory: string;
+  /**
+   * `written`, or `missed` when the connection fell behind; either way the client reads `logs`
+   * on from its cursor.
+   */
+  change: ProjectLogRecordsChangeKindOnTheWire;
+}
+
+/**
+ * What a `project_log_records_written` tells of a project's log.
+ */
+export type ProjectLogRecordsChangeKindOnTheWire = "written" | "missed";
+
+/**
  * `list_operation_groups`' params: none.
  */
 export type ListOperationGroupsRequest = Record<string, never>;
@@ -3980,6 +4024,17 @@ export interface ControlOperations {
   subscribe_stream_action_changes: {
     params: SubscribeStreamActionChangesRequest;
     result: SubscribeStreamActionChangesResult;
+  };
+  /**
+   * Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
+   *
+   * Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+   *
+   * Since contract version 2, experimental.
+   */
+  subscribe_project_log_records: {
+    params: SubscribeProjectLogRecordsRequest;
+    result: SubscribeProjectLogRecordsResult;
   };
   /**
    * Describe this runtime: its version, its build id, how long it has been up and where it logs.
@@ -4793,6 +4848,12 @@ export interface ControlNotifications {
    * Since contract version 2, experimental.
    */
   stream_action_changed: StreamActionChangedNotificationParams;
+  /**
+   * A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.
+   *
+   * Since contract version 2, experimental.
+   */
+  project_log_records_written: ProjectLogRecordsWrittenNotificationParams;
 }
 
 /** A method name the runtime serves. */

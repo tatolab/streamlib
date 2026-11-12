@@ -10,6 +10,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "subscribe_project_changes",
   "subscribe_stream_graph_changes",
   "subscribe_stream_action_changes",
+  "subscribe_project_log_records",
   "describe_runtime",
   "list_streams",
   "graph",

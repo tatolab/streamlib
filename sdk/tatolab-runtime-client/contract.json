@@ -187,6 +187,49 @@
       "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
+      "name": "subscribe_project_log_records",
+      "summary": "Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.",
+      "description": "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscribeProjectLogRecordsRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "subscribe_project_log_records_result",
+        "schema": {
+          "$ref": "#/components/schemas/SubscribeProjectLogRecordsResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
       "name": "describe_runtime",
       "summary": "Describe this runtime: its version, its build id, how long it has been up and where it logs.",
       "description": "Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>.<per-build nonce>`, telling two builds of one version apart), `up_for_ms`, the monotonic milliseconds since its engine started — a restart resets it — and `runtime_log_directory`, the folder its own log is written to, `null` when it keeps none. Names no stream.",
@@ -3415,6 +3458,27 @@
         "studio",
         "public"
       ]
+    },
+    {
+      "name": "project_log_records_written",
+      "summary": "A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ProjectLogRecordsWrittenNotificationParams"
+          }
+        }
+      ],
+      "x-subscribed-by": "subscribe_project_log_records",
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
     }
   ],
   "x-agent-discovery-tools": [
@@ -3737,6 +3801,39 @@
           "actions_under_way"
         ],
         "description": "What `subscribe_stream_action_changes` answers: the actions under way when the subscription\nbegan, which the client describes once to follow from."
+      },
+      "SubscribeProjectLogRecordsRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_directories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The projects, by absolute directory, whose new log records the connection is told of;\nrefused when empty or when one is relative."
+          }
+        },
+        "required": [
+          "project_directories"
+        ],
+        "description": "`subscribe_project_log_records`' params."
+      },
+      "SubscribeProjectLogRecordsResult": {
+        "type": "object",
+        "properties": {
+          "project_directories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every project the connection is subscribed to, by its directory as the connection spelled\nit, this call's among them."
+          }
+        },
+        "required": [
+          "project_directories"
+        ],
+        "description": "What `subscribe_project_log_records` answers: the projects the connection is now told of new\nlog records of."
       },
       "DescribeRuntimeRequest": {
         "type": "object",
@@ -10100,6 +10197,39 @@
           }
         ],
         "description": "What happened to the stream actions a connection follows."
+      },
+      "ProjectLogRecordsWrittenNotificationParams": {
+        "type": "object",
+        "properties": {
+          "project_directory": {
+            "type": "string",
+            "description": "The project, by its directory as the connection spelled it to\n`subscribe_project_log_records`; once for each spelling of one project subscribed."
+          },
+          "change": {
+            "$ref": "#/components/schemas/ProjectLogRecordsChangeKindOnTheWire",
+            "description": "`written`, or `missed` when the connection fell behind; either way the client reads `logs`\non from its cursor."
+          }
+        },
+        "required": [
+          "project_directory",
+          "change"
+        ],
+        "description": "`project_log_records_written`'s params."
+      },
+      "ProjectLogRecordsChangeKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "written",
+            "description": "The runtime wrote new records to the project's log."
+          },
+          {
+            "type": "string",
+            "const": "missed",
+            "description": "The connection fell behind and may have missed a write."
+          }
+        ],
+        "description": "What a `project_log_records_written` tells of a project's log."
       },
       "ListOperationGroupsRequest": {
         "type": "object",

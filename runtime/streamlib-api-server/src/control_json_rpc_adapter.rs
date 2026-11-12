@@ -22,9 +22,10 @@ use streamlib_control_contract::{
     CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATION_FAILED_ERROR_CODE,
     CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlNotification, ControlOperationCall,
     ControlOperationCallParseRefusal, ProjectChangeKindOnTheWire, ProjectChanged,
-    ProjectChangedNotificationParams, StreamActionChangeKindOnTheWire, StreamActionChanged,
-    StreamActionChangedNotificationParams, StreamGraphChangeKindOnTheWire, StreamGraphChanged,
-    StreamGraphChangedNotificationParams,
+    ProjectChangedNotificationParams, ProjectLogRecordsChangeKindOnTheWire,
+    ProjectLogRecordsWritten, ProjectLogRecordsWrittenNotificationParams,
+    StreamActionChangeKindOnTheWire, StreamActionChanged, StreamActionChangedNotificationParams,
+    StreamGraphChangeKindOnTheWire, StreamGraphChanged, StreamGraphChangedNotificationParams,
 };
 use streamlib_project_repository::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
@@ -219,6 +220,12 @@ async fn serve_control_json_rpc_over_a_websocket(
         outgoing_message_sender.clone(),
         connection_ended.clone(),
     ));
+    tokio::spawn(send_project_log_writes_until_the_connection_ends(
+        streamlib::sdk::logging::listen_for_each_project_log_written(),
+        Arc::clone(&subscriptions),
+        outgoing_message_sender.clone(),
+        connection_ended.clone(),
+    ));
     tokio::spawn(
         send_stream_graph_and_action_changes_until_the_connection_ends(
             Arc::clone(&dispatcher.operations_on_the_loaded_streams),
@@ -352,6 +359,59 @@ async fn send_project_changes_until_the_connection_ends(
         };
         for params in notifications {
             if send_a_notification::<ProjectChanged>(&outgoing_message_sender, params)
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    }
+}
+
+/// Send each write of a subscribed project's log as a `project_log_records_written` notification
+/// until the connection ends.
+async fn send_project_log_writes_until_the_connection_ends(
+    mut project_log_writes: tokio::sync::broadcast::Receiver<std::path::PathBuf>,
+    subscriptions: Arc<ControlSubscriptionsOfOneConnection>,
+    outgoing_message_sender: mpsc::Sender<Value>,
+    connection_ended: CancellationToken,
+) {
+    loop {
+        let received = tokio::select! {
+            () = connection_ended.cancelled() => return,
+            received = project_log_writes.recv() => received,
+        };
+        let notifications: Vec<ProjectLogRecordsWrittenNotificationParams> = match received {
+            Ok(project_directory_with_symlinks_resolved) => subscriptions
+                .the_project_log_as_subscribed(&project_directory_with_symlinks_resolved)
+                .into_iter()
+                .map(
+                    |project_directory| ProjectLogRecordsWrittenNotificationParams {
+                        project_directory,
+                        change: ProjectLogRecordsChangeKindOnTheWire::Written,
+                    },
+                )
+                .collect(),
+            Err(RecvError::Lagged(missed_project_log_write_count)) => {
+                tracing::debug!(
+                    missed_project_log_write_count,
+                    "a control WebSocket fell behind the project log writes; every subscribed project is sent `missed`"
+                );
+                subscriptions
+                    .every_subscribed_project_log()
+                    .into_iter()
+                    .map(
+                        |project_directory| ProjectLogRecordsWrittenNotificationParams {
+                            project_directory,
+                            change: ProjectLogRecordsChangeKindOnTheWire::Missed,
+                        },
+                    )
+                    .collect()
+            }
+            Err(RecvError::Closed) => return,
+        };
+        for params in notifications {
+            if send_a_notification::<ProjectLogRecordsWritten>(&outgoing_message_sender, params)
                 .await
                 .is_err()
             {

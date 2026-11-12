@@ -698,6 +698,101 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
 // logs
 // ============================================================================
 
+/// A subscriber to a project's log, through a symlink to it, is told `project_log_records_written`
+/// naming the project as it spelled it once a record it emits is written, and `logs` then reads
+/// that record; a project it did not subscribe to is never named.
+///
+/// Mental-revert: without the drain worker's announcement the wait below times out, without the
+/// connection's filter the other project's write is sent, and naming the project with symlinks
+/// resolved sends a directory the subscriber never named.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_log_subscriber_is_told_each_write_and_reads_the_new_record_with_logs() {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let another_project_directory = tempfile::tempdir().expect("another project directory");
+    let engine = Runner::new().expect("the engine builds");
+    let stream = engine
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "logged",
+        ))
+        .expect("the stream loads");
+    let stream_of_another_project = engine
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            another_project_directory.path(),
+            "elsewhere",
+        ))
+        .expect("the other stream loads");
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        Arc::clone(&engine) as Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    )
+    .await;
+    let symlinks_directory = tempfile::tempdir().expect("a directory for a symlink");
+    let project_directory_through_a_symlink = symlinks_directory.path().join("logged-project");
+    std::os::unix::fs::symlink(
+        project_directory.path(),
+        &project_directory_through_a_symlink,
+    )
+    .expect("the symlink to the project is made");
+    let project_directory_as_subscribed = project_directory_through_a_symlink.display().to_string();
+    let mut subscriber = served.control_websocket().await;
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_log_records",
+                      "params": { "project_directories": [project_directory_as_subscribed] } }),
+        )
+        .await;
+    assert_eq!(
+        the_next_answer_but_its_notifications(&mut subscriber).await["result"],
+        json!({ "project_directories": [project_directory_as_subscribed] })
+    );
+
+    stream_of_another_project.log_route().run_entered(|| {
+        tracing::info!("project-log-push-token-of-another-project");
+    });
+    stream_of_another_project
+        .log_route()
+        .write_every_record_it_emitted_and_sync();
+    stream.log_route().run_entered(|| {
+        tracing::info!("project-log-push-token");
+    });
+    stream.log_route().write_every_record_it_emitted_and_sync();
+
+    let mut project_log_writes_told = Vec::new();
+    while let Ok(written) = tokio::time::timeout(
+        Duration::from_secs(1),
+        the_next_notification_under(&mut subscriber, "project_log_records_written"),
+    )
+    .await
+    {
+        project_log_writes_told.push(written);
+    }
+    assert!(
+        project_log_writes_told.contains(
+            &json!({ "project_directory": project_directory_as_subscribed, "change": "written" })
+        ),
+        "{project_log_writes_told:?}"
+    );
+    assert!(
+        project_log_writes_told
+            .iter()
+            .all(|written| written["project_directory"] == project_directory_as_subscribed.as_str()),
+        "{project_log_writes_told:?}"
+    );
+    let page = served
+        .control_call(
+            "logs",
+            json!({ "project_directory": project_directory_as_subscribed }),
+        )
+        .await;
+    let messages: Vec<&str> = page["result"]["records"]
+        .as_array()
+        .expect("a records array")
+        .iter()
+        .filter_map(|record| record["message"].as_str())
+        .collect();
+    assert!(messages.contains(&"project-log-push-token"), "{page}");
+}
+
 /// `logs` reads a project's log from disk: `stream` narrows it to one of the
 /// project's streams, `count` bounds a page, `next_after` reads on, and the
 /// records stay readable once the stream is unloaded.

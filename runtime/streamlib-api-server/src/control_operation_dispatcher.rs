@@ -24,6 +24,7 @@ use streamlib_control_contract::{
     RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetStudioFieldsRequest,
     SubscribeProjectChangesRequest, SubscribeProjectChangesResult,
+    SubscribeProjectLogRecordsRequest, SubscribeProjectLogRecordsResult,
     SubscribeStreamActionChangesRequest, SubscribeStreamActionChangesResult,
     SubscribeStreamGraphChangesRequest, SubscribeStreamGraphChangesResult, TransactRequest,
     UnlockSubgraphRequest,
@@ -87,6 +88,8 @@ pub(crate) enum ControlOperationAnswer {
     Discover(DiscoverResult),
     /// `subscribe_project_changes`'.
     SubscribeProjectChanges(SubscribeProjectChangesResult),
+    /// `subscribe_project_log_records`'.
+    SubscribeProjectLogRecords(SubscribeProjectLogRecordsResult),
     /// `subscribe_stream_graph_changes`'.
     SubscribeStreamGraphChanges(SubscribeStreamGraphChangesResult),
     /// `subscribe_stream_action_changes`'.
@@ -224,6 +227,12 @@ impl ControlOperationDispatcher {
                 projects,
             }) => subscribe_to_project_changes(projects, request_origin)
                 .map(ControlOperationAnswer::SubscribeProjectChanges),
+            ControlOperationCall::SubscribeProjectLogRecords(
+                SubscribeProjectLogRecordsRequest {
+                    project_directories,
+                },
+            ) => subscribe_to_project_log_records(project_directories, request_origin)
+                .map(ControlOperationAnswer::SubscribeProjectLogRecords),
             ControlOperationCall::SubscribeStreamGraphChanges(
                 SubscribeStreamGraphChangesRequest { streams },
             ) => self
@@ -1319,6 +1328,41 @@ fn subscribe_to_project_changes(
     }
     Ok(SubscribeProjectChangesResult {
         projects: subscriptions.subscribe_to_the_projects(projects),
+    })
+}
+
+fn subscribe_to_project_log_records(
+    project_directories: Vec<std::path::PathBuf>,
+    request_origin: &ControlRequestOrigin,
+) -> Result<SubscribeProjectLogRecordsResult, ControlOperationRefusal> {
+    let subscriptions = the_subscriptions_of_the_connection_a_subscription_arrived_on(
+        "subscribe_project_log_records",
+        request_origin,
+    )?;
+    if project_directories.is_empty() {
+        return Err(ControlOperationRefusal::Failed(
+            "subscribe_project_log_records failed: `project_directories` names no project"
+                .to_owned(),
+        ));
+    }
+    for project_directory in &project_directories {
+        refuse_a_relative_project_directory(project_directory).map_err(|why| {
+            ControlOperationRefusal::Failed(format!("subscribe_project_log_records failed: {why}"))
+        })?;
+    }
+    let project_directories_as_subscribed_and_with_symlinks_resolved = project_directories
+        .into_iter()
+        .map(|project_directory| {
+            let project_directory_with_symlinks_resolved =
+                std::fs::canonicalize(&project_directory)
+                    .unwrap_or_else(|_| project_directory.clone());
+            (project_directory, project_directory_with_symlinks_resolved)
+        })
+        .collect();
+    Ok(SubscribeProjectLogRecordsResult {
+        project_directories: subscriptions.subscribe_to_the_project_logs(
+            project_directories_as_subscribed_and_with_symlinks_resolved,
+        ),
     })
 }
 

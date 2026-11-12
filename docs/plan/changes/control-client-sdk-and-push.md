@@ -170,6 +170,16 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   resource. That broadcast reports a lag but not which ids it skipped, so on a lag
   `stream_action_changed` carries `missed` and the client calls `describe_stream_action` for
   each action it follows.
+- **Push for a project's new log records.** The contract gains
+  `subscribe_project_log_records(project_directories)` and the notification
+  `project_log_records_written` (`{ project_directory, change }`, where `change` is `written` or
+  `missed`), so Studio's log view follows a project's log without its 1.5 s `logs` read (owner,
+  2026-11-12). The engine's log drain worker announces each project whose log it handed new
+  records to the OS, once per flush, at most every 100 ms, on one process-wide broadcast; each
+  connection sends it for the projects it subscribed to, matched with symlinks resolved and named
+  by the directory the connection spelled, and the client reads `logs` on from its cursor. The notification carries no records,
+  so a burst of writes costs one read. The names and the record-free notification are the
+  implementer's (session, 2026-11-12).
 - **The change feed as a control operation.** `read_project_changes { project_directory }`
   answers a project's change feed as its MCP resource renders it, opening the project as
   `list_assets` does. A client reads it once, and again after `missed`, and `project_changed`

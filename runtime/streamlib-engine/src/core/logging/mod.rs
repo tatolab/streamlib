@@ -24,7 +24,7 @@ pub use project_log_route::RUNTIME_OWN_LOG_INSTANCE_NAME;
 pub(crate) use project_log_route::TheRuntimesOwnLogWhileItsEngineLives;
 pub use project_log_route::{
     ProjectLogRoute, ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread,
-    carrying_this_threads_project_log_route_entry,
+    carrying_this_threads_project_log_route_entry, listen_for_each_project_log_written,
     run_in_the_project_log_route_entry_when_there_is_one,
     the_project_log_route_entry_of_this_thread,
 };

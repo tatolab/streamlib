@@ -185,12 +185,14 @@ impl ProjectLogFilesWrittenSinceTheirLastFlush {
     fn flush_each(&mut self) {
         for route in self.0.drain(..) {
             route.flush_the_records_pending_in_the_jsonl_log_file();
+            route.announce_its_log_written();
         }
     }
 
     fn flush_and_fsync_each(&mut self) {
         for route in self.0.drain(..) {
             route.flush_and_fsync_the_jsonl_log_file();
+            route.announce_its_log_written();
         }
     }
 }

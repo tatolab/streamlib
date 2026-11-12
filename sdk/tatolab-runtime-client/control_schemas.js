@@ -83,6 +83,16 @@ const SubscribeStreamActionChangesResult = z.looseObject({
   actions_under_way: z.array(z.string()),
 });
 
+/** @type {z.ZodType<ControlContract.SubscribeProjectLogRecordsRequest>} */
+const SubscribeProjectLogRecordsRequest = z.strictObject({
+  project_directories: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeProjectLogRecordsResult>} */
+const SubscribeProjectLogRecordsResult = z.looseObject({
+  project_directories: z.array(z.string()),
+});
+
 /** @type {z.ZodType<ControlContract.DescribeRuntimeRequest>} */
 const DescribeRuntimeRequest = z.strictObject({});
 
@@ -1369,6 +1379,15 @@ const StreamActionChangedNotificationParams = z.looseObject({
   action: z.string().nullable().optional(),
 });
 
+/** @type {z.ZodType<ControlContract.ProjectLogRecordsChangeKindOnTheWire>} */
+const ProjectLogRecordsChangeKindOnTheWire = z.union([z.literal("written"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.ProjectLogRecordsWrittenNotificationParams>} */
+const ProjectLogRecordsWrittenNotificationParams = z.looseObject({
+  project_directory: z.string(),
+  change: ProjectLogRecordsChangeKindOnTheWire,
+});
+
 /** @type {z.ZodType<ControlContract.ListOperationGroupsRequest>} */
 const ListOperationGroupsRequest = z.strictObject({});
 
@@ -1445,6 +1464,8 @@ export const ControlSchemas = Object.freeze({
     SubscribeStreamGraphChangesResult,
     SubscribeStreamActionChangesRequest,
     SubscribeStreamActionChangesResult,
+    SubscribeProjectLogRecordsRequest,
+    SubscribeProjectLogRecordsResult,
     DescribeRuntimeRequest,
     DescribeRuntimeToolResult,
     ListStreamsRequest,
@@ -1595,6 +1616,8 @@ export const ControlSchemas = Object.freeze({
     NodeStateOnTheWire,
     StreamActionChangedNotificationParams,
     StreamActionChangeKindOnTheWire,
+    ProjectLogRecordsWrittenNotificationParams,
+    ProjectLogRecordsChangeKindOnTheWire,
     ListOperationGroupsRequest,
     ListOperationGroupsResult,
     AgentOperationGroup,
@@ -1623,6 +1646,10 @@ export const ControlSchemas = Object.freeze({
     subscribe_stream_action_changes: Object.freeze({
       params: SubscribeStreamActionChangesRequest,
       result: SubscribeStreamActionChangesResult,
+    }),
+    subscribe_project_log_records: Object.freeze({
+      params: SubscribeProjectLogRecordsRequest,
+      result: SubscribeProjectLogRecordsResult,
     }),
     describe_runtime: Object.freeze({
       params: DescribeRuntimeRequest,
@@ -1917,5 +1944,6 @@ export const ControlSchemas = Object.freeze({
     project_changed: ProjectChangedNotificationParams,
     stream_graph_changed: StreamGraphChangedNotificationParams,
     stream_action_changed: StreamActionChangedNotificationParams,
+    project_log_records_written: ProjectLogRecordsWrittenNotificationParams,
   }),
 });
