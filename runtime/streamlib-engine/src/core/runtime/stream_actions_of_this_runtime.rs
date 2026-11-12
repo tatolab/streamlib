@@ -173,6 +173,11 @@ impl ProjectAsALoadReadsIt {
         let asset_uuids_the_project_holds =
             every_asset_uuid_the_project_holds(&project_directory, project_file.project)
                 .map_err(refused)?;
+        refuse_streams_whose_graph_documents_share_a_node_uuid(
+            &project_directory,
+            &stream_documents,
+            &asset_uuids_the_project_holds,
+        )?;
         Ok(Self {
             project_directory,
             project_file,
@@ -213,6 +218,52 @@ impl ProjectAsALoadReadsIt {
             ),
         }
     }
+}
+
+/// Refuse a project two of whose stream graph documents hold a node of one UUID, naming both
+/// documents, since a node's UUID keys the values it keeps in the project's store.
+fn refuse_streams_whose_graph_documents_share_a_node_uuid(
+    project_directory: &Path,
+    stream_documents: &[ProjectStreamDocument],
+    asset_uuids_the_project_holds: &BTreeSet<Uuid>,
+) -> Result<()> {
+    let mut document_and_node_path_of_each_node_uuid: HashMap<Uuid, (String, String)> =
+        HashMap::new();
+    for stream_document in stream_documents {
+        let Ok(graph) = the_graph_a_stream_document_holds(
+            project_directory,
+            stream_document,
+            asset_uuids_the_project_holds,
+        ) else {
+            continue;
+        };
+        for (node_path, node) in graph.nodes_at_every_level() {
+            let Some(node_uuid) = node.id else {
+                continue;
+            };
+            match document_and_node_path_of_each_node_uuid.get(&node_uuid) {
+                Some((first_document_path, first_node_path))
+                    if *first_document_path != stream_document.path.to_string() =>
+                {
+                    return Err(Error::Configuration(format!(
+                        "the project in {} was not loaded: its graph documents \
+                         `{first_document_path}` and `{}` both hold the node {node_uuid} \
+                         (`{first_node_path}` and `{node_path}`), and a node's UUID keys the \
+                         values it keeps, so each stream's nodes need UUIDs of their own; a \
+                         copied graph document keeps the UUIDs of the one it was copied from",
+                        project_directory.display(),
+                        stream_document.path,
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    document_and_node_path_of_each_node_uuid
+                        .insert(node_uuid, (stream_document.path.to_string(), node_path));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// One stream asset a load read: where it lives, its name, and the graph its document holds
@@ -5693,6 +5744,35 @@ mod tests {
             failed_because
                 .contains("`streams/camera.graph.json` holds no UUID as the `id` of `source`"),
             "{failed_because}"
+        );
+        assert!(runner.ids_of_the_loaded_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_project_two_of_whose_graph_documents_share_a_node_uuid_is_refused_naming_both() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv().given_a_venv();
+        project.write_the_graph_document(the_graph_of_a_stream_named("camera"));
+        let camera_document: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(project.graph_document_path_of("camera")).unwrap(),
+        )
+        .unwrap();
+        let mut copied_by_hand = the_graph_of_a_stream_named("camera-copy");
+        copied_by_hand["nodes"][0]["id"] = camera_document["nodes"][0]["id"].clone();
+        project.write_the_graph_document(copied_by_hand);
+
+        let refusal = runner
+            .load_the_project_off_its_queue(project.run_request())
+            .expect_err("two streams holding one node UUID refuse the load")
+            .to_string();
+
+        assert!(
+            refusal.contains("`streams/camera.graph.json`")
+                && refusal.contains("`streams/camera-copy.graph.json`")
+                && refusal.contains(camera_document["nodes"][0]["id"].as_str().unwrap()),
+            "{refusal}"
         );
         assert!(runner.ids_of_the_loaded_streams().is_empty());
     }
