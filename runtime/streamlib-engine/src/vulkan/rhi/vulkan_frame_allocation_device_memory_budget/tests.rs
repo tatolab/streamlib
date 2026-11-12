@@ -452,7 +452,7 @@ fn the_metal_working_set_refuses_past_the_recommended_maximum_less_the_headroom_
 #[test]
 fn a_budget_left_with_no_room_by_a_test_refuses_every_frame() {
     let gate = FrameAllocationDeviceMemoryBudgetGate::new();
-    gate.leave_no_room_in_any_budget_for_this_test();
+    let _budget_left_with_no_room = gate.leave_no_room_in_any_budget_for_this_test();
     for reading in [
         roomy_reading_of_one_heap(64_000 * BYTES_PER_MEBIBYTE, 0),
         roomy_reading_of_one_heap(64_000 * BYTES_PER_MEBIBYTE, 32_000 * BYTES_PER_MEBIBYTE),

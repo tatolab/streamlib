@@ -326,12 +326,33 @@ impl FrameAllocationDeviceMemoryBudgetGate {
         allocate_the_frame()
     }
 
-    /// From now on, weigh every frame allocation on this gate against a budget
-    /// lowered to its usage.
+    /// Until the returned guard drops, weigh every frame allocation on this
+    /// gate against a budget lowered to its usage.
     #[cfg(test)]
-    pub(crate) fn leave_no_room_in_any_budget_for_this_test(&self) {
+    pub(crate) fn leave_no_room_in_any_budget_for_this_test(
+        &self,
+    ) -> FrameAllocationBudgetLeftWithNoRoomUntilDropped<'_> {
         self.every_budget_left_with_no_room_by_a_test
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        FrameAllocationBudgetLeftWithNoRoomUntilDropped {
+            every_budget_left_with_no_room_by_a_test: &self
+                .every_budget_left_with_no_room_by_a_test,
+        }
+    }
+}
+
+/// Gives a gate's budgets their room back when dropped.
+#[cfg(test)]
+#[must_use = "the budget gets its room back as soon as this guard drops"]
+pub(crate) struct FrameAllocationBudgetLeftWithNoRoomUntilDropped<'gate> {
+    every_budget_left_with_no_room_by_a_test: &'gate std::sync::atomic::AtomicBool,
+}
+
+#[cfg(test)]
+impl Drop for FrameAllocationBudgetLeftWithNoRoomUntilDropped<'_> {
+    fn drop(&mut self) {
+        self.every_budget_left_with_no_room_by_a_test
+            .store(false, std::sync::atomic::Ordering::SeqCst);
     }
 }
 

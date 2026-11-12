@@ -4294,12 +4294,15 @@ impl HostVulkanDevice {
         &self.metal_working_set_of_the_device
     }
 
-    /// From now on, weigh every frame allocation on this device against a
-    /// budget lowered to its usage, so the next one is refused.
+    /// Until the returned guard drops, weigh every frame allocation on this
+    /// device against a budget lowered to its usage, so each one is refused.
     #[cfg(test)]
-    pub(crate) fn leave_no_room_in_any_frame_allocation_budget_for_this_test(&self) {
+    pub(crate) fn leave_no_room_in_any_frame_allocation_budget_for_this_test(
+        &self,
+    ) -> super::vulkan_frame_allocation_device_memory_budget::FrameAllocationBudgetLeftWithNoRoomUntilDropped<'_>
+{
         self.frame_allocation_device_memory_budget_gate
-            .leave_no_room_in_any_budget_for_this_test();
+            .leave_no_room_in_any_budget_for_this_test()
     }
 
     /// `VkPhysicalDeviceIDProperties::deviceUUID` queried at construction.
@@ -5256,7 +5259,8 @@ mod tests {
                 TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
             );
 
-        device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
+        let _frame_allocation_budget_left_with_no_room =
+            device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
         let blocks_before_the_refusal = device_memory_blocks_the_allocator_holds();
         let refusal = device
             .create_texture(&frame_descriptor)
@@ -5482,7 +5486,8 @@ mod tests {
             "a device that allocates no frame through any constructor has nothing to weigh"
         );
 
-        device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
+        let _frame_allocation_budget_left_with_no_room =
+            device.leave_no_room_in_any_frame_allocation_budget_for_this_test();
         for (expected_frame_allocation_site, allocate_one_frame, heap_the_allocation_lands_on) in
             heap_each_frame_constructors_allocation_lands_on
         {

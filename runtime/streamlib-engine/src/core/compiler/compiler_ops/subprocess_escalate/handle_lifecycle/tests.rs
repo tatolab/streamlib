@@ -1231,7 +1231,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
         .collect();
     let requested_shape = the_64x32_rgba8_unorm_one_off_texture_shape();
 
-    sandbox
+    let _frame_allocation_budget_left_with_no_room = sandbox
         .host_inner()
         .device()
         .inner

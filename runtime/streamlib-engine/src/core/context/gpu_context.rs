@@ -6943,7 +6943,8 @@ mod tests {
             .device_memory_heap_of_memory_type(pool_memory_type_index)
             .expect("the slot's memory type is one of the device's");
 
-        gpu.device()
+        let _frame_allocation_budget_left_with_no_room = gpu
+            .device()
             .inner
             .leave_no_room_in_any_frame_allocation_budget_for_this_test();
         let acquire_started = std::time::Instant::now();

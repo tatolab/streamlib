@@ -10,6 +10,10 @@ use crate::host_rhi::HostTextureExt;
 use super::command_queue::RhiCommandQueue;
 use super::texture::{Texture, TextureDescriptor};
 
+/// The process's one GPU device. Two live Vulkan devices in one process crash
+/// MoltenVK and NVIDIA's Linux driver.
+static PROCESS_GPU_DEVICE: std::sync::Mutex<Option<GpuDevice>> = std::sync::Mutex::new(None);
+
 /// Platform-agnostic GPU device wrapper.
 ///
 /// This type wraps the platform-specific device implementation and provides
@@ -37,8 +41,21 @@ impl GpuDevice {
     // stays Host-free. Engine RHI helpers and in-tree adapters
     // `use crate::host_rhi::HostGpuDeviceExt;` to surface it.
 
-    /// Create a new GPU device using the system default.
+    /// The process's one GPU device, created on the first call; every later
+    /// or concurrent call returns that same device.
     pub fn new() -> Result<Self> {
+        let mut process_gpu_device = PROCESS_GPU_DEVICE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(process_gpu_device) = process_gpu_device.as_ref() {
+            return Ok(process_gpu_device.clone());
+        }
+        let created_gpu_device = Self::create_the_process_gpu_device()?;
+        *process_gpu_device = Some(created_gpu_device.clone());
+        Ok(created_gpu_device)
+    }
+
+    fn create_the_process_gpu_device() -> Result<Self> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let device_arc = crate::vulkan::rhi::HostVulkanDevice::new()?;
@@ -51,18 +68,15 @@ impl GpuDevice {
                 RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
 
-            // Store a global reference for external-handle import. The import
-            // trait (RhiPixelBufferImport::from_external_handle) is a static
-            // method with no device parameter, so the global bridges that gap.
+            if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .set(std::sync::Arc::clone(&device_arc))
+                .is_err()
             {
-                if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
-                    .set(std::sync::Arc::clone(&device_arc))
-                    .is_err()
-                {
-                    tracing::warn!(
-                        "VULKAN_DEVICE_FOR_IMPORT already set (duplicate GpuDevice::new() call)"
-                    );
-                }
+                return Err(crate::core::Error::GpuError(
+                    "the external-handle import device was set before the process's GPU device \
+                     was created"
+                        .into(),
+                ));
             }
 
             Ok(Self {

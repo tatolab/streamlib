@@ -22,7 +22,7 @@ use super::vulkan_frame_allocation_device_memory_budget::DeviceMemoryBudgetAdmis
 /// Process-global HostVulkanDevice reference for external-handle import —
 /// DMA-BUF on Linux, IOSurface on macOS.
 ///
-/// Set once during [`GpuDevice::new()`]. The import trait
+/// Set once, when [`GpuDevice::new()`] creates the process's one device. The import trait
 /// (`RhiPixelBufferImport::from_external_handle`) is a static method with no
 /// device parameter, so this global bridges that gap.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
