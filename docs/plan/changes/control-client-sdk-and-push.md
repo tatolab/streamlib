@@ -137,20 +137,26 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
     - The loopback listener otherwise serves only what `loopback_http_listener.rs` serves today.
 - **Push for a loaded stream's live graph.** The contract gains
   `subscribe_stream_graph_changes(streams)` and the notification `stream_graph_changed`
-  (`{ stream, change }`, where `change` is `edited`, `node_state_changed` or
-  `playback_state_changed`, with the node and its new state where one applies).
+  (`{ stream, change }`, where `change` is `edited`, `node_state_changed`,
+  `playback_state_changed` or `missed`, with the node and its new state where one applies).
   - The adapter reads it from `PUBSUB`, the engine's one event system, on each subscribed
     stream's topic: `GraphDidChange`, the playback events, and `ProcessorStateDidChange`.
-  - The engine starts publishing `ProcessorStateDidChange` from
-    `StateComponent::transition_to_only_from`, its one state-change point, rather than through
-    a second channel.
+  - The engine starts publishing `ProcessorStateDidChange` from `ObservableProcessorState`
+    (`state_component.rs`), which holds every write of a processor's state: `transition_to`,
+    `transition_to_only_from`, `transition_to_unless_already_failed` and
+    `fail_with_reason_and_capture_device`, the last covering every failure. `StateComponent`
+    only forwards to it. No second channel.
   - A full queue drops an event in `PUBSUB` (`bus.rs:116`). The adapter then sends
     `stream_graph_changed` with `change: "missed"`, and the client reads the graph again, as
-    `project_changed` does for a lagged feed.
+    `project_changed` does for a lagged feed. `PUBSUB` counts a drop per subscription but tells
+    the listener nothing, so how the adapter learns of one is [NEEDS DECISION] 4.
+  - A stream loaded again gets a new stream tag and so a new topic
+    (`runtime.rs:3830`). How a subscription follows it is [NEEDS DECISION] 5.
 - **Push for stream actions.** The contract gains `subscribe_stream_action_changes` and
   `stream_action_changed` (`{ action }`), read from the stream-action queue's broadcast
   (`project_stream_action_queue.rs:232`), so a client follows an action without the MCP
-  resource.
+  resource. That broadcast reports a lag but not which ids it skipped; how a client recovers is
+  [NEEDS DECISION] 6.
 
 ## MODIFIED
 
@@ -204,7 +210,10 @@ The other polls (log, listing, status line, runtime description) are named under
 1. The generated client: schemas, methods, `on_<notification>`, the message builders, and
    both transports over the existing adapter, with `ControlWebSocketTransport` arriving with
    step 2. Studio can adopt it over `POST /control` at once.
-2. `/control/ws` on the socket. `/control/stream` is removed in the same PR.
+2. `/control/ws` on the socket. `/control/stream` is removed in the same PR, with no
+   compatibility route (pre-1.0, no shims). Its callers are the generated client, which moves
+   to `/control/ws` in that PR, and Studio's `RuntimeViewerControlConnection`, which stays on its
+   pinned streamlib commit until the app change moves it.
 3. `stream_graph_changed` with `ProcessorStateDidChange` published, and `stream_action_changed`.
    Studio drops the graph poll and `/mcp/stdio` here.
 4. The loopback listener for `/control/ws`, with the token and `Origin` gate.
@@ -230,3 +239,14 @@ sits under step 6, "One control API contract", as its next step.
    and no ecosystem.
 3. **Studio's transport.** (a) WebSocket on the socket for everything, recommended, as you
    asked. (b) `POST /control` for calls and WebSocket only for push.
+4. **How the adapter learns of a `PUBSUB` drop.** (a) `PUBSUB` hands a listener the count of
+   events it lost at its next delivery, an extension of the one event system, recommended.
+   (b) No drop signal; Studio re-reads the graph on reconnect only, and a dropped event leaves
+   it stale until the next one.
+5. **A subscription across a reload.** (a) A subscription names stream ids; when one is loaded
+   again, the adapter moves to the new topic and sends `change: "missed"` so the client reads
+   the graph again, recommended. (b) A reload ends the subscription with a notification, and
+   the client subscribes again.
+6. **A missed stream action.** (a) On a lag, `stream_action_changed` carries `missed` and the
+   client calls `describe_stream_action` for each action it follows, recommended. (b) The
+   notification carries no recovery; a client polls the actions it follows after a lag.
