@@ -534,6 +534,28 @@ impl Drop for VulkanLogicalDeviceDestroyedUnlessTaken {
     }
 }
 
+/// The device number of `physical_device`'s DRM render node, or `None` when it
+/// advertises no `VK_EXT_physical_device_drm` or has no render node.
+#[cfg(target_os = "linux")]
+fn drm_render_node_number_of_the_physical_device(
+    instance: &vulkanalia::Instance,
+    physical_device: vk::PhysicalDevice,
+    advertises_physical_device_drm: bool,
+) -> Option<drm_modifier_probe::DrmRenderNodeNumber> {
+    if !advertises_physical_device_drm {
+        return None;
+    }
+    let mut drm_properties = vk::PhysicalDeviceDrmPropertiesEXT::builder().build();
+    let mut properties2 = vk::PhysicalDeviceProperties2::builder()
+        .push_next(&mut drm_properties)
+        .build();
+    unsafe { instance.get_physical_device_properties2(physical_device, &mut properties2) };
+    (drm_properties.has_render == vk::TRUE).then_some(drm_modifier_probe::DrmRenderNodeNumber {
+        major: drm_properties.render_major,
+        minor: drm_properties.render_minor,
+    })
+}
+
 /// Whether `physical_device` can export a timeline semaphore as an OPAQUE_FD.
 #[cfg(target_os = "linux")]
 fn physical_device_exports_an_opaque_fd_timeline_semaphore(
@@ -1192,11 +1214,18 @@ impl HostVulkanDevice {
         // is skipped, which makes render-target DMA-BUF allocations refuse
         // with an error rather than silently picking a sampler-only modifier.
         // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`. The table
-        // is the EGL default display's, not this device's, so a device that
-        // exports no DMA-BUF takes none of it.
+        // is the EGL device's on this device's render node, and a device that
+        // exports no DMA-BUF takes none.
         #[cfg(target_os = "linux")]
         let drm_modifier_table = if supports_dma_buf_export {
-            match drm_modifier_probe::default_display_drm_modifier_table_probed_once_per_process() {
+            let render_node = drm_render_node_number_of_the_physical_device(
+                instance,
+                physical_device,
+                available_device_ext_names.contains(&c"VK_EXT_physical_device_drm"),
+            );
+            match drm_modifier_probe::drm_modifier_table_of_the_render_node_probed_once_per_process(
+                render_node,
+            ) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!(

@@ -4,7 +4,8 @@
 //! EGL probe for DRM format modifiers (render-target-capable and
 //! sampler-only).
 //!
-//! Queries `eglQueryDmaBufModifiersEXT` on a host EGL display and partitions
+//! Queries `eglQueryDmaBufModifiersEXT` on the EGL device whose DRM render
+//! node is the Vulkan device's, and partitions
 //! the returned modifiers by the `external_only` flag — `external_only=FALSE`
 //! lands in the render-target list (safe to bind as `GL_TEXTURE_2D` and use
 //! as an FBO color attachment), `external_only=TRUE` lands in the
@@ -21,12 +22,19 @@
 //! a fallback path (typically: refuse to allocate a render-target image and
 //! surface a `GpuError`).
 //!
-//! The probe runs once per process and every caller shares its answer. It never
-//! terminates the default display, and it keeps libEGL loaded.
+//! `EGL_DEFAULT_DISPLAY` is only the fallback, for a device with no render node
+//! or an EGL without `EGL_EXT_device_enumeration` / `EGL_EXT_platform_device`:
+//! in a desktop session GLVND can resolve it to another vendor's EGL than the
+//! one driving the device, whose modifiers the device cannot allocate (Mesa's
+//! software EGL beside NVIDIA's driver reports LINEAR alone, as render-target).
+//!
+//! The probe runs once per process per render node and every caller shares its
+//! answer. It never terminates a display, and it keeps libEGL loaded.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
-use std::sync::{Arc, OnceLock};
+use std::os::unix::fs::MetadataExt;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use libloading::Library;
 use thiserror::Error;
@@ -83,6 +91,14 @@ pub enum ProbeError {
     ExtensionMissing,
     #[error("eglQueryDmaBufModifiersEXT failed for fourcc 0x{0:08x} (EGL error 0x{1:04x})")]
     QueryFailed(u32, u32),
+}
+
+/// A DRM render node's device number (`/dev/dri/renderD*`), as
+/// `VK_EXT_physical_device_drm` states it for a Vulkan device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DrmRenderNodeNumber {
+    pub major: i64,
+    pub minor: i64,
 }
 
 /// DRM modifiers reported by the EGL probe, partitioned by binding capability.
@@ -160,6 +176,8 @@ mod egl {
     use std::ffi::c_void;
 
     pub type EGLDisplay = *mut c_void;
+    pub type EGLDeviceEXT = *mut c_void;
+    pub type EGLenum = u32;
     pub type EGLBoolean = u32;
     pub type EGLint = i32;
     pub type EGLuint64KHR = u64;
@@ -170,6 +188,8 @@ mod egl {
     pub const EGL_TRUE: EGLBoolean = 1;
     pub const EGL_FALSE: EGLBoolean = 0;
     pub const EGL_EXTENSIONS: EGLint = 0x3055;
+    pub const EGL_PLATFORM_DEVICE_EXT: EGLenum = 0x313F;
+    pub const EGL_DRM_RENDER_NODE_FILE_EXT: EGLint = 0x3377;
 }
 
 static LIBEGL_KEPT_LOADED_FOR_PROCESS: OnceLock<Result<Library, ProbeError>> = OnceLock::new();
@@ -260,6 +280,159 @@ impl EglFns {
     }
 }
 
+/// `EGL_EXT_device_enumeration`'s and `EGL_EXT_platform_device`'s client
+/// functions, resolved through `eglGetProcAddress`.
+struct EglDeviceFns {
+    egl_query_devices: unsafe extern "C" fn(
+        egl::EGLint,
+        *mut egl::EGLDeviceEXT,
+        *mut egl::EGLint,
+    ) -> egl::EGLBoolean,
+    egl_query_device_string: unsafe extern "C" fn(egl::EGLDeviceEXT, egl::EGLint) -> *const c_char,
+    egl_get_platform_display:
+        unsafe extern "C" fn(egl::EGLenum, *mut c_void, *const egl::EGLint) -> egl::EGLDisplay,
+}
+
+impl EglDeviceFns {
+    /// The device functions, or `None` when this EGL does not advertise the
+    /// client extensions that enumerate devices and open a display on one.
+    fn resolve(fns: &EglFns) -> Option<Self> {
+        let client_extensions_ptr =
+            unsafe { (fns.egl_query_string)(egl::EGL_NO_DISPLAY, egl::EGL_EXTENSIONS) };
+        if client_extensions_ptr.is_null() {
+            return None;
+        }
+        let client_extensions = unsafe { CStr::from_ptr(client_extensions_ptr) }
+            .to_str()
+            .unwrap_or("");
+        let advertises = |extension: &str| {
+            client_extensions
+                .split_whitespace()
+                .any(|tok| tok == extension)
+        };
+        if !(advertises("EGL_EXT_device_enumeration") || advertises("EGL_EXT_device_base"))
+            || !advertises("EGL_EXT_platform_device")
+        {
+            return None;
+        }
+        let proc_address = |name: &CStr| {
+            let raw = unsafe { (fns.egl_get_proc_address)(name.as_ptr()) };
+            (!raw.is_null()).then_some(raw)
+        };
+        let query_devices = proc_address(c"eglQueryDevicesEXT")?;
+        let query_device_string = proc_address(c"eglQueryDeviceStringEXT")?;
+        let get_platform_display = proc_address(c"eglGetPlatformDisplayEXT")?;
+        Some(Self {
+            egl_query_devices: unsafe { std::mem::transmute(query_devices) },
+            egl_query_device_string: unsafe { std::mem::transmute(query_device_string) },
+            egl_get_platform_display: unsafe { std::mem::transmute(get_platform_display) },
+        })
+    }
+
+    /// Every EGL device this EGL enumerates.
+    fn every_device(&self) -> Vec<egl::EGLDeviceEXT> {
+        let mut device_count: egl::EGLint = 0;
+        if unsafe { (self.egl_query_devices)(0, std::ptr::null_mut(), &mut device_count) }
+            != egl::EGL_TRUE
+            || device_count <= 0
+        {
+            return Vec::new();
+        }
+        let mut devices = vec![std::ptr::null_mut(); device_count as usize];
+        let mut returned_count: egl::EGLint = 0;
+        if unsafe {
+            (self.egl_query_devices)(device_count, devices.as_mut_ptr(), &mut returned_count)
+        } != egl::EGL_TRUE
+        {
+            return Vec::new();
+        }
+        devices.truncate(returned_count.max(0) as usize);
+        devices
+    }
+
+    /// The device number of `device`'s DRM render node, or `None` for a device
+    /// with none (a software device) or an EGL that does not name it.
+    fn render_node_number_of(&self, device: egl::EGLDeviceEXT) -> Option<DrmRenderNodeNumber> {
+        let device_extensions_ptr =
+            unsafe { (self.egl_query_device_string)(device, egl::EGL_EXTENSIONS) };
+        if device_extensions_ptr.is_null() {
+            return None;
+        }
+        let device_extensions = unsafe { CStr::from_ptr(device_extensions_ptr) }
+            .to_str()
+            .unwrap_or("");
+        if !device_extensions
+            .split_whitespace()
+            .any(|tok| tok == "EGL_EXT_device_drm_render_node")
+        {
+            return None;
+        }
+        let render_node_path_ptr =
+            unsafe { (self.egl_query_device_string)(device, egl::EGL_DRM_RENDER_NODE_FILE_EXT) };
+        if render_node_path_ptr.is_null() {
+            return None;
+        }
+        let render_node_path = unsafe { CStr::from_ptr(render_node_path_ptr) }
+            .to_str()
+            .ok()?;
+        let device_number = std::fs::metadata(render_node_path).ok()?.rdev();
+        Some(DrmRenderNodeNumber {
+            major: i64::from(libc::major(device_number)),
+            minor: i64::from(libc::minor(device_number)),
+        })
+    }
+}
+
+/// An initialized EGL display and the EGL version it reported.
+struct InitializedEglDisplay {
+    display: egl::EGLDisplay,
+    major: egl::EGLint,
+    minor: egl::EGLint,
+}
+
+fn initialize_egl_display(
+    fns: &EglFns,
+    display: egl::EGLDisplay,
+) -> Result<InitializedEglDisplay, ProbeError> {
+    if display == egl::EGL_NO_DISPLAY {
+        return Err(ProbeError::NoDisplay);
+    }
+    let mut major = 0;
+    let mut minor = 0;
+    if unsafe { (fns.egl_initialize)(display, &mut major, &mut minor) } != egl::EGL_TRUE {
+        let err = unsafe { (fns.egl_get_error)() } as u32;
+        return Err(ProbeError::InitFailed(err));
+    }
+    Ok(InitializedEglDisplay {
+        display,
+        major,
+        minor,
+    })
+}
+
+/// The first EGL device display on `render_node` that initializes; `None` when
+/// this EGL enumerates no devices or none on that node initializes.
+fn initialized_egl_device_display_on_the_render_node(
+    fns: &EglFns,
+    render_node: DrmRenderNodeNumber,
+) -> Option<InitializedEglDisplay> {
+    let device_fns = EglDeviceFns::resolve(fns)?;
+    device_fns
+        .every_device()
+        .into_iter()
+        .filter(|&device| device_fns.render_node_number_of(device) == Some(render_node))
+        .find_map(|device| {
+            let display = unsafe {
+                (device_fns.egl_get_platform_display)(
+                    egl::EGL_PLATFORM_DEVICE_EXT,
+                    device,
+                    std::ptr::null(),
+                )
+            };
+            initialize_egl_display(fns, display).ok()
+        })
+}
+
 /// FOURCC formats the probe interrogates by default. Mirrors the
 /// `SurfaceFormat` set carried over the surface-adapter ABI (BGRA, RGBA,
 /// NV12).
@@ -291,41 +464,62 @@ fn partition_modifiers_by_external_only(
     (rt, sampler_only)
 }
 
-static DEFAULT_DISPLAY_PROBE_RESULT: OnceLock<Result<Arc<DrmModifierTable>, ProbeError>> =
-    OnceLock::new();
+type ProbeResultsByRenderNode =
+    HashMap<Option<DrmRenderNodeNumber>, Result<Arc<DrmModifierTable>, ProbeError>>;
 
-/// The [`DrmModifierTable`] for `EGL_DEFAULT_DISPLAY`, probed on the first call
-/// in the process and shared with every later caller.
+static PROBE_RESULTS_BY_RENDER_NODE: OnceLock<Mutex<ProbeResultsByRenderNode>> = OnceLock::new();
+
+/// The [`DrmModifierTable`] of the EGL device on `render_node`, or of
+/// `EGL_DEFAULT_DISPLAY` when `render_node` is `None` or no EGL device on it
+/// initializes; probed on the first call for that node in the process and
+/// shared with every later caller.
 ///
-/// On any failure (missing libEGL, no display server, extension not
-/// advertised), returns the error and the caller decides whether to
-/// degrade to [`DrmModifierTable::empty`] or surface the failure.
-pub fn default_display_drm_modifier_table_probed_once_per_process()
--> Result<Arc<DrmModifierTable>, ProbeError> {
-    DEFAULT_DISPLAY_PROBE_RESULT
-        .get_or_init(|| probe_with_formats(DEFAULT_PROBE_FORMATS).map(Arc::new))
+/// On any failure (missing libEGL, no display, extension not advertised),
+/// returns the error and the caller decides whether to degrade to
+/// [`DrmModifierTable::empty`] or surface the failure.
+pub fn drm_modifier_table_of_the_render_node_probed_once_per_process(
+    render_node: Option<DrmRenderNodeNumber>,
+) -> Result<Arc<DrmModifierTable>, ProbeError> {
+    let mut probe_results = PROBE_RESULTS_BY_RENDER_NODE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    probe_results
+        .entry(render_node)
+        .or_insert_with(|| probe_with_formats(render_node, DEFAULT_PROBE_FORMATS).map(Arc::new))
         .clone()
 }
 
 #[tracing::instrument(level = "info", name = "drm_modifier_probe", skip_all)]
-fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeError> {
+fn probe_with_formats(
+    render_node: Option<DrmRenderNodeNumber>,
+    formats: &[u32],
+) -> Result<DrmModifierTable, ProbeError> {
     let mut fns = EglFns::load()?;
 
-    let display = unsafe { (fns.egl_get_display)(egl::EGL_DEFAULT_DISPLAY) };
-    if display == egl::EGL_NO_DISPLAY {
-        return Err(ProbeError::NoDisplay);
+    let device_display = render_node.and_then(|render_node| {
+        initialized_egl_device_display_on_the_render_node(&fns, render_node)
+    });
+    if device_display.is_none() {
+        tracing::warn!(
+            ?render_node,
+            "drm_modifier_probe: no EGL device on the Vulkan device's render node initialized; \
+             probing EGL_DEFAULT_DISPLAY, whose vendor may not be the device's"
+        );
     }
-
-    let mut major = 0;
-    let mut minor = 0;
-    let init_ok = unsafe { (fns.egl_initialize)(display, &mut major, &mut minor) };
-    if init_ok != egl::EGL_TRUE {
-        let err = unsafe { (fns.egl_get_error)() } as u32;
-        return Err(ProbeError::InitFailed(err));
-    }
-    // The display is the process's shared `EGL_DEFAULT_DISPLAY`, so it is never
+    // A display is shared process-wide by EGL, so neither kind is ever
     // `eglTerminate`d — see
     // `docs/learnings/egl-default-display-terminate-is-process-wide.md`.
+    let InitializedEglDisplay {
+        display,
+        major,
+        minor,
+    } = match device_display {
+        Some(device_display) => device_display,
+        None => initialize_egl_display(&fns, unsafe {
+            (fns.egl_get_display)(egl::EGL_DEFAULT_DISPLAY)
+        })?,
+    };
 
     // Verify the extension is advertised on this display before chasing the
     // proc address.
@@ -513,7 +707,7 @@ mod tests {
     /// with the RT path.
     #[test]
     fn rt_and_sampler_only_lists_are_disjoint_when_probed() {
-        let table = match default_display_drm_modifier_table_probed_once_per_process() {
+        let table = match drm_modifier_table_of_the_render_node_probed_once_per_process(None) {
             Ok(t) => t,
             Err(e) => {
                 skip_because_this_machine_lacks_naming_the_refusal(
@@ -543,7 +737,7 @@ mod tests {
     /// either returned a known error or a sane table.
     #[test]
     fn the_default_display_probe_runs_or_skips_cleanly() {
-        match default_display_drm_modifier_table_probed_once_per_process() {
+        match drm_modifier_table_of_the_render_node_probed_once_per_process(None) {
             Ok(table) => {
                 let n = table.formats_with_rt_modifier();
                 println!("EGL probe ok: {} format(s) with RT modifiers", n);
@@ -570,7 +764,7 @@ mod tests {
                 std::thread::spawn(move || {
                     start_together.wait();
                     (0..PROBES_PER_THREAD)
-                        .map(|_| probe_with_formats(DEFAULT_PROBE_FORMATS))
+                        .map(|_| probe_with_formats(None, DEFAULT_PROBE_FORMATS))
                         .collect::<Vec<_>>()
                 })
             })
@@ -588,12 +782,33 @@ mod tests {
         }
     }
 
-    /// The table describes the process's default display, not a device, so
-    /// every caller shares the one probe's answer.
+    /// A render node no EGL device sits on falls back to the default
+    /// display, so its table is the default display's.
     #[test]
-    fn every_caller_shares_the_one_default_display_probe() {
-        let first_probe_result = default_display_drm_modifier_table_probed_once_per_process();
-        let second_probe_result = default_display_drm_modifier_table_probed_once_per_process();
+    fn a_render_node_no_egl_device_sits_on_probes_the_default_display() {
+        let render_node_no_device_sits_on = DrmRenderNodeNumber { major: 0, minor: 0 };
+        let fallback_probe_result = drm_modifier_table_of_the_render_node_probed_once_per_process(
+            Some(render_node_no_device_sits_on),
+        );
+        let default_display_probe_result =
+            drm_modifier_table_of_the_render_node_probed_once_per_process(None);
+        match (fallback_probe_result, default_display_probe_result) {
+            (Ok(fallback_table), Ok(default_display_table)) => {
+                assert_eq!(*fallback_table, *default_display_table)
+            }
+            (fallback_probe_result, default_display_probe_result) => {
+                assert_eq!(fallback_probe_result, default_display_probe_result)
+            }
+        }
+    }
+
+    /// Every caller asking for one render node shares the one probe's answer.
+    #[test]
+    fn every_caller_shares_the_one_probe_of_a_render_node() {
+        let first_probe_result =
+            drm_modifier_table_of_the_render_node_probed_once_per_process(None);
+        let second_probe_result =
+            drm_modifier_table_of_the_render_node_probed_once_per_process(None);
         match (first_probe_result, second_probe_result) {
             (Ok(first_table), Ok(second_table)) => assert!(
                 Arc::ptr_eq(&first_table, &second_table),
