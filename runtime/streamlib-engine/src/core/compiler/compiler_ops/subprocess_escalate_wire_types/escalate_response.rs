@@ -229,4 +229,9 @@ pub(crate) struct EscalateResponseOk {
     /// write-back was available, never that it still is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) writable: Option<bool>,
+
+    /// The value the node keeps under the key a `read_node_store_key` named. Absent when it
+    /// keeps none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) node_store_value: Option<serde_json::Value>,
 }

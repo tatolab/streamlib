@@ -67,6 +67,7 @@ from ._node_context_protocols import ChannelsBlock as ChannelsBlock
 from ._node_context_protocols import PacketsUnit as PacketsUnit
 from ._node_context_protocols import PortPayloadBorrow as PortPayloadBorrow
 from ._node_context_protocols import PortPayloadLoan as PortPayloadLoan
+from ._node_context_protocols import StoreScopedToThisNode as StoreScopedToThisNode
 from ._node_context_protocols import UnreadMessage as UnreadMessage
 from ._node_context_protocols import (
     RuntimeContextFullAccess as RuntimeContextFullAccess,
@@ -241,6 +242,7 @@ __all__ = [
     "SetVariable",
     "SetVariableConfig",
     "SteppedStreamClock",
+    "StoreScopedToThisNode",
     "StreamBuilder",
     "StreamClock",
     "StreamClockReading",

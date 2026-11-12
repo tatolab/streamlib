@@ -15,6 +15,7 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
 use super::gpu_context::{PythonGpuContextFullAccess, PythonGpuContextLimitedAccess};
 use super::link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
+use super::store_scoped_to_this_node::PythonStoreScopedToThisNode;
 use streamlib::sdk::processor_interpreter::{
     PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
@@ -81,6 +82,7 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
     gpu_full_access_context: Py<PythonGpuContextFullAccess>,
+    store_scoped_to_this_node: Py<PythonStoreScopedToThisNode>,
     /// This helper's own record of what its parent last announced, shared with
     /// the limited-access view derived from this one.
     pause_state_announced_by_parent: Arc<AtomicBool>,
@@ -172,6 +174,13 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
                 helper_process_exchange_client,
             },
         )?,
+        store_scoped_to_this_node: Py::new(
+            python,
+            PythonStoreScopedToThisNode {
+                escalate_request_to_parent: escalate_request_to_parent
+                    .map(|requester| requester.clone().unbind()),
+            },
+        )?,
         pause_state_announced_by_parent: Arc::new(AtomicBool::new(false)),
         link_data_access,
         escalate_request_to_parent: escalate_request_to_parent
@@ -202,6 +211,9 @@ pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
             .clone_ref(python),
         gpu_limited_access_context: full_access_context
             .gpu_limited_access_context
+            .clone_ref(python),
+        store_scoped_to_this_node: full_access_context
+            .store_scoped_to_this_node
             .clone_ref(python),
         pause_state_announced_by_parent: Arc::clone(
             &full_access_context.pause_state_announced_by_parent,
@@ -279,6 +291,11 @@ impl PythonRuntimeContextFullAccess {
     #[getter]
     fn outputs(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
         self.link_output_data_writer.clone_ref(python)
+    }
+
+    /// The values this node keeps in its project's store, by key.
+    fn store(&self, python: Python<'_>) -> Py<PythonStoreScopedToThisNode> {
+        self.store_scoped_to_this_node.clone_ref(python)
     }
 
     #[getter]
@@ -384,6 +401,7 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
+    store_scoped_to_this_node: Py<PythonStoreScopedToThisNode>,
     /// Shared with the full-access view this one was derived from.
     pause_state_announced_by_parent: Arc<AtomicBool>,
 }
@@ -416,6 +434,11 @@ impl PythonRuntimeContextLimitedAccess {
     #[getter]
     fn outputs(&self, python: Python<'_>) -> Py<PythonLinkOutputDataWriter> {
         self.link_output_data_writer.clone_ref(python)
+    }
+
+    /// The values this node keeps in its project's store, by key.
+    fn store(&self, python: Python<'_>) -> Py<PythonStoreScopedToThisNode> {
+        self.store_scoped_to_this_node.clone_ref(python)
     }
 
     #[getter]

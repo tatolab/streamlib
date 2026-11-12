@@ -975,6 +975,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
                         ctx.stream_id().to_string(),
                     ),
                 ),
+                store_of_the_node: ctx.store().ok(),
                 ..self.what_the_node_reaches.clone()
             },
         )?;
@@ -1921,6 +1922,7 @@ pub(crate) fn spawn_host_for_processor_node(
             process_raising_the_node_reports: Default::default(),
             output_frames_kept_by_its_output_links: link_wiring
                 .output_frames_kept_by_its_output_links(),
+            store_of_the_node: None,
         },
         link_wiring,
         #[cfg(target_os = "macos")]

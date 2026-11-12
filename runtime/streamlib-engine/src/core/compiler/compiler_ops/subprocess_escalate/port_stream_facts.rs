@@ -36,6 +36,8 @@ pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) process_raising_the_node_reports: Arc<ProcessRaisingTheNodeReports>,
     pub(crate) output_frames_kept_by_its_output_links:
         Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
+    /// The node's own keys of its project's store; `None` for a node its stream gives none.
+    pub(crate) store_of_the_node: Option<crate::core::context::StoreScopedToThisNode>,
 }
 
 /// Replace the stream facts the helper's output port carries.

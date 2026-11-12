@@ -93,6 +93,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonKernelDispatchBatch>()?;
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
+    module.add_class::<python_processor_context::PythonStoreScopedToThisNode>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_class::<python_helper_stream_clock::PythonStreamClockReading>()?;
     #[cfg(unix)]

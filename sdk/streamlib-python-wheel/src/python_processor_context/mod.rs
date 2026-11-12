@@ -25,6 +25,7 @@ mod kernel_wire_encoding;
 mod kernels;
 mod link_data_access;
 mod runtime_context;
+mod store_scoped_to_this_node;
 
 pub(crate) use format_vocabulary::parse_pixel_format_name;
 pub(crate) use gpu_context::{
@@ -55,6 +56,7 @@ pub(crate) use runtime_context::{
     note_stop_request_from_parent_on_runtime_context,
     open_runtime_context_full_access_for_helper_process,
 };
+pub(crate) use store_scoped_to_this_node::PythonStoreScopedToThisNode;
 
 /// The refusal `escalate` gives on either capability.
 ///
