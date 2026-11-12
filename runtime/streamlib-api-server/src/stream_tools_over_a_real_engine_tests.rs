@@ -2525,6 +2525,32 @@ async fn the_next_notification_under(
     }
 }
 
+/// The next message that answers a request, past every notification sent before it.
+async fn the_next_answer_but_its_notifications(
+    subscriber: &mut crate::control_json_rpc_adapter::tests::ControlWebSocketMessages,
+) -> Value {
+    loop {
+        let message = subscriber.next_message().await;
+        if message.get("id").is_some() {
+            return message;
+        }
+    }
+}
+
+/// The params of the next `stream_graph_changed` that is not a sample of drops, raises and link
+/// states, which a subscriber is sent on each stream's first sample.
+async fn the_next_stream_graph_change_but_its_samples(
+    subscriber: &mut crate::control_json_rpc_adapter::tests::ControlWebSocketMessages,
+) -> Value {
+    loop {
+        let stream_graph_change =
+            the_next_notification_under(subscriber, "stream_graph_changed").await;
+        if stream_graph_change["change"] != "drops_raises_or_link_states_changed" {
+            return stream_graph_change;
+        }
+    }
+}
+
 /// A subscriber to a loaded stream's graph is sent each edit another client makes, is sent
 /// `missed` when the stream is unloaded and again when it is loaded once more, and follows it to
 /// its new load; a subscriber to the stream actions is sent each change of the close and the
@@ -2567,7 +2593,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
         )
         .await;
     assert_eq!(
-        subscriber.next_message().await["result"],
+        the_next_answer_but_its_notifications(&mut subscriber).await["result"],
         json!({ "actions_under_way": [] })
     );
 
@@ -2579,7 +2605,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
         .await;
     assert!(added.get("result").is_some(), "{added}");
     assert_eq!(
-        the_next_notification_under(&mut subscriber, "stream_graph_changed").await,
+        the_next_stream_graph_change_but_its_samples(&mut subscriber).await,
         json!({ "stream": stream_id, "change": "edited", "node": null, "node_state": null })
     );
 
@@ -2664,9 +2690,9 @@ impl streamlib::sdk::processors::ContinuousProcessor
     }
 }
 
-/// A subscriber to a played stream's graph is sent `drops_raises_or_link_states_changed` once a
-/// node's `process()` starts raising, which no graph event reports, and the graph it reads then
-/// carries the raise.
+/// A subscriber to a stream's graph is sent `drops_raises_or_link_states_changed` on the stream's
+/// first sample, and again once a node's `process()` starts raising after playback starts, which no
+/// graph event reports, and the graph it reads then carries the raise.
 ///
 /// Mental-revert: without the sampling, the raise reaches a pushed client only on its next
 /// unrelated change, and the wait below times out.
@@ -2713,6 +2739,14 @@ async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
         json!([stream_id])
     );
 
+    loop {
+        let first_sample =
+            the_next_notification_under(&mut subscriber, "stream_graph_changed").await;
+        if first_sample["change"] == "drops_raises_or_link_states_changed" {
+            break;
+        }
+    }
+
     let queued = served
         .control_call(
             "start_playback",
@@ -2726,28 +2760,33 @@ async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
     let started = the_stream_action_once_finished(&operations_on_the_loaded_streams, &action).await;
     assert_eq!(started["state"], "done", "{started}");
 
-    let changed = tokio::time::timeout(Duration::from_secs(10), async {
+    let graph_carrying_the_raise = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let stream_graph_change =
                 the_next_notification_under(&mut subscriber, "stream_graph_changed").await;
-            if stream_graph_change["change"] == "drops_raises_or_link_states_changed" {
-                return stream_graph_change;
+            if stream_graph_change["change"] != "drops_raises_or_link_states_changed" {
+                continue;
+            }
+            assert_eq!(
+                stream_graph_change["stream"], stream_id,
+                "{stream_graph_change}"
+            );
+            let graph = served
+                .control_call("graph", json!({ "stream": stream_id }))
+                .await;
+            let raising_because =
+                graph["result"]["nodes"][0]["components"]["process_raising_because"]
+                    .as_str()
+                    .unwrap_or_default();
+            if raising_because.contains(WHAT_THE_RAISING_SOURCE_RAISES) {
+                return graph;
             }
         }
     })
-    .await
-    .expect("the raise is pushed within a few samples");
-    assert_eq!(changed["stream"], stream_id, "{changed}");
-    let graph = served
-        .control_call("graph", json!({ "stream": stream_id }))
-        .await;
-    let raising_because = graph["result"]["nodes"][0]["components"]["process_raising_because"]
-        .as_str()
-        .unwrap_or_default()
-        .to_owned();
+    .await;
     assert!(
-        raising_because.contains(WHAT_THE_RAISING_SOURCE_RAISES),
-        "{graph}"
+        graph_carrying_the_raise.is_ok(),
+        "no drops_raises_or_link_states_changed was followed by a graph carrying the raise"
     );
 }
 

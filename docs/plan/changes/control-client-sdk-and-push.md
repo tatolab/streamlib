@@ -161,8 +161,9 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
     board, on paths that run every frame. They reach a subscriber all the same, so Studio drops
     its slow `graph` read (owner, 2026-11-12). Each connection samples them from each followed
     stream's graph every 500 ms and sends `drops_raises_or_link_states_changed` for a stream
-    whose sample differs from the one before; a written count, which grows with every bag, is
-    not sampled. The kind's name and the 500 ms are the implementer's (session, 2026-11-12).
+    whose sample differs from the one before, and on its first sample, so a change made between
+    the client's graph read and that sample still reaches it. A written count, which grows with
+    every bag and which Studio does not show, is not sampled. The kind's name and the 500 ms are the implementer's (session, 2026-11-12).
 - **Push for stream actions.** The contract gains `subscribe_stream_action_changes` and
   `stream_action_changed` (`{ action }`), read from the stream-action queue's broadcast
   (`project_stream_action_queue.rs:232`), so a client follows an action without the MCP

@@ -493,11 +493,11 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
 }
 
 /// The drops, raises and link states of each stream graph the connection follows that is loaded
-/// now; a stream whose graph does not export is left out until it does.
+/// now, `None` for one whose graph did not export.
 async fn the_drops_raises_and_link_states_of_each_followed_stream(
     operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
     subscriptions: &ControlSubscriptionsOfOneConnection,
-) -> BTreeMap<String, Value> {
+) -> BTreeMap<String, Option<Value>> {
     let mut sampled_by_stream = BTreeMap::new();
     for stream in subscriptions.every_followed_stream_graph_loaded_now() {
         let Ok(runtime_operations) =
@@ -505,19 +505,20 @@ async fn the_drops_raises_and_link_states_of_each_followed_stream(
         else {
             continue;
         };
-        match runtime_operations.to_json_async().await {
-            Ok(stream_graph) => {
-                sampled_by_stream.insert(
+        let sampled = match runtime_operations.to_json_async().await {
+            Ok(stream_graph) => Some(the_drops_raises_and_link_states_of_a_stream_graph(
+                &stream_graph,
+            )),
+            Err(not_exported) => {
+                tracing::debug!(
+                    %not_exported,
                     stream,
-                    the_drops_raises_and_link_states_of_a_stream_graph(&stream_graph),
+                    "a followed stream's graph did not export for its drops, raises and link states"
                 );
+                None
             }
-            Err(not_exported) => tracing::debug!(
-                %not_exported,
-                stream,
-                "a followed stream's graph did not export for its drops, raises and link states"
-            ),
-        }
+        };
+        sampled_by_stream.insert(stream, sampled);
     }
     sampled_by_stream
 }
