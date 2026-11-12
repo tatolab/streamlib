@@ -20,7 +20,8 @@ use rmcp::service::SubscriptionContext;
 use serde_json::json;
 use streamlib_project_repository::{
     AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectRepositoriesOpenInThisRuntime,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, ProjectTransactionUndoState,
+    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetMediaFactsReadOnTheWire, ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire,
@@ -277,6 +278,29 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
     }
 }
 
+/// The change feed of the project `project_repository` holds, as its resource and
+/// `read_project_changes` render it.
+pub(crate) fn the_change_feed_of_the_project(
+    project_repository: &ProjectRepository,
+    project_actions_refused: &ProjectActionsRefusedSinceTheRuntimeStarted,
+    asset_media_facts_reads: &crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime,
+) -> Result<ProjectTransactionsResourceContents, ProjectRepositoryRefusal> {
+    let project = project_repository.project_file().project;
+    let applied_transactions = project_repository
+        .applied_transactions_newest_first(PROJECT_TRANSACTIONS_RESOURCE_TRANSACTION_COUNT)?;
+    let undo_state_of_each_transaction = project_repository.the_undo_state_of_each_transaction()?;
+    Ok(ProjectTransactionsResourceContents {
+        project: project.to_string(),
+        project_directory: project_repository.project_directory().to_path_buf(),
+        transactions: the_change_feed_newest_first(
+            applied_transactions,
+            &undo_state_of_each_transaction,
+            asset_media_facts_reads.the_finished_reads_newest_first(project),
+            project_actions_refused.the_refused_actions_newest_first(project),
+        ),
+    })
+}
+
 /// Read the change feed of `project`, which an asset tool must have opened.
 pub(crate) async fn read_project_transactions_resource(
     project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
@@ -293,29 +317,16 @@ pub(crate) async fn read_project_transactions_resource(
                 Some(json!({ "project": project.to_string() })),
             ));
         };
-        let project_repository = project_repository.lock();
-        let applied_transactions = project_repository
-            .applied_transactions_newest_first(PROJECT_TRANSACTIONS_RESOURCE_TRANSACTION_COUNT)
-            .map_err(|refusal| {
-                McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
-            })?;
-        let undo_state_of_each_transaction = project_repository
-            .the_undo_state_of_each_transaction()
-            .map_err(|refusal| {
-                McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
-            })?;
-        let transactions = the_change_feed_newest_first(
-            applied_transactions,
-            &undo_state_of_each_transaction,
-            asset_media_facts_reads.the_finished_reads_newest_first(project),
-            project_actions_refused.the_refused_actions_newest_first(project),
-        );
-        serde_json::to_string_pretty(&ProjectTransactionsResourceContents {
-            project: project.to_string(),
-            project_directory: project_repository.project_directory().to_path_buf(),
-            transactions,
-        })
-        .map_err(|e| McpError::internal_error(format!("project {project}'s transactions did not render: {e}"), None))
+        let change_feed = the_change_feed_of_the_project(
+            &project_repository.lock(),
+            &project_actions_refused,
+            &asset_media_facts_reads,
+        )
+        .map_err(|refusal| {
+            McpError::internal_error(format!("project {project}'s history could not be read: {refusal}"), None)
+        })?;
+        serde_json::to_string_pretty(&change_feed)
+            .map_err(|e| McpError::internal_error(format!("project {project}'s transactions did not render: {e}"), None))
     })
     .await
     .map_err(|join_failure| McpError::internal_error(format!("the read did not finish: {join_failure}"), None))??;

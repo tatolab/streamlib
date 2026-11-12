@@ -757,6 +757,53 @@ const ListAssetsToolResult = z.looseObject({
   transactions_resource_uri: z.string(),
 });
 
+/** @type {z.ZodType<ControlContract.ProjectTransactionOnTheWire>} */
+const ProjectTransactionOnTheWire = z.looseObject({
+  format_version: z.number().int().min(0),
+  transaction: z.string(),
+  commit: z.string(),
+  parent_commit: z.string().nullable().optional(),
+  author_kind: z.string(),
+  author_name: z.string(),
+  operations: z.array(z.unknown()),
+  inverse_operations: z.array(z.unknown()),
+  undoes: z.string().nullable().optional(),
+  redoes: z.string().nullable().optional(),
+  idempotency_key: z.string().nullable().optional(),
+  actions: z.array(z.unknown()).optional(),
+  undo_state: z.string().nullable().optional(),
+  applied_at: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.RefusedProjectActionOnTheWire>} */
+const RefusedProjectActionOnTheWire = z.looseObject({
+  author_kind: z.string(),
+  author_name: z.string(),
+  mode: z.string(),
+  operations: z.array(z.unknown()),
+  idempotency_key: z.string().nullable().optional(),
+  refusal: ProjectActionRefusalOnTheWire,
+  refused_at: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.AssetMediaFactsReadOnTheWire>} */
+const AssetMediaFactsReadOnTheWire = z.looseObject({
+  asset: z.string(),
+  content_sha256: z.string(),
+  media_facts_state: z.string(),
+  read_at: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.ProjectChangeFeedEntryOnTheWire>} */
+const ProjectChangeFeedEntryOnTheWire = z.union([ProjectTransactionOnTheWire, RefusedProjectActionOnTheWire, AssetMediaFactsReadOnTheWire]);
+
+/** @type {z.ZodType<ControlContract.ProjectTransactionsResourceContents>} */
+const ProjectTransactionsResourceContents = z.looseObject({
+  project: z.string(),
+  project_directory: z.string(),
+  transactions: z.array(ProjectChangeFeedEntryOnTheWire),
+});
+
 /** @type {z.ZodType<ControlContract.DescribeAssetRequest>} */
 const DescribeAssetRequest = z.strictObject({
   project_directory: z.string(),
@@ -1289,24 +1336,6 @@ const UndoOrRedoRequest = z.strictObject({
   idempotency_key: z.string().nullable().optional(),
 });
 
-/** @type {z.ZodType<ControlContract.ProjectTransactionOnTheWire>} */
-const ProjectTransactionOnTheWire = z.looseObject({
-  format_version: z.number().int().min(0),
-  transaction: z.string(),
-  commit: z.string(),
-  parent_commit: z.string().nullable().optional(),
-  author_kind: z.string(),
-  author_name: z.string(),
-  operations: z.array(z.unknown()),
-  inverse_operations: z.array(z.unknown()),
-  undoes: z.string().nullable().optional(),
-  redoes: z.string().nullable().optional(),
-  idempotency_key: z.string().nullable().optional(),
-  actions: z.array(z.unknown()).optional(),
-  undo_state: z.string().nullable().optional(),
-  applied_at: z.string(),
-});
-
 /** @type {z.ZodType<ControlContract.ProjectChangeKindOnTheWire>} */
 const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("missed")]);
 
@@ -1488,6 +1517,11 @@ export const ControlSchemas = Object.freeze({
     AssetLutFactsOnTheWire,
     AssetSceneFactsOnTheWire,
     AssetPreviewOnTheWire,
+    ProjectTransactionsResourceContents,
+    ProjectChangeFeedEntryOnTheWire,
+    ProjectTransactionOnTheWire,
+    RefusedProjectActionOnTheWire,
+    AssetMediaFactsReadOnTheWire,
     DescribeAssetRequest,
     DescribeAssetToolResult,
     ReadAssetPreviewRequest,
@@ -1554,7 +1588,6 @@ export const ControlSchemas = Object.freeze({
     ListSamplesToolResultSample,
     RefreshFragmentsRequest,
     UndoOrRedoRequest,
-    ProjectTransactionOnTheWire,
     ProjectChangedNotificationParams,
     ProjectChangeKindOnTheWire,
     StreamGraphChangedNotificationParams,
@@ -1742,6 +1775,10 @@ export const ControlSchemas = Object.freeze({
     list_assets: Object.freeze({
       params: ListAssetsRequest,
       result: ListAssetsToolResult,
+    }),
+    read_project_changes: Object.freeze({
+      params: OneProjectByItsDirectoryRequest,
+      result: ProjectTransactionsResourceContents,
     }),
     describe_asset: Object.freeze({
       params: DescribeAssetRequest,

@@ -1857,6 +1857,49 @@
       "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
+      "name": "read_project_changes",
+      "summary": "Read a project's change feed as it stands: its newest transactions, refused actions and media facts reads.",
+      "description": "Read the change feed of the project in `project_directory`, opening it as `list_assets` does, as the resource `list_assets` names as `transactions_resource_uri` renders it: the project's UUID as `project`, its `project_directory`, and under `transactions` its newest 64 transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. `subscribe_project_changes` sends a `project_changed` notification for each change after it, and `missed` when the connection fell behind, after which the feed is read again. Refused for a folder with no `tatolab-project.json`.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/OneProjectByItsDirectoryRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "read_project_changes_result",
+        "schema": {
+          "$ref": "#/components/schemas/ProjectTransactionsResourceContents"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed"
+        }
+      ],
+      "x-since": 2,
+      "x-stability": "experimental",
+      "x-group": "project",
+      "x-exposures": [
+        "studio",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
       "name": "describe_asset",
       "summary": "Describe one asset of a project.",
       "description": "Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of its bytes, its import settings, `file_at_its_path`, whether a file is at its path, and what the runtime has read from its bytes, which it reads once per SHA-256 after an import or a replace and keeps in the project's `.tatolab/`. `media_facts_state` is `read`, `reading` — a read queued or under way, after which the project's change feed carries a `media_facts_read` entry — `unreadable`, with why in `media_facts_unreadable_because`, or `null` for a stream asset. `media_facts` carries `duration_ms`; `video` with `pixel_width`, `pixel_height`, `frames_per_second` and `codec`; `audio` with `sample_rate_hz`, `channel_count` and `codec`; `image` with `pixel_width` and `pixel_height`; `lut` with `lut_1d_size` or `lut_3d_size`, `domain_min` and `domain_max`; and `scene` — each `null` when the file does not hold or state it. `preview` is the size and `media_type` of the picture `read_asset_preview` answers, `null` when the asset has none.",
@@ -7390,6 +7433,245 @@
         ],
         "description": "An asset's preview picture, which `read_asset_preview` answers."
       },
+      "ProjectTransactionsResourceContents": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "description": "The project's UUID."
+          },
+          "project_directory": {
+            "type": "string",
+            "description": "The project directory, symlinks resolved."
+          },
+          "transactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectChangeFeedEntryOnTheWire"
+            },
+            "description": "Its newest applied transactions and refused actions, newest first."
+          }
+        },
+        "required": [
+          "project",
+          "project_directory",
+          "transactions"
+        ],
+        "description": "What a project's transactions resource holds: its newest transactions and the actions refused\nsince the runtime started, newest first."
+      },
+      "ProjectChangeFeedEntryOnTheWire": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ProjectTransactionOnTheWire",
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "applied"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "description": "A transaction the project's history records."
+          },
+          {
+            "$ref": "#/components/schemas/RefusedProjectActionOnTheWire",
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "refused"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "description": "An action the runtime refused since it started, which no history records."
+          },
+          {
+            "$ref": "#/components/schemas/AssetMediaFactsReadOnTheWire",
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "const": "media_facts_read"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "description": "The runtime finished reading an asset's media facts since it started; no history\nrecords it."
+          }
+        ],
+        "description": "One entry of a project's change feed, tagged by its `status`."
+      },
+      "ProjectTransactionOnTheWire": {
+        "type": "object",
+        "properties": {
+          "format_version": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The format the transaction was recorded in, `1` for one recorded before formats were."
+          },
+          "transaction": {
+            "type": "string",
+            "description": "The transaction's UUID."
+          },
+          "commit": {
+            "type": "string",
+            "description": "The commit on the project history's `main` that records it."
+          },
+          "parent_commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit history stood at when it applied, absent for a project's first."
+          },
+          "author_kind": {
+            "type": "string",
+            "description": "`person`, `agent` or `runtime`."
+          },
+          "author_name": {
+            "type": "string",
+            "description": "The author's name as history shows it."
+          },
+          "operations": {
+            "type": "array",
+            "items": true,
+            "description": "What it changed, in order, each tagged by its `operation`."
+          },
+          "inverse_operations": {
+            "type": "array",
+            "items": true,
+            "description": "What undoes it, in order."
+          },
+          "undoes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transaction this one undoes, when it is an undo."
+          },
+          "redoes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The transaction this one redoes, when it is a redo."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key the caller sent it under, when it sent one."
+          },
+          "actions": {
+            "type": "array",
+            "items": true,
+            "description": "The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for\nan undo, a redo, or a change the runtime made itself."
+          },
+          "undo_state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where an edit or a redo stands with its author's undo and redo now: `applied`,\n`undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;\nabsent for an undo."
+          },
+          "applied_at": {
+            "type": "string",
+            "description": "When the runtime applied it, RFC 3339 in UTC to the second, for display only."
+          }
+        },
+        "required": [
+          "format_version",
+          "transaction",
+          "commit",
+          "author_kind",
+          "author_name",
+          "operations",
+          "inverse_operations",
+          "applied_at"
+        ],
+        "description": "One transaction a project's change feed holds."
+      },
+      "RefusedProjectActionOnTheWire": {
+        "type": "object",
+        "properties": {
+          "author_kind": {
+            "type": "string",
+            "description": "`person`, `agent` or `runtime`."
+          },
+          "author_name": {
+            "type": "string",
+            "description": "The author's name as an applied transaction would carry it."
+          },
+          "mode": {
+            "type": "string",
+            "description": "`commit` or `live`, as the action asked."
+          },
+          "operations": {
+            "type": "array",
+            "items": true,
+            "description": "The operations the action asked for, in order, as the request named them."
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The key the caller sent it under, when it sent one."
+          },
+          "refusal": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire",
+            "description": "What the runtime refused, in its own words."
+          },
+          "refused_at": {
+            "type": "string",
+            "description": "When the runtime refused it, RFC 3339 in UTC to the second, for display only."
+          }
+        },
+        "required": [
+          "author_kind",
+          "author_name",
+          "mode",
+          "operations",
+          "refusal",
+          "refused_at"
+        ],
+        "description": "An action on a project the runtime refused, as its change feed holds it."
+      },
+      "AssetMediaFactsReadOnTheWire": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset's UUID."
+          },
+          "content_sha256": {
+            "type": "string",
+            "description": "The SHA-256 of the bytes read, in lowercase hex."
+          },
+          "media_facts_state": {
+            "type": "string",
+            "description": "`read` or `unreadable`."
+          },
+          "read_at": {
+            "type": "string",
+            "description": "When the read finished, RFC 3339 in UTC to the second."
+          }
+        },
+        "required": [
+          "asset",
+          "content_sha256",
+          "media_facts_state",
+          "read_at"
+        ],
+        "description": "An asset whose media facts the runtime finished reading, as a project's change feed holds it."
+      },
       "DescribeAssetRequest": {
         "type": "object",
         "additionalProperties": false,
@@ -9617,98 +9899,6 @@
           "project_directory"
         ],
         "description": "The params of `undo` and `redo`."
-      },
-      "ProjectTransactionOnTheWire": {
-        "type": "object",
-        "properties": {
-          "format_version": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "description": "The format the transaction was recorded in, `1` for one recorded before formats were."
-          },
-          "transaction": {
-            "type": "string",
-            "description": "The transaction's UUID."
-          },
-          "commit": {
-            "type": "string",
-            "description": "The commit on the project history's `main` that records it."
-          },
-          "parent_commit": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The commit history stood at when it applied, absent for a project's first."
-          },
-          "author_kind": {
-            "type": "string",
-            "description": "`person`, `agent` or `runtime`."
-          },
-          "author_name": {
-            "type": "string",
-            "description": "The author's name as history shows it."
-          },
-          "operations": {
-            "type": "array",
-            "items": true,
-            "description": "What it changed, in order, each tagged by its `operation`."
-          },
-          "inverse_operations": {
-            "type": "array",
-            "items": true,
-            "description": "What undoes it, in order."
-          },
-          "undoes": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The transaction this one undoes, when it is an undo."
-          },
-          "redoes": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The transaction this one redoes, when it is a redo."
-          },
-          "idempotency_key": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The key the caller sent it under, when it sent one."
-          },
-          "actions": {
-            "type": "array",
-            "items": true,
-            "description": "The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for\nan undo, a redo, or a change the runtime made itself."
-          },
-          "undo_state": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Where an edit or a redo stands with its author's undo and redo now: `applied`,\n`undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;\nabsent for an undo."
-          },
-          "applied_at": {
-            "type": "string",
-            "description": "When the runtime applied it, RFC 3339 in UTC to the second, for display only."
-          }
-        },
-        "required": [
-          "format_version",
-          "transaction",
-          "commit",
-          "author_kind",
-          "author_name",
-          "operations",
-          "inverse_operations",
-          "applied_at"
-        ],
-        "description": "One transaction a project's change feed holds."
       },
       "ProjectChangedNotificationParams": {
         "type": "object",

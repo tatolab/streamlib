@@ -2454,6 +2454,64 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn read_project_changes_over_control_answers_the_change_feed_its_resource_renders() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        engine.operations_on_the_loaded_streams(),
+    )
+    .await;
+    let applied = tool_answer(
+        &served
+            .mcp_tool_result(
+                "transact",
+                json!({
+                    "author": an_agent_named("alice"),
+                    "operations": [{ "operation": "rename_node", "stream": stream_asset,
+                                     "node": SOURCE_NODE_UUID, "name": "camera" }],
+                }),
+            )
+            .await,
+    )
+    .expect("the transaction applies");
+
+    let read_over_control = served
+        .control_call(
+            "read_project_changes",
+            json!({ "project_directory": project.path() }),
+        )
+        .await;
+    let change_feed = &read_over_control["result"];
+    let resource_read = serde_json::to_value(
+        served
+            .mcp_client
+            .read_resource(rmcp::model::ReadResourceRequestParams::new(
+                crate::mcp_project_change_feed::project_transactions_resource_uri(project.project),
+            ))
+            .await
+            .expect("the change feed's resource reads"),
+    )
+    .unwrap();
+    let change_feed_over_mcp: Value =
+        serde_json::from_str(resource_read["contents"][0]["text"].as_str().unwrap()).unwrap();
+
+    assert_eq!(
+        change_feed["project"],
+        json!(project.project),
+        "{read_over_control}"
+    );
+    assert_eq!(change_feed["transactions"][0]["status"], "applied");
+    assert_eq!(
+        change_feed["transactions"][0]["transaction"],
+        applied["transaction"]
+    );
+    assert_eq!(change_feed["transactions"][0]["author_name"], "alice");
+    assert_eq!(*change_feed, change_feed_over_mcp);
+}
+
 /// The next notification `subscriber` is sent under `method`, skipping any other.
 async fn the_next_notification_under(
     subscriber: &mut crate::control_json_rpc_adapter::tests::ControlWebSocketMessages,

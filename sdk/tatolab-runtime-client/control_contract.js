@@ -48,6 +48,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "duplicate_project",
   "delete_project",
   "list_assets",
+  "read_project_changes",
   "describe_asset",
   "read_asset_preview",
   "import_asset",

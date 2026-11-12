@@ -2104,6 +2104,151 @@ export interface AssetPreviewOnTheWire {
 }
 
 /**
+ * What a project's transactions resource holds: its newest transactions and the actions refused
+ * since the runtime started, newest first.
+ */
+export interface ProjectTransactionsResourceContents {
+  /**
+   * The project's UUID.
+   */
+  project: string;
+  /**
+   * The project directory, symlinks resolved.
+   */
+  project_directory: string;
+  /**
+   * Its newest applied transactions and refused actions, newest first.
+   */
+  transactions: Array<ProjectChangeFeedEntryOnTheWire>;
+}
+
+/**
+ * One entry of a project's change feed, tagged by its `status`.
+ */
+export type ProjectChangeFeedEntryOnTheWire = ProjectTransactionOnTheWire | RefusedProjectActionOnTheWire | AssetMediaFactsReadOnTheWire;
+
+/**
+ * One transaction a project's change feed holds.
+ */
+export interface ProjectTransactionOnTheWire {
+  /**
+   * The format the transaction was recorded in, `1` for one recorded before formats were.
+   */
+  format_version: number;
+  /**
+   * The transaction's UUID.
+   */
+  transaction: string;
+  /**
+   * The commit on the project history's `main` that records it.
+   */
+  commit: string;
+  /**
+   * The commit history stood at when it applied, absent for a project's first.
+   */
+  parent_commit?: string | null;
+  /**
+   * `person`, `agent` or `runtime`.
+   */
+  author_kind: string;
+  /**
+   * The author's name as history shows it.
+   */
+  author_name: string;
+  /**
+   * What it changed, in order, each tagged by its `operation`.
+   */
+  operations: Array<unknown>;
+  /**
+   * What undoes it, in order.
+   */
+  inverse_operations: Array<unknown>;
+  /**
+   * The transaction this one undoes, when it is an undo.
+   */
+  undoes?: string | null;
+  /**
+   * The transaction this one redoes, when it is a redo.
+   */
+  redoes?: string | null;
+  /**
+   * The key the caller sent it under, when it sent one.
+   */
+  idempotency_key?: string | null;
+  /**
+   * The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for
+   * an undo, a redo, or a change the runtime made itself.
+   */
+  actions?: Array<unknown>;
+  /**
+   * Where an edit or a redo stands with its author's undo and redo now: `applied`,
+   * `undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;
+   * absent for an undo.
+   */
+  undo_state?: string | null;
+  /**
+   * When the runtime applied it, RFC 3339 in UTC to the second, for display only.
+   */
+  applied_at: string;
+}
+
+/**
+ * An action on a project the runtime refused, as its change feed holds it.
+ */
+export interface RefusedProjectActionOnTheWire {
+  /**
+   * `person`, `agent` or `runtime`.
+   */
+  author_kind: string;
+  /**
+   * The author's name as an applied transaction would carry it.
+   */
+  author_name: string;
+  /**
+   * `commit` or `live`, as the action asked.
+   */
+  mode: string;
+  /**
+   * The operations the action asked for, in order, as the request named them.
+   */
+  operations: Array<unknown>;
+  /**
+   * The key the caller sent it under, when it sent one.
+   */
+  idempotency_key?: string | null;
+  /**
+   * What the runtime refused, in its own words.
+   */
+  refusal: ProjectActionRefusalOnTheWire;
+  /**
+   * When the runtime refused it, RFC 3339 in UTC to the second, for display only.
+   */
+  refused_at: string;
+}
+
+/**
+ * An asset whose media facts the runtime finished reading, as a project's change feed holds it.
+ */
+export interface AssetMediaFactsReadOnTheWire {
+  /**
+   * The asset's UUID.
+   */
+  asset: string;
+  /**
+   * The SHA-256 of the bytes read, in lowercase hex.
+   */
+  content_sha256: string;
+  /**
+   * `read` or `unreadable`.
+   */
+  media_facts_state: string;
+  /**
+   * When the read finished, RFC 3339 in UTC to the second.
+   */
+  read_at: string;
+}
+
+/**
  * `describe_asset`'s params.
  */
 export interface DescribeAssetRequest {
@@ -3573,71 +3718,6 @@ export interface UndoOrRedoRequest {
 }
 
 /**
- * One transaction a project's change feed holds.
- */
-export interface ProjectTransactionOnTheWire {
-  /**
-   * The format the transaction was recorded in, `1` for one recorded before formats were.
-   */
-  format_version: number;
-  /**
-   * The transaction's UUID.
-   */
-  transaction: string;
-  /**
-   * The commit on the project history's `main` that records it.
-   */
-  commit: string;
-  /**
-   * The commit history stood at when it applied, absent for a project's first.
-   */
-  parent_commit?: string | null;
-  /**
-   * `person`, `agent` or `runtime`.
-   */
-  author_kind: string;
-  /**
-   * The author's name as history shows it.
-   */
-  author_name: string;
-  /**
-   * What it changed, in order, each tagged by its `operation`.
-   */
-  operations: Array<unknown>;
-  /**
-   * What undoes it, in order.
-   */
-  inverse_operations: Array<unknown>;
-  /**
-   * The transaction this one undoes, when it is an undo.
-   */
-  undoes?: string | null;
-  /**
-   * The transaction this one redoes, when it is a redo.
-   */
-  redoes?: string | null;
-  /**
-   * The key the caller sent it under, when it sent one.
-   */
-  idempotency_key?: string | null;
-  /**
-   * The actions its caller sent, exactly as sent, each tagged by its `operation`; absent for
-   * an undo, a redo, or a change the runtime made itself.
-   */
-  actions?: Array<unknown>;
-  /**
-   * Where an edit or a redo stands with its author's undo and redo now: `applied`,
-   * `undone_redoable` or `undone_not_redoable`, the same for an edit and every redo of it;
-   * absent for an undo.
-   */
-  undo_state?: string | null;
-  /**
-   * When the runtime applied it, RFC 3339 in UTC to the second, for display only.
-   */
-  applied_at: string;
-}
-
-/**
  * `project_changed`'s params.
  */
 export interface ProjectChangedNotificationParams {
@@ -4316,6 +4396,17 @@ export interface ControlOperations {
   list_assets: {
     params: ListAssetsRequest;
     result: ListAssetsToolResult;
+  };
+  /**
+   * Read a project's change feed as it stands: its newest transactions, refused actions and media facts reads.
+   *
+   * Read the change feed of the project in `project_directory`, opening it as `list_assets` does, as the resource `list_assets` names as `transactions_resource_uri` renders it: the project's UUID as `project`, its `project_directory`, and under `transactions` its newest 64 transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. `subscribe_project_changes` sends a `project_changed` notification for each change after it, and `missed` when the connection fell behind, after which the feed is read again. Refused for a folder with no `tatolab-project.json`.
+   *
+   * Since contract version 2, experimental.
+   */
+  read_project_changes: {
+    params: OneProjectByItsDirectoryRequest;
+    result: ProjectTransactionsResourceContents;
   };
   /**
    * Describe one asset of a project.
