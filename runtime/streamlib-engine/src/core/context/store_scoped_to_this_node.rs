@@ -5,7 +5,7 @@
 //! Stop and a restart of the runtime, readable at once and committed by the store's one debounced
 //! writer, so a node may write at whatever rate it changes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -109,6 +109,33 @@ impl Drop for ProjectStoresOpenInThisRuntime {
     }
 }
 
+/// Remove every key of the `node_store` table whose node UUID `node_uuids_held` leaves out.
+fn drop_the_keys_of_every_node_not_held(
+    project_store: &ProjectStore,
+    resolved_project_directory: &Path,
+    node_uuids_held: &HashSet<Uuid>,
+) {
+    let keys = match project_store.keys_in(NODE_STORE_TABLE) {
+        Ok(keys) => keys,
+        Err(not_listed) => {
+            tracing::warn!(
+                project_directory = %resolved_project_directory.display(),
+                "the project closed and its store's node keys did not list, so the keys of \
+                 nodes it no longer holds stay: {not_listed}"
+            );
+            return;
+        }
+    };
+    for key in keys {
+        let node_uuid_of_the_key = key
+            .split_once('/')
+            .and_then(|(node_uuid, _)| node_uuid.parse::<Uuid>().ok());
+        if node_uuid_of_the_key.is_some_and(|node_uuid| !node_uuids_held.contains(&node_uuid)) {
+            project_store.remove(NODE_STORE_TABLE, &key);
+        }
+    }
+}
+
 /// Drop this runtime's hold on the store of the project at `resolved_project_directory`, closing
 /// it under the process-wide lock when no other runtime in this process holds it.
 fn let_go_of_a_project_store(
@@ -162,9 +189,14 @@ impl ProjectStoresOpenInThisRuntime {
         Ok(open_in_this_process)
     }
 
-    /// Commit what the store of the project at `project_directory` holds waiting and let it go,
+    /// Drop the keys of every node `node_uuids_the_project_holds` leaves out, when it is known,
+    /// commit what the store of the project at `project_directory` holds waiting and let it go,
     /// closing it unless another runtime in this process still holds it, as its project closes.
-    pub(crate) fn close_the_store_of_the_project_at(&self, project_directory: &Path) {
+    pub(crate) fn close_the_store_of_the_project_at(
+        &self,
+        project_directory: &Path,
+        node_uuids_the_project_holds: Option<&HashSet<Uuid>>,
+    ) {
         let resolved_project_directory = std::fs::canonicalize(project_directory)
             .unwrap_or_else(|_| project_directory.to_path_buf());
         let Some(held_by_this_runtime) = self
@@ -174,6 +206,13 @@ impl ProjectStoresOpenInThisRuntime {
         else {
             return;
         };
+        if let Some(node_uuids_the_project_holds) = node_uuids_the_project_holds {
+            drop_the_keys_of_every_node_not_held(
+                &held_by_this_runtime,
+                &resolved_project_directory,
+                node_uuids_the_project_holds,
+            );
+        }
         if let Err(not_committed) = held_by_this_runtime.commit_every_waiting_write_now() {
             tracing::error!(
                 project_directory = %resolved_project_directory.display(),

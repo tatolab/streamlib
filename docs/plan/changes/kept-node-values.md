@@ -104,9 +104,9 @@ as stated until the owner says otherwise (session, 2026-11-11).
    Rust, a kept `GraphInput` restoring its value at setup and committing at teardown, `lifetime`
    on `GraphInputConfig`. Ticket 1b follows with: a stopped project's `graph` reading the store,
    writes to a stopped kept Input (Assumed 2), the store closed with `close_project` once that verb
-   lands, and dropping the keys of a node the graph no longer holds; the first three are built,
-   and when a removed node's keys are dropped waits on the owner, since an undo can bring the
-   node back under its UUID. Engine tests over a real engine:
+   lands, and dropping the keys of a node the graph no longer holds: when its project closes,
+   the store drops the keys of every node none of its saved graph documents names, so an undo
+   while the project is open keeps the value (owner, 2026-11-12). Engine tests over a real engine:
    a kept Input written then Stop, Play reaches its readers with the written value; a reset Input
    returns to its `default`; 1,000 writes in one second commit at most four write transactions and
    the database holds the last; a restart restores the kept value.

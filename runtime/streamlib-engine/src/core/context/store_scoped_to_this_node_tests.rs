@@ -70,7 +70,7 @@ fn closing_a_project_releases_its_store_once_no_other_runtime_holds_it() {
         .expect("writes");
     drop(from_the_runtime);
 
-    runtime.close_the_store_of_the_project_at(project_directory.path());
+    runtime.close_the_store_of_the_project_at(project_directory.path(), None);
     let reopened = streamlib_project_repository::ProjectStore::open_in_the_project_at(
         project_directory.path(),
     )
@@ -82,4 +82,41 @@ fn closing_a_project_releases_its_store_once_no_other_runtime_holds_it() {
             .is_ok(),
         "a project opened again opens its store again"
     );
+}
+
+#[test]
+fn closing_a_project_drops_the_keys_of_every_node_its_graphs_no_longer_hold() {
+    let project_directory = tempfile::tempdir().expect("a temporary project");
+    let node_still_held = uuid::Uuid::new_v4();
+    let node_deleted = uuid::Uuid::new_v4();
+    let runtime = ProjectStoresOpenInThisRuntime::default();
+    for node_uuid in [node_still_held, node_deleted] {
+        StoreScopedToThisNode::of_the_node(
+            runtime
+                .the_store_of_the_project_at(project_directory.path())
+                .expect("the runtime opens the store"),
+            node_uuid,
+        )
+        .write("value", &json!(0.5))
+        .expect("writes");
+    }
+
+    runtime.close_the_store_of_the_project_at(
+        project_directory.path(),
+        Some(&std::collections::HashSet::from([node_still_held])),
+    );
+    let reopened = ProjectStoresOpenInThisRuntime::default();
+    let store_of = |node_uuid| {
+        StoreScopedToThisNode::of_the_node(
+            reopened
+                .the_store_of_the_project_at(project_directory.path())
+                .expect("the store opens again"),
+            node_uuid,
+        )
+    };
+    assert_eq!(
+        store_of(node_still_held).read("value").expect("reads"),
+        Some(json!(0.5))
+    );
+    assert_eq!(store_of(node_deleted).read("value").expect("reads"), None);
 }
