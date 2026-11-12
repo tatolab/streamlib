@@ -459,7 +459,9 @@ mod tests {
     #[test]
     fn a_uuid_string_is_checked_as_one_and_any_other_string_is_not() {
         assert_eq!(
-            expression_outside_any_component(&json!({ "type": ["string", "null"], "format": "uuid" })),
+            expression_outside_any_component(
+                &json!({ "type": ["string", "null"], "format": "uuid" })
+            ),
             "z.guid().nullable()"
         );
         assert_eq!(

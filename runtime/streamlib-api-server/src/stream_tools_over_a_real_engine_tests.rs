@@ -2545,7 +2545,10 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
         loop {
             let stream_action_change =
                 the_next_notification_under(&mut subscriber, "stream_action_changed").await;
-            assert_eq!(stream_action_change["change"], "changed", "{stream_action_change}");
+            assert_eq!(
+                stream_action_change["change"], "changed",
+                "{stream_action_change}"
+            );
             if stream_action_change["action"] == action {
                 break;
             }
