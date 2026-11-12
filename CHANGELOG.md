@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.78](https://github.com/tatolab/streamlib/compare/v0.68.77...v0.68.78) (2026-11-12)
+
+
+### Features
+
+* **control:** /control/ws, with stream graph and stream action changes pushed over it ([832e807](https://github.com/tatolab/streamlib/commit/832e807642705e86736dacbe87a9b477f4ee719f))
+
 ## [0.68.77](https://github.com/tatolab/streamlib/compare/v0.68.76...v0.68.77) (2026-11-12)
 
 
