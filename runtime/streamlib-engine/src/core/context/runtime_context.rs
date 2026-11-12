@@ -53,6 +53,31 @@ impl LoadedStreamARuntimeContextBelongsTo {
         &self,
         node_uuid: uuid::Uuid,
     ) -> crate::core::error::Result<super::StoreScopedToThisNode> {
+        StoreOfOneNodeOpenedOnFirstUse {
+            project_stores: Arc::clone(&self.project_stores),
+            project_directory: Arc::clone(&self.project_directory),
+            node_uuid: Some(node_uuid),
+        }
+        .open()
+    }
+}
+
+/// One node's keys of its stream's project store, opened each time they are used.
+#[derive(Clone, Debug)]
+pub(crate) struct StoreOfOneNodeOpenedOnFirstUse {
+    pub(crate) project_stores: Arc<super::ProjectStoresOpenInThisRuntime>,
+    pub(crate) project_directory: Arc<std::path::Path>,
+    pub(crate) node_uuid: Option<uuid::Uuid>,
+}
+
+impl StoreOfOneNodeOpenedOnFirstUse {
+    /// Open the node's keys, refused when the context is no node's or the store does not open.
+    pub(crate) fn open(&self) -> crate::core::error::Result<super::StoreScopedToThisNode> {
+        let node_uuid = self.node_uuid.ok_or_else(|| {
+            crate::core::error::Error::Runtime(
+                "a context of no node has no store; only a node's own context does".to_string(),
+            )
+        })?;
         let project_store = self
             .project_stores
             .the_store_of_the_project_at(&self.project_directory)?;
@@ -416,12 +441,16 @@ impl RuntimeContext {
 
     /// The keys this node keeps in its project's store, opening the store on first use.
     pub fn store(&self) -> crate::core::error::Result<super::StoreScopedToThisNode> {
-        let node_uuid = self.node_uuid.ok_or_else(|| {
-            crate::core::error::Error::Runtime(
-                "a context of no node has no store; only a node's own context does".to_string(),
-            )
-        })?;
-        self.loaded_stream.the_store_of_the_node(node_uuid)
+        self.store_of_this_node_opened_on_first_use().open()
+    }
+
+    /// The node's store, left unopened until something reads or writes it.
+    pub(crate) fn store_of_this_node_opened_on_first_use(&self) -> StoreOfOneNodeOpenedOnFirstUse {
+        StoreOfOneNodeOpenedOnFirstUse {
+            project_stores: Arc::clone(&self.loaded_stream.project_stores),
+            project_directory: Arc::clone(&self.loaded_stream.project_directory),
+            node_uuid: self.node_uuid,
+        }
     }
 
     /// Check if this processor is paused.

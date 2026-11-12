@@ -975,7 +975,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
                         ctx.stream_id().to_string(),
                     ),
                 ),
-                store_of_the_node: ctx.store().ok(),
+                store_of_the_node: Some(ctx.host_base().store_of_this_node_opened_on_first_use()),
                 ..self.what_the_node_reaches.clone()
             },
         )?;

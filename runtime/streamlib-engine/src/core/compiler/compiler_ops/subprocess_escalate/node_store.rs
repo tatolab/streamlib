@@ -63,15 +63,16 @@ pub(super) fn handle_remove_node_store_key(
 
 fn the_store_of_the_node(
     what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
-) -> Result<&StoreScopedToThisNode> {
+) -> Result<StoreScopedToThisNode> {
     what_the_node_reaches
         .store_of_the_node
         .as_ref()
         .ok_or_else(|| {
             Error::Runtime(
-                "this node has no store: its stream keeps no project store for it".to_string(),
+                "this helper was spawned by no node's context, so it has no store".to_string(),
             )
-        })
+        })?
+        .open()
 }
 
 fn the_acknowledgement(rid: String) -> EscalateResponse {
@@ -93,38 +94,62 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::core::context::ProjectStoresOpenInThisRuntime;
+    use crate::core::context::{ProjectStoresOpenInThisRuntime, StoreOfOneNodeOpenedOnFirstUse};
 
-    fn the_value_read_back(
+    fn what_a_node_of_the_project_at_reaches(
+        project_stores: &Arc<ProjectStoresOpenInThisRuntime>,
+        project_directory: &std::path::Path,
+        node_uuid: uuid::Uuid,
+    ) -> WhatTheNodeOfAHelperPlacedProcessorReaches {
+        WhatTheNodeOfAHelperPlacedProcessorReaches {
+            store_of_the_node: Some(StoreOfOneNodeOpenedOnFirstUse {
+                project_stores: Arc::clone(project_stores),
+                project_directory: Arc::from(project_directory),
+                node_uuid: Some(node_uuid),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn the_read_answer(
         what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
         key: &str,
-    ) -> Option<serde_json::Value> {
-        match handle_read_node_store_key(
+    ) -> EscalateResponse {
+        handle_read_node_store_key(
             what_the_node_reaches,
             "r-read".to_string(),
             EscalateRequestReadNodeStoreKey {
                 key: key.to_string(),
                 request_id: "r-read".to_string(),
             },
-        ) {
+        )
+    }
+
+    fn the_value_read_back(
+        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        key: &str,
+    ) -> Option<serde_json::Value> {
+        match the_read_answer(what_the_node_reaches, key) {
             EscalateResponse::Ok(ok) => ok.node_store_value,
             EscalateResponse::Err(refused) => panic!("the read is refused: {}", refused.message),
         }
     }
 
     #[test]
-    fn a_helpers_node_reads_back_what_it_wrote_until_it_removes_it() {
+    fn a_helpers_node_writes_its_own_keys_of_the_project_store_until_it_removes_them() {
         let project_directory = tempfile::tempdir().expect("a temporary project");
         let project_stores = Arc::new(ProjectStoresOpenInThisRuntime::default());
-        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches {
-            store_of_the_node: Some(StoreScopedToThisNode::of_the_node(
-                project_stores
-                    .the_store_of_the_project_at(project_directory.path())
-                    .expect("the store opens"),
-                uuid::Uuid::new_v4(),
-            )),
-            ..Default::default()
-        };
+        let node_uuid = uuid::Uuid::new_v4();
+        let what_the_node_reaches = what_a_node_of_the_project_at_reaches(
+            &project_stores,
+            project_directory.path(),
+            node_uuid,
+        );
+        let what_another_node_reaches = what_a_node_of_the_project_at_reaches(
+            &project_stores,
+            project_directory.path(),
+            uuid::Uuid::new_v4(),
+        );
         assert_eq!(
             the_value_read_back(&what_the_node_reaches, "calibration"),
             None
@@ -145,7 +170,23 @@ mod tests {
         ));
         assert_eq!(
             the_value_read_back(&what_the_node_reaches, "calibration"),
+            Some(written.clone())
+        );
+        let the_nodes_own_keys = StoreScopedToThisNode::of_the_node(
+            project_stores
+                .the_store_of_the_project_at(project_directory.path())
+                .expect("the store opens"),
+            node_uuid,
+        );
+        assert_eq!(
+            the_nodes_own_keys
+                .read("calibration")
+                .expect("the key reads"),
             Some(written)
+        );
+        assert_eq!(
+            the_value_read_back(&what_another_node_reaches, "calibration"),
+            None
         );
 
         assert!(matches!(
@@ -166,14 +207,36 @@ mod tests {
     }
 
     #[test]
-    fn a_node_given_no_store_is_refused_by_name() {
-        let answer = handle_read_node_store_key(
+    fn a_store_that_does_not_open_is_refused_in_its_own_words() {
+        let not_a_directory =
+            tempfile::NamedTempFile::new().expect("a file where a project would be");
+        let project_stores = Arc::new(ProjectStoresOpenInThisRuntime::default());
+        let what_the_node_reaches = what_a_node_of_the_project_at_reaches(
+            &project_stores,
+            not_a_directory.path(),
+            uuid::Uuid::new_v4(),
+        );
+        let opening_it_directly = StoreOfOneNodeOpenedOnFirstUse {
+            project_stores: Arc::clone(&project_stores),
+            project_directory: Arc::from(not_a_directory.path()),
+            node_uuid: Some(uuid::Uuid::new_v4()),
+        }
+        .open()
+        .expect_err("a file is no project directory")
+        .to_string();
+
+        let answer = the_read_answer(&what_the_node_reaches, "calibration");
+        assert!(
+            matches!(&answer, EscalateResponse::Err(refused) if refused.message == opening_it_directly),
+            "{answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_helper_no_nodes_context_spawned_is_refused_by_name() {
+        let answer = the_read_answer(
             &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
-            "r-read".to_string(),
-            EscalateRequestReadNodeStoreKey {
-                key: "calibration".to_string(),
-                request_id: "r-read".to_string(),
-            },
+            "calibration",
         );
         assert!(
             matches!(&answer, EscalateResponse::Err(refused) if refused.request_id == "r-read" && refused.message.contains("no store")),

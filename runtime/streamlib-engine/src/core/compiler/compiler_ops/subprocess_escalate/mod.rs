@@ -105,7 +105,8 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 }
 
 /// Dispatch an [`EscalateRequest`] against `sandbox`, or — for a stream-facts,
-/// node failure or shared native service lease op — against what the helper's node reaches. Returns
+/// node failure, shared native service lease or node store op — against what the helper's node
+/// reaches. Returns
 /// `Some(EscalateResponse)` for request/response ops so the bridge can
 /// write a reply; returns `None` for fire-and-forget ops
 /// ([`EscalateRequest::Log`]) whose effect lands directly in the unified
