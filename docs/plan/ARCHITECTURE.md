@@ -348,7 +348,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   fails — every sync would wait on PyPI again (owner, 2026-11-10).
   Create is a queued stream action: the tool and `new` answer at once with its action id, the
   scaffold's stream id and the project directory. Owner, 2026-10-28 and 2026-10-31.
-  [create-project — SHIPPED #2982, #3012; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532]
+  [create-project — SHIPPED #2982, #3012; project-and-assets — SHIPPED #3261, #3263, #3275, #3285, #3295, #3301, #3303, #3317, #3329, #3348, #3366, #3384; offline-new-projects — SHIPPED #3505, #3508, #3512, #3532; amended by first-party-package-index: create renders
+  the starter or, given `sample` (`tatolab new --sample <name>`), copies a sample project the
+  runtime unit carries under a new project UUID, which `list_samples` lists by name, title and
+  summary; a sample the unit does not carry is refused by name, listing the ones it does]
   Rejected: `hello`, then `hello-2`, `hello-3`, … as the default project — a prototype's
   placeholder (owner, 2026-10-28).
   Rejected: uv from the user's `PATH`, refused when absent — an agent with no terminal could not

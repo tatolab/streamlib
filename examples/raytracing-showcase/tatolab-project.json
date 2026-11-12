@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "raytracing-showcase",
+  "description": "One scene rendered twice side by side, rasterised on the left and ray traced on the right.",
+  "name": "Ray tracing showcase",
   "project": "fec3efd2-99bd-489a-be04-0ebfe674aa7e"
 }

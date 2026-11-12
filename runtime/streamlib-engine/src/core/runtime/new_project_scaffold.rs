@@ -1,15 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The files a new stream project starts from, rendered from the templates the
-//! SDK carries — its project file and one stream asset's graph document among them — and
-//! their write into the project's directory.
+//! The files a new stream project starts from — the starter, rendered from the templates the
+//! SDK carries, or a sample project the runtime unit carries — and their write into the
+//! project's directory.
 
 use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use streamlib_project_repository::{PROJECT_FILE_NAME, THIS_RUNTIME_VERSION, TatolabProjectFile};
+use streamlib_project_repository::{
+    PROJECT_FILE_NAME, ProjectRepositoryRefusal, SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH,
+    SampleProjectTheRuntimeUnitCarries, THIS_RUNTIME_VERSION, TatolabProjectFile,
+};
 use uuid::Uuid;
 
 use super::StreamLocation;
@@ -49,28 +52,42 @@ pub(crate) struct ScaffoldedProjectFile {
     pub(crate) rendered_contents: String,
 }
 
-/// A new project as the scaffold starts it: its name, its project's UUID and its one stream
-/// asset's, each drawn fresh.
+/// A new project as the scaffold starts it: its name, its project's UUID and the UUID of its
+/// stream asset `main`, the project's drawn fresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NewProjectScaffold {
     /// The project's name: the folder it is created in.
     pub(crate) project_name: String,
     /// The project's UUID.
     pub(crate) project: Uuid,
-    /// Its one stream asset's UUID.
+    /// Its stream asset `main`'s UUID: drawn fresh for the starter, the sample's own for a sample.
     pub(crate) stream_asset: Uuid,
+    /// The sample it is copied from; `None` renders the starter.
+    pub(crate) sample: Option<SampleProjectTheRuntimeUnitCarries>,
 }
 
 impl NewProjectScaffold {
     /// A new project in `project_directory`, named after its folder, with fresh UUIDs.
     pub(crate) fn of_a_new_project_in(project_directory: &Path) -> Self {
         Self {
-            project_name: project_directory
-                .file_name()
-                .map(|folder_name| folder_name.to_string_lossy().into_owned())
-                .unwrap_or_default(),
+            project_name: the_project_name_of_the_folder(project_directory),
             project: Uuid::new_v4(),
             stream_asset: Uuid::new_v4(),
+            sample: None,
+        }
+    }
+
+    /// A new project in `project_directory` copied from `sample`, named after its folder, under a
+    /// fresh project UUID.
+    pub(crate) fn of_a_new_project_from_a_sample_in(
+        project_directory: &Path,
+        sample: SampleProjectTheRuntimeUnitCarries,
+    ) -> Self {
+        Self {
+            project_name: the_project_name_of_the_folder(project_directory),
+            project: Uuid::new_v4(),
+            stream_asset: sample.main_stream_asset,
+            sample: Some(sample),
         }
     }
 
@@ -118,6 +135,13 @@ impl NewProjectScaffold {
             Error::Runtime(format!("the graph document is not UTF-8: {not_utf8}"))
         })
     }
+}
+
+fn the_project_name_of_the_folder(project_directory: &Path) -> String {
+    project_directory
+        .file_name()
+        .map(|folder_name| folder_name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Every file `scaffold` starts with, in write order, rendered from the embedded templates.
@@ -180,13 +204,56 @@ pub(crate) fn python_distribution_name_for(directory_name: &str) -> String {
     }
 }
 
-/// Write the files `scaffold` starts from into `project_directory`, created when absent, its
+/// Write the files `scaffold` starts from into `project_directory`, created when absent: its
+/// sample's, its stream asset `main` shown under the project's name, or else the starter's, its
 /// distribution named after the folder. Refused, with nothing written, when any of those files
 /// is already there.
 pub(crate) fn write_the_new_project_scaffold_into(
     project_directory: &Path,
     scaffold: &NewProjectScaffold,
 ) -> Result<()> {
+    match &scaffold.sample {
+        Some(sample) => write_the_sample_project_into(project_directory, scaffold, sample),
+        None => write_the_starter_into(project_directory, scaffold),
+    }
+}
+
+fn write_the_sample_project_into(
+    project_directory: &Path,
+    scaffold: &NewProjectScaffold,
+    sample: &SampleProjectTheRuntimeUnitCarries,
+) -> Result<()> {
+    sample
+        .copy_into(project_directory, scaffold.project, &scaffold.project_name)
+        .map_err(|refusal| match refusal {
+            ProjectRepositoryRefusal::SampleProjectCopyWouldOverwrite { .. } => {
+                Error::Configuration(refusal.to_string())
+            }
+            other => Error::Runtime(format!(
+                "the sample `{}` was not copied, so the project may be left partly written: {other}",
+                sample.listed.name
+            )),
+        })?;
+    let main_stream_document_path =
+        project_directory.join(SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH);
+    let mut graph = GraphSnapshot::from_json_str(
+        &fs::read_to_string(&main_stream_document_path).map_err(|io_failure| {
+            Error::Runtime(format!(
+                "cannot read `{}`: {io_failure}",
+                main_stream_document_path.display()
+            ))
+        })?,
+    )?;
+    graph.display_name = Some(scaffold.project_name.clone());
+    fs::write(&main_stream_document_path, graph.graph_document_bytes()?).map_err(|io_failure| {
+        Error::Runtime(format!(
+            "cannot write `{}`: {io_failure}",
+            main_stream_document_path.display()
+        ))
+    })
+}
+
+fn write_the_starter_into(project_directory: &Path, scaffold: &NewProjectScaffold) -> Result<()> {
     let scaffolded_files = render_scaffold_template_files(
         &python_distribution_name_for(&scaffold.project_name),
         scaffold,
@@ -295,6 +362,7 @@ mod tests {
             project_name: project_name.to_string(),
             project: Uuid::new_v4(),
             stream_asset: Uuid::new_v4(),
+            sample: None,
         }
     }
 

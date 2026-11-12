@@ -12,7 +12,8 @@
 //! the lend and uv from its own directory. A wheel of `tatolab-stream` and of each core
 //! first-party module goes beside the lend in `lib/tatolab/imports/`, and the third-party
 //! wheels they require and one CPython build in `lib/tatolab/carried-wheels/` and
-//! `lib/tatolab/python-downloads/`.
+//! `lib/tatolab/python-downloads/`. Every converted example goes beside the lend as a sample
+//! project in `lib/tatolab/samples/<name>/`.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
 //! `runtime_unit_layout`, included by path because xtask does not link the
@@ -24,6 +25,7 @@ use crate::stage_browser_host::stage_the_browser_host;
 use crate::stage_first_party_modules::stage_the_first_party_modules;
 use crate::stage_runtime_unit_carried_packages::stage_the_carried_packages;
 use crate::stage_runtime_unit_uv::stage_the_runtime_unit_uv;
+use crate::stage_sample_projects::stage_the_sample_projects;
 use anyhow::{Context, Result};
 use engine_build_id_composition::{
     RUNTIME_UNIT_ENGINE_BUILD_NONCE_ENVIRONMENT_VARIABLE, mint_per_build_nonce,
@@ -39,7 +41,7 @@ pub(crate) use runtime_unit_layout::{
 pub(crate) use runtime_unit_layout::{
     browser_host_directory_beside_the_lend, carried_python_downloads_directory_beside_the_lend,
     carried_python_downloads_metadata_file_in, carried_wheels_directory_beside_the_lend,
-    first_party_modules_directory_beside_the_lend,
+    first_party_modules_directory_beside_the_lend, sample_projects_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
 
@@ -242,6 +244,7 @@ pub fn run(
 
     stage_the_browser_host(workspace_root)?;
     stage_the_first_party_modules(workspace_root)?;
+    stage_the_sample_projects(workspace_root)?;
     stage_the_carried_packages(workspace_root, macos_developer_id_application_identity)?;
 
     let bin_directory = runtime_unit_binary_directory_in_the_workspace(workspace_root);

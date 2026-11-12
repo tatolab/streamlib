@@ -37,6 +37,7 @@ pub mod stage_browser_host;
 pub mod stage_first_party_modules;
 pub mod stage_runtime_unit_carried_packages;
 pub mod stage_runtime_unit_uv;
+pub mod stage_sample_projects;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/`. `lint_logging` walks these by name rather

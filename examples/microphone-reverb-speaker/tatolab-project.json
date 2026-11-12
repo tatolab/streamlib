@@ -1,5 +1,6 @@
 {
   "dependencies": [],
-  "name": "microphone-reverb-speaker",
+  "description": "The microphone through a reverb to the speaker; wear headphones.",
+  "name": "Microphone reverb",
   "project": "2653f84a-bd95-4cbc-92fd-9fc260a45366"
 }
