@@ -283,23 +283,34 @@ impl LoadedStreamInThisRuntime {
         graph_whose_every_node_holds_a_uuid: GraphSnapshot,
         node_types_the_document_names: Vec<ProcessorClassImportPath>,
     ) -> Result<GraphDocumentAcceptedForAReconcile> {
-        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
-        let lend_directory = self.lend_directory();
-        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-            launch_record.describe_and_register_every_type_a_load_names(
-                node_types_the_document_names.iter(),
-                lend_directory.as_deref(),
-            )
-        }))
-        .await
-        .map_err(|join_failure| {
-            Error::Runtime(format!(
-                "the describe of the graph's node types did not finish: {join_failure}"
-            ))
-        })??;
+        if let Some(why_none_of_its_node_code_is_read) = self
+            .node_types_this_stream_resolves()
+            .why_every_node_type_is_held_as_a_placeholder()
+        {
+            self.node_types_this_stream_resolves()
+                .hold_a_placeholder_of_each_node_type_not_described(
+                    &graph_whose_every_node_holds_a_uuid,
+                    &why_none_of_its_node_code_is_read,
+                );
+        } else {
+            let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+            let lend_directory = self.lend_directory();
+            tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
+                launch_record.describe_and_register_every_type_a_load_names(
+                    node_types_the_document_names.iter(),
+                    lend_directory.as_deref(),
+                )
+            }))
+            .await
+            .map_err(|join_failure| {
+                Error::Runtime(format!(
+                    "the describe of the graph's node types did not finish: {join_failure}"
+                ))
+            })??;
+        }
         let resolution = graph_whose_every_node_holds_a_uuid
-            .with_graph_only_nodes_resolved(self.node_types_this_stream_resolves())?;
-        resolution.validate(self.node_types_this_stream_resolves())?;
+            .with_graph_only_nodes_resolved(self.node_types_this_stream_resolves())?
+            .validated_setting_aside_each_link_it_refuses(self.node_types_this_stream_resolves())?;
         let graph = &resolution.graph_the_runtime_runs;
 
         let mut document_node_index_by_uuid: HashMap<Uuid, usize> = HashMap::new();
@@ -329,6 +340,24 @@ impl LoadedStreamInThisRuntime {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let links_set_aside_before_the_document = self.the_links_set_aside_by_node_uuid();
+        for set_aside in &resolution
+            .graph_only_nodes_as_drawn
+            .links_its_validation_set_aside
+        {
+            let set_aside_by_node_uuid = RunningLinkBetweenTwoNodesByUuid {
+                source_node: document_node_uuid_named(&set_aside.link.source.node)?,
+                source_port: cast_name(&set_aside.link.source.port)?,
+                target_node: document_node_uuid_named(&set_aside.link.target.node)?,
+                target_port: cast_name(&set_aside.link.target.port)?,
+            };
+            if !links_set_aside_before_the_document.contains(&set_aside_by_node_uuid) {
+                return Err(Error::GraphError(format!(
+                    "the graph is refused: {}",
+                    set_aside.described()
+                )));
+            }
+        }
         Ok(GraphDocumentAcceptedForAReconcile {
             resolution,
             document_node_index_by_uuid,
@@ -374,6 +403,34 @@ impl LoadedStreamInThisRuntime {
     pub(super) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
         self.compiler
             .scope(|this_streams_graph, _tx| the_live_nodes_of(this_streams_graph))
+    }
+
+    /// Each link this stream's graph holds set aside by its validation, each end its node's
+    /// UUID; one naming a node the graph no longer holds is left out.
+    fn the_links_set_aside_by_node_uuid(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+        let node_uuid_of_each_name: HashMap<String, Uuid> = self
+            .the_live_nodes()
+            .into_iter()
+            .map(|live_node| (live_node.display_name, live_node.node_uuid))
+            .collect();
+        let node_uuid_named = |node_name: &str| {
+            cast_name(node_name)
+                .ok()
+                .and_then(|cast| node_uuid_of_each_name.get(&cast).copied())
+        };
+        self.graph_only_nodes_as_drawn
+            .lock()
+            .links_its_validation_set_aside
+            .iter()
+            .filter_map(|set_aside| {
+                Some(RunningLinkBetweenTwoNodesByUuid {
+                    source_node: node_uuid_named(&set_aside.link.source.node)?,
+                    source_port: cast_name(&set_aside.link.source.port).ok()?,
+                    target_node: node_uuid_named(&set_aside.link.target.node)?,
+                    target_port: cast_name(&set_aside.link.target.port).ok()?,
+                })
+            })
+            .collect()
     }
 
     pub(super) fn the_live_links_by_node_uuid(

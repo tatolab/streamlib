@@ -121,7 +121,9 @@ public contract, so it carries an ADR.
   and restores its recorded playback: playing, paused or stopped.
 - **A failed stream stays editable.** A stream whose code fails to describe is still held from
   its document, its unknown types as placeholder nodes keeping their saved config and ports,
-  shown `failed` with the reason; a document that will not parse is the only stream not held.
+  shown `failed` with the reason; a link its validation refuses is held as drawn and never
+  wired, shown `error` with the reason, and Play is refused while one stands; a document that
+  will not parse is the only stream not held.
 - **Edits and Play are ordered.** A Play reads the held graph after every edit committed before
   it was queued, so an edit landing while a Play prepares is either in that run or refused with
   the reason, never committed and missing from the run.
@@ -203,9 +205,11 @@ pressing Stop took the editor down with the flow (owner, 2026-11-11, #3542)."
 7. **Nothing ever disappears.** A stream or node that fails stays shown, to read and edit, so
    people can fix it; being able to stop is what lets them design and prototype without fearing
    broken state (owner, 2026-11-11). A failed stream is held stopped from its document at a
-   runtime start as at an open; one failed for crashing the runtime is listed failed with its
-   reason and built at no start until a play or reload retries it, since building it is what
-   crashed the runtime (session, 2026-11-11).
+   runtime start as at an open. One failed for crashing the runtime is held from its saved
+   document without reading any of its node code, since reading that code is what can crash the
+   runtime: every node and link drawn as saved and shown failed, editable, until a reload tries
+   it for real (owner, 2026-11-12). One that crashes the runtime even so is not loaded at a
+   start at all (session, 2026-11-12).
 
 ## Tickets (tracer bullets)
 

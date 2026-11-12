@@ -127,6 +127,7 @@ pub struct NodeTypesOneStreamResolves {
         RwLock<HashMap<ProcessorClassImportPath, ProcessExecution>>,
     placeholder_of_each_node_type_not_described:
         RwLock<HashMap<ProcessorClassImportPath, PlaceholderOfANodeTypeNotDescribed>>,
+    why_every_node_type_is_held_as_a_placeholder: RwLock<Option<String>>,
 }
 
 /// A node type a stream's graph document names and its node code did not describe, held as a
@@ -345,17 +346,31 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
-        PROCESSOR_REGISTRY
-            .port_info(node_type)
+        self.placeholder_of_the_node_type_not_described(node_type)
+            .map(|placeholder| placeholder.input_and_output_port_info)
+            .or_else(|| PROCESSOR_REGISTRY.port_info(node_type))
             .or_else(|| {
                 self.project_the_type_this_streams_interpreter_described(node_type, |described| {
                     described.input_and_output_port_info.clone()
                 })
             })
-            .or_else(|| {
-                self.placeholder_of_the_node_type_not_described(node_type)
-                    .map(|placeholder| placeholder.input_and_output_port_info)
-            })
+    }
+
+    /// Hold every node type a graph names as a placeholder from here on, reading none of its
+    /// node code, for `why_none_of_it_is_read`.
+    pub(crate) fn hold_every_node_type_as_a_placeholder_reading_no_node_code(
+        &self,
+        why_none_of_it_is_read: String,
+    ) {
+        *self.why_every_node_type_is_held_as_a_placeholder.write() = Some(why_none_of_it_is_read);
+    }
+
+    /// Why every node type a graph names is held as a placeholder, reading none of its node
+    /// code; `None` when node code is read.
+    pub(crate) fn why_every_node_type_is_held_as_a_placeholder(&self) -> Option<String> {
+        self.why_every_node_type_is_held_as_a_placeholder
+            .read()
+            .clone()
     }
 
     /// The placeholder this stream holds for `node_type`, which its node code did not describe.
@@ -379,6 +394,9 @@ impl NodeTypesOneStreamResolves {
         graph: &crate::core::graph_snapshot::GraphSnapshot,
         why_its_node_code_did_not_describe_them: &str,
     ) {
+        let every_node_type_is_held = self
+            .why_every_node_type_is_held_as_a_placeholder()
+            .is_some();
         use crate::core::descriptors::{PortFamily, PortFamilyDeclaration};
         use crate::core::graph::PortKind;
         let node_type_of_each_node: HashMap<&str, &ProcessorClassImportPath> = graph
@@ -390,7 +408,14 @@ impl NodeTypesOneStreamResolves {
             .nodes
             .iter()
             .map(|node| &node.processor_type)
-            .filter(|node_type| self.port_info(node_type).is_none())
+            .filter(|node_type| {
+                if every_node_type_is_held {
+                    self.placeholder_of_the_node_type_not_described(node_type)
+                        .is_none()
+                } else {
+                    self.port_info(node_type).is_none()
+                }
+            })
             .collect();
         if not_described.is_empty() {
             return;
@@ -426,7 +451,10 @@ impl NodeTypesOneStreamResolves {
                 PlaceholderOfANodeTypeNotDescribed {
                     why_its_node_code_did_not_describe_it: why_its_node_code_did_not_describe_them
                         .to_string(),
-                    input_and_output_port_info: (Vec::new(), Vec::new()),
+                    input_and_output_port_info: every_node_type_is_held
+                        .then(|| PROCESSOR_REGISTRY.port_info(node_type))
+                        .flatten()
+                        .unwrap_or_default(),
                 }
             });
             let (inputs, outputs) = &mut placeholder.input_and_output_port_info;
@@ -481,6 +509,12 @@ impl NodeTypesOneStreamResolves {
 
     /// How `node_type` runs, native first.
     pub(crate) fn node_kind(&self, node_type: &ProcessorClassImportPath) -> Option<NodeKind> {
+        if self
+            .placeholder_of_the_node_type_not_described(node_type)
+            .is_some()
+        {
+            return None;
+        }
         PROCESSOR_REGISTRY.node_kind(node_type).or_else(|| {
             self.project_the_type_this_streams_interpreter_described(node_type, |described| {
                 described.descriptor.node_kind
@@ -548,6 +582,12 @@ impl NodeTypesOneStreamResolves {
         node_type: &ProcessorClassImportPath,
         config: &serde_json::Value,
     ) -> Result<()> {
+        if self
+            .placeholder_of_the_node_type_not_described(node_type)
+            .is_some()
+        {
+            return Ok(());
+        }
         PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(node_name, node_type, config)
     }
 
