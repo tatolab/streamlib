@@ -24,6 +24,14 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   subscribe_project_changes(params: ControlOperations["subscribe_project_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_project_changes"]["result"]>;
   /**
+   * Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.
+   */
+  subscribe_stream_graph_changes(params: ControlOperations["subscribe_stream_graph_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_stream_graph_changes"]["result"]>;
+  /**
+   * Send this connection a `stream_action_changed` notification each time a stream action changes.
+   */
+  subscribe_stream_action_changes(params?: ControlOperations["subscribe_stream_action_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_stream_action_changes"]["result"]>;
+  /**
    * Describe this runtime: its version, its build id, how long it has been up and where it logs.
    */
   describe_runtime(params?: ControlOperations["describe_runtime"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["describe_runtime"]["result"]>;
@@ -311,4 +319,12 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * Hear each `project_changed` the connection is sent, checked against the contract; the returned function stops it. A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.
    */
   on_project_changed(listener: (params: ControlNotifications["project_changed"]) => void): () => void;
+  /**
+   * Hear each `stream_graph_changed` the connection is sent, checked against the contract; the returned function stops it. A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+   */
+  on_stream_graph_changed(listener: (params: ControlNotifications["stream_graph_changed"]) => void): () => void;
+  /**
+   * Hear each `stream_action_changed` the connection is sent, checked against the contract; the returned function stops it. A stream action changed, which `describe_stream_action` describes, or `missed`.
+   */
+  on_stream_action_changed(listener: (params: ControlNotifications["stream_action_changed"]) => void): () => void;
 }

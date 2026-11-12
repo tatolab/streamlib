@@ -1182,6 +1182,10 @@ mod connect_wires_a_matching_link_in_silence_tests {
                 }
                 Ok(())
             }
+
+            fn on_events_lost(&mut self, _lost_event_count: u64) -> Result<()> {
+                Ok(())
+            }
         }
 
         let announced = Arc::new(Mutex::new(Vec::new()));

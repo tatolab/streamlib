@@ -8,13 +8,16 @@ use crate::core::graph::{
     ShutdownChannelComponent, StateComponent, StepProgressOfOneNodeComponent,
 };
 use crate::core::processors::ProcessorState;
+use crate::core::pubsub::LoadedStreamIdentity;
 
 /// Attach infrastructure components to a processor node, its pause gate
-/// closed while its stream is paused.
+/// closed while its stream is paused, and publish each change of its state on
+/// `the_stream_the_processor_belongs_to`'s topic from its move to `Idle` on.
 /// Returns a barrier handle for coordinating with the processor thread.
 pub(crate) fn prepare_processor(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
+    the_stream_the_processor_belongs_to: &LoadedStreamIdentity,
 ) -> Result<ProcessorReadyBarrierHandle> {
     let paused_with_its_stream = graph.state() == GraphState::Paused;
     let node_mut = graph
@@ -38,6 +41,10 @@ pub(crate) fn prepare_processor(
     // was added, and a fresh component would strand every waiter already
     // holding the old one.
     if let Some(state) = node_mut.get::<StateComponent>() {
+        state.publish_each_change_as_a_processor_of(
+            proc_id.clone(),
+            the_stream_the_processor_belongs_to.clone(),
+        );
         state.transition_to(ProcessorState::Idle);
     }
 
@@ -62,7 +69,16 @@ mod tests {
         let processor_id = graph.traversal().v(()).ids().remove(0);
         graph.set_state(graph_state);
 
-        let _barrier = prepare_processor(&mut graph, &processor_id).expect("the node is prepared");
+        let _barrier = prepare_processor(
+            &mut graph,
+            &processor_id,
+            &crate::core::pubsub::LoadedStreamIdentity {
+                runtime_id: "prepare-processor-test".to_string(),
+                stream_id: "main".to_string(),
+                stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
+            },
+        )
+        .expect("the node is prepared");
 
         graph
             .traversal()

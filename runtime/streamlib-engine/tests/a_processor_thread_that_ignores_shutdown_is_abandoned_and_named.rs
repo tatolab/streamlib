@@ -100,6 +100,10 @@ impl EventListener for RemovedProcessorIdsRecorder {
         }
         Ok(())
     }
+
+    fn on_events_lost(&mut self, _lost_event_count: u64) -> Result<()> {
+        Ok(())
+    }
 }
 
 fn assert_the_graph_holds_no_processor(stream: &LoadedStreamInThisRuntime) {

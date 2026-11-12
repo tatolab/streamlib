@@ -9,7 +9,9 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
+use crate::core::graph::ProcessorUniqueId;
 use crate::core::processors::ProcessorState;
+use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 
 /// A processor's state together with the signal that it changed.
 ///
@@ -31,6 +33,14 @@ pub struct ObservableProcessorState {
     /// What the processor's `process()` raised or returned as an error the
     /// last time it ran, while it has not run cleanly since.
     process_raising_because: Mutex<Option<String>>,
+    state_changes_published_as: Mutex<Option<ProcessorStateChangesPublishedOnItsStreamsTopic>>,
+}
+
+/// The processor and stream each state change is published as a
+/// `ProcessorStateDidChange` of.
+struct ProcessorStateChangesPublishedOnItsStreamsTopic {
+    processor_id: ProcessorUniqueId,
+    stream: LoadedStreamIdentity,
 }
 
 /// How often a helper-placed processor's helper process has been started again
@@ -53,6 +63,44 @@ impl ObservableProcessorState {
             capture_device_access_never_asked_for: Mutex::new(None),
             helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
             process_raising_because: Mutex::new(None),
+            state_changes_published_as: Mutex::new(None),
+        }
+    }
+
+    /// From now on, publish each change of the state as a `ProcessorStateDidChange` of
+    /// `processor_id` on `stream`'s topic.
+    pub fn publish_each_change_as_a_processor_of(
+        &self,
+        processor_id: ProcessorUniqueId,
+        stream: LoadedStreamIdentity,
+    ) {
+        *self.state_changes_published_as.lock() =
+            Some(ProcessorStateChangesPublishedOnItsStreamsTopic {
+                processor_id,
+                stream,
+            });
+    }
+
+    /// Write `new_state` over `current`, which the caller holds locked, wake every waiter, and
+    /// publish the change under that lock so the changes publish in the order they were made.
+    fn write_the_state_and_publish_the_change(
+        &self,
+        current: &mut ProcessorState,
+        new_state: ProcessorState,
+    ) {
+        let old_state = std::mem::replace(current, new_state);
+        self.changed.notify_all();
+        if old_state == new_state {
+            return;
+        }
+        if let Some(published_as) = &*self.state_changes_published_as.lock() {
+            published_as.stream.publish_on_this_streams_topic(
+                RuntimeEvent::ProcessorStateDidChange {
+                    processor_id: published_as.processor_id.clone(),
+                    old_state,
+                    new_state,
+                },
+            );
         }
     }
 
@@ -63,8 +111,7 @@ impl ObservableProcessorState {
 
     /// Move the processor to `state` and wake everything waiting on it.
     pub fn transition_to(&self, state: ProcessorState) {
-        *self.current.lock() = state;
-        self.changed.notify_all();
+        self.write_the_state_and_publish_the_change(&mut self.current.lock(), state);
     }
 
     /// Move the processor to `Error`, keeping `reason` for whoever asks why,
@@ -96,8 +143,7 @@ impl ObservableProcessorState {
         let mut current = self.current.lock();
         *self.failure_reason.lock() = Some(reason);
         *self.capture_device_access_never_asked_for.lock() = capture_device_access_never_asked_for;
-        *current = ProcessorState::Error;
-        self.changed.notify_all();
+        self.write_the_state_and_publish_the_change(&mut current, ProcessorState::Error);
     }
 
     /// Why the processor failed, when it failed through [`Self::fail_with`].
@@ -168,8 +214,7 @@ impl ObservableProcessorState {
         if *current == ProcessorState::Error {
             return;
         }
-        *current = state;
-        self.changed.notify_all();
+        self.write_the_state_and_publish_the_change(&mut current, state);
     }
 
     /// Move the processor to `state` only while it is in `only_from`, and wake
@@ -183,8 +228,7 @@ impl ObservableProcessorState {
         if *current != only_from {
             return false;
         }
-        *current = state;
-        self.changed.notify_all();
+        self.write_the_state_and_publish_the_change(&mut current, state);
         true
     }
 
@@ -240,6 +284,16 @@ impl StateComponent {
         state: ProcessorState,
     ) -> bool {
         self.0.transition_to_only_from(only_from, state)
+    }
+
+    /// [`ObservableProcessorState::publish_each_change_as_a_processor_of`].
+    pub fn publish_each_change_as_a_processor_of(
+        &self,
+        processor_id: ProcessorUniqueId,
+        stream: LoadedStreamIdentity,
+    ) {
+        self.0
+            .publish_each_change_as_a_processor_of(processor_id, stream);
     }
 
     /// Share the state with a thread that will drive or observe it.
@@ -571,5 +625,102 @@ mod tests {
         );
         state.note_why_process_is_raising(None);
         assert_eq!(rendered.to_json(), JsonValue::Null);
+    }
+
+    struct EveryStateChangeHeardOnOneTopic(
+        std::sync::mpsc::Sender<(ProcessorUniqueId, ProcessorState, ProcessorState)>,
+    );
+
+    impl crate::core::pubsub::EventListener for EveryStateChangeHeardOnOneTopic {
+        fn on_event(
+            &mut self,
+            event: &crate::core::pubsub::Event,
+        ) -> crate::core::error::Result<()> {
+            if let crate::core::pubsub::Event::OfALoadedStream {
+                event:
+                    RuntimeEvent::ProcessorStateDidChange {
+                        processor_id,
+                        old_state,
+                        new_state,
+                    },
+                ..
+            } = event
+            {
+                let _ = self.0.send((processor_id.clone(), *old_state, *new_state));
+            }
+            Ok(())
+        }
+
+        fn on_events_lost(&mut self, _lost_event_count: u64) -> crate::core::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Every write that changes a published state publishes it on its stream's topic, in order,
+    /// and a write that leaves the state as it was, or one before publication starts, publishes
+    /// nothing.
+    ///
+    /// Mental-revert: drop the publish from any one write path and its change is missing below.
+    #[test]
+    fn each_write_that_changes_a_published_state_is_published_on_its_streams_topic() {
+        let stream = LoadedStreamIdentity {
+            runtime_id: "processor-state-publication-test".to_string(),
+            stream_id: "main".to_string(),
+            stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(7),
+        };
+        let (heard, received) = std::sync::mpsc::channel();
+        let listener: Arc<Mutex<dyn crate::core::pubsub::EventListener>> =
+            Arc::new(Mutex::new(EveryStateChangeHeardOnOneTopic(heard)));
+        crate::core::pubsub::PUBSUB
+            .subscribe(
+                &crate::core::pubsub::topics::loaded_stream(&stream),
+                Arc::clone(&listener),
+            )
+            .expect("subscribe");
+        let processor_id = ProcessorUniqueId::from("camera");
+        let state = ObservableProcessorState::new(ProcessorState::Pending);
+        state.transition_to(ProcessorState::Pending);
+        state.publish_each_change_as_a_processor_of(processor_id.clone(), stream);
+
+        state.transition_to(ProcessorState::Idle);
+        state.transition_to(ProcessorState::Idle);
+        assert!(state.transition_to_only_from(ProcessorState::Idle, ProcessorState::Running));
+        assert!(!state.transition_to_only_from(ProcessorState::Idle, ProcessorState::Stopped));
+        state.transition_to_unless_already_failed(ProcessorState::Paused);
+        state.fail_with("the camera went away");
+        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+
+        let every_change: Vec<_> = (0..4)
+            .map(|_| {
+                received
+                    .recv_timeout(UNREACHABLE_DEADLINE)
+                    .expect("a change was not published")
+            })
+            .collect();
+        assert_eq!(
+            every_change,
+            vec![
+                (
+                    processor_id.clone(),
+                    ProcessorState::Pending,
+                    ProcessorState::Idle
+                ),
+                (
+                    processor_id.clone(),
+                    ProcessorState::Idle,
+                    ProcessorState::Running
+                ),
+                (
+                    processor_id.clone(),
+                    ProcessorState::Running,
+                    ProcessorState::Paused
+                ),
+                (processor_id, ProcessorState::Paused, ProcessorState::Error),
+            ]
+        );
+        assert!(
+            received.recv_timeout(Duration::from_millis(100)).is_err(),
+            "a write that changed nothing was published"
+        );
     }
 }

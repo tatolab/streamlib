@@ -19,6 +19,7 @@ use crate::core::ProcessorDescriptor;
 use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
 use crate::core::processors::InstalledModuleOfANodeType;
+use crate::core::pubsub::LoadedStreamIdentity;
 
 /// What the local API reaches a runtime through: the runtime's description, the
 /// stream a call names, a stream's node catalog, and the stream
@@ -43,6 +44,14 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         stream_id: &str,
     ) -> Result<Arc<dyn RuntimeOperations>>;
+
+    /// The identity, and so the event topic, of the stream `stream_id` names as it is loaded now,
+    /// with the same [`Error::NotFound`](crate::core::error::Error::NotFound) refusal; a stream
+    /// loaded again answers a new one.
+    fn loaded_stream_identity_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<LoadedStreamIdentity>;
 
     /// The node types the loaded stream `stream_id` names resolves — the
     /// native ones, then the ones described in its own interpreter — with the
@@ -192,6 +201,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
     ) -> Result<Arc<dyn RuntimeOperations>> {
         self.loaded_stream_of_the_id(stream_id)
             .map(|stream| stream as Arc<dyn RuntimeOperations>)
+    }
+
+    fn loaded_stream_identity_of_the_stream_a_call_names(
+        &self,
+        stream_id: &str,
+    ) -> Result<LoadedStreamIdentity> {
+        self.loaded_stream_of_the_id(stream_id)
+            .map(|stream| stream.loaded_stream_identity().clone())
     }
 
     fn node_catalog_of_the_stream_a_call_names(

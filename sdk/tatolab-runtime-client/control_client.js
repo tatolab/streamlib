@@ -14,6 +14,14 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("subscribe_project_changes", params, callOptions);
   }
 
+  subscribe_stream_graph_changes(params, callOptions) {
+    return this.call("subscribe_stream_graph_changes", params, callOptions);
+  }
+
+  subscribe_stream_action_changes(params = {}, callOptions) {
+    return this.call("subscribe_stream_action_changes", params, callOptions);
+  }
+
   describe_runtime(params = {}, callOptions) {
     return this.call("describe_runtime", params, callOptions);
   }
@@ -300,5 +308,13 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   on_project_changed(listener) {
     return this.onNotification("project_changed", listener);
+  }
+
+  on_stream_graph_changed(listener) {
+    return this.onNotification("stream_graph_changed", listener);
+  }
+
+  on_stream_action_changed(listener) {
+    return this.onNotification("stream_action_changed", listener);
   }
 }

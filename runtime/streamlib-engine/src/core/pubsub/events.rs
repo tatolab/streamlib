@@ -37,9 +37,14 @@ pub mod topics {
     }
 }
 
-/// Trait for objects that can receive events
+/// A receiver of the events published on the topic it is subscribed to.
 pub trait EventListener: Send {
+    /// Hear one event.
     fn on_event(&mut self, event: &Event) -> Result<()>;
+
+    /// Hear that the bus dropped `lost_event_count` events for this listener
+    /// at its full queue, each published after the event it last heard.
+    fn on_events_lost(&mut self, lost_event_count: u64) -> Result<()>;
 }
 
 /// The loaded stream an event belongs to: the runtime that loaded it, its

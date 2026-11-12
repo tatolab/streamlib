@@ -498,6 +498,17 @@ Answer `contract_version`, the version of the contract this runtime serves, its 
 - Result: `DiscoverResult`
 - Errors: `1` refused, `2` failed, `3` contract version mismatch
 
+### `subscribe_stream_graph_changes`
+
+Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.
+
+Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+
+- Since contract version 2, experimental.
+- Params: `SubscribeStreamGraphChangesRequest`
+- Result: `SubscribeStreamGraphChangesResult`
+- Errors: `1` refused, `2` failed
+
 ### `describe_runtime`
 
 Describe this runtime: its version, its build id, how long it has been up and where it logs.
@@ -744,6 +755,17 @@ List the sample projects the runtime unit carries at its own version, each by th
 
 ## stream
 
+### `subscribe_stream_action_changes`
+
+Send this connection a `stream_action_changed` notification each time a stream action changes.
+
+Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.
+
+- Since contract version 2, experimental.
+- Params: `SubscribeStreamActionChangesRequest`
+- Result: `SubscribeStreamActionChangesResult`
+- Errors: `1` refused, `2` failed
+
 ### `list_streams`
 
 List every stream the runtime holds, by stream id, with its location and state.
@@ -832,3 +854,19 @@ A change on the feed of a project the connection subscribed to: a transaction ap
 - Sent after `subscribe_project_changes`.
 - Since contract version 1, experimental.
 - Params: `ProjectChangedNotificationParams`
+
+### `stream_graph_changed`
+
+A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+
+- Sent after `subscribe_stream_graph_changes`.
+- Since contract version 2, experimental.
+- Params: `StreamGraphChangedNotificationParams`
+
+### `stream_action_changed`
+
+A stream action changed, which `describe_stream_action` describes, or `missed`.
+
+- Sent after `subscribe_stream_action_changes`.
+- Since contract version 2, experimental.
+- Params: `StreamActionChangedNotificationParams`

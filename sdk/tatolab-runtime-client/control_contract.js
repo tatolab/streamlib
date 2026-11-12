@@ -8,6 +8,8 @@ export const CONTROL_CONTRACT_VERSION = 2;
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
   "subscribe_project_changes",
+  "subscribe_stream_graph_changes",
+  "subscribe_stream_action_changes",
   "describe_runtime",
   "list_streams",
   "graph",

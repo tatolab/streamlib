@@ -139,6 +139,44 @@ export interface SubscribeProjectChangesResult {
 }
 
 /**
+ * `subscribe_stream_graph_changes`' params.
+ */
+export interface SubscribeStreamGraphChangesRequest {
+  /**
+   * The loaded streams, by stream id, whose graph changes the connection is sent; refused when
+   * empty or when one is not loaded.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * What `subscribe_stream_graph_changes` answers: the streams the connection is now sent graph
+ * changes of.
+ */
+export interface SubscribeStreamGraphChangesResult {
+  /**
+   * Every stream the connection is subscribed to, by stream id, this call's among them.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * `subscribe_stream_action_changes`' params, which name nothing.
+ */
+export type SubscribeStreamActionChangesRequest = Record<string, never>;
+
+/**
+ * What `subscribe_stream_action_changes` answers: the actions under way when the subscription
+ * began, which the client describes once to follow from.
+ */
+export interface SubscribeStreamActionChangesResult {
+  /**
+   * The id of each stream action queued or running as the subscription began.
+   */
+  actions_under_way: Array<string>;
+}
+
+/**
  * `describe_runtime`'s params: none.
  */
 export type DescribeRuntimeRequest = Record<string, never>;
@@ -3624,6 +3662,58 @@ export interface ProjectChangedNotificationParams {
 export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
 
 /**
+ * `stream_graph_changed`'s params.
+ */
+export interface StreamGraphChangedNotificationParams {
+  /**
+   * The stream, by stream id.
+   */
+  stream: string;
+  /**
+   * What changed; `missed` when the client reads the graph again.
+   */
+  change: StreamGraphChangeKindOnTheWire;
+  /**
+   * The node whose state changed, by its graph `id`, when `change` is `node_state_changed`.
+   */
+  node?: string | null;
+  /**
+   * The node's new state, when `change` is `node_state_changed`.
+   */
+  node_state?: NodeStateOnTheWire | null;
+}
+
+/**
+ * What changed in a loaded stream's live graph.
+ */
+export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "playback_state_changed" | "missed";
+
+/**
+ * A node's state as `graph` renders it.
+ */
+export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
+
+/**
+ * `stream_action_changed`'s params.
+ */
+export interface StreamActionChangedNotificationParams {
+  /**
+   * What happened; `missed` when the client calls `describe_stream_action` for each action it
+   * follows.
+   */
+  change: StreamActionChangeKindOnTheWire;
+  /**
+   * The action that changed, by id, when `change` is `changed`.
+   */
+  action?: string | null;
+}
+
+/**
+ * What happened to the stream actions a connection follows.
+ */
+export type StreamActionChangeKindOnTheWire = "changed" | "missed";
+
+/**
  * `list_operation_groups`' params: none.
  */
 export type ListOperationGroupsRequest = Record<string, never>;
@@ -3788,6 +3878,28 @@ export interface ControlOperations {
   subscribe_project_changes: {
     params: SubscribeProjectChangesRequest;
     result: SubscribeProjectChangesResult;
+  };
+  /**
+   * Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.
+   *
+   * Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+   *
+   * Since contract version 2, experimental.
+   */
+  subscribe_stream_graph_changes: {
+    params: SubscribeStreamGraphChangesRequest;
+    result: SubscribeStreamGraphChangesResult;
+  };
+  /**
+   * Send this connection a `stream_action_changed` notification each time a stream action changes.
+   *
+   * Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.
+   *
+   * Since contract version 2, experimental.
+   */
+  subscribe_stream_action_changes: {
+    params: SubscribeStreamActionChangesRequest;
+    result: SubscribeStreamActionChangesResult;
   };
   /**
    * Describe this runtime: its version, its build id, how long it has been up and where it logs.
@@ -4578,6 +4690,18 @@ export interface ControlNotifications {
    * Since contract version 1, experimental.
    */
   project_changed: ProjectChangedNotificationParams;
+  /**
+   * A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, or `missed`.
+   *
+   * Since contract version 2, experimental.
+   */
+  stream_graph_changed: StreamGraphChangedNotificationParams;
+  /**
+   * A stream action changed, which `describe_stream_action` describes, or `missed`.
+   *
+   * Since contract version 2, experimental.
+   */
+  stream_action_changed: StreamActionChangedNotificationParams;
 }
 
 /** A method name the runtime serves. */

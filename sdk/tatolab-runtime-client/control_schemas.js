@@ -65,6 +65,24 @@ const SubscribeProjectChangesResult = z.looseObject({
   projects: z.array(z.guid()),
 });
 
+/** @type {z.ZodType<ControlContract.SubscribeStreamGraphChangesRequest>} */
+const SubscribeStreamGraphChangesRequest = z.strictObject({
+  streams: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamGraphChangesResult>} */
+const SubscribeStreamGraphChangesResult = z.looseObject({
+  streams: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamActionChangesRequest>} */
+const SubscribeStreamActionChangesRequest = z.strictObject({});
+
+/** @type {z.ZodType<ControlContract.SubscribeStreamActionChangesResult>} */
+const SubscribeStreamActionChangesResult = z.looseObject({
+  actions_under_way: z.array(z.string()),
+});
+
 /** @type {z.ZodType<ControlContract.DescribeRuntimeRequest>} */
 const DescribeRuntimeRequest = z.strictObject({});
 
@@ -1299,6 +1317,29 @@ const ProjectChangedNotificationParams = z.looseObject({
   transaction: ProjectTransactionOnTheWire.nullable().optional(),
 });
 
+/** @type {z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>} */
+const StreamGraphChangeKindOnTheWire = z.union([z.literal("edited"), z.literal("node_state_changed"), z.literal("playback_state_changed"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.NodeStateOnTheWire>} */
+const NodeStateOnTheWire = z.union([z.literal("Pending"), z.literal("Idle"), z.literal("Running"), z.literal("Paused"), z.literal("Stopping"), z.literal("Stopped"), z.literal("Error"), z.literal("Restarting")]);
+
+/** @type {z.ZodType<ControlContract.StreamGraphChangedNotificationParams>} */
+const StreamGraphChangedNotificationParams = z.looseObject({
+  stream: z.string(),
+  change: StreamGraphChangeKindOnTheWire,
+  node: z.string().nullable().optional(),
+  node_state: NodeStateOnTheWire.nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>} */
+const StreamActionChangeKindOnTheWire = z.union([z.literal("changed"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.StreamActionChangedNotificationParams>} */
+const StreamActionChangedNotificationParams = z.looseObject({
+  change: StreamActionChangeKindOnTheWire,
+  action: z.string().nullable().optional(),
+});
+
 /** @type {z.ZodType<ControlContract.ListOperationGroupsRequest>} */
 const ListOperationGroupsRequest = z.strictObject({});
 
@@ -1371,6 +1412,10 @@ export const ControlSchemas = Object.freeze({
     DiscoverResult,
     SubscribeProjectChangesRequest,
     SubscribeProjectChangesResult,
+    SubscribeStreamGraphChangesRequest,
+    SubscribeStreamGraphChangesResult,
+    SubscribeStreamActionChangesRequest,
+    SubscribeStreamActionChangesResult,
     DescribeRuntimeRequest,
     DescribeRuntimeToolResult,
     ListStreamsRequest,
@@ -1512,6 +1557,11 @@ export const ControlSchemas = Object.freeze({
     ProjectTransactionOnTheWire,
     ProjectChangedNotificationParams,
     ProjectChangeKindOnTheWire,
+    StreamGraphChangedNotificationParams,
+    StreamGraphChangeKindOnTheWire,
+    NodeStateOnTheWire,
+    StreamActionChangedNotificationParams,
+    StreamActionChangeKindOnTheWire,
     ListOperationGroupsRequest,
     ListOperationGroupsResult,
     AgentOperationGroup,
@@ -1532,6 +1582,14 @@ export const ControlSchemas = Object.freeze({
     subscribe_project_changes: Object.freeze({
       params: SubscribeProjectChangesRequest,
       result: SubscribeProjectChangesResult,
+    }),
+    subscribe_stream_graph_changes: Object.freeze({
+      params: SubscribeStreamGraphChangesRequest,
+      result: SubscribeStreamGraphChangesResult,
+    }),
+    subscribe_stream_action_changes: Object.freeze({
+      params: SubscribeStreamActionChangesRequest,
+      result: SubscribeStreamActionChangesResult,
     }),
     describe_runtime: Object.freeze({
       params: DescribeRuntimeRequest,
@@ -1820,5 +1878,7 @@ export const ControlSchemas = Object.freeze({
   }),
   notifications: Object.freeze({
     project_changed: ProjectChangedNotificationParams,
+    stream_graph_changed: StreamGraphChangedNotificationParams,
+    stream_action_changed: StreamActionChangedNotificationParams,
   }),
 });

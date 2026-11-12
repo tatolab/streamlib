@@ -368,7 +368,11 @@ impl Compiler {
 
                 tracing::info!("[{}] Preparing {}", CompilePhase::Prepare, proc_id);
 
-                let barrier_handle = super::compiler_ops::prepare_processor(&mut graph, proc_id)?;
+                let barrier_handle = super::compiler_ops::prepare_processor(
+                    &mut graph,
+                    proc_id,
+                    the_stream_the_compile_belongs_to,
+                )?;
                 barrier_handles.push((proc_id.clone(), barrier_handle));
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(

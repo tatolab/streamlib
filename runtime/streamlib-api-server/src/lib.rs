@@ -17,6 +17,7 @@ mod control_operations_on_project_views;
 mod control_operations_on_stream_graph_history;
 #[cfg(test)]
 mod control_plane_stub_support;
+mod control_subscriptions_of_one_connection;
 mod first_party_package_moves_recorded_in_the_open_projects;
 mod handlers;
 mod local_api_served_for_an_engine;

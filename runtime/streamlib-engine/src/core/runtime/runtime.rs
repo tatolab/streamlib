@@ -2544,6 +2544,10 @@ mod tests {
                 }
                 Ok(())
             }
+
+            fn on_events_lost(&mut self, _lost_event_count: u64) -> Result<()> {
+                Ok(())
+            }
         }
 
         let project_directory = a_project_directory_this_test_owns();
@@ -2598,6 +2602,10 @@ mod tests {
     impl crate::core::pubsub::EventListener for EveryEventOnOneStreamsTopic {
         fn on_event(&mut self, event: &crate::core::pubsub::Event) -> Result<()> {
             self.0.lock().push(event.clone());
+            Ok(())
+        }
+
+        fn on_events_lost(&mut self, _lost_event_count: u64) -> Result<()> {
             Ok(())
         }
     }

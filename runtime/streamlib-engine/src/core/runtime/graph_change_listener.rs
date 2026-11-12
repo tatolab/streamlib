@@ -35,6 +35,34 @@ impl GraphChangeListener {
     }
 }
 
+impl GraphChangeListener {
+    /// Compile the stream's graph on the async runtime, once the stream is started.
+    fn commit_the_graph_once_started(&self) {
+        if *self.status.lock() != RuntimeStatus::Started {
+            tracing::debug!(
+                "[GraphChangeListener] Runtime not started, commit deferred to start()"
+            );
+            return;
+        }
+        let Some(runtime_context) = self.runtime_context.lock().clone() else {
+            tracing::debug!("[GraphChangeListener] No runtime context, skipping commit");
+            return;
+        };
+        let compiler = Arc::clone(&self.compiler);
+        let runtime_context_for_the_commit = Arc::clone(&runtime_context);
+        runtime_context
+            .tokio_handle()
+            .spawn(polled_in_a_project_log_route_entry(
+                Arc::clone(runtime_context.this_streams_log_route()),
+                async move {
+                    if let Err(e) = compiler.commit(&runtime_context_for_the_commit) {
+                        tracing::error!("[GraphChangeListener] Commit failed: {}", e);
+                    }
+                },
+            ));
+    }
+}
+
 impl EventListener for GraphChangeListener {
     fn on_event(&mut self, event: &Event) -> Result<()> {
         if let Event::OfALoadedStream {
@@ -42,37 +70,14 @@ impl EventListener for GraphChangeListener {
             ..
         } = event
         {
-            // Only compile when runtime is started
-            if *self.status.lock() != RuntimeStatus::Started {
-                tracing::debug!(
-                    "[GraphChangeListener] Runtime not started, commit deferred to start()"
-                );
-                return Ok(());
-            }
-
-            // Get runtime context
-            let ctx = match self.runtime_context.lock().clone() {
-                Some(ctx) => ctx,
-                None => {
-                    tracing::debug!("[GraphChangeListener] No runtime context, skipping commit");
-                    return Ok(());
-                }
-            };
-
-            // Dispatch commit to tokio (non-blocking)
-            // Note: compiler.commit() has no main thread requirements - uses only thread-safe primitives
-            let compiler = Arc::clone(&self.compiler);
-            let ctx_for_closure = Arc::clone(&ctx);
-            ctx.tokio_handle()
-                .spawn(polled_in_a_project_log_route_entry(
-                    Arc::clone(ctx.this_streams_log_route()),
-                    async move {
-                        if let Err(e) = compiler.commit(&ctx_for_closure) {
-                            tracing::error!("[GraphChangeListener] Commit failed: {}", e);
-                        }
-                    },
-                ));
+            self.commit_the_graph_once_started();
         }
+        Ok(())
+    }
+
+    /// A lost event may have been a `GraphDidChange`, so the graph is compiled as if it was.
+    fn on_events_lost(&mut self, _lost_event_count: u64) -> Result<()> {
+        self.commit_the_graph_once_started();
         Ok(())
     }
 }

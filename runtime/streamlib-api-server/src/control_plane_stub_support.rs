@@ -257,6 +257,21 @@ pub(crate) fn refuse_a_stream_the_stub_runtime_does_not_load(
     }
 }
 
+/// The identity the stub stream is loaded under, one for the whole test process.
+pub(crate) fn the_stub_streams_loaded_identity() -> ::streamlib::sdk::pubsub::LoadedStreamIdentity {
+    static THE_STUB_STREAMS_LOADED_IDENTITY: ::std::sync::OnceLock<
+        ::streamlib::sdk::pubsub::LoadedStreamIdentity,
+    > = ::std::sync::OnceLock::new();
+    THE_STUB_STREAMS_LOADED_IDENTITY
+        .get_or_init(|| ::streamlib::sdk::pubsub::LoadedStreamIdentity {
+            runtime_id: STUB_MACHINE_NAME.to_owned(),
+            stream_id: STUB_STREAM_ID.to_owned(),
+            stream_tag: ::streamlib::sdk::runtime::LoadedStreamTag::next_in_this_process()
+                .expect("a stream tag is left for the stub stream"),
+        })
+        .clone()
+}
+
 /// The refusal every stream action meets on a stub runtime, which loads its
 /// one stream and no other.
 pub(crate) fn the_stub_runtime_takes_no_stream_action(
@@ -300,6 +315,15 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     stream_id,
                 )?;
                 Ok(::std::sync::Arc::new(self.clone()))
+            }
+            fn loaded_stream_identity_of_the_stream_a_call_names(
+                &self,
+                stream_id: &str,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::pubsub::LoadedStreamIdentity> {
+                $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
+                    stream_id,
+                )?;
+                Ok($crate::control_plane_stub_support::the_stub_streams_loaded_identity())
             }
             fn node_catalog_of_the_stream_a_call_names(
                 &self,

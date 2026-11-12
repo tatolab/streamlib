@@ -215,7 +215,7 @@ pub(crate) fn control_request_origin_of_an_mcp_tool_call(
         client_name: tool_call_request_context
             .client_info()
             .map(|client| client.name),
-        project_change_subscriptions: None,
+        subscriptions: None,
         viewers_held_open: None,
     }
 }

@@ -16,11 +16,14 @@ use axum::routing::{MethodRouter, get, post};
 use futures_util::stream::SplitStream;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
     CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATION_FAILED_ERROR_CODE,
     CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlNotification, ControlOperationCall,
     ControlOperationCallParseRefusal, ProjectChangeKindOnTheWire, ProjectChanged,
-    ProjectChangedNotificationParams,
+    ProjectChangedNotificationParams, StreamActionChangeKindOnTheWire, StreamActionChanged,
+    StreamActionChangedNotificationParams, StreamGraphChangeKindOnTheWire, StreamGraphChanged,
+    StreamGraphChangedNotificationParams,
 };
 use streamlib_project_repository::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
@@ -35,9 +38,9 @@ use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
-    ControlRequestOrigin, ProjectChangeSubscriptionsOfOneConnection,
-    refuse_another_contract_version,
+    ControlRequestOrigin, refuse_another_contract_version,
 };
+use crate::control_subscriptions_of_one_connection::ControlSubscriptionsOfOneConnection;
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
 const JSON_RPC_VERSION: &str = "2.0";
@@ -48,6 +51,10 @@ const JSON_RPC_INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// How many answers and notifications one WebSocket may have waiting to be written.
 const CONTROL_WEBSOCKET_OUTGOING_MESSAGE_CAPACITY: usize = 256;
+
+/// How many stream graph changes heard for one WebSocket may wait to become notifications; past
+/// it, its `PUBSUB` listeners wait, and their queues lose events.
+const CONTROL_WEBSOCKET_STREAM_GRAPH_CHANGES_HEARD_CAPACITY: usize = 64;
 
 /// `POST /control`'s route: each request body is one JSON-RPC message, answered in the response.
 pub(crate) fn control_json_rpc_route<S>(dispatcher: ControlOperationDispatcher) -> MethodRouter<S>
@@ -89,7 +96,7 @@ async fn answer_one_control_json_rpc_post(
 ) -> Response {
     let request_origin = ControlRequestOrigin {
         client_name: the_client_name_a_request_sent(&request_headers),
-        project_change_subscriptions: None,
+        subscriptions: None,
         viewers_held_open: None,
     };
     let answer = match the_contract_version_a_request_sent(&request_headers) {
@@ -139,9 +146,13 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
         Ok(()) => {}
         Err(refused) => return refused.into_response(),
     }
+    let (stream_graph_changes_to_the_connection, stream_graph_changes_heard) =
+        mpsc::channel(CONTROL_WEBSOCKET_STREAM_GRAPH_CHANGES_HEARD_CAPACITY);
     let request_origin = ControlRequestOrigin {
         client_name: the_client_name_a_request_sent(&request_headers),
-        project_change_subscriptions: Some(Arc::default()),
+        subscriptions: Some(Arc::new(ControlSubscriptionsOfOneConnection::new(
+            stream_graph_changes_to_the_connection,
+        ))),
         viewers_held_open: Some(Arc::default()),
     };
     websocket_upgrade.on_upgrade(move |websocket| {
@@ -149,6 +160,7 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
             dispatcher,
             project_repositories,
             request_origin,
+            stream_graph_changes_heard,
             websocket,
             local_api_stopping_token,
         )
@@ -177,28 +189,39 @@ fn the_contract_version_a_request_sent(request_headers: &HeaderMap) -> Result<Op
 }
 
 /// Serve one WebSocket: answer each request as it completes, send each change of a subscribed
-/// project, and end once the client closes and every answer is written, or the local API stops.
+/// project, stream graph and stream action, and end once the client closes and every answer is
+/// written, or the local API stops.
 async fn serve_control_json_rpc_over_a_websocket(
     dispatcher: ControlOperationDispatcher,
     project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
     request_origin: ControlRequestOrigin,
+    stream_graph_changes_heard: mpsc::Receiver<StreamGraphChangedNotificationParams>,
     websocket: WebSocket,
     local_api_stopping_token: CancellationToken,
 ) {
+    let Some(subscriptions) = request_origin.subscriptions.clone() else {
+        tracing::error!("a control WebSocket was served with no subscriptions of its own");
+        return;
+    };
     let (mut messages_to_the_client, messages_from_the_client) = websocket.split();
     let (outgoing_message_sender, mut outgoing_messages) =
         mpsc::channel::<Value>(CONTROL_WEBSOCKET_OUTGOING_MESSAGE_CAPACITY);
     let connection_ended = CancellationToken::new();
-    let project_change_subscriptions = request_origin
-        .project_change_subscriptions
-        .clone()
-        .unwrap_or_default();
     tokio::spawn(send_project_changes_until_the_connection_ends(
         project_repositories.subscribe_to_the_change_feed(),
-        project_change_subscriptions,
+        Arc::clone(&subscriptions),
         outgoing_message_sender.clone(),
         connection_ended.clone(),
     ));
+    tokio::spawn(
+        send_stream_graph_and_action_changes_until_the_connection_ends(
+            Arc::clone(&dispatcher.operations_on_the_loaded_streams),
+            subscriptions,
+            stream_graph_changes_heard,
+            outgoing_message_sender.clone(),
+            connection_ended.clone(),
+        ),
+    );
     let reading_requests = tokio::spawn(read_and_answer_requests_until_the_client_closes(
         dispatcher,
         request_origin,
@@ -290,7 +313,7 @@ async fn read_and_answer_requests_until_the_client_closes(
 /// connection ends.
 async fn send_project_changes_until_the_connection_ends(
     mut change_feed: tokio::sync::broadcast::Receiver<ProjectChangeFeedAnnouncement>,
-    project_change_subscriptions: Arc<ProjectChangeSubscriptionsOfOneConnection>,
+    subscriptions: Arc<ControlSubscriptionsOfOneConnection>,
     outgoing_message_sender: mpsc::Sender<Value>,
     connection_ended: CancellationToken,
 ) {
@@ -300,7 +323,7 @@ async fn send_project_changes_until_the_connection_ends(
             received = change_feed.recv() => received,
         };
         let notifications: Vec<ProjectChangedNotificationParams> = match received {
-            Ok(announcement) if project_change_subscriptions.holds(announcement.project) => {
+            Ok(announcement) if subscriptions.holds_the_project(announcement.project) => {
                 vec![the_notification_of_an_announcement(announcement)]
             }
             Ok(_) => Vec::new(),
@@ -309,7 +332,7 @@ async fn send_project_changes_until_the_connection_ends(
                     missed_announcement_count,
                     "a control stream fell behind the change feed; every subscribed project is sent `missed`"
                 );
-                project_change_subscriptions
+                subscriptions
                     .every_subscribed_project()
                     .into_iter()
                     .map(|project| ProjectChangedNotificationParams {
@@ -322,13 +345,112 @@ async fn send_project_changes_until_the_connection_ends(
             Err(RecvError::Closed) => return,
         };
         for params in notifications {
-            let notification = json!({
-                "jsonrpc": JSON_RPC_VERSION,
-                "method": ProjectChanged::METHOD_NAME,
-                "params": params,
-            });
-            if outgoing_message_sender.send(notification).await.is_err() {
+            if send_a_notification::<ProjectChanged>(&outgoing_message_sender, params)
+                .await
+                .is_err()
+            {
                 return;
+            }
+        }
+    }
+}
+
+/// Send `Notification` with `params` to the client; an error once the connection has ended.
+async fn send_a_notification<Notification: ControlNotification>(
+    outgoing_message_sender: &mpsc::Sender<Value>,
+    params: Notification::Params,
+) -> Result<(), ()> {
+    outgoing_message_sender
+        .send(json!({
+            "jsonrpc": JSON_RPC_VERSION,
+            "method": Notification::METHOD_NAME,
+            "params": params,
+        }))
+        .await
+        .map_err(drop)
+}
+
+/// Send each change heard in a followed stream's graph as a `stream_graph_changed`
+/// notification, and each stream action change as a `stream_action_changed` once the
+/// connection subscribed to them, until the connection ends. Each stream action change also
+/// moves each followed stream to the load it has now, sending `missed` for one whose load
+/// changed.
+async fn send_stream_graph_and_action_changes_until_the_connection_ends(
+    operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    subscriptions: Arc<ControlSubscriptionsOfOneConnection>,
+    mut stream_graph_changes_heard: mpsc::Receiver<StreamGraphChangedNotificationParams>,
+    outgoing_message_sender: mpsc::Sender<Value>,
+    connection_ended: CancellationToken,
+) {
+    let mut stream_action_changes =
+        operations_on_the_loaded_streams.listen_for_each_stream_action_change();
+    loop {
+        tokio::select! {
+            () = connection_ended.cancelled() => return,
+            stream_graph_change = stream_graph_changes_heard.recv() => {
+                let Some(stream_graph_change) = stream_graph_change else {
+                    return;
+                };
+                if send_a_notification::<StreamGraphChanged>(&outgoing_message_sender, stream_graph_change)
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            stream_action_change = stream_action_changes.recv() => {
+                let stream_action_notification = match stream_action_change {
+                    Ok(action) => StreamActionChangedNotificationParams {
+                        change: StreamActionChangeKindOnTheWire::Changed,
+                        action: Some(action),
+                    },
+                    Err(RecvError::Lagged(missed_stream_action_change_count)) => {
+                        tracing::debug!(
+                            missed_stream_action_change_count,
+                            "a control WebSocket fell behind the stream actions; it is sent `missed`"
+                        );
+                        StreamActionChangedNotificationParams {
+                            change: StreamActionChangeKindOnTheWire::Missed,
+                            action: None,
+                        }
+                    }
+                    Err(RecvError::Closed) => return,
+                };
+                if subscriptions.is_subscribed_to_stream_actions()
+                    && send_a_notification::<StreamActionChanged>(
+                        &outgoing_message_sender,
+                        stream_action_notification,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let operations_on_the_loaded_streams = Arc::clone(&operations_on_the_loaded_streams);
+                let subscriptions = Arc::clone(&subscriptions);
+                let Ok(streams_whose_load_changed) = tokio::task::spawn_blocking(move || {
+                    subscriptions.follow_each_stream_graph_to_its_current_load(
+                        operations_on_the_loaded_streams.as_ref(),
+                    )
+                })
+                .await
+                else {
+                    return;
+                };
+                for stream in streams_whose_load_changed {
+                    let missed = StreamGraphChangedNotificationParams {
+                        stream,
+                        change: StreamGraphChangeKindOnTheWire::Missed,
+                        node: None,
+                        node_state: None,
+                    };
+                    if send_a_notification::<StreamGraphChanged>(&outgoing_message_sender, missed)
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
             }
         }
     }

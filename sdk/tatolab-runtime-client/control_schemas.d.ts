@@ -19,6 +19,10 @@ export interface ControlSchemasOfTheContract {
     readonly DiscoverResult: z.ZodType<ControlContract.DiscoverResult>;
     readonly SubscribeProjectChangesRequest: z.ZodType<ControlContract.SubscribeProjectChangesRequest>;
     readonly SubscribeProjectChangesResult: z.ZodType<ControlContract.SubscribeProjectChangesResult>;
+    readonly SubscribeStreamGraphChangesRequest: z.ZodType<ControlContract.SubscribeStreamGraphChangesRequest>;
+    readonly SubscribeStreamGraphChangesResult: z.ZodType<ControlContract.SubscribeStreamGraphChangesResult>;
+    readonly SubscribeStreamActionChangesRequest: z.ZodType<ControlContract.SubscribeStreamActionChangesRequest>;
+    readonly SubscribeStreamActionChangesResult: z.ZodType<ControlContract.SubscribeStreamActionChangesResult>;
     readonly DescribeRuntimeRequest: z.ZodType<ControlContract.DescribeRuntimeRequest>;
     readonly DescribeRuntimeToolResult: z.ZodType<ControlContract.DescribeRuntimeToolResult>;
     readonly ListStreamsRequest: z.ZodType<ControlContract.ListStreamsRequest>;
@@ -160,6 +164,11 @@ export interface ControlSchemasOfTheContract {
     readonly ProjectTransactionOnTheWire: z.ZodType<ControlContract.ProjectTransactionOnTheWire>;
     readonly ProjectChangedNotificationParams: z.ZodType<ControlContract.ProjectChangedNotificationParams>;
     readonly ProjectChangeKindOnTheWire: z.ZodType<ControlContract.ProjectChangeKindOnTheWire>;
+    readonly StreamGraphChangedNotificationParams: z.ZodType<ControlContract.StreamGraphChangedNotificationParams>;
+    readonly StreamGraphChangeKindOnTheWire: z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>;
+    readonly NodeStateOnTheWire: z.ZodType<ControlContract.NodeStateOnTheWire>;
+    readonly StreamActionChangedNotificationParams: z.ZodType<ControlContract.StreamActionChangedNotificationParams>;
+    readonly StreamActionChangeKindOnTheWire: z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>;
     readonly ListOperationGroupsRequest: z.ZodType<ControlContract.ListOperationGroupsRequest>;
     readonly ListOperationGroupsResult: z.ZodType<ControlContract.ListOperationGroupsResult>;
     readonly AgentOperationGroup: z.ZodType<ControlContract.AgentOperationGroup>;
