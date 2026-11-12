@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-moq"
-version = "0.68.81"
+version = "0.68.82"
 description = "MoQ gateway, track, send and receive nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -25,7 +25,7 @@ classifiers = [
 # processor interpreter, which borrows `tatolab.runtime` from the runtime that
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
-dependencies = ["tatolab-stream>=0.68.81"]  # x-release-please-version
+dependencies = ["tatolab-stream>=0.68.82"]  # x-release-please-version
 
 [project.entry-points."tatolab.nodes"]
 MoqGateway = "tatolab.moq:MoqGateway"

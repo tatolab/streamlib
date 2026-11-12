@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.68.82](https://github.com/tatolab/streamlib/compare/v0.68.81...v0.68.82) (2026-11-12)
+
+
+### Features
+
+* **runtime:** refuse a project whose streams share a node UUID ([652756a](https://github.com/tatolab/streamlib/commit/652756a6f7192e10a59d28ea70264ad51ad6400e))
+
+
+### Bug Fixes
+
+* **release:** the Vulkan-loader gates play the project they create ([9300beb](https://github.com/tatolab/streamlib/commit/9300bebe8b266c9806912354a62c1b7be50580f5))
+
 ## [0.68.81](https://github.com/tatolab/streamlib/compare/v0.68.80...v0.68.81) (2026-11-12)
 
 
