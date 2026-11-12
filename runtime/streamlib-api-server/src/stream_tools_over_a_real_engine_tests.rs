@@ -3541,7 +3541,32 @@ async fn an_edit_inside_a_collapsed_subgraph_reaches_the_running_stream_and_undo
          {live_subgraph}"
     );
 
-    for _ in 0..2 {
+    let graph_input_config = the_node_named(
+        &the_node_named(&project.the_graph_document_of("main"), "sub")["fragment"],
+        "pass-sink-video",
+    )["config"]
+        .clone();
+    let mut renamed_port_config = graph_input_config.clone();
+    renamed_port_config["port"] = json!("video_in");
+    call(
+        "set_node_config",
+        json!({ "stream": stream_asset, "level": [subgraph], "node": graph_input,
+                "config": renamed_port_config, "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("the subgraph's port is renamed from inside it");
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("main")),
+        ["source/video -> sub/video_in"],
+        "the link onto the renamed port follows it"
+    );
+    assert_eq!(
+        links_by_node_name_in(&engine.the_live_graph_of(&stream_id)),
+        ["source/video -> sub/video_in"],
+        "the running link onto the renamed port follows it"
+    );
+
+    for _ in 0..3 {
         call(
             "undo",
             json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
