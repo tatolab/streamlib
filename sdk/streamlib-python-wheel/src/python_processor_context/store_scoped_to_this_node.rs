@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::types::{PyDict, PyFloat, PyList, PyTuple};
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 
@@ -30,6 +30,7 @@ impl PythonStoreScopedToThisNode {
     /// Keep `value`, anything JSON can hold, under `key`, replacing what was there.
     fn write(&self, python: Python<'_>, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let op = self.node_store_op(python, "write_node_store_key", key)?;
+        refuse_a_float_json_cannot_hold(value)?;
         let value_as_json = python_object_to_json_value(value)?;
         op.set_item(
             "value",
@@ -76,4 +77,30 @@ impl PythonStoreScopedToThisNode {
             .bind(python)
             .call1((op,))
     }
+}
+
+/// Refuse a NaN or an infinity anywhere in `value`, which the shared JSON conversion
+/// would otherwise keep as `null`.
+fn refuse_a_float_json_cannot_hold(value: &Bound<'_, PyAny>) -> PyResult<()> {
+    if let Ok(float) = value.cast::<PyFloat>() {
+        if !float.value().is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "a store keeps what JSON can hold, and JSON holds no {}",
+                float.value()
+            )));
+        }
+    } else if let Ok(mapping) = value.cast::<PyDict>() {
+        for (_, item) in mapping.iter() {
+            refuse_a_float_json_cannot_hold(&item)?;
+        }
+    } else if let Ok(sequence) = value.cast::<PyList>() {
+        for item in sequence.iter() {
+            refuse_a_float_json_cannot_hold(&item)?;
+        }
+    } else if let Ok(sequence) = value.cast::<PyTuple>() {
+        for item in sequence.iter() {
+            refuse_a_float_json_cannot_hold(&item)?;
+        }
+    }
+    Ok(())
 }

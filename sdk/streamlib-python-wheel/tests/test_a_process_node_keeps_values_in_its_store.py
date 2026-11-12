@@ -44,8 +44,11 @@ def contexts_escalating_to(parent: StandInParentKeepingNodeStoreValues):
         "processor-under-test",
         parent,
     )
-    return full_access_context, _engine.limited_access_view_of_runtime_context_for_helper_process(
-        full_access_context
+    return (
+        full_access_context,
+        _engine.limited_access_view_of_runtime_context_for_helper_process(
+            full_access_context
+        ),
     )
 
 
@@ -77,6 +80,15 @@ def test_a_value_json_cannot_carry_is_refused_before_it_reaches_the_parent():
 
     with pytest.raises(TypeError, match="JSON"):
         full_access_context.store().write("calibration", b"\x00\x01")
+    for value_holding_a_float_json_cannot_hold in (
+        float("nan"),
+        {"gain": float("inf")},
+        [0.5, [float("-inf")]],
+    ):
+        with pytest.raises(ValueError, match="JSON holds no"):
+            full_access_context.store().write(
+                "calibration", value_holding_a_float_json_cannot_hold
+            )
     assert parent.ops_received == []
 
 
