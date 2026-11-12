@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -12,12 +13,12 @@ use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
-use crate::core::compiler::{Compiler, PendingOperation};
+use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId, StateComponent, node_named_or_refused,
-    refuse_a_link_between_ports_whose_families_do_not_match,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    PendingDeletionComponent, ProcessorInstanceComponent, ProcessorUniqueId, StateComponent,
+    node_named_or_refused, refuse_a_link_between_ports_whose_families_do_not_match,
 };
 use crate::core::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::logging::{
@@ -71,6 +72,7 @@ fn this_thread_may_commit_inline() -> bool {
 /// to report ready — so it runs off the async worker.
 async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
     let Some(runtime_ctx) = live else {
+        take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
@@ -83,6 +85,37 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
             "the graph change's compile task did not finish: {join_failure}"
         ))
     })?
+}
+
+/// On a stream no commit builds, a stopped one or one not started, take each node and link
+/// pending deletion out of the graph now, with every operation logged for it: the graph it holds
+/// to read and edit then shows the removal, and the UUID and name it held are free again.
+fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &Compiler) {
+    compiler.scope(|this_streams_graph, tx| {
+        let links_pending_deletion: HashSet<LinkUniqueId> = this_streams_graph
+            .traversal()
+            .e(())
+            .iter()
+            .filter(|link| link.has::<PendingDeletionComponent>())
+            .map(|link| link.id.clone())
+            .collect();
+        let nodes_pending_deletion: HashSet<ProcessorUniqueId> = this_streams_graph
+            .traversal()
+            .v(())
+            .iter()
+            .filter(|node| {
+                node.has::<PendingDeletionComponent>() && !node.has::<ProcessorInstanceComponent>()
+            })
+            .map(|node| node.id.clone())
+            .collect();
+        tx.retract_every_operation_naming(&nodes_pending_deletion, &links_pending_deletion);
+        for link_id in &links_pending_deletion {
+            this_streams_graph.traversal_mut().e(link_id).drop();
+        }
+        for processor_id in &nodes_pending_deletion {
+            this_streams_graph.traversal_mut().v(processor_id).drop();
+        }
+    });
 }
 
 /// Whether an added node's config references are checked against the graph it joins.
@@ -245,6 +278,45 @@ pub(super) async fn add_processor_impl(
 }
 
 /// Core implementation for remove_processor - takes owned Arcs for 'static lifetime.
+/// Mark `processor_id` and every link on it pending deletion, each link logged as a link's
+/// removal ahead of the node's, so the compile reclaims both endpoints' ports through the link
+/// path; dropping the node alone would cascade its edges out of the graph with the peers'
+/// publishers, subscribers and notifiers still held against their channels.
+fn mark_the_node_and_each_of_its_links_pending_deletion(
+    graph: &mut Graph,
+    tx: &CompilerTransactionHandle,
+    processor_id: &ProcessorUniqueId,
+) -> Result<()> {
+    if !graph.traversal().v(processor_id).exists() {
+        return Err(Error::ProcessorNotFound(processor_id.to_string()));
+    }
+    let inbound_links: Vec<LinkUniqueId> = graph
+        .traversal_mut()
+        .v(processor_id)
+        .in_e()
+        .iter()
+        .map(|link| link.id.clone())
+        .collect();
+    let outbound_links: Vec<LinkUniqueId> = graph
+        .traversal_mut()
+        .v(processor_id)
+        .out_e()
+        .iter()
+        .map(|link| link.id.clone())
+        .collect();
+    for link_id in inbound_links.into_iter().chain(outbound_links) {
+        if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
+            link.insert(PendingDeletionComponent);
+        }
+        tx.log(PendingOperation::RemoveLink(link_id));
+    }
+    if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
+        node.insert(PendingDeletionComponent);
+    }
+    tx.log(PendingOperation::RemoveProcessor(processor_id.clone()));
+    Ok(())
+}
+
 pub(super) async fn remove_processor_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     processor_id: ProcessorUniqueId,
@@ -255,42 +327,7 @@ pub(super) async fn remove_processor_impl(
         stream,
     } = live_graph_change;
     compiler.scope(|graph, tx| {
-        if !graph.traversal().v(&processor_id).exists() {
-            return Err(Error::ProcessorNotFound(processor_id.to_string()));
-        }
-
-        // Every link on the node is removed as a link, which reclaims both
-        // endpoints' ports. Dropping the node alone cascades its edges out of
-        // the graph with the peers' publishers, subscribers and notifiers
-        // still held against their channels.
-        let inbound_links: Vec<LinkUniqueId> = graph
-            .traversal_mut()
-            .v(&processor_id)
-            .in_e()
-            .iter()
-            .map(|link| link.id.clone())
-            .collect();
-        let outbound_links: Vec<LinkUniqueId> = graph
-            .traversal_mut()
-            .v(&processor_id)
-            .out_e()
-            .iter()
-            .map(|link| link.id.clone())
-            .collect();
-        for link_id in inbound_links.into_iter().chain(outbound_links) {
-            if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
-                link.insert(PendingDeletionComponent);
-            }
-            tx.log(PendingOperation::RemoveLink(link_id));
-        }
-
-        if let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() {
-            node.insert(PendingDeletionComponent);
-        }
-
-        tx.log(PendingOperation::RemoveProcessor(processor_id.clone()));
-
-        Ok(())
+        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &processor_id)
     })?;
 
     let removal_outcome = commit_live_graph_change(&compiler, live).await;
@@ -887,8 +924,8 @@ mod connect_wires_a_matching_link_in_silence_tests {
     use parking_lot::Mutex;
 
     use super::{
-        LiveGraphChangeOnOneStream, connect_impl, disconnect_impl, remove_processor_impl,
-        the_node_this_stream_names,
+        LiveGraphChangeOnOneStream, connect_impl, disconnect_impl,
+        mark_the_node_and_each_of_its_links_pending_deletion, the_node_this_stream_names,
     };
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::descriptors::ProcessorClassImportPath;
@@ -1034,7 +1071,7 @@ mod connect_wires_a_matching_link_in_silence_tests {
     /// cascades its edges out of the graph with the peer's publisher,
     /// subscriber and notifier still held against their channels.
     #[test]
-    fn remove_processor_logs_every_incident_link_ahead_of_the_node() {
+    fn removing_a_processor_logs_every_incident_link_ahead_of_the_node() {
         register_producer_and_consumer_descriptors();
         let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
         let consumer_id = to.processor_id().clone();
@@ -1049,12 +1086,11 @@ mod connect_wires_a_matching_link_in_silence_tests {
                 to,
             ))
             .expect("the link is created");
-        runtime
-            .block_on(remove_processor_impl(
-                a_fixture_graph_change(Arc::clone(&compiler)),
-                consumer_id.clone(),
-            ))
-            .expect("the consumer is removed");
+        compiler
+            .scope(|graph, tx| {
+                mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &consumer_id)
+            })
+            .expect("the consumer is marked for removal");
 
         let logged = compiler.logged_pending_operations();
         let link_removal = logged

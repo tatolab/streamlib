@@ -21,6 +21,7 @@ mod processor_thread_shutdown;
 pub(crate) mod scheduling;
 
 pub use compiler::Compiler;
+pub(crate) use compiler_transaction::CompilerTransactionHandle;
 pub use pending_operation::PendingOperation;
 pub use processor_thread_shutdown::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId, ProcessorThreadKind,
