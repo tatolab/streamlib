@@ -581,7 +581,7 @@ Close a viewer this connection opened, letting go of its port's channel.
 
 Send this connection a `project_changed` notification for each change on the named projects' feeds.
 
-Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
+Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. A connection that falls behind, or a project whose folder changed in ways the OS did not name, is sent `missed`, and the client reads the change feed and lists the project's files again. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
 
 - Since contract version 1, experimental.
 - Params: `SubscribeProjectChangesRequest`
@@ -735,7 +735,7 @@ Delete the whole project in `project_directory`: queue its deletion on its strea
 
 Read a project's change feed as it stands: its newest transactions, refused actions and media facts reads.
 
-Read the change feed of the project in `project_directory`, opening it as `list_assets` does, as the resource `list_assets` names as `transactions_resource_uri` renders it: the project's UUID as `project`, its `project_directory`, and under `transactions` its newest 64 transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. `subscribe_project_changes` sends a `project_changed` notification for each change after it, and `missed` when the connection fell behind, after which the feed is read again. Refused for a folder with no `tatolab-project.json`.
+Read the change feed of the project in `project_directory`, opening it as `list_assets` does, as the resource `list_assets` names as `transactions_resource_uri` renders it: the project's UUID as `project`, its `project_directory`, and under `transactions` its newest 64 transactions, the actions refused and the assets whose media facts were read since the runtime started, newest first, each tagged by `status`. `subscribe_project_changes` sends a `project_changed` notification for each change after it, and `missed` when changes went unsent, after which the feed is read again and the project's files listed again. Refused for a folder with no `tatolab-project.json`.
 
 - Since contract version 2, experimental.
 - Params: `OneProjectByItsDirectoryRequest`

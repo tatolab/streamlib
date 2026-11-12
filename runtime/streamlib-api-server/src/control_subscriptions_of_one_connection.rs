@@ -26,7 +26,7 @@ use uuid::Uuid;
 /// The subscriptions of one connection that stays open to be sent notifications.
 pub(crate) struct ControlSubscriptionsOfOneConnection {
     subscribed_projects_with_their_folders_watched:
-        Mutex<BTreeMap<Uuid, Option<ProjectFilesWatchedWhileHeld>>>,
+        Mutex<BTreeMap<Uuid, ProjectFilesWatchedWhileHeld>>,
     subscribed_project_logs_by_directory_with_symlinks_resolved:
         Mutex<BTreeMap<PathBuf, BTreeSet<std::ffi::OsString>>>,
     followed_stream_graphs: Mutex<BTreeMap<String, Option<StreamGraphFollowedOnOneLoad>>>,
@@ -103,19 +103,17 @@ impl ControlSubscriptionsOfOneConnection {
 
     /// Subscribe to `projects`' change feeds, holding the watch `watch_the_files_of` gives on
     /// each one's folder for as long as the connection stays open, and answering every project
-    /// subscribed to; a project with no watch yet, one not open when it was first subscribed, is
-    /// asked for one again.
+    /// subscribed to.
     pub(crate) fn subscribe_to_the_projects(
         &self,
         projects: Vec<Uuid>,
-        watch_the_files_of: impl Fn(Uuid) -> Option<ProjectFilesWatchedWhileHeld>,
+        watch_the_files_of: impl Fn(Uuid) -> ProjectFilesWatchedWhileHeld,
     ) -> Vec<Uuid> {
         let mut subscribed_projects = self.subscribed_projects_with_their_folders_watched.lock();
         for project in projects {
-            let folder_watched = subscribed_projects.entry(project).or_insert(None);
-            if folder_watched.is_none() {
-                *folder_watched = watch_the_files_of(project);
-            }
+            subscribed_projects
+                .entry(project)
+                .or_insert_with(|| watch_the_files_of(project));
         }
         subscribed_projects.keys().copied().collect()
     }

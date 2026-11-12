@@ -10,7 +10,9 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::project_file::PROJECT_FILE_NAME;
-use crate::project_files_changed_outside_the_runtime_watch::ProjectFilesChangedOutsideTheRuntimeWatch;
+use crate::project_files_changed_outside_the_runtime_watch::{
+    ProjectFilesChangedOutsideTheRuntimeWatch, ProjectFilesToldChanged,
+};
 use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::{AppliedProjectTransaction, ProjectActionApplyOutcome};
@@ -39,11 +41,21 @@ pub enum ProjectChangeOnTheFeed {
     /// Files in the project's folder changed, appeared or went away, whoever wrote them, each by
     /// its path relative to the project; a transaction's own writes are among them.
     FilesChanged(Vec<String>),
+    /// Files in the project's folder changed that the OS did not name, so a client lists the
+    /// project again.
+    FilesChangedUnnamed,
 }
 
-/// A hold on the watch of one open project's folder; the folder is watched while any hold lives.
+/// A hold on the watch of one project's folder, watched while any hold lives and the project is
+/// open here.
 pub struct ProjectFilesWatchedWhileHeld {
-    _watch_kept_alive: Arc<ProjectFilesChangedOutsideTheRuntimeWatch>,
+    _wanted: Arc<ProjectFilesWatchWanted>,
+}
+
+/// The watch the holds on one project's folder want, running while the project is open.
+#[derive(Default)]
+struct ProjectFilesWatchWanted {
+    folder_watch: Mutex<Option<ProjectFilesChangedOutsideTheRuntimeWatch>>,
 }
 
 impl std::fmt::Debug for ProjectFilesWatchedWhileHeld {
@@ -61,8 +73,7 @@ pub type ProjectRepositoryOneWriterAtATime = Arc<Mutex<ProjectRepository>>;
 pub struct ProjectRepositoriesOpenInThisRuntime {
     project_repository_by_resolved_directory:
         Mutex<BTreeMap<PathBuf, ProjectRepositoryOneWriterAtATime>>,
-    project_files_watch_by_project:
-        Mutex<BTreeMap<Uuid, Weak<ProjectFilesChangedOutsideTheRuntimeWatch>>>,
+    project_files_watch_wanted_by_project: Mutex<BTreeMap<Uuid, Weak<ProjectFilesWatchWanted>>>,
     project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
 }
@@ -71,7 +82,7 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
     fn default() -> Self {
         Self {
             project_repository_by_resolved_directory: Mutex::default(),
-            project_files_watch_by_project: Mutex::default(),
+            project_files_watch_wanted_by_project: Mutex::default(),
             project_change_feed: broadcast::channel(PROJECT_CHANGE_FEED_CAPACITY).0,
             python_requirements_lock: None,
         }
@@ -199,56 +210,87 @@ impl ProjectRepositoriesOpenInThisRuntime {
     pub fn close_the_project_repository_at(&self, project_directory: &Path) {
         let resolved_project_directory = std::fs::canonicalize(project_directory)
             .unwrap_or_else(|_| project_directory.to_path_buf());
-        self.project_repository_by_resolved_directory
+        let closed = self
+            .project_repository_by_resolved_directory
             .lock()
             .remove(&resolved_project_directory);
+        if let Some(closed) = closed {
+            let project = closed.lock().project_file().project;
+            if let Some(wanted) = self.the_live_files_watch_wanted_for(project) {
+                *wanted.folder_watch.lock() = None;
+            }
+        }
     }
 
-    /// Watch the folder of the open project `project`, announcing each change to its files on the
-    /// change feed while any returned hold lives; none when the project is not open here, or when
-    /// the OS will not watch its folder, which is logged.
-    pub fn watch_the_files_of(&self, project: Uuid) -> Option<ProjectFilesWatchedWhileHeld> {
-        let mut project_files_watch_by_project = self.project_files_watch_by_project.lock();
-        if let Some(watch) = project_files_watch_by_project
+    /// Watch the folder of the project `project` while the returned hold or another lives,
+    /// announcing each change to its files on the change feed while the project is open here; a
+    /// folder the OS will not watch is logged and left unwatched.
+    pub fn watch_the_files_of(&self, project: Uuid) -> ProjectFilesWatchedWhileHeld {
+        let wanted = {
+            let mut project_files_watch_wanted_by_project =
+                self.project_files_watch_wanted_by_project.lock();
+            match project_files_watch_wanted_by_project
+                .get(&project)
+                .and_then(Weak::upgrade)
+            {
+                Some(wanted) => wanted,
+                None => {
+                    let wanted = Arc::new(ProjectFilesWatchWanted::default());
+                    project_files_watch_wanted_by_project.retain(|_, held| held.strong_count() > 0);
+                    project_files_watch_wanted_by_project.insert(project, Arc::downgrade(&wanted));
+                    wanted
+                }
+            }
+        };
+        if let Some(open) = self.the_open_project_repository_of(project) {
+            let resolved_project_directory = open.lock().project_directory().to_path_buf();
+            self.start_the_wanted_watch(&wanted, project, &resolved_project_directory);
+        }
+        ProjectFilesWatchedWhileHeld { _wanted: wanted }
+    }
+
+    fn the_live_files_watch_wanted_for(
+        &self,
+        project: Uuid,
+    ) -> Option<Arc<ProjectFilesWatchWanted>> {
+        self.project_files_watch_wanted_by_project
+            .lock()
             .get(&project)
             .and_then(Weak::upgrade)
-        {
-            return Some(ProjectFilesWatchedWhileHeld {
-                _watch_kept_alive: watch,
-            });
+    }
+
+    fn start_the_wanted_watch(
+        &self,
+        wanted: &ProjectFilesWatchWanted,
+        project: Uuid,
+        resolved_project_directory: &Path,
+    ) {
+        let mut folder_watch = wanted.folder_watch.lock();
+        if folder_watch.is_some() {
+            return;
         }
-        let resolved_project_directory = self
-            .the_open_project_repository_of(project)?
-            .lock()
-            .project_directory()
-            .to_path_buf();
         let project_change_feed = self.project_change_feed.clone();
         let watched = ProjectFilesChangedOutsideTheRuntimeWatch::of_the_project_in(
-            &resolved_project_directory,
-            move |files_changed| {
-                let _ = project_change_feed.send(ProjectChangeFeedAnnouncement {
-                    project,
-                    change: ProjectChangeOnTheFeed::FilesChanged(files_changed),
-                });
+            resolved_project_directory,
+            move |told_changed| {
+                let change = match told_changed {
+                    ProjectFilesToldChanged::These(files_changed) => {
+                        ProjectChangeOnTheFeed::FilesChanged(files_changed)
+                    }
+                    ProjectFilesToldChanged::SomeTheOsDidNotName => {
+                        ProjectChangeOnTheFeed::FilesChangedUnnamed
+                    }
+                };
+                let _ = project_change_feed.send(ProjectChangeFeedAnnouncement { project, change });
             },
         );
         match watched {
-            Ok(watch) => {
-                let watch = Arc::new(watch);
-                project_files_watch_by_project.retain(|_, held| held.strong_count() > 0);
-                project_files_watch_by_project.insert(project, Arc::downgrade(&watch));
-                Some(ProjectFilesWatchedWhileHeld {
-                    _watch_kept_alive: watch,
-                })
-            }
-            Err(not_watched) => {
-                tracing::warn!(
-                    project = %resolved_project_directory.display(),
-                    %not_watched,
-                    "the project's folder is not watched, so a change made outside the runtime is not announced"
-                );
-                None
-            }
+            Ok(watch) => *folder_watch = Some(watch),
+            Err(not_watched) => tracing::warn!(
+                project = %resolved_project_directory.display(),
+                %not_watched,
+                "the project's folder is not watched, so a change made outside the runtime is not announced"
+            ),
         }
     }
 
@@ -280,9 +322,14 @@ impl ProjectRepositoriesOpenInThisRuntime {
         if let Some(python_requirements_lock) = &self.python_requirements_lock {
             opened.lock_the_python_requirements_with(Arc::clone(python_requirements_lock));
         }
+        let project = opened.project_file().project;
         let opened = Arc::new(Mutex::new(opened));
         project_repository_by_resolved_directory
-            .insert(resolved_project_directory, Arc::clone(&opened));
+            .insert(resolved_project_directory.clone(), Arc::clone(&opened));
+        drop(project_repository_by_resolved_directory);
+        if let Some(wanted) = self.the_live_files_watch_wanted_for(project) {
+            self.start_the_wanted_watch(&wanted, project, &resolved_project_directory);
+        }
         Ok(opened)
     }
 }
@@ -290,6 +337,7 @@ impl ProjectRepositoriesOpenInThisRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project_files_changed_outside_the_runtime_watch::PROJECT_FILE_CHANGES_GATHERED_FOR;
     use crate::project_transaction::ProjectTransactionAuthor;
 
     #[test]
@@ -363,42 +411,43 @@ mod tests {
         );
     }
 
-    /// A node file an editor saves in an open project's folder is announced as `FilesChanged`
-    /// while a hold on its watch lives, and the folder is watched no longer once every hold is
-    /// dropped.
+    /// A node file an editor saves in a project's folder is announced as `FilesChanged` while a
+    /// hold on its watch lives and the project is open, a hold taken before the project opens
+    /// among them; the folder is watched no longer once the project closes.
     ///
-    /// Mental-revert: without the watch nothing is announced; a watch kept past its last hold
-    /// leaves the map holding a live watch.
+    /// Mental-revert: without the watch nothing is announced; a hold taken before the open that
+    /// the open does not honour announces nothing either.
     #[test]
-    fn a_file_saved_in_an_open_projects_folder_is_announced_while_its_watch_is_held() {
+    fn a_file_saved_in_a_watched_projects_folder_is_announced_while_it_is_open() {
         let parent = tempfile::tempdir().unwrap();
         let project_directory = parent.path().join("arm");
-        ProjectRepository::create(
+        let created = ProjectRepository::create(
             &project_directory,
             "arm",
             &ProjectTransactionAuthor::the_runtime(),
         )
         .unwrap();
+        let project = created.project_file().project;
+        drop(created);
         let open = ProjectRepositoriesOpenInThisRuntime::default();
-        assert!(open.watch_the_files_of(Uuid::new_v4()).is_none());
-        let project_repository = open.the_project_repository_at(&project_directory).unwrap();
-        let project = project_repository.lock().project_file().project;
+        let _held_before_the_open = open.watch_the_files_of(project);
+        let _held_after_the_open = {
+            open.the_project_repository_at(&project_directory).unwrap();
+            open.watch_the_files_of(project)
+        };
         let mut change_feed = open.subscribe_to_the_change_feed();
-        let first_hold = open
-            .watch_the_files_of(project)
-            .expect("the open project is watched");
-        let second_hold = open
-            .watch_the_files_of(project)
-            .expect("the watch is shared");
+        let next_announced =
+            |change_feed: &mut broadcast::Receiver<ProjectChangeFeedAnnouncement>,
+             within: std::time::Duration| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .unwrap()
+                    .block_on(async { tokio::time::timeout(within, change_feed.recv()).await })
+            };
 
         std::fs::write(project_directory.join("blur.py"), b"x = 1").unwrap();
-        let announced = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap()
-            .block_on(async {
-                tokio::time::timeout(std::time::Duration::from_secs(5), change_feed.recv()).await
-            })
+        let announced = next_announced(&mut change_feed, std::time::Duration::from_secs(5))
             .expect("the save is announced")
             .unwrap();
         assert_eq!(announced.project, project);
@@ -407,16 +456,12 @@ mod tests {
             ProjectChangeOnTheFeed::FilesChanged(vec!["blur.py".to_owned()])
         );
 
-        drop(first_hold);
-        let is_watched = |open: &ProjectRepositoriesOpenInThisRuntime| {
-            open.project_files_watch_by_project
-                .lock()
-                .get(&project)
-                .is_some_and(|watch| watch.strong_count() > 0)
-        };
-        assert!(is_watched(&open));
-        drop(second_hold);
-        assert!(!is_watched(&open));
+        open.close_the_project_repository_at(&project_directory);
+        std::fs::write(project_directory.join("blur.py"), b"x = 2").unwrap();
+        assert!(
+            next_announced(&mut change_feed, PROJECT_FILE_CHANGES_GATHERED_FOR * 5).is_err(),
+            "a closed project's folder is not watched"
+        );
     }
 
     #[test]

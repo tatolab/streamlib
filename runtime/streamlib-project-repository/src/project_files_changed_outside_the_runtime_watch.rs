@@ -16,26 +16,46 @@ use crate::project_asset::DIRECTORIES_A_PROJECT_SCAN_SKIPS;
 /// How long the watch gathers the changes after the first of a burst before it tells of them.
 pub(crate) const PROJECT_FILE_CHANGES_GATHERED_FOR: Duration = Duration::from_millis(100);
 
+/// What the watch tells of one gathered burst of changes in the project's folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ProjectFilesToldChanged {
+    /// These files changed, appeared or went away, each by its path relative to the project, `/`
+    /// between segments.
+    These(Vec<String>),
+    /// Files changed that the OS did not name: its queue overflowed or a folder could not be
+    /// watched, so a client lists the project again.
+    SomeTheOsDidNotName,
+}
+
+/// What the OS's watch hands the gatherer: an event, or word that some change went unnamed.
+enum FolderWatchReport {
+    Event(notify::Event),
+    ChangesTheOsDidNotName,
+}
+
 /// The OS's watch on one project's folder; dropping it ends the watch.
 pub(crate) struct ProjectFilesChangedOutsideTheRuntimeWatch {
     _folder_watcher: notify::RecommendedWatcher,
 }
 
 impl ProjectFilesChangedOutsideTheRuntimeWatch {
-    /// Watch `resolved_project_directory`, handing `tell_of_the_files_changed` each gathered set of
-    /// changed files, by path relative to the project with `/` between segments, leaving out what
-    /// the project's history records nothing of: a hidden folder, `node_modules`, `__pycache__` and
-    /// a Python virtual environment.
+    /// Watch `resolved_project_directory`, handing `tell_of_the_files_changed` each gathered burst
+    /// of changes, leaving out what the project's history records nothing of: a hidden folder,
+    /// `node_modules`, `__pycache__` and a Python virtual environment.
     pub(crate) fn of_the_project_in(
         resolved_project_directory: &Path,
-        tell_of_the_files_changed: impl Fn(Vec<String>) + Send + 'static,
+        tell_of_the_files_changed: impl Fn(ProjectFilesToldChanged) + Send + 'static,
     ) -> notify::Result<Self> {
-        let (folder_events_to_the_gatherer, folder_events) = mpsc::channel::<notify::Event>();
+        let (folder_reports_to_the_gatherer, folder_reports) = mpsc::channel::<FolderWatchReport>();
         let mut folder_watcher =
             notify::recommended_watcher(move |folder_event: notify::Result<notify::Event>| {
-                if let Ok(folder_event) = folder_event {
-                    let _ = folder_events_to_the_gatherer.send(folder_event);
-                }
+                let folder_report = match folder_event {
+                    Ok(folder_event) if !folder_event.need_rescan() => {
+                        FolderWatchReport::Event(folder_event)
+                    }
+                    Ok(_) | Err(_) => FolderWatchReport::ChangesTheOsDidNotName,
+                };
+                let _ = folder_reports_to_the_gatherer.send(folder_report);
             })?;
         folder_watcher.watch(resolved_project_directory, RecursiveMode::Recursive)?;
         let project_directory = resolved_project_directory.to_path_buf();
@@ -44,7 +64,7 @@ impl ProjectFilesChangedOutsideTheRuntimeWatch {
             .spawn(move || {
                 gather_and_tell_until_the_watch_ends(
                     &project_directory,
-                    &folder_events,
+                    &folder_reports,
                     &tell_of_the_files_changed,
                 )
             })
@@ -57,43 +77,64 @@ impl ProjectFilesChangedOutsideTheRuntimeWatch {
 
 fn gather_and_tell_until_the_watch_ends(
     project_directory: &Path,
-    folder_events: &mpsc::Receiver<notify::Event>,
-    tell_of_the_files_changed: &impl Fn(Vec<String>),
+    folder_reports: &mpsc::Receiver<FolderWatchReport>,
+    tell_of_the_files_changed: &impl Fn(ProjectFilesToldChanged),
 ) {
-    while let Ok(first_folder_event) = folder_events.recv() {
-        let mut files_changed = BTreeSet::new();
-        gather_the_files_changed_by(project_directory, first_folder_event, &mut files_changed);
+    while let Ok(first_folder_report) = folder_reports.recv() {
+        let mut gathered = ProjectFilesGathered::default();
+        gathered.gather(project_directory, first_folder_report);
         let told_at = Instant::now() + PROJECT_FILE_CHANGES_GATHERED_FOR;
         loop {
             let left_to_gather = told_at.saturating_duration_since(Instant::now());
-            match folder_events.recv_timeout(left_to_gather) {
-                Ok(folder_event) => {
-                    gather_the_files_changed_by(project_directory, folder_event, &mut files_changed)
-                }
+            if left_to_gather.is_zero() {
+                break;
+            }
+            match folder_reports.recv_timeout(left_to_gather) {
+                Ok(folder_report) => gathered.gather(project_directory, folder_report),
                 Err(mpsc::RecvTimeoutError::Timeout) => break,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         }
-        if !files_changed.is_empty() {
-            tell_of_the_files_changed(files_changed.into_iter().collect());
+        if let Some(told_changed) = gathered.into_told() {
+            tell_of_the_files_changed(told_changed);
         }
     }
 }
 
-fn gather_the_files_changed_by(
-    project_directory: &Path,
-    folder_event: notify::Event,
-    files_changed: &mut BTreeSet<String>,
-) {
-    if matches!(folder_event.kind, EventKind::Access(_)) {
-        return;
+/// The changes of one burst, gathered until it is told.
+#[derive(Default)]
+struct ProjectFilesGathered {
+    files_changed: BTreeSet<String>,
+    some_change_the_os_did_not_name: bool,
+}
+
+impl ProjectFilesGathered {
+    fn gather(&mut self, project_directory: &Path, folder_report: FolderWatchReport) {
+        match folder_report {
+            FolderWatchReport::ChangesTheOsDidNotName => {
+                self.some_change_the_os_did_not_name = true
+            }
+            FolderWatchReport::Event(folder_event) => {
+                if matches!(folder_event.kind, EventKind::Access(_)) {
+                    return;
+                }
+                self.files_changed.extend(
+                    folder_event
+                        .paths
+                        .iter()
+                        .filter_map(|path| the_project_file_a_path_names(project_directory, path)),
+                );
+            }
+        }
     }
-    files_changed.extend(
-        folder_event
-            .paths
-            .iter()
-            .filter_map(|path| the_project_file_a_path_names(project_directory, path)),
-    );
+
+    fn into_told(self) -> Option<ProjectFilesToldChanged> {
+        if self.some_change_the_os_did_not_name {
+            return Some(ProjectFilesToldChanged::SomeTheOsDidNotName);
+        }
+        (!self.files_changed.is_empty())
+            .then(|| ProjectFilesToldChanged::These(self.files_changed.into_iter().collect()))
+    }
 }
 
 /// `path` relative to `project_directory`, `/` between segments, or none when it lies outside the
@@ -152,6 +193,38 @@ mod tests {
         );
     }
 
+    /// A burst holding a change the OS did not name is told as such, so a client lists the
+    /// project again; a burst of reads alone is not told.
+    ///
+    /// Mental-revert: dropping a rescan's word tells nothing, and the client keeps a stale listing.
+    #[test]
+    fn a_change_the_os_did_not_name_is_told_and_reads_alone_are_not() {
+        let project = Path::new("/projects/arm");
+        let mut gathered = ProjectFilesGathered::default();
+        gathered.gather(
+            project,
+            FolderWatchReport::Event(
+                notify::Event::new(EventKind::Modify(notify::event::ModifyKind::Any))
+                    .add_path(project.join("nodes/blur.py")),
+            ),
+        );
+        gathered.gather(project, FolderWatchReport::ChangesTheOsDidNotName);
+        assert_eq!(
+            gathered.into_told(),
+            Some(ProjectFilesToldChanged::SomeTheOsDidNotName)
+        );
+
+        let mut reads_alone = ProjectFilesGathered::default();
+        reads_alone.gather(
+            project,
+            FolderWatchReport::Event(
+                notify::Event::new(EventKind::Access(notify::event::AccessKind::Any))
+                    .add_path(project.join("nodes/blur.py")),
+            ),
+        );
+        assert_eq!(reads_alone.into_told(), None);
+    }
+
     /// A file written in the project's folder, outside any runtime call, is told once its burst
     /// is gathered; a write under `.git` is not.
     ///
@@ -163,7 +236,8 @@ mod tests {
         let resolved_project_directory = std::fs::canonicalize(project.path()).unwrap();
         std::fs::create_dir_all(resolved_project_directory.join("nodes")).unwrap();
         std::fs::create_dir_all(resolved_project_directory.join(".git")).unwrap();
-        let (files_told_changed_to_the_test, files_told_changed) = mpsc::channel::<Vec<String>>();
+        let (files_told_changed_to_the_test, files_told_changed) =
+            mpsc::channel::<ProjectFilesToldChanged>();
         let _watch = ProjectFilesChangedOutsideTheRuntimeWatch::of_the_project_in(
             &resolved_project_directory,
             move |files_changed| {
@@ -176,13 +250,19 @@ mod tests {
         std::fs::write(resolved_project_directory.join("nodes/blur.py"), b"x = 1").unwrap();
         std::fs::write(resolved_project_directory.join("nodes/blur.py"), b"x = 2").unwrap();
 
-        let mut every_file_told_changed = files_told_changed
-            .recv_timeout(Duration::from_secs(5))
-            .expect("the write is told");
+        let files_named = |told_changed| match told_changed {
+            ProjectFilesToldChanged::These(files_changed) => files_changed,
+            ProjectFilesToldChanged::SomeTheOsDidNotName => panic!("the OS named no file"),
+        };
+        let mut every_file_told_changed = files_named(
+            files_told_changed
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the write is told"),
+        );
         while let Ok(more_told_changed) =
             files_told_changed.recv_timeout(PROJECT_FILE_CHANGES_GATHERED_FOR * 3)
         {
-            every_file_told_changed.extend(more_told_changed);
+            every_file_told_changed.extend(files_named(more_told_changed));
         }
         assert!(
             every_file_told_changed.contains(&"nodes/blur.py".to_owned()),
