@@ -225,7 +225,8 @@ impl ControlOperationDispatcher {
                 .map(ControlOperationAnswer::Discover),
             ControlOperationCall::SubscribeProjectChanges(SubscribeProjectChangesRequest {
                 projects,
-            }) => subscribe_to_project_changes(projects, request_origin)
+            }) => self
+                .subscribe_to_project_changes(projects, request_origin)
                 .map(ControlOperationAnswer::SubscribeProjectChanges),
             ControlOperationCall::SubscribeProjectLogRecords(
                 SubscribeProjectLogRecordsRequest {
@@ -1313,24 +1314,6 @@ fn the_subscriptions_of_the_connection_a_subscription_arrived_on<'origin>(
     })
 }
 
-fn subscribe_to_project_changes(
-    projects: Vec<Uuid>,
-    request_origin: &ControlRequestOrigin,
-) -> Result<SubscribeProjectChangesResult, ControlOperationRefusal> {
-    let subscriptions = the_subscriptions_of_the_connection_a_subscription_arrived_on(
-        "subscribe_project_changes",
-        request_origin,
-    )?;
-    if projects.is_empty() {
-        return Err(ControlOperationRefusal::Failed(
-            "subscribe_project_changes failed: `projects` names no project".to_owned(),
-        ));
-    }
-    Ok(SubscribeProjectChangesResult {
-        projects: subscriptions.subscribe_to_the_projects(projects),
-    })
-}
-
 fn subscribe_to_project_log_records(
     project_directories: Vec<std::path::PathBuf>,
     request_origin: &ControlRequestOrigin,
@@ -1352,13 +1335,19 @@ fn subscribe_to_project_log_records(
     }
     let project_directories_as_subscribed_and_with_symlinks_resolved = project_directories
         .into_iter()
-        .map(|project_directory| {
-            let project_directory_with_symlinks_resolved =
-                std::fs::canonicalize(&project_directory)
-                    .unwrap_or_else(|_| project_directory.clone());
-            (project_directory, project_directory_with_symlinks_resolved)
-        })
-        .collect();
+        .map(
+            |project_directory| match std::fs::canonicalize(&project_directory) {
+                Ok(project_directory_with_symlinks_resolved) => {
+                    Ok((project_directory, project_directory_with_symlinks_resolved))
+                }
+                Err(not_resolved) => Err(ControlOperationRefusal::Failed(format!(
+                    "subscribe_project_log_records failed: `{}` is not a folder on this machine: \
+                     {not_resolved}",
+                    project_directory.display()
+                ))),
+            },
+        )
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(SubscribeProjectLogRecordsResult {
         project_directories: subscriptions.subscribe_to_the_project_logs(
             project_directories_as_subscribed_and_with_symlinks_resolved,
@@ -1367,6 +1356,27 @@ fn subscribe_to_project_log_records(
 }
 
 impl ControlOperationDispatcher {
+    fn subscribe_to_project_changes(
+        &self,
+        projects: Vec<Uuid>,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<SubscribeProjectChangesResult, ControlOperationRefusal> {
+        let subscriptions = the_subscriptions_of_the_connection_a_subscription_arrived_on(
+            "subscribe_project_changes",
+            request_origin,
+        )?;
+        if projects.is_empty() {
+            return Err(ControlOperationRefusal::Failed(
+                "subscribe_project_changes failed: `projects` names no project".to_owned(),
+            ));
+        }
+        Ok(SubscribeProjectChangesResult {
+            projects: subscriptions.subscribe_to_the_projects(projects, |project| {
+                self.project_repositories.watch_the_files_of(project)
+            }),
+        })
+    }
+
     async fn subscribe_to_stream_graph_changes(
         &self,
         streams: Vec<String>,

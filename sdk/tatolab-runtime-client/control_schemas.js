@@ -1347,13 +1347,14 @@ const UndoOrRedoRequest = z.strictObject({
 });
 
 /** @type {z.ZodType<ControlContract.ProjectChangeKindOnTheWire>} */
-const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("missed")]);
+const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("files_changed"), z.literal("missed")]);
 
 /** @type {z.ZodType<ControlContract.ProjectChangedNotificationParams>} */
 const ProjectChangedNotificationParams = z.looseObject({
   project: z.guid(),
   change: ProjectChangeKindOnTheWire,
   transaction: ProjectTransactionOnTheWire.nullable().optional(),
+  files: z.array(z.string()).nullable().optional(),
 });
 
 /** @type {z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>} */

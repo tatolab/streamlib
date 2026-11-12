@@ -18,7 +18,7 @@ path = "src/lib.rs"
 default = ["history", "store"]
 # The project's own history and the one writer that commits to it. Without it the crate reads
 # and writes a project's files alone, so a consumer such as the Python wheel links no libgit2.
-history = ["dep:git2", "dep:libz-sys", "dep:parking_lot", "dep:tokio", "dep:zip"]
+history = ["dep:git2", "dep:libz-sys", "dep:notify", "dep:parking_lot", "dep:tokio", "dep:zip"]
 # The JSON Schema of each graph action, in the schemars rmcp reads, for the MCP tools. Without it
 # the engine and the SDK link only their own schemars, so a missing `JsonSchema` derive on a
 # processor config is reported against one crate.
@@ -32,6 +32,7 @@ git2 = { version = "0.21", default-features = false, features = ["vendored-libgi
 # libgit2's zlib, compiled in: the runtime unit's executables may need only what manylinux
 # promises a host, and `libz.so.1` is not among it.
 libz-sys = { version = "1.1", default-features = false, features = ["static"], optional = true }
+notify = { version = "8.2", optional = true }
 parking_lot = { version = "0.12", optional = true }
 redb = { version = "4.5", optional = true }
 schemars = { version = "1.2", features = ["uuid1"], optional = true }

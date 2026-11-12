@@ -675,7 +675,7 @@ pub struct SubscribeStreamGraphChangesRequest {
 #[serde(deny_unknown_fields)]
 pub struct SubscribeProjectLogRecordsRequest {
     /// The projects, by absolute directory, whose new log records the connection is told of;
-    /// refused when empty or when one is relative.
+    /// refused when empty, or when one is relative or names no folder on this machine.
     pub project_directories: Vec<PathBuf>,
 }
 

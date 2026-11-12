@@ -15,6 +15,7 @@ const client = await TatolabRuntimeClient.connect({ socketPath, clientName });
 const clientOverAPost = new TatolabRuntimeClient(new ControlPostTransport({ socketPath, clientName }));
 const heardChange = new Promise((resolveHeardChange) => {
   const stopHearing = client.on_project_changed((params) => {
+    if (params.change === "files_changed") return;
     stopHearing();
     resolveHeardChange(params);
   });

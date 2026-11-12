@@ -81,6 +81,9 @@ pub enum ProjectChangeKindOnTheWire {
     Refused,
     /// The runtime finished reading an asset's media facts.
     MediaFactsRead,
+    /// Files in the project's folder changed, appeared or went away, an editor's saves and a
+    /// transaction's own writes alike; `files` names them.
+    FilesChanged,
     /// The connection fell behind and missed changes.
     Missed,
 }
@@ -95,6 +98,11 @@ pub struct ProjectChangedNotificationParams {
     pub change: ProjectChangeKindOnTheWire,
     /// The transaction that applied, when `change` is `applied`; its `undo_state` is absent.
     pub transaction: Option<ProjectTransactionOnTheWire>,
+    /// The files that changed, by path relative to the project with `/` between segments, when
+    /// `change` is `files_changed`; a hidden folder, `node_modules`, `__pycache__` and a Python
+    /// virtual environment are never named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<String>>,
 }
 
 /// `project_changed`: one change on a subscribed project's feed.
@@ -103,7 +111,7 @@ pub struct ProjectChanged;
 impl ControlNotification for ProjectChanged {
     type Params = ProjectChangedNotificationParams;
     const METHOD_NAME: &'static str = "project_changed";
-    const ONE_LINE_DOC: &'static str = "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.";
+    const ONE_LINE_DOC: &'static str = "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_project_changes";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;

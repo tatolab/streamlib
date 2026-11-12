@@ -19,9 +19,10 @@ use rmcp::model::{
 use rmcp::service::SubscriptionContext;
 use serde_json::json;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectRepositoriesOpenInThisRuntime,
-    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
-    ProjectTransactionAuthorKind, ProjectTransactionUndoState,
+    AppliedProjectTransaction, ProjectActionIdempotencyKey, ProjectChangeFeedAnnouncement,
+    ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    ProjectTransactionUndoState,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetMediaFactsReadOnTheWire, ProjectActionRefusalOnTheWire, ProjectChangeFeedEntryOnTheWire,
@@ -255,6 +256,7 @@ pub(crate) async fn announce_project_transactions_until_the_listen_ends(
             () = context.cancelled() => return,
             () = local_api_stopping_token.cancelled() => return,
             received = change_feed.recv() => match received {
+            Ok(ProjectChangeFeedAnnouncement { change: ProjectChangeOnTheFeed::FilesChanged(_), .. }) => Vec::new(),
             Ok(announcement) => vec![project_transactions_resource_uri(announcement.project)],
                 Err(RecvError::Lagged(missed_announcement_count)) => {
                     tracing::debug!(missed_announcement_count, "a change-feed listener fell behind; every subscribed project is marked updated");

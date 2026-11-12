@@ -324,7 +324,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   redo(params: ControlOperations["redo"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["redo"]["result"]>;
   /**
-   * Hear each `project_changed` the connection is sent, checked against the contract; the returned function stops it. A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.
+   * Hear each `project_changed` the connection is sent, checked against the contract; the returned function stops it. A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
    */
   on_project_changed(listener: (params: ControlNotifications["project_changed"]) => void): () => void;
   /**

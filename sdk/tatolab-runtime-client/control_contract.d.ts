@@ -182,7 +182,7 @@ export interface SubscribeStreamActionChangesResult {
 export interface SubscribeProjectLogRecordsRequest {
   /**
    * The projects, by absolute directory, whose new log records the connection is told of;
-   * refused when empty or when one is relative.
+   * refused when empty, or when one is relative or names no folder on this machine.
    */
   project_directories: Array<string>;
 }
@@ -3757,12 +3757,18 @@ export interface ProjectChangedNotificationParams {
    * The transaction that applied, when `change` is `applied`; its `undo_state` is absent.
    */
   transaction?: ProjectTransactionOnTheWire | null;
+  /**
+   * The files that changed, by path relative to the project with `/` between segments, when
+   * `change` is `files_changed`; a hidden folder, `node_modules`, `__pycache__` and a Python
+   * virtual environment are never named.
+   */
+  files?: Array<string> | null;
 }
 
 /**
  * What changed on a project's change feed.
  */
-export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "missed";
+export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "files_changed" | "missed";
 
 /**
  * `stream_graph_changed`'s params.
@@ -3995,7 +4001,7 @@ export interface ControlOperations {
   /**
    * Send this connection a `project_changed` notification for each change on the named projects' feeds.
    *
-   * Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one and each media facts read it finishes is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
+   * Subscribe the connection to the change feeds of `projects`, by UUID: from then on, each transaction applied to one, each action the runtime refuses on one, each media facts read it finishes and each burst of files changed in its folder, an editor's saves among them, named under `files`, is sent as a `project_changed` notification, whoever made it, until the connection closes. Served only on a connection that stays open; refused for an empty `projects`. Answers every project the connection is subscribed to.
    *
    * Since contract version 1, experimental.
    */
@@ -4028,7 +4034,7 @@ export interface ControlOperations {
   /**
    * Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
    *
-   * Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty or relative `project_directories`. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+   * Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
    *
    * Since contract version 2, experimental.
    */
@@ -4831,7 +4837,7 @@ export interface ControlOperations {
 /** Every notification the runtime sends a subscribed connection, by method name: the params it carries. */
 export interface ControlNotifications {
   /**
-   * A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, or media facts read.
+   * A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
    *
    * Since contract version 1, experimental.
    */
