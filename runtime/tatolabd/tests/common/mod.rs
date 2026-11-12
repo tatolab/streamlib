@@ -87,6 +87,28 @@ impl TemporaryRuntimeUnit {
     }
 }
 
+/// Keep `command`'s child from inheriting any descriptor but its standard streams.
+///
+/// Darwin's `socket` takes no close-on-exec flag, so std sets it in a second call; a spawn on
+/// another test thread between the two hands that runtime the socket, and once the socket is
+/// bound it holds another test's machine lock port for as long as that runtime lives.
+pub fn close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_child(
+    command: &mut Command,
+) {
+    use std::os::unix::process::CommandExt;
+    const FIRST_DESCRIPTOR_ABOVE_THE_STANDARD_STREAMS: libc::c_int = 3;
+    // SAFETY: the closure runs in the forked child before `exec` and calls only
+    // `getdtablesize` and `fcntl`, both async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            for descriptor in FIRST_DESCRIPTOR_ABOVE_THE_STANDARD_STREAMS..libc::getdtablesize() {
+                libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC);
+            }
+            Ok(())
+        });
+    }
+}
+
 /// A port both UDP and TCP bind on `host` now.
 pub fn a_port_free_for_udp_and_tcp_on(host: &str) -> u16 {
     for _ in 0..50 {
@@ -259,6 +281,9 @@ impl TatolabTestMachineRoot {
             tatolabd_command.env(
                 TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE,
                 loopback_http_port.to_string(),
+            );
+            close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_child(
+                &mut tatolabd_command,
             );
         }
         tatolabd_command
