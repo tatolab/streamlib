@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Encodes and decodes audio as Opus.",
+  "name": "Opus",
+  "project": "44a85da2-1637-4c67-8e1f-6e983bcf4400"
+}

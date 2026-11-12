@@ -1,0 +1,6 @@
+{
+  "dependencies": [],
+  "description": "Encodes and decodes video as H.265 on the GPU.",
+  "name": "H.265",
+  "project": "a50bafcb-3697-4eda-a7f2-a46e997087ca"
+}

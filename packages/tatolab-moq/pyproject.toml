@@ -27,6 +27,12 @@ classifiers = [
 # depends on it.
 dependencies = ["tatolab-stream>=0.68.68"]  # x-release-please-version
 
+[project.entry-points."tatolab.nodes"]
+MoqGateway = "tatolab.moq:MoqGateway"
+MoqTrack = "tatolab.moq:MoqTrack"
+MoqTrackSend = "tatolab.moq:MoqTrackSend"
+MoqTrackReceive = "tatolab.moq:MoqTrackReceive"
+
 [project.urls]
 Homepage = "https://tatolab.com"
 Install = "https://tatolab.com/docs/install"
