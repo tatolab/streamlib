@@ -43,7 +43,7 @@ fn a_chain_of_five_nodes() -> StreamGraphDocument {
             node(SOURCE, "source"), grouped(BLUR, "blur"), node(TINT, "tint"),
             node(SINK, "sink"), node(PREVIEW, "preview"),
         ],
-        "groups": [{ "id": "00000000-0000-4000-8000-0000000000c0", "name": "looks" }],
+        "groups": [{ "id": "00000000-0000-4000-8000-0000000000c0", "title": "looks" }],
         "links": [
             a_link(SOURCE, "video", BLUR, "video"),
             a_link(BLUR, "video", TINT, "video"),
@@ -131,6 +131,11 @@ fn a_collapsed_selection_is_a_new_stream_placed_where_its_nodes_were() {
 
     let collapsed = applied(&document, &the_fold_of(&collapse));
 
+    assert_eq!(
+        collapsed.groups().unwrap(),
+        document.groups().unwrap(),
+        "the frame stays in the stream that collapsed its node"
+    );
     let names: Vec<String> = collapsed
         .nodes()
         .into_iter()
@@ -248,6 +253,55 @@ fn an_unlocked_placed_stream_puts_a_copy_of_its_nodes_in_place_and_its_undo_plac
     assert_eq!(
         applied(&unlocked, &unlock.inverse()).to_value(),
         collapsed.to_value()
+    );
+}
+
+#[test]
+fn an_unlocked_placed_stream_passing_its_input_straight_to_its_output_links_the_source_to_the_reader()
+ {
+    let placing = "00000000-0000-4000-8000-0000000000a0";
+    let passing_input = "00000000-0000-4000-8000-0000000000a1";
+    let passing_output = "00000000-0000-4000-8000-0000000000a2";
+    let document = StreamGraphDocument::from_value(json!({
+        "nodes": [
+            { "id": SOURCE, "name": "source", "type": "looks.nodes:Source", "config": {} },
+            { "id": placing, "name": "look", "type": STREAM_FRAGMENT_NODE_TYPE,
+              "config": { "stream": { "asset": LOOK_STREAM } } },
+            { "id": SINK, "name": "sink", "type": "looks.nodes:Sink", "config": {} },
+        ],
+        "links": [
+            a_link(SOURCE, "video", placing, "video"),
+            a_link(placing, "graded", SINK, "video"),
+        ],
+    }))
+    .unwrap();
+    let passing_straight_through = StreamGraphDocument::from_value(json!({
+        "asset": LOOK_STREAM,
+        "nodes": [
+            { "id": passing_input, "name": "video", "type": GRAPH_INPUT_NODE_TYPE,
+              "config": { "port": "video", "family": "image" } },
+            { "id": passing_output, "name": "graded", "type": GRAPH_OUTPUT_NODE_TYPE,
+              "config": { "port": "graded", "family": "image" } },
+        ],
+        "links": [a_link(passing_input, "value", passing_output, "value")],
+    }))
+    .unwrap();
+    let unlock = StreamGraphOperation::UnfoldFragment {
+        fold: document
+            .the_fold_a_fragment_unfolds(
+                uuid(placing),
+                &|_: &Value| Ok(passing_straight_through.clone()),
+                &mut fresh_uuids(),
+            )
+            .unwrap(),
+    };
+
+    let unlocked = applied(&document, &unlock);
+
+    assert_eq!(links_of(&unlocked), ["source/video -> sink/video"]);
+    assert_eq!(
+        applied(&unlocked, &unlock.inverse()).to_value(),
+        document.to_value()
     );
 }
 

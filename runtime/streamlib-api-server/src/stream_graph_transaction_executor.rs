@@ -5,7 +5,7 @@
 //! refused whole, written to the graph documents and committed to the project's history, or
 //! applied live to the running streams alone.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -26,8 +26,10 @@ use streamlib_project_repository::{
     StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     StreamGraphOperation, StreamGraphOperationOnAStream,
+    asset_references_made_references_into_the_import,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
-    the_fragment_a_stream_fragment_places, the_stream_document_of_an_import,
+    is_a_graph_interface_node_type, the_fragment_a_stream_fragment_places,
+    the_stream_document_of_an_import,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
@@ -143,7 +145,7 @@ fn the_staged_graph_of_the_stream(
 
 /// The graph document of the stream a stream fragment's `held_stream`, its config's `stream`,
 /// places: one of the project as the transaction has staged it, or one of an import as its
-/// folder holds it.
+/// folder holds it, each asset it references made a reference into that import.
 fn the_document_a_placed_stream_holds(
     held_stream: &Value,
     streams: &BTreeMap<String, StreamATransactionEdits>,
@@ -166,14 +168,45 @@ fn the_document_a_placed_stream_holds(
                 .as_str()
                 .and_then(|from| Uuid::parse_str(from).ok())
                 .ok_or("a placed stream's `from` is no project's UUID")?;
-            let (document, _) = the_stream_document_of_an_import(
+            let (mut document, _) = the_stream_document_of_an_import(
                 project_repository.project_directory(),
                 from,
                 stream,
             )?;
+            asset_references_made_references_into_the_import(&mut document, from);
             StreamGraphDocument::from_value(document)
         }
     }
+}
+
+/// The type, name and config of the node `edit` adds to `document` or configures there; none
+/// for a subgraph node or a Graph Input or Output, whose types name no processor.
+fn the_processor_node_an_edit_adds_or_configures(
+    edit: &StreamGraphOperation,
+    document: &StreamGraphDocument,
+) -> Option<(String, String, Value)> {
+    let (node_type, node_name, config, holds_a_fragment) = match edit {
+        StreamGraphOperation::AddNode { node, .. } => (
+            node.node_type.clone(),
+            node.name.clone(),
+            node.config.clone(),
+            node.fragment.is_some(),
+        ),
+        StreamGraphOperation::SetNodeConfig { node, to, .. } => {
+            let configured = document.node(*node).ok()?;
+            (
+                configured.node_type,
+                configured.name,
+                to.clone(),
+                configured.fragment.is_some(),
+            )
+        }
+        _ => return None,
+    };
+    let names_a_processor = !holds_a_fragment
+        && node_type != STREAM_FRAGMENT_NODE_TYPE
+        && !is_a_graph_interface_node_type(&node_type);
+    names_a_processor.then_some((node_type, node_name, config))
 }
 
 /// Record `label` against the node `operation` adds, under the UUID `drawn_uuid_of` gives it.
@@ -540,6 +573,8 @@ impl StreamGraphTransactionExecutor<'_> {
             Vec::new();
         let mut staged_graph_of_each_stream_not_running: BTreeMap<Uuid, StreamGraphDocument> =
             BTreeMap::new();
+        let mut streams_taking_their_edits_once_the_documents_hold_them: BTreeSet<String> =
+            BTreeSet::new();
         let project_repository_read_during_the_requests = project_repository_held.as_deref();
         for (request_index, (request, stream_id)) in requests_and_the_stream_id_each_names
             .into_iter()
@@ -551,6 +586,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 &stream_id,
                 &mut streams,
                 &mut staged_graph_of_each_stream_not_running,
+                &mut streams_taking_their_edits_once_the_documents_hold_them,
                 project_repository_read_during_the_requests,
                 &mut node_by_label,
                 &mut labels_of_added_nodes,
@@ -627,7 +663,9 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
     /// made on its running stream and staged on its document, and one that reaches a running
     /// stream only from the documents — inside a placed stream, or placing one — staged on the
-    /// documents it changes, each loaded stream it changes taking it once they are written.
+    /// documents it changes, each loaded stream it changes taking it once they are written. A
+    /// stream of `streams_taking_their_edits_once_the_documents_hold_them` takes each later edit
+    /// that way too, so its running stream takes the transaction's edits in order.
     #[allow(clippy::too_many_arguments)]
     fn apply_one_request(
         &self,
@@ -635,6 +673,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_id: &str,
         streams: &mut BTreeMap<String, StreamATransactionEdits>,
         staged_graph_of_each_stream_not_running: &mut BTreeMap<Uuid, StreamGraphDocument>,
+        streams_taking_their_edits_once_the_documents_hold_them: &mut BTreeSet<String>,
         project_repository: Option<&ProjectRepository>,
         node_by_label: &mut HashMap<String, Uuid>,
         labels_of_added_nodes: &mut HashMap<Uuid, String>,
@@ -736,9 +775,12 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             &mut placed_stream_a_collapse_saves,
         )?;
+        let made_on_the_running_stream_now = reached.is_the_streams_own_level()
+            && !edit_as_drawn.reaches_a_running_stream_once_the_documents_hold_it()
+            && !streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
         if let StreamGraphOperation::AddNode { node, .. } = &mut edit_as_drawn
             && node.name.is_empty()
-            && !reached.is_the_streams_own_level()
+            && !made_on_the_running_stream_now
         {
             let names_at_the_level: std::collections::HashSet<String> = level_as_drawn
                 .nodes()
@@ -756,9 +798,7 @@ impl StreamGraphTransactionExecutor<'_> {
             staged_graph_of_each_stream_not_running
                 .insert(collapsed.placed_stream, collapsed.document);
         }
-        if reached.is_the_streams_own_level()
-            && !edit_as_drawn.reaches_a_running_stream_once_the_documents_hold_it()
-        {
+        if made_on_the_running_stream_now {
             let applied = self
                 .async_runtime
                 .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))
@@ -804,6 +844,16 @@ impl StreamGraphTransactionExecutor<'_> {
             ));
         }
         let edit = reached.the_operation_on_the_document(edit_as_drawn)?;
+        if let Some((node_type, node_name, config)) =
+            the_processor_node_an_edit_adds_or_configures(&edit, &reached.document)
+        {
+            self.async_runtime
+                .block_on(
+                    stream_operations
+                        .refuse_a_node_a_live_add_would_refuse(&node_type, &node_name, &config),
+                )
+                .map_err(|refusal| refusal.to_string())?;
+        }
         let mut placed_document_after_the_edit = reached.document.clone();
         placed_document_after_the_edit.apply(&edit)?;
         let operation_answered =
@@ -822,6 +872,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut made_live_once_the_documents_hold_them = Vec::new();
         if reached.is_the_streams_own_level() {
             made_live_once_the_documents_hold_them.push((stream_id.to_owned(), edit.clone()));
+            streams_taking_their_edits_once_the_documents_hold_them.insert(stream_id.to_owned());
         }
         project_operations.push(ProjectOperation::StreamGraph(
             StreamGraphOperationOnAStream {
@@ -843,6 +894,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 {
                     made_live_once_the_documents_hold_them
                         .push((placing_stream_id.clone(), carry.clone()));
+                    streams_taking_their_edits_once_the_documents_hold_them
+                        .insert(placing_stream_id.clone());
                 }
                 project_operations.push(ProjectOperation::StreamGraph(
                     StreamGraphOperationOnAStream {
@@ -873,7 +926,7 @@ impl StreamGraphTransactionExecutor<'_> {
     /// Each stream of the project placing the stream `reached` is the level of, by its stream
     /// asset, with the operation carrying its links onto that stream's ports across the edit that
     /// leaves its document as `placed_document_after_the_edit`, each staged on the placing
-    /// stream's document.
+    /// stream's document; a stream the transaction saves is among them.
     fn the_links_carried_in_every_stream_placing(
         &self,
         reached: &StreamGraphLevelOfAPlacedStream,
@@ -885,13 +938,14 @@ impl StreamGraphTransactionExecutor<'_> {
         if reached.is_the_streams_own_level() {
             return Ok(Vec::new());
         }
-        let stream_assets_of_the_project: Vec<Uuid> = project_repository
+        let mut stream_assets_of_the_project: BTreeSet<Uuid> = project_repository
             .assets()
             .map_err(|refusal| refusal.to_string())?
             .into_iter()
             .filter(|asset| asset.kind == ProjectAssetKind::Stream)
             .map(|asset| asset.asset)
             .collect();
+        stream_assets_of_the_project.extend(staged_graph_of_each_stream_not_running.keys());
         let mut carried = Vec::new();
         for placing_stream in stream_assets_of_the_project {
             if placing_stream == reached.stream {
@@ -1040,6 +1094,8 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
             Vec::new();
+        let mut streams_taking_their_operations_once_the_documents_hold_them: BTreeSet<String> =
+            BTreeSet::new();
         for operation in &reversal.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
                 stream,
@@ -1051,9 +1107,13 @@ impl StreamGraphTransactionExecutor<'_> {
             let Some(stream_id) = stream_id_of_each_stream_asset.get(stream) else {
                 continue;
             };
-            if graph_operation.reaches_a_running_stream_once_the_documents_hold_it() {
+            if graph_operation.reaches_a_running_stream_once_the_documents_hold_it()
+                || streams_taking_their_operations_once_the_documents_hold_them.contains(stream_id)
+            {
                 made_live_once_the_documents_hold_them
                     .push((stream_id.clone(), graph_operation.clone()));
+                streams_taking_their_operations_once_the_documents_hold_them
+                    .insert(stream_id.clone());
                 continue;
             }
             let mut applied_to_the_running_stream = || {

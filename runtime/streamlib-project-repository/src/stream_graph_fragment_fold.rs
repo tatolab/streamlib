@@ -370,6 +370,7 @@ impl StreamGraphDocument {
         let mut kept_inner_links = Vec::new();
         let mut readers_of_each_input_port: Vec<(String, StreamGraphDocumentLinkEnd)> = Vec::new();
         let mut source_of_each_output_port: Vec<(String, StreamGraphDocumentLinkEnd)> = Vec::new();
+        let mut output_port_each_input_port_passes_to: Vec<(String, String)> = Vec::new();
         for inner_link in stored["links"].as_array().into_iter().flatten() {
             let (Some(source), Some(target)) = (
                 inner_link.get("source").and_then(inner_end),
@@ -384,17 +385,24 @@ impl StreamGraphDocument {
                 (None, None) => kept_inner_links.push(inner_link.clone()),
                 (Some(port), None) => readers_of_each_input_port.push((port.clone(), target)),
                 (None, Some(port)) => source_of_each_output_port.push((port.clone(), source)),
-                (Some(_), Some(_)) => {}
+                (Some(input_port), Some(output_port)) => output_port_each_input_port_passes_to
+                    .push((input_port.clone(), output_port.clone())),
             }
         }
 
         let mut fragment_links = Vec::new();
         let mut carried_links: Vec<StreamGraphDocumentLink> = Vec::new();
+        let mut source_of_each_link_into_the_fragment: Vec<(String, StreamGraphDocumentLinkEnd)> =
+            Vec::new();
+        let mut target_of_each_link_out_of_the_fragment: Vec<(String, StreamGraphDocumentLinkEnd)> =
+            Vec::new();
         for (position, value) in self.link_values().iter().enumerate() {
             let Some(link) = self.link_read_from(value) else {
                 continue;
             };
             if link.target.node == fragment {
+                source_of_each_link_into_the_fragment
+                    .push((link.target.port.clone(), link.source.clone()));
                 carried_links.extend(
                     readers_of_each_input_port
                         .iter()
@@ -405,6 +413,8 @@ impl StreamGraphDocument {
                         }),
                 );
             } else if link.source.node == fragment {
+                target_of_each_link_out_of_the_fragment
+                    .push((link.source.port.clone(), link.target.clone()));
                 carried_links.extend(
                     source_of_each_output_port
                         .iter()
@@ -421,6 +431,22 @@ impl StreamGraphDocument {
                 position,
                 value: value.clone(),
             });
+        }
+        for (input_port, output_port) in &output_port_each_input_port_passes_to {
+            for (_, source) in source_of_each_link_into_the_fragment
+                .iter()
+                .filter(|(port, _)| port == input_port)
+            {
+                carried_links.extend(
+                    target_of_each_link_out_of_the_fragment
+                        .iter()
+                        .filter(|(port, _)| port == output_port)
+                        .map(|(_, target)| StreamGraphDocumentLink {
+                            source: source.clone(),
+                            target: target.clone(),
+                        }),
+                );
+            }
         }
         let mut unfolded_links = kept_inner_links;
         for carried in carried_links {

@@ -13,6 +13,7 @@ use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecord
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent, node_named_or_refused,
@@ -696,6 +697,49 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         names_at_the_level: &std::collections::HashSet<String>,
     ) -> Result<String> {
         self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
+    }
+
+    fn refuse_a_node_a_live_add_would_refuse(
+        &self,
+        node_type: &str,
+        node_name: &str,
+        config: &serde_json::Value,
+    ) -> BoxFuture<'_, Result<()>> {
+        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+        let lend_directory = self.lend_directory();
+        let node_type = ProcessorClassImportPath::new(node_type)
+            .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")));
+        let node_name = node_name.to_owned();
+        let config = config.clone();
+        self.in_this_streams_log_route(async move {
+            let node_type = node_type?;
+            if launch_record.a_live_add_must_describe(&node_type) {
+                let launch_record = Arc::clone(&launch_record);
+                let described_type = node_type.clone();
+                tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(
+                    move || {
+                        launch_record.describe_and_register_a_type_a_live_add_names(
+                            &described_type,
+                            lend_directory.as_deref(),
+                        )
+                    },
+                ))
+                .await
+                .map_err(|join_failure| {
+                    Error::Runtime(format!(
+                        "the describe of a node type did not finish: {join_failure}"
+                    ))
+                })??;
+            }
+            let node_types = launch_record.node_types_this_stream_resolves();
+            if node_types.port_info(&node_type).is_none() {
+                return Err(Error::UnknownProcessorType { ident: node_type });
+            }
+            node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &config)?;
+            crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
+                &node_name, &node_type, node_types, &config,
+            )
+        })
     }
 
     fn reconcile_each_stream_fragment_to_the_stream_it_references_live(

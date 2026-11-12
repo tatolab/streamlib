@@ -33,7 +33,7 @@ use streamlib::sdk::runtime::{
     StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordsInTheStateDirectory,
 };
-use streamlib_project_repository::STREAM_FRAGMENT_NODE_TYPE;
+use streamlib_project_repository::{GRAPH_OUTPUT_NODE_TYPE, STREAM_FRAGMENT_NODE_TYPE};
 use uuid::Uuid;
 
 use crate::control_plane_stub_support::LocalApiServedOnAFreshSocket;
@@ -3821,6 +3821,245 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
             ["pass-sink", "pass-sink-video"]
         );
     }
+}
+
+/// A transaction that collapses a selection and then renames the subgraph by its label reaches
+/// the running stream in that order, and so does its redo.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_collapse_and_a_rename_of_its_subgraph_in_one_transaction_reach_the_running_stream_in_order()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink = engine.a_sink_linked_from_the_source_of_main(&project).await;
+    let running_look_places_the_sink = |live: &Value| {
+        assert_eq!(sorted_node_names_in(live), ["look", "source"], "{live}");
+        assert_eq!(
+            the_node_names_a_fragment_places(&the_node_named(live, "look")),
+            ["pass-sink", "pass-sink-video"]
+        );
+    };
+
+    engine
+        .the_answer_of_the_tool(
+            "transact",
+            json!({ "operations": [
+                { "operation": "collapse_selection_into_subgraph", "stream": stream_asset,
+                  "nodes": [sink], "name": "sub", "as": "subgraph" },
+                { "operation": "rename_node", "stream": stream_asset, "node": "subgraph",
+                  "name": "look" },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the collapse and the rename apply in order");
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["look", "source"]
+    );
+    running_look_places_the_sink(&engine.the_live_graph_of(&stream_id));
+
+    engine
+        .the_undo_by(&project, "alice")
+        .await
+        .expect("the transaction undoes");
+    assert_eq!(
+        sorted_node_names_in(&engine.the_live_graph_of(&stream_id)),
+        ["pass-sink", "source"]
+    );
+    engine
+        .the_answer_of_the_tool(
+            "redo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the redo applies in order");
+    running_look_places_the_sink(&engine.the_live_graph_of(&stream_id));
+}
+
+/// An add inside a placed stream of a type the stream does not resolve is refused, as the same
+/// add at the stream's own level is, and leaves the placed stream as it was.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_add_inside_a_placed_stream_of_a_type_nothing_resolves_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let sink = engine.a_sink_linked_from_the_source_of_main(&project).await;
+    let subgraph = engine
+        .a_node_of_main_collapsed_into_sub(&project, &sink)
+        .await;
+    let sub_before_the_add = project.the_graph_document_of("sub");
+    let unresolved_type = StreamToolsTestSink::processor_class_import_path()
+        .as_str()
+        .replace("StreamToolsTestSink", "StreamToolsTestSinkNothingRegisters");
+
+    let refused = engine
+        .the_answer_of_the_tool(
+            "add_node",
+            json!({ "stream": project.stream_asset_of("main"), "level": [subgraph],
+                    "type": unresolved_type, "name": "missing",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("a type nothing resolves is not added inside sub");
+
+    assert!(
+        refused.contains("StreamToolsTestSinkNothingRegisters"),
+        "{refused}"
+    );
+    assert_eq!(project.the_graph_document_of("sub"), sub_before_the_add);
+    engine
+        .the_answer_of_the_tool(
+            "add_node",
+            json!({ "stream": project.stream_asset_of("main"), "level": [subgraph],
+                    "type": GRAPH_OUTPUT_NODE_TYPE, "name": "out",
+                    "config": { "port": "out", "family": "image" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a Graph Output is added inside sub");
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("sub")),
+        ["out", "pass-sink", "pass-sink-video"]
+    );
+}
+
+/// A transaction that collapses one placement of `sub` into a new stream and then renames a
+/// port of `sub` from inside its other placement carries the link onto that port in the new
+/// stream too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_transaction_saves() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink = engine.a_sink_linked_from_the_source_of_main(&project).await;
+    let subgraph = engine
+        .a_node_of_main_collapsed_into_sub(&project, &sink)
+        .await;
+    let sub_asset = the_stream_asset_placed_by(&project.the_graph_document_of("main"), &subgraph);
+    let placed_again = engine
+        .the_answer_of_the_tool(
+            "transact",
+            json!({ "operations": [
+                { "operation": "add_node", "stream": stream_asset, "as": "again",
+                  "type": STREAM_FRAGMENT_NODE_TYPE, "name": "sub-again",
+                  "config": { "stream": { "asset": sub_asset } } },
+                { "operation": "connect", "stream": stream_asset,
+                  "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+                  "target": { "node": "again", "port": "pass-sink-video" } },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("main places sub a second time");
+    let sub_again = placed_again["added_nodes"][0]["node"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let graph_input = the_node_named(&project.the_graph_document_of("sub"), "pass-sink-video");
+    let mut renamed_port_config = graph_input["config"].clone();
+    renamed_port_config["port"] = json!("video_in");
+
+    engine
+        .the_answer_of_the_tool(
+            "transact",
+            json!({ "operations": [
+                { "operation": "collapse_selection_into_subgraph", "stream": stream_asset,
+                  "nodes": [subgraph], "name": "wrapper" },
+                { "operation": "set_node_config", "stream": stream_asset, "level": [sub_again],
+                  "node": the_uuid_a_held_node_takes_under(
+                      &sub_again, graph_input["id"].as_str().unwrap()),
+                  "config": renamed_port_config },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the collapse and the rename apply");
+
+    let links_into_sub_in_wrapper: Vec<String> =
+        links_by_node_name_in(&project.the_graph_document_of("wrapper"))
+            .into_iter()
+            .filter(|link| link.contains("-> sub/"))
+            .collect();
+    assert_eq!(
+        links_into_sub_in_wrapper.len(),
+        1,
+        "{links_into_sub_in_wrapper:?}"
+    );
+    assert!(
+        links_into_sub_in_wrapper[0].ends_with("-> sub/video_in"),
+        "{links_into_sub_in_wrapper:?}"
+    );
+    assert_eq!(
+        links_by_node_name_in(&project.the_graph_document_of("main"))
+            .into_iter()
+            .filter(|link| link.contains("sub-again"))
+            .collect::<Vec<_>>(),
+        ["source/video -> sub-again/video_in"]
+    );
+}
+
+/// Unlocking the placement of an import's stream copies its nodes into the project with each
+/// stream they place still read from the import.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unlocked_placement_of_an_imports_stream_keeps_each_stream_it_places_in_the_import() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let arm = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [{ "id": Uuid::new_v4(), "name": "grain", "type": STREAM_FRAGMENT_NODE_TYPE,
+                    "config": {} }],
+        "links": [],
+    }));
+    let grain_asset = arm.stream_asset_of("grain");
+    let mut arm_main = arm.the_graph_document_of("main");
+    arm_main["nodes"][0]["config"] = json!({ "stream": { "asset": grain_asset } });
+    arm.write_the_graph_document_text("main", &arm_main.to_string());
+    let mut grain = the_graph_of_a_stream_named("grain");
+    grain["nodes"][0]["id"] = json!(Uuid::new_v4());
+    arm.write_the_graph_document(grain);
+    let cell = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&cell, "main");
+    let stream_asset = cell.stream_asset_of("main");
+    engine
+        .the_answer_of_the_tool(
+            "add_dependency",
+            json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the arm is imported");
+    let used = engine
+        .the_answer_of_the_tool(
+            "use_dependency_stream",
+            json!({ "stream": stream_asset, "project": arm.project,
+                    "dependency_stream": arm.stream_asset_of("main").to_string(), "name": "arm",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the arm's stream is placed");
+    let fragment = used["added_nodes"][0]["node"].as_str().unwrap().to_owned();
+
+    engine
+        .the_answer_of_the_tool(
+            "unlock_subgraph",
+            json!({ "stream": stream_asset, "fragment": fragment,
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the arm's placement unlocks");
+
+    let unlocked = cell.the_graph_document_of("main");
+    assert_eq!(sorted_node_names_in(&unlocked), ["grain", "source"]);
+    assert_eq!(
+        the_node_named(&unlocked, "grain")["config"],
+        json!({ "stream": { "asset": grain_asset, "from": arm.project } })
+    );
+    assert_eq!(
+        the_node_names_a_fragment_places(&the_node_named(
+            &engine.the_live_graph_of(&stream_id),
+            "grain"
+        )),
+        ["source"]
+    );
 }
 
 impl ProjectWithGraphDocuments {

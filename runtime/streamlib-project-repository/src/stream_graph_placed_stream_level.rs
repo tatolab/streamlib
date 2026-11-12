@@ -51,7 +51,7 @@ impl StreamGraphLevelOfAPlacedStream {
             .map(|own| (own.to_string(), self.the_drawn_uuid_of(own).to_string()))
             .collect();
         let mut drawn = self.document.to_value();
-        each_uuid_renamed(&mut drawn, &drawn_uuid_of_each_own);
+        each_node_and_group_reference_renamed(&mut drawn, &drawn_uuid_of_each_own);
         StreamGraphDocument::from_value(drawn)
     }
 
@@ -66,11 +66,7 @@ impl StreamGraphLevelOfAPlacedStream {
             .into_iter()
             .map(|own| (self.the_drawn_uuid_of(own).to_string(), own.to_string()))
             .collect();
-        let mut operation = serde_json::to_value(operation_as_drawn)
-            .map_err(|not_written| format!("the operation does not write: {not_written}"))?;
-        each_uuid_renamed(&mut operation, &own_uuid_of_each_drawn);
-        serde_json::from_value(operation)
-            .map_err(|not_read| format!("the operation does not read back: {not_read}"))
+        the_operation_with_each_node_and_group_renamed(operation_as_drawn, &own_uuid_of_each_drawn)
     }
 
     /// `operation`, made on the level's document, as the stream the path starts from draws it:
@@ -87,11 +83,7 @@ impl StreamGraphLevelOfAPlacedStream {
             .into_iter()
             .map(|own| (own.to_string(), self.the_drawn_uuid_of(own).to_string()))
             .collect();
-        let mut drawn = serde_json::to_value(operation)
-            .map_err(|not_written| format!("the operation does not write: {not_written}"))?;
-        each_uuid_renamed(&mut drawn, &drawn_uuid_of_each_own);
-        serde_json::from_value(drawn)
-            .map_err(|not_read| format!("the operation does not read back: {not_read}"))
+        the_operation_with_each_node_and_group_renamed(operation.clone(), &drawn_uuid_of_each_own)
     }
 
     fn every_node_and_group_uuid_of_the_document(&self) -> Vec<Uuid> {
@@ -328,22 +320,77 @@ fn the_stream_a_node_of_the_level_places(
     }
 }
 
-/// Each string of `value` naming a key of `renamed`, at any depth, replaced by its value.
-fn each_uuid_renamed(value: &mut Value, renamed: &HashMap<String, String>) {
+/// `operation` with each node and group it names under the UUID `renamed` gives it; a config
+/// or pin value it sets is a value of its own and is left as it is.
+fn the_operation_with_each_node_and_group_renamed(
+    operation: StreamGraphOperation,
+    renamed: &HashMap<String, String>,
+) -> Result<StreamGraphOperation, String> {
+    let renamed_uuid = |uuid: Uuid| -> Uuid {
+        renamed
+            .get(&uuid.to_string())
+            .and_then(|new_text| Uuid::parse_str(new_text).ok())
+            .unwrap_or(uuid)
+    };
+    match operation {
+        StreamGraphOperation::SetNodeConfig { node, from, to } => {
+            Ok(StreamGraphOperation::SetNodeConfig {
+                node: renamed_uuid(node),
+                from,
+                to,
+            })
+        }
+        StreamGraphOperation::SetPinValue {
+            node,
+            input,
+            from,
+            to,
+        } => Ok(StreamGraphOperation::SetPinValue {
+            node: renamed_uuid(node),
+            input,
+            from,
+            to,
+        }),
+        operation => {
+            let mut renamed_operation = serde_json::to_value(operation)
+                .map_err(|not_written| format!("the operation does not write: {not_written}"))?;
+            each_node_and_group_reference_renamed(&mut renamed_operation, renamed);
+            serde_json::from_value(renamed_operation)
+                .map_err(|not_read| format!("the operation does not read back: {not_read}"))
+        }
+    }
+}
+
+/// Each node and group UUID `value` names, at any depth, replaced by its value in `renamed`: a
+/// node's or group's `id`, a link end's or an operation's `node`, a `group`, and each entry of a
+/// `nodes` list. A node's `config` and `pins` are values of its own and are left as they are.
+fn each_node_and_group_reference_renamed(value: &mut Value, renamed: &HashMap<String, String>) {
+    let rename = |text: &mut String| {
+        if let Some(new_text) = renamed.get(text.as_str()) {
+            *text = new_text.clone();
+        }
+    };
     match value {
-        Value::String(text) => {
-            if let Some(new_text) = renamed.get(text.as_str()) {
-                *text = new_text.clone();
-            }
-        }
-        Value::Array(values) => {
-            for value in values {
-                each_uuid_renamed(value, renamed);
-            }
-        }
         Value::Object(object) => {
-            for value in object.values_mut() {
-                each_uuid_renamed(value, renamed);
+            for (key, entry) in object.iter_mut() {
+                match (key.as_str(), entry) {
+                    ("config" | "pins", _) => {}
+                    ("id" | "node" | "group", Value::String(text)) => rename(text),
+                    ("nodes", Value::Array(entries)) => {
+                        for entry in entries {
+                            match entry {
+                                Value::String(text) => rename(text),
+                                entry => each_node_and_group_reference_renamed(entry, renamed),
+                            }
+                        }
+                    }
+                    (_, entry) => each_node_and_group_reference_renamed(entry, renamed),
+                }
+            }
+        }
+        Value::Array(entries) => {
+            for entry in entries {
+                each_node_and_group_reference_renamed(entry, renamed);
             }
         }
         _ => {}

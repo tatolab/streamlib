@@ -92,6 +92,16 @@ pub trait RuntimeOperations: Send + Sync {
         names_at_the_level: &std::collections::HashSet<String>,
     ) -> Result<String>;
 
+    /// Refuse a node of type `node_type` named `node_name` holding `config` that a live add to
+    /// this stream would refuse: a type it does not resolve once described, or a config the
+    /// type's config schema refuses.
+    fn refuse_a_node_a_live_add_would_refuse(
+        &self,
+        node_type: &str,
+        node_name: &str,
+        config: &serde_json::Value,
+    ) -> BoxFuture<'_, Result<()>>;
+
     /// Bring each stream fragment of this stream's live graph to the stream it references, as
     /// that stream's graph document, or its import's, is on disk now.
     fn reconcile_each_stream_fragment_to_the_stream_it_references_live(

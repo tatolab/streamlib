@@ -248,6 +248,52 @@ fn a_node_added_wired_and_configured_at_a_placed_level_lands_in_the_placed_strea
 }
 
 #[test]
+fn a_config_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
+    let level = the_level(&[uuid(LOOK)]).unwrap();
+    let drawn_tint = drawn_inside(LOOK, TINT).to_string();
+
+    let (configure, configured) = the_placed_stream_edited(
+        &level,
+        StreamGraphOperation::SetNodeConfig {
+            node: drawn_inside(LOOK, BLUR),
+            from: json!({ "strength": 1 }),
+            to: json!({ "strength": 1, "follows": drawn_tint }),
+        },
+    );
+    assert_eq!(
+        configured.node(uuid(BLUR)).unwrap().config["follows"],
+        json!(drawn_tint)
+    );
+    assert_eq!(
+        level
+            .the_operation_as_drawn(&configure, &configured)
+            .unwrap(),
+        StreamGraphOperation::SetNodeConfig {
+            node: drawn_inside(LOOK, BLUR),
+            from: json!({ "strength": 1 }),
+            to: json!({ "strength": 1, "follows": drawn_tint }),
+        }
+    );
+
+    let speck = Uuid::from_u128(0x201);
+    let mut speck_naming_tint = a_plain_node(speck, "speck");
+    speck_naming_tint.config = json!({ "follows": TINT });
+    let add = StreamGraphOperation::AddNode {
+        node: speck_naming_tint,
+        links: Vec::new(),
+    };
+    let mut added = level.document.clone();
+    added.apply(&add).unwrap();
+    let StreamGraphOperation::AddNode { node, .. } =
+        level.the_operation_as_drawn(&add, &added).unwrap()
+    else {
+        panic!("an add is drawn as an add");
+    };
+    assert_eq!(node.id, drawn_inside(LOOK, &speck.to_string()));
+    assert_eq!(node.config, json!({ "follows": TINT }));
+}
+
+#[test]
 fn a_name_at_a_placed_level_clashes_only_with_a_name_of_the_placed_stream() {
     let level = the_level(&[uuid(LOOK)]).unwrap();
     let mut placed = level.document.clone();
