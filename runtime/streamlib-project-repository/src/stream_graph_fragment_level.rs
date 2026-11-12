@@ -116,14 +116,15 @@ impl StreamGraphDocument {
         inside.apply(edit)?;
         let mut links = self.link_values().to_vec();
         for taken_out in port_links_taken_out.iter().rev() {
-            if links.get(taken_out.position) != Some(&taken_out.value) {
+            let Some(held_at) = self.position_of_the_link_with_the_ends_of(&links, taken_out)
+            else {
                 return Err(format!(
-                    "the graph holds no link {} at position {}, onto a port of node {fragment} \
-                     the edit inside it takes away",
-                    taken_out.value, taken_out.position
+                    "the graph holds no link {}, onto a port of node {fragment} the edit inside \
+                     it takes away",
+                    taken_out.value
                 ));
-            }
-            links.remove(taken_out.position);
+            };
+            links.remove(held_at);
         }
         for put_back in port_links_put_back {
             if put_back.position > links.len() {
@@ -141,6 +142,26 @@ impl StreamGraphDocument {
         self.fragment_object_mut(fragment)?
             .insert("fragment".to_owned(), inside.to_value());
         Ok(())
+    }
+
+    /// Where `links` holds the link joining `taken_out`'s two ends, at its recorded position
+    /// when it is still there. A graph rendered from the running stream carries each link's
+    /// running `id`, which the link as recorded need not, so the link is matched by its ends.
+    fn position_of_the_link_with_the_ends_of(
+        &self,
+        links: &[Value],
+        taken_out: &StreamGraphDocumentValueAtItsPosition,
+    ) -> Option<usize> {
+        let ends_taken_out = self.link_read_from(&taken_out.value)?;
+        let joins_the_ends_taken_out =
+            |held: &Value| self.link_read_from(held).as_ref() == Some(&ends_taken_out);
+        if links
+            .get(taken_out.position)
+            .is_some_and(joins_the_ends_taken_out)
+        {
+            return Some(taken_out.position);
+        }
+        links.iter().position(joins_the_ends_taken_out)
     }
 
     fn an_authored_fragment_of_this_level(
