@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.73](https://github.com/tatolab/streamlib/compare/v0.68.72...v0.68.73) (2026-11-12)
+
+
+### Features
+
+* **runtime-client:** generate the TypeScript control client and carry it in the runtime unit ([92ec999](https://github.com/tatolab/streamlib/commit/92ec999561528f11ea4451045ced9a79b37028bc))
+
 ## [0.68.72](https://github.com/tatolab/streamlib/compare/v0.68.71...v0.68.72) (2026-11-12)
 
 
