@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.75](https://github.com/tatolab/streamlib/compare/v0.68.74...v0.68.75) (2026-11-12)
+
+
+### Bug Fixes
+
+* **runtime:** keep a node's studio metadata as sent inside a placed stream ([ee20ab9](https://github.com/tatolab/streamlib/commit/ee20ab9d2e4a50824a36ef2f31b3a69fcafe4a19))
+
 ## [0.68.74](https://github.com/tatolab/streamlib/compare/v0.68.73...v0.68.74) (2026-11-12)
 
 
