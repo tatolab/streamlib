@@ -8,8 +8,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::Value;
-use streamlib::sdk::error::PrivacyGatedCaptureDevice;
+use streamlib::sdk::error::{PrivacyGatedCaptureDevice, WhyANodeOfAStreamIsNotRunning};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, ProjectOpenOrReloadRequest, StreamActionQueued,
     StreamActionStep, StreamListingState, StreamLocation,
@@ -27,24 +28,32 @@ use streamlib_control_contract::{
     UnlockGeneratorFragmentRequest,
 };
 use streamlib_project_repository::{
-    ProjectRepositoriesOpenInThisRuntime, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    StreamGraphAction,
+    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
+    ProjectTransactionAuthor, ProjectTransactionAuthorKind, StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET, CancelStreamActionToolResult,
-    CaptureDeviceOnTheWire, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
-    GraphTransactionToolResult, ListStreamsToolResult, ListStreamsToolResultStream,
-    ListedStreamState, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
-    ProjectStreamActionQueuedToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
-    StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    AssetTransactionToolResult, CONTROL_JSON_RPC_STREAM_UPGRADE_REQUEST_TARGET,
+    CancelStreamActionToolResult, CaptureDeviceOnTheWire, CloseViewerToolResult,
+    CreateNodeFileToolResult, CreateProjectToolResult, DeleteProjectToolResult,
+    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeRuntimeToolResult,
+    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
+    ImportProjectToolResult, ListAssetsToolResult, ListDependenciesToolResult,
+    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
+    ListSamplesToolResult, ListStreamsToolResult, ListStreamsToolResultStream, ListedStreamState,
+    LogsToolResult, NodeNotRunningBecauseOnTheWire, OpenViewerToolResult, PausePlaybackToolResult,
+    ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
+    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
+    ProjectTransactionOnTheWire, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
+    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
+    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 use uuid::Uuid;
 
-use crate::mcp::{
-    describe_stream_action_tool_result_of, refuse_a_relative_project_directory,
-    stream_action_state_on_the_wire,
-};
-use crate::mcp_project_asset_tools::the_idempotency_key_a_caller_sent;
+use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
+use crate::control_operations_on_loaded_streams::ViewersOneConnectionHoldsOpen;
+use crate::control_operations_on_project_assets::the_idempotency_key_a_caller_sent;
+use crate::mcp::{describe_stream_action_tool_result_of, stream_action_state_on_the_wire};
 use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
 };
@@ -63,6 +72,8 @@ pub(crate) struct ControlRequestOrigin {
     /// The project change subscriptions of the connection it arrived on, when that connection
     /// stays open to be sent notifications.
     pub(crate) project_change_subscriptions: Option<Arc<ProjectChangeSubscriptionsOfOneConnection>>,
+    /// The viewers the connection it arrived on holds open, when that connection stays open.
+    pub(crate) viewers_held_open: Option<Arc<ViewersOneConnectionHoldsOpen>>,
 }
 
 /// The projects one open connection is sent `project_changed` notifications for.
@@ -89,8 +100,10 @@ impl ProjectChangeSubscriptionsOfOneConnection {
     }
 }
 
-/// What a registered operation answers when it is not refused.
-#[derive(Debug)]
+/// What a registered operation answers when it is not refused; it serializes as the result it
+/// holds.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
 pub(crate) enum ControlOperationAnswer {
     /// `discover`'s.
     Discover(DiscoverResult),
@@ -116,6 +129,58 @@ pub(crate) enum ControlOperationAnswer {
     DescribeStreamAction(DescribeStreamActionToolResult),
     /// `cancel_stream_action`'s.
     CancelStreamAction(CancelStreamActionToolResult),
+    /// A project settings change's: the transaction it applied and how people see the project.
+    ProjectSettingsTransaction(ProjectSettingsTransactionToolResult),
+    /// `duplicate_project`'s.
+    DuplicateProject(DuplicateProjectToolResult),
+    /// `delete_project`'s.
+    DeleteProject(DeleteProjectToolResult),
+    /// `list_assets`'s.
+    ListAssets(ListAssetsToolResult),
+    /// `describe_asset`'s.
+    DescribeAsset(DescribeAssetToolResult),
+    /// `read_asset_preview`'s.
+    ReadAssetPreview(ReadAssetPreviewToolResult),
+    /// `import_asset`'s.
+    AssetTransaction(AssetTransactionToolResult),
+    /// `add_dependency`'s.
+    DependencyTransaction(DependencyTransactionToolResult),
+    /// `update_dependency`'s.
+    UpdateDependency(UpdateDependencyToolResult),
+    /// `list_dependencies`'s.
+    ListDependencies(ListDependenciesToolResult),
+    /// `list_project_files`'s.
+    ListProjectFiles(ListProjectFilesToolResult),
+    /// `read_project_file`'s.
+    ReadProjectFile(ReadProjectFileToolResult),
+    /// `create_node_file`'s.
+    CreateNodeFile(CreateNodeFileToolResult),
+    /// `write_project_file`'s.
+    ProjectFileTransaction(ProjectFileTransactionToolResult),
+    /// `list_project_node_types`'s.
+    ListProjectNodeTypes(ListProjectNodeTypesToolResult),
+    /// `list_project_views`'s.
+    ListProjectViews(ListProjectViewsToolResult),
+    /// `write_studio_view_output`'s.
+    WriteStudioViewOutput(WriteStudioViewOutputToolResult),
+    /// `write_graph_input`'s.
+    WriteGraphInput(WriteGraphInputToolResult),
+    /// `import_project`'s.
+    ImportProject(ImportProjectToolResult),
+    /// `logs`'s.
+    Logs(LogsToolResult),
+    /// `open_viewer`'s.
+    OpenViewer(OpenViewerToolResult),
+    /// `close_viewer`'s.
+    CloseViewer(CloseViewerToolResult),
+    /// `set_stream_clock_scale`'s.
+    SetStreamClockScale(SetStreamClockScaleToolResult),
+    /// `create_project`'s.
+    CreateProject(CreateProjectToolResult),
+    /// `list_samples`'s.
+    ListSamples(ListSamplesToolResult),
+    /// `undo`'s.
+    ProjectTransaction(ProjectTransactionOnTheWire),
 }
 
 /// Why a registered operation answered no result.
@@ -129,12 +194,35 @@ pub(crate) enum ControlOperationRefusal {
     ContractVersionMismatch(ControlContractVersionMismatch),
 }
 
+impl std::fmt::Display for ControlOperationRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RefusedAction(refused) => {
+                write!(
+                    formatter,
+                    "{} failed: {}",
+                    refused.action, refused.runtime_words
+                )
+            }
+            Self::Failed(why) => formatter.write_str(why),
+            Self::ContractVersionMismatch(mismatch) => mismatch.fmt(formatter),
+        }
+    }
+}
+
+impl From<String> for ControlOperationRefusal {
+    fn from(why_in_the_runtime_words: String) -> Self {
+        Self::Failed(why_in_the_runtime_words)
+    }
+}
+
 /// The runtime's services every operation reaches.
 #[derive(Clone)]
 pub(crate) struct ControlOperationDispatcher {
     pub(crate) operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     pub(crate) project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
     pub(crate) project_actions_refused: Arc<ProjectActionsRefusedSinceTheRuntimeStarted>,
+    pub(crate) asset_media_facts_reads: Arc<AssetMediaFactsReadsInThisRuntime>,
 }
 
 impl ControlOperationDispatcher {
@@ -790,7 +878,211 @@ impl ControlOperationDispatcher {
                         state: stream_action_state_on_the_wire(stream_action.state),
                     })
                 }),
+            ControlOperationCall::RenameProject(request) => self
+                .rename_project(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectSettingsTransaction),
+            ControlOperationCall::SetProjectDescription(request) => self
+                .set_project_description(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectSettingsTransaction),
+            ControlOperationCall::SetProjectCover(request) => self
+                .set_project_cover(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectSettingsTransaction),
+            ControlOperationCall::DuplicateProject(request) => self
+                .duplicate_project(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::DuplicateProject),
+            ControlOperationCall::DeleteProject(request) => self
+                .delete_project(request)
+                .await
+                .map(ControlOperationAnswer::DeleteProject),
+            ControlOperationCall::ListAssets(request) => self
+                .list_assets(request)
+                .await
+                .map(ControlOperationAnswer::ListAssets),
+            ControlOperationCall::DescribeAsset(request) => self
+                .describe_asset(request)
+                .await
+                .map(ControlOperationAnswer::DescribeAsset),
+            ControlOperationCall::ReadAssetPreview(request) => self
+                .read_asset_preview(request)
+                .await
+                .map(ControlOperationAnswer::ReadAssetPreview),
+            ControlOperationCall::ImportAsset(request) => self
+                .import_asset(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::RelocateAsset(request) => self
+                .relocate_asset(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::DeleteAsset(request) => self
+                .delete_asset(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::SetAssetSettings(request) => self
+                .set_asset_settings(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::ReplaceAsset(request) => self
+                .replace_asset(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::CreateStream(request) => self
+                .create_stream(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::DeleteStream(request) => self
+                .delete_stream(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::SetStreamDisplayName(request) => self
+                .set_stream_display_name(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::AssetTransaction),
+            ControlOperationCall::AddDependency(request) => self
+                .add_dependency(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::DependencyTransaction),
+            ControlOperationCall::UpdateDependency(request) => self
+                .update_dependency(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::UpdateDependency),
+            ControlOperationCall::ListDependencies(request) => self
+                .list_dependencies(request)
+                .await
+                .map(ControlOperationAnswer::ListDependencies),
+            ControlOperationCall::RemoveDependency(request) => self
+                .remove_dependency(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::DependencyTransaction),
+            ControlOperationCall::UseDependencyStream(request) => self
+                .use_dependency_stream(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::ListProjectFiles(request) => self
+                .list_project_files(request)
+                .await
+                .map(ControlOperationAnswer::ListProjectFiles),
+            ControlOperationCall::ReadProjectFile(request) => self
+                .read_project_file(request)
+                .await
+                .map(ControlOperationAnswer::ReadProjectFile),
+            ControlOperationCall::CreateNodeFile(request) => self
+                .create_node_file(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::CreateNodeFile),
+            ControlOperationCall::WriteProjectFile(request) => self
+                .write_project_file(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectFileTransaction),
+            ControlOperationCall::ListProjectNodeTypes(request) => self
+                .list_project_node_types(request)
+                .await
+                .map(ControlOperationAnswer::ListProjectNodeTypes),
+            ControlOperationCall::ListProjectViews(request) => self
+                .list_project_views(request)
+                .await
+                .map(ControlOperationAnswer::ListProjectViews),
+            ControlOperationCall::WriteStudioViewOutput(request) => self
+                .write_studio_view_output(request)
+                .await
+                .map(ControlOperationAnswer::WriteStudioViewOutput),
+            ControlOperationCall::WriteGraphInput(request) => self
+                .write_graph_input(request)
+                .await
+                .map(ControlOperationAnswer::WriteGraphInput),
+            ControlOperationCall::ImportProject(request) => self
+                .import_project(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ImportProject),
+            ControlOperationCall::Logs(request) => {
+                self.logs(request).await.map(ControlOperationAnswer::Logs)
+            }
+            ControlOperationCall::OpenViewer(request) => self
+                .open_viewer(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::OpenViewer),
+            ControlOperationCall::CloseViewer(request) => self
+                .close_viewer(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::CloseViewer),
+            ControlOperationCall::SetStreamClockScale(request) => self
+                .set_stream_clock_scale(request)
+                .await
+                .map(ControlOperationAnswer::SetStreamClockScale),
+            ControlOperationCall::CreateProject(request) => self
+                .create_project(request)
+                .await
+                .map(ControlOperationAnswer::CreateProject),
+            ControlOperationCall::ListSamples(request) => self
+                .list_samples(request)
+                .await
+                .map(ControlOperationAnswer::ListSamples),
+            ControlOperationCall::RefreshFragments(request) => self
+                .refresh_fragments(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::GraphTransaction),
+            ControlOperationCall::Undo(request) => self
+                .undo(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectTransaction),
+            ControlOperationCall::Redo(request) => self
+                .redo(request, request_origin)
+                .await
+                .map(ControlOperationAnswer::ProjectTransaction),
         }
+    }
+
+    /// Run `call` on the project at `project_directory`, its one writer held, on a blocking task;
+    /// a refusal is the runtime's own words.
+    pub(crate) async fn a_project_repository_call_off_the_async_runtime<
+        ProjectRepositoryCallOutcome,
+    >(
+        &self,
+        method_name: &'static str,
+        project_directory: PathBuf,
+        call: impl FnOnce(
+            &mut ProjectRepository,
+        ) -> Result<ProjectRepositoryCallOutcome, ProjectRepositoryRefusal>
+        + Send
+        + 'static,
+    ) -> Result<ProjectRepositoryCallOutcome, ControlOperationRefusal>
+    where
+        ProjectRepositoryCallOutcome: Send + 'static,
+    {
+        let project_repositories = Arc::clone(&self.project_repositories);
+        tokio::task::spawn_blocking(move || {
+            let project_repository =
+                project_repositories.the_project_repository_at(&project_directory)?;
+            let mut project_repository = project_repository.lock();
+            call(&mut project_repository)
+        })
+        .await
+        .map_err(|join_failure| {
+            ControlOperationRefusal::Failed(format!(
+                "{method_name} failed: the call did not finish: {join_failure}"
+            ))
+        })?
+        .map_err(|refusal| {
+            ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
+        })
+    }
+
+    /// The operations on the stream `method_name`'s call names, or the refusal naming the loaded
+    /// streams.
+    pub(crate) fn the_stream_a_call_names(
+        &self,
+        method_name: &str,
+        stream: &str,
+    ) -> Result<Arc<dyn streamlib::sdk::runtime::RuntimeOperations>, ControlOperationRefusal> {
+        self.operations_on_the_loaded_streams
+            .runtime_operations_of_the_stream_a_call_names(stream)
+            .map_err(|refusal| {
+                ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
+            })
     }
 
     /// Run the blocking stream action `action` over the runtime's streams on a blocking task; a
@@ -1016,6 +1308,20 @@ fn subscribe_to_project_changes(
     })
 }
 
+/// Refuses a `project_directory` that is not absolute, since the runtime cannot see the caller's
+/// working directory.
+pub(crate) fn refuse_a_relative_project_directory(
+    project_directory: &std::path::Path,
+) -> Result<(), String> {
+    if project_directory.is_absolute() {
+        return Ok(());
+    }
+    Err(format!(
+        "`project_directory` must be an absolute path; got `{}`",
+        project_directory.display()
+    ))
+}
+
 /// The author a change names: the caller's own, or the agent the request's client named itself.
 pub(crate) fn the_author_of_a_change(
     author: Option<ProjectTransactionAuthorArgument>,
@@ -1082,6 +1388,42 @@ pub(crate) fn stream_action_step_on_the_wire(step: StreamActionStep) -> StreamAc
     }
 }
 
+/// Why a reach for a node of a stream was refused: structured, naming `not_running_because`,
+/// when the node does not run, and the runtime's words otherwise.
+pub(crate) fn the_refusal_of_a_reach_for_a_node(
+    method_name: &str,
+    refusal: streamlib::sdk::error::Error,
+) -> ControlOperationRefusal {
+    match refusal {
+        streamlib::sdk::error::Error::NodeOfAStreamIsNotRunning {
+            not_running_because,
+            runtime_words,
+        } => ControlOperationRefusal::RefusedAction(Box::new(ProjectActionRefusalOnTheWire {
+            action: method_name.to_owned(),
+            refused_operation_index: None,
+            refused_node: None,
+            refused_link: None,
+            refused_field: None,
+            not_running_because: Some(match not_running_because {
+                WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
+                    NodeNotRunningBecauseOnTheWire::PlaybackStopped
+                }
+                WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
+                    NodeNotRunningBecauseOnTheWire::PlaybackPaused
+                }
+                WhyANodeOfAStreamIsNotRunning::Preparing => {
+                    NodeNotRunningBecauseOnTheWire::Preparing
+                }
+                WhyANodeOfAStreamIsNotRunning::NodeFailed => {
+                    NodeNotRunningBecauseOnTheWire::NodeFailed
+                }
+            }),
+            runtime_words,
+        })),
+        refusal => ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1090,6 +1432,7 @@ mod tests {
         ControlRequestOrigin {
             client_name: client_name.map(str::to_owned),
             project_change_subscriptions: None,
+            viewers_held_open: None,
         }
     }
 

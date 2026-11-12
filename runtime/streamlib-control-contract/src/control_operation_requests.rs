@@ -9,15 +9,17 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use streamlib_project_repository::{
-    EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION, GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION,
-    GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION, GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION,
-    GROUP_ARGUMENT_DESCRIPTION, GROUP_COLOUR_ARGUMENT_DESCRIPTION,
-    GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
-    IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
+    DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION, DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION,
+    DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION, EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION, GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION,
+    GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION, GROUP_ARGUMENT_DESCRIPTION,
+    GROUP_COLOUR_ARGUMENT_DESCRIPTION, GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION,
+    GROUP_TITLE_ARGUMENT_DESCRIPTION, IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
-    NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
+    NOTE_TEXT_ARGUMENT_DESCRIPTION, ProjectAssetKind, StreamGraphAction, StreamGraphActionLinkEnd,
+    StudioCanvasPair,
 };
 use uuid::Uuid;
 
@@ -675,4 +677,776 @@ pub struct OneStreamActionRequest {
     /// The stream action's id.
     #[schemars(description = STREAM_ACTION_ARGUMENT_DESCRIPTION)]
     pub action: String,
+}
+
+/// `rename_project`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RenameProjectRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The project's new name.
+    #[schemars(description = "The project's new name; never blank.")]
+    pub name: String,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// The key the caller minted for this gesture.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `set_project_description`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectDescriptionRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// What the project is.
+    #[schemars(description = "What the project is; `null` or blank clears it.")]
+    pub description: Option<String>,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// The key the caller minted for this gesture.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `set_project_cover`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetProjectCoverRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The media asset the project is shown by.
+    #[schemars(
+        description = "The media asset the project is shown by, by the UUID `import_asset` or `list_assets` answered; `null` clears it."
+    )]
+    pub cover: Option<String>,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// The key the caller minted for this gesture.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `duplicate_project`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DuplicateProjectRequest {
+    /// The project's directory.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Where the duplicate goes.
+    #[schemars(
+        description = "Where the duplicate goes, by absolute path: a folder that does not exist yet, outside the project."
+    )]
+    pub into: PathBuf,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+}
+
+/// What `asset_project_directory` says.
+pub const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
+    "The project, by absolute path: a folder holding `tatolab-project.json`.";
+
+/// What `asset` says.
+pub const ASSET_ARGUMENT_DESCRIPTION: &str =
+    "The asset, by the UUID `import_asset` or `list_assets` answered.";
+
+/// What `stream_asset` says.
+pub const STREAM_ASSET_ARGUMENT_DESCRIPTION: &str = "The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports as its location's `stream_asset`.";
+
+/// What `stream_display_name` says.
+pub const STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION: &str =
+    "The name the stream is shown under, written in its graph document; refused when blank.";
+
+/// What an asset is, as a caller names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAssetKindArgument {
+    /// Video, audio or an image.
+    Media,
+    /// USD, glTF and other 3D scenes.
+    Scene,
+    /// Everything else a node reads: an FMU, a LUT, model weights, a font.
+    Data,
+    /// A stream's graph document; listed, never imported.
+    Stream,
+}
+
+/// `list_assets`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListAssetsRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Only the assets of this kind.
+    #[schemars(description = "Only the assets of this kind. Omit it for every asset.")]
+    pub kind: Option<ProjectAssetKindArgument>,
+}
+
+/// `describe_asset`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DescribeAssetRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+}
+
+/// `read_asset_preview`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadAssetPreviewRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+}
+
+/// `import_asset`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportAssetRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Where the bytes come from.
+    #[schemars(
+        description = "Where the bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`."
+    )]
+    pub source: String,
+    /// Where the asset sits in the project, `/`-separated and relative to the project directory,
+    /// such as `media/intro.mp4`.
+    #[schemars(
+        description = "Where the asset sits in the project, `/`-separated and relative to the project directory, such as `media/intro.mp4`. Omit it to place the file in its kind's folder — `media/`, `scenes/` or `data/` — under `file_name`, numbered `<name>-2.<extension>`, `-3`, … past a name already taken there."
+    )]
+    pub asset_path: Option<String>,
+    /// The asset's file name in its kind's folder when `asset_path` is omitted, such as
+    /// `intro.mp4`.
+    #[schemars(
+        description = "The asset's file name in its kind's folder when `asset_path` is omitted, such as `intro.mp4`. Omit it for the source file's own name; an upload, which carries no name, needs it."
+    )]
+    pub file_name: Option<String>,
+    /// `media`, `scene` or `data`.
+    #[schemars(
+        description = "`media`, `scene` or `data`. Omit it for the kind the file's extension implies, `data` when it implies none."
+    )]
+    pub kind: Option<ProjectAssetKindArgument>,
+    /// The settings the import takes, kept in the asset's sidecar.
+    #[schemars(description = "The settings the import takes, kept in the asset's sidecar.")]
+    pub import_settings: Option<Map<String, Value>>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `relocate_asset`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RelocateAssetRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+    /// The asset's new path in the project, `/`-separated and relative to the project directory,
+    /// such as `archive/opening.mp4`.
+    #[schemars(
+        description = "The asset's new path in the project, `/`-separated and relative to the project directory, such as `archive/opening.mp4`; its folders are made when missing."
+    )]
+    pub to_path: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `delete_asset`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteAssetRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `set_asset_settings`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetAssetSettingsRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+    /// The settings that replace the asset's import settings whole.
+    #[schemars(description = "The settings that replace the asset's import settings whole.")]
+    pub import_settings: Map<String, Value>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `replace_asset`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplaceAssetRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The asset, by the UUID `import_asset` or `list_assets` answered.
+    #[schemars(description = ASSET_ARGUMENT_DESCRIPTION)]
+    pub asset: String,
+    /// Where the new bytes come from.
+    #[schemars(
+        description = "Where the new bytes come from: the absolute path of a file on this machine, or the SHA-256, in 64 lowercase hex digits, of an upload in the project's `.tatolab/uploads/`."
+    )]
+    pub source: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `create_stream`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateStreamRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Where the stream's graph document sits in the project, `/`-separated and relative to the
+    /// project directory and ending `.graph.json`, such as `streams/preview.graph.json`.
+    #[schemars(
+        description = "Where the stream's graph document sits in the project, `/`-separated and relative to the project directory and ending `.graph.json`, such as `streams/preview.graph.json`."
+    )]
+    pub path: String,
+    /// The name the stream is shown under, written in its graph document.
+    #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
+    pub display_name: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `delete_stream`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteStreamRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports
+    /// as its location's `stream_asset`.
+    #[schemars(description = STREAM_ASSET_ARGUMENT_DESCRIPTION)]
+    pub stream_asset: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `set_stream_display_name`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetStreamDisplayNameRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The stream asset, by the UUID `create_stream` answered as `asset` or `list_streams` reports
+    /// as its location's `stream_asset`.
+    #[schemars(description = STREAM_ASSET_ARGUMENT_DESCRIPTION)]
+    pub stream_asset: String,
+    /// The name the stream is shown under, written in its graph document.
+    #[schemars(description = STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION)]
+    pub display_name: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+impl From<ProjectAssetKindArgument> for ProjectAssetKind {
+    fn from(kind: ProjectAssetKindArgument) -> Self {
+        match kind {
+            ProjectAssetKindArgument::Media => Self::Media,
+            ProjectAssetKindArgument::Scene => Self::Scene,
+            ProjectAssetKindArgument::Data => Self::Data,
+            ProjectAssetKindArgument::Stream => Self::Stream,
+        }
+    }
+}
+
+/// What `importing_project_directory` says.
+pub const IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
+    "The project that imports, by absolute path: a folder holding `tatolab-project.json`.";
+
+/// What `import_source` says.
+pub const IMPORT_SOURCE_ARGUMENT_DESCRIPTION: &str = "Where the project is copied from, on this machine, by absolute path: its project folder, or a `.zip` of one, such as a GitHub archive downloaded first. It must hold a `tatolab-project.json` with a project UUID, at its root or in its one top folder.";
+
+/// `add_dependency`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AddDependencyRequest {
+    /// The project that imports, by absolute path.
+    #[schemars(description = IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Where the project is copied from, on this machine, by absolute path.
+    #[schemars(description = IMPORT_SOURCE_ARGUMENT_DESCRIPTION)]
+    pub source: String,
+    /// The folder under `imports/` its copy takes.
+    #[schemars(
+        description = "The folder under `imports/` its copy takes; the imported project's name, lowercase with each run of other characters made `-`, when omitted."
+    )]
+    pub folder: Option<String>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `update_dependency`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateDependencyRequest {
+    /// The project that imports, by absolute path.
+    #[schemars(description = IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists
+    /// under `dependencies`.
+    #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
+    pub project: String,
+    /// Where to copy it from this time, as `add_dependency` takes it.
+    #[schemars(
+        description = "Where to copy it from this time, as `add_dependency` takes it; the `source` it was last copied from when omitted."
+    )]
+    pub source: Option<String>,
+    /// Overwrite the files of its folder edited since its copy, which an update without it lists
+    /// under `edited_files` and leaves as they are.
+    #[schemars(
+        description = "Overwrite the files of its folder edited since its copy, which an update without it lists under `edited_files` and leaves as they are."
+    )]
+    pub overwrite_edited_files: Option<bool>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `list_dependencies`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListDependenciesRequest {
+    /// The project that imports, by absolute path.
+    #[schemars(description = IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Read each import's `source` and answer the version it holds now beside the copy's.
+    #[schemars(
+        description = "Read each import's `source` and answer the version it holds now beside the copy's."
+    )]
+    pub check_for_newer: Option<bool>,
+}
+
+/// `remove_dependency`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveDependencyRequest {
+    /// The project that imports, by absolute path.
+    #[schemars(description = IMPORTING_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists
+    /// under `dependencies`.
+    #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
+    pub project: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `use_dependency_stream`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UseDependencyStreamRequest {
+    /// The stream the edit is to, by its stream asset's UUID.
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: Uuid,
+    /// The imported project, by the UUID `add_dependency` answers and `tatolab-project.json` lists
+    /// under `dependencies`.
+    #[schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION)]
+    pub project: String,
+    /// The imported project's stream, by its stream asset's UUID, the `asset` its graph document
+    /// under `imports/<folder>/` holds.
+    #[schemars(description = DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION)]
+    pub dependency_stream: String,
+    /// The fragment node's name, cast to lowercase URL-safe.
+    #[schemars(description = DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION)]
+    pub name: Option<String>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// What `project_file_path` says.
+pub const PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION: &str = "The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`; refused outside the project, inside `.tatolab/`, or through a symbolic link.";
+
+/// `list_project_files`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListProjectFilesRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// A folder of the project, `/`-separated and relative to the project directory, to list alone.
+    #[schemars(
+        description = "A folder of the project, `/`-separated and relative to the project directory, to list alone; the whole project when omitted."
+    )]
+    pub under: Option<String>,
+}
+
+/// `read_project_file`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReadProjectFileRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`.
+    #[schemars(description = PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION)]
+    pub path: String,
+}
+
+/// `write_project_file`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteProjectFileRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The file, `/`-separated and relative to the project directory, such as `nodes/camera.py`.
+    #[schemars(description = PROJECT_FILE_PATH_ARGUMENT_DESCRIPTION)]
+    pub path: String,
+    /// The file's whole new content as UTF-8 text.
+    #[schemars(
+        description = "The file's whole new content as UTF-8 text. Send this or `content_base64`, never both."
+    )]
+    pub content: Option<String>,
+    /// The file's whole new content as standard base64 with padding, for bytes that are not text.
+    #[schemars(
+        description = "The file's whole new content as standard base64 with padding, for bytes that are not text. Send this or `content`, never both."
+    )]
+    pub content_base64: Option<String>,
+    /// The `content_sha256` `read_project_file` or the last `write_project_file` answered for the
+    /// file.
+    #[schemars(
+        description = "The `content_sha256` `read_project_file` or the last `write_project_file` answered for the file: the write is refused, and the file left as it is, when the file no longer holds those bytes. Omitted, the write goes over whatever the file holds."
+    )]
+    pub expected_sha256: Option<String>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `create_node_file`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateNodeFileRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// The new Python file, `/`-separated and relative to the project directory, such as
+    /// `nodes/edge_glow.py`.
+    #[schemars(
+        description = "The new Python file, `/`-separated and relative to the project directory, such as `nodes/edge_glow.py`: each folder and the file's name a Python identifier, the class named after the file (`EdgeGlow`). Refused where a file already is, outside the project, inside `.tatolab/` or `imports/`, or through a symbolic link."
+    )]
+    pub path: String,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// `list_project_node_types`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListProjectNodeTypesRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+}
+
+/// `list_project_views`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListProjectViewsRequest {
+    /// The project, by absolute path.
+    #[schemars(description = ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+}
+
+/// `write_studio_view_output`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteStudioViewOutputRequest {
+    /// The stream id of the stream holding the view node.
+    #[schemars(description = "The stream id of the stream holding the view node.")]
+    pub stream: String,
+    /// The view node's UUID, as `graph` lists it under `id`.
+    #[schemars(description = "The view node's UUID, as `graph` lists it under `id`.")]
+    pub node: String,
+    /// The view node's output port the value is published on.
+    #[schemars(description = "The view node's output port the value is published on.")]
+    pub port: String,
+    /// The value, as the port's family carries it.
+    #[schemars(
+        description = "The value, as the port's family carries it: a Records port takes a JSON object; an Array port a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels port a number, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
+    )]
+    pub value: serde_json::Value,
+}
+
+/// `write_graph_input`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteGraphInputRequest {
+    /// The stream id of a loaded stream.
+    #[schemars(description = "The stream id of a loaded stream.")]
+    pub stream: String,
+    /// The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as
+    /// every exposed name is.
+    #[schemars(
+        description = "The Input's name, as a top-level `GraphInput`'s config declares it under `port`, cast as every exposed name is."
+    )]
+    pub input: String,
+    /// The value, as the Input's family carries it.
+    #[schemars(
+        description = "The value, as the Input's family carries it: a Records Input takes a JSON object; an Array Input a number or a list of numbers, nested to any depth, as its `values` attribute of float64, or an object of such attributes by name; a Channels Input a number or a bool, as one control value, or `{\"samples\": [[...], ...], \"sample_rate\"}`, float32 channel by channel."
+    )]
+    pub value: serde_json::Value,
+}
+
+/// `import_project`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImportProjectRequest {
+    /// The `.zip` of a project on this machine, by absolute path, such as a GitHub archive
+    /// downloaded first.
+    #[schemars(
+        description = "The `.zip` of a project on this machine, by absolute path, such as a GitHub archive downloaded first. It must hold a `tatolab-project.json` with a project UUID, at its root or in its one top folder."
+    )]
+    pub source: String,
+    /// Where the new project is made, by absolute path.
+    #[schemars(
+        description = "Where the new project is made, by absolute path: a folder that does not exist yet, its parent made when missing."
+    )]
+    pub project_directory: PathBuf,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+}
+
+/// What every required `stream` argument says.
+pub const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream this call is about, by the stream id `list_streams` and `graph` report. A stream not loaded is refused naming the loaded ones.";
+
+/// What `graph`'s optional `stream` argument says.
+/// What a stream action's `stream` argument says.
+pub const STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION: &str =
+    "The stream, by the stream id `list_streams` reports: loaded, or recorded and not loaded.";
+
+/// `logs`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LogsRequest {
+    /// The project, by absolute path.
+    #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
+    pub project_directory: PathBuf,
+    /// Only the records of this stream, by its stream id.
+    #[schemars(
+        description = "Only the records of this stream, by its stream id. Omit it for every record of the project, its loads' among them."
+    )]
+    pub stream: Option<String>,
+    /// Only the records of this stream action, by its action id.
+    #[schemars(description = "Only the records of this stream action, by its action id.")]
+    pub action: Option<String>,
+    /// Return the records after this opaque cursor, the previous result's `next_after`.
+    #[schemars(
+        description = "Return the records after this opaque cursor, the previous result's `next_after`. Omit it for the oldest the project's log holds."
+    )]
+    pub after: Option<String>,
+    /// The most records to return.
+    #[schemars(
+        range(min = 1),
+        description = "The most records to return. Defaults to 256; a larger value than 4096 is clamped to it."
+    )]
+    pub count: Option<u32>,
+}
+
+/// `set_stream_clock_scale`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetStreamClockScaleRequest {
+    /// The stream, by the stream id `list_streams` reports.
+    #[schemars(description = STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: String,
+    /// Stream seconds per machine second from now on.
+    #[schemars(
+        description = "Stream seconds per machine second from now on: 0.5 runs the stream at half speed, 1 at real time. A finite number greater than zero, at most 1."
+    )]
+    pub scale: f64,
+}
+
+/// `open_viewer`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OpenViewerRequest {
+    /// The loaded stream this call is about, by the stream id `list_streams` and `graph` report.
+    #[schemars(description = STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: String,
+    /// The node's id, as `graph` lists it under `id`.
+    #[schemars(
+        description = "The node's id, as `graph` lists it under `id`; its name is a label, not its identity."
+    )]
+    pub node_id: String,
+    /// The node's output port, as `graph` lists it under `ports.outputs`.
+    #[schemars(description = "The node's output port, as `graph` lists it under `ports.outputs`.")]
+    pub port: String,
+    /// The process id of the viewer that imports the port's Image frames.
+    #[schemars(
+        description = "The process id of the viewer that imports the port's Image frames. On macOS the surface-sharing service admits only that process, a running process of the runtime's user, to new connections while the viewer stays open, and without it the answer names no `surface_share_address`; Linux admits whoever may open its socket."
+    )]
+    #[serde(default)]
+    pub viewer_process_id: Option<u32>,
+}
+
+/// `close_viewer`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CloseViewerRequest {
+    /// The viewer, by the id `open_viewer` answered.
+    #[schemars(description = "The viewer, by the id `open_viewer` answered.")]
+    pub viewer: String,
+}
+
+/// `list_samples`'s params: none.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListSamplesRequest {}
+
+/// `create_project`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateProjectRequest {
+    /// Where to create the project, by absolute path.
+    #[schemars(
+        description = "Where to create the project, by absolute path: created when missing, and holding none of the files a new project starts with. Omit it to create the project in a folder named `<adjective>-<noun>`, drawn at random, under `~/streams`."
+    )]
+    #[serde(default)]
+    pub project_directory: Option<PathBuf>,
+    /// The `name` of a sample project `list_samples` lists, to copy into the new project instead of
+    /// the starter.
+    #[schemars(
+        description = "The `name` of a sample project `list_samples` lists, to copy into the new project instead of the starter. Omit it for the starter."
+    )]
+    #[serde(default)]
+    pub sample: Option<String>,
+}
+
+/// `refresh_fragments`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RefreshFragmentsRequest {
+    /// The project, by absolute path.
+    #[schemars(
+        description = "The project, by absolute path: a folder holding `tatolab-project.json`."
+    )]
+    pub project_directory: PathBuf,
+    /// The project's Python files that changed, each by its path relative to the project directory
+    /// or absolute inside it, e.g.
+    #[schemars(
+        description = "The project's Python files that changed, each by its path relative to the project directory or absolute inside it, e.g. `generators/looks.py`; each names the module it is imported as."
+    )]
+    pub changed_files: Vec<PathBuf>,
+    /// `commit`, the default.
+    #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
+    pub mode: Option<GraphEditMode>,
+    /// Who the change is by, as history records it and undo follows it.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// The params of `undo` and `redo`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UndoOrRedoRequest {
+    /// The project, by absolute path.
+    #[schemars(
+        description = "The project, by absolute path: a folder holding `tatolab-project.json`."
+    )]
+    pub project_directory: PathBuf,
+    /// Whose edits.
+    #[schemars(
+        description = "Whose edits: an undo or a redo reverses only its own author's. Omit it to be the agent the MCP client named in its `clientInfo`."
+    )]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// A key the caller mints once per user gesture, such as a slider drag committed on release.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
 }

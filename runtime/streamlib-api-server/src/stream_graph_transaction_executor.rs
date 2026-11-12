@@ -35,7 +35,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 use uuid::Uuid;
 
-use crate::mcp_project_asset_tools::{
+use crate::control_operations_on_project_assets::{
     bring_the_loaded_streams_in_line_with_the_stream_documents_of,
     the_idempotency_key_a_caller_sent,
 };

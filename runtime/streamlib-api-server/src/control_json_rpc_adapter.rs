@@ -90,6 +90,7 @@ async fn answer_one_control_json_rpc_post(
     let request_origin = ControlRequestOrigin {
         client_name: the_client_name_a_request_sent(&request_headers),
         project_change_subscriptions: None,
+        viewers_held_open: None,
     };
     let answer = match the_contract_version_a_request_sent(&request_headers) {
         Err(why) => Some(a_json_rpc_error(
@@ -142,12 +143,8 @@ async fn answer_the_control_json_rpc_stream_upgrade(
     match the_contract_version_a_request_sent(request.headers())
         .map_err(|why| (StatusCode::BAD_REQUEST, why))
         .and_then(|client_contract_version| {
-            refuse_another_contract_version(client_contract_version).map_err(|refusal| {
-                (
-                    StatusCode::CONFLICT,
-                    the_runtime_words_of_a_refusal(&refusal),
-                )
-            })
+            refuse_another_contract_version(client_contract_version)
+                .map_err(|refusal| (StatusCode::CONFLICT, refusal.to_string()))
         }) {
         Ok(()) => {}
         Err(refused) => return refused.into_response(),
@@ -155,6 +152,7 @@ async fn answer_the_control_json_rpc_stream_upgrade(
     let request_origin = ControlRequestOrigin {
         client_name: the_client_name_a_request_sent(request.headers()),
         project_change_subscriptions: Some(Arc::default()),
+        viewers_held_open: Some(Arc::default()),
     };
     let pending_upgrade = hyper::upgrade::on(&mut request);
     tokio::spawn(async move {
@@ -467,25 +465,12 @@ async fn the_answer_to_one_json_rpc_message(
 }
 
 fn the_result_of_an_answer(answered: ControlOperationAnswer) -> Value {
-    let rendered = match answered {
-        ControlOperationAnswer::Discover(result) => serde_json::to_value(result),
-        ControlOperationAnswer::SubscribeProjectChanges(result) => serde_json::to_value(result),
-        ControlOperationAnswer::DescribeRuntime(result) => serde_json::to_value(result),
-        ControlOperationAnswer::ListStreams(result) => serde_json::to_value(result),
-        ControlOperationAnswer::Graph(graph) => Ok(graph),
-        ControlOperationAnswer::GraphTransaction(result) => serde_json::to_value(result),
-        ControlOperationAnswer::ProjectStreamActionQueued(result) => serde_json::to_value(result),
-        ControlOperationAnswer::RemoveProject(result) => serde_json::to_value(result),
-        ControlOperationAnswer::PausePlayback(result) => serde_json::to_value(result),
-        ControlOperationAnswer::ResumePlayback(result) => serde_json::to_value(result),
-        ControlOperationAnswer::DescribeStreamAction(result) => serde_json::to_value(result),
-        ControlOperationAnswer::CancelStreamAction(result) => serde_json::to_value(result),
-    };
-    rendered.unwrap_or_else(|_| unreachable!("a result type always serializes to JSON"))
+    serde_json::to_value(answered)
+        .unwrap_or_else(|_| unreachable!("a result type always serializes to JSON"))
 }
 
 fn the_json_rpc_error_of_a_refusal(request_id: Value, refusal: ControlOperationRefusal) -> Value {
-    let runtime_words = the_runtime_words_of_a_refusal(&refusal);
+    let runtime_words = refusal.to_string();
     match refusal {
         ControlOperationRefusal::RefusedAction(refused) => a_json_rpc_error(
             request_id,
@@ -505,16 +490,6 @@ fn the_json_rpc_error_of_a_refusal(request_id: Value, refusal: ControlOperationR
             runtime_words,
             serde_json::to_value(mismatch).ok(),
         ),
-    }
-}
-
-fn the_runtime_words_of_a_refusal(refusal: &ControlOperationRefusal) -> String {
-    match refusal {
-        ControlOperationRefusal::RefusedAction(refused) => {
-            format!("{} failed: {}", refused.action, refused.runtime_words)
-        }
-        ControlOperationRefusal::Failed(why) => why.clone(),
-        ControlOperationRefusal::ContractVersionMismatch(mismatch) => mismatch.to_string(),
     }
 }
 
@@ -745,6 +720,57 @@ pub(crate) mod tests {
             (
                 "describe_stream_action",
                 json!({ "action": "an action nobody queued" }),
+            ),
+            (
+                "remove_node",
+                json!({ "stream": stream_asset, "node": "nobody", "mode": "live" }),
+            ),
+            ("list_samples", json!({})),
+            ("logs", json!({ "project_directory": "relative/rig" })),
+            (
+                "open_viewer",
+                json!({ "stream": "no such stream", "node_id": "nobody", "port": "video" }),
+            ),
+            (
+                "close_viewer",
+                json!({ "viewer": "a viewer nobody opened" }),
+            ),
+            (
+                "set_stream_clock_scale",
+                json!({ "stream": "no such stream", "scale": 0.5 }),
+            ),
+            (
+                "write_graph_input",
+                json!({ "stream": "no such stream", "input": "gain", "value": 1 }),
+            ),
+            ("undo", json!({ "project_directory": "relative/rig" })),
+            (
+                "refresh_fragments",
+                json!({ "project_directory": "relative/rig", "changed_files": [] }),
+            ),
+            (
+                "list_assets",
+                json!({ "project_directory": "/no/such/project" }),
+            ),
+            (
+                "rename_project",
+                json!({ "project_directory": "/no/such/project", "name": "Rig" }),
+            ),
+            (
+                "list_dependencies",
+                json!({ "project_directory": "/no/such/project" }),
+            ),
+            (
+                "list_project_files",
+                json!({ "project_directory": "/no/such/project" }),
+            ),
+            (
+                "list_project_node_types",
+                json!({ "project_directory": "/no/such/project" }),
+            ),
+            (
+                "list_project_views",
+                json!({ "project_directory": "/no/such/project" }),
             ),
         ];
         for (method, params) in calls {

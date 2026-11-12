@@ -5,6 +5,16 @@ mod asset_media_facts_reads;
 mod axum_router_served_until_stopped;
 mod control_json_rpc_adapter;
 mod control_operation_dispatcher;
+mod control_operations_on_loaded_streams;
+mod control_operations_on_new_projects;
+mod control_operations_on_one_project;
+mod control_operations_on_project_archives;
+mod control_operations_on_project_assets;
+mod control_operations_on_project_dependencies;
+mod control_operations_on_project_files;
+mod control_operations_on_project_node_types;
+mod control_operations_on_project_views;
+mod control_operations_on_stream_graph_history;
 #[cfg(test)]
 mod control_plane_stub_support;
 mod first_party_package_moves_recorded_in_the_open_projects;
