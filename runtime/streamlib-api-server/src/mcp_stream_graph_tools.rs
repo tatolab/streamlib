@@ -374,8 +374,6 @@ struct SetGroupFieldsToolArguments {
 struct AddNoteToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    level: Option<Vec<Uuid>>,
     #[schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION)]
     text: String,
     #[schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "[f64; 2]")]
@@ -396,8 +394,6 @@ struct AddNoteToolArguments {
 struct SetNoteFieldsToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    level: Option<Vec<Uuid>>,
     #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
     note: String,
     #[schemars(description = "What the note says; kept when omitted.")]
@@ -426,8 +422,6 @@ struct SetNoteFieldsToolArguments {
 struct RemoveNoteToolArguments {
     #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
     stream: Uuid,
-    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
-    level: Option<Vec<Uuid>>,
     #[schemars(description = NOTE_ARGUMENT_DESCRIPTION)]
     note: String,
     #[schemars(description = GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION)]
@@ -1089,7 +1083,6 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(AddNoteToolArguments {
             stream,
-            level,
             text,
             position,
             size,
@@ -1100,7 +1093,6 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::AddNote {
             stream,
-            level: level.unwrap_or_default(),
             text,
             position,
             size,
@@ -1124,7 +1116,6 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(SetNoteFieldsToolArguments {
             stream,
-            level,
             note,
             text,
             position,
@@ -1136,7 +1127,6 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         let operation = StreamGraphAction::SetNoteFields {
             stream,
-            level: level.unwrap_or_default(),
             note,
             text,
             position,
@@ -1161,18 +1151,13 @@ impl LocalApiMcpServerHandler {
         tool_call_request_context: RequestContext<RoleServer>,
         Parameters(RemoveNoteToolArguments {
             stream,
-            level,
             note,
             mode,
             author,
             idempotency_key,
         }): Parameters<RemoveNoteToolArguments>,
     ) -> ToolCallAnswer {
-        let operation = StreamGraphAction::RemoveNote {
-            stream,
-            level: level.unwrap_or_default(),
-            note,
-        };
+        let operation = StreamGraphAction::RemoveNote { stream, note };
         self.one_graph_transaction(
             "remove_note",
             vec![operation],

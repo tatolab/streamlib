@@ -405,9 +405,6 @@ pub enum StreamGraphAction {
     AddNote {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
         text: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "[f64; 2]"))]
@@ -419,9 +416,6 @@ pub enum StreamGraphAction {
     SetNoteFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
         note: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
@@ -438,9 +432,6 @@ pub enum StreamGraphAction {
     RemoveNote {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,
-        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        level: Vec<Uuid>,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
         note: String,
     },
@@ -477,11 +468,12 @@ impl StreamGraphAction {
             | Self::SetGroupFields { level, .. }
             | Self::RemoveGroup { level, .. }
             | Self::CollapseSelectionIntoSubgraph { level, .. }
-            | Self::UnlockGeneratorFragment { level, .. }
-            | Self::AddNote { level, .. }
-            | Self::SetNoteFields { level, .. }
-            | Self::RemoveNote { level, .. } => level,
-            Self::ImportGraphGenerator { .. } | Self::UseDependencyStream { .. } => &[],
+            | Self::UnlockGeneratorFragment { level, .. } => level,
+            Self::ImportGraphGenerator { .. }
+            | Self::UseDependencyStream { .. }
+            | Self::AddNote { .. }
+            | Self::SetNoteFields { .. }
+            | Self::RemoveNote { .. } => &[],
         }
     }
 

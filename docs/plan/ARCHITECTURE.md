@@ -2257,8 +2257,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `collapse_selection_into_subgraph` makes from a selection of nodes, carrying each link that
   crossed it through a `GraphInput` or `GraphOutput` inside; `unlock_generator_fragment` turns a
   generator's fragment back into plain nodes of its graph, which no refresh then reaches, each a
-  graph action with an inverse. Every graph edit but `import_graph_generator` and
-  `use_dependency_stream` takes an optional `level`, the path of fragment node UUIDs from the
+  graph action with an inverse. Every graph edit but `import_graph_generator`,
+  `use_dependency_stream` and the canvas-note edits takes an optional `level`, the path of fragment node UUIDs from the
   stream's own level inward, and applies inside the authored fragment it names, an Input or Output
   added or removed there adding or removing the fragment node's port; a name is unique within its
   level. Inside a generator's output it is refused until `unlock_generator_fragment`, and inside a
