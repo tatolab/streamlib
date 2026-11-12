@@ -20,7 +20,7 @@ schemars = { version = "1.2", features = ["uuid1"] }
 serde.workspace = true
 serde_json.workspace = true
 streamlib-project-repository = { path = "../streamlib-project-repository", default-features = false, features = ["mcp-tool-json-schema"] }
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.78", features = ["json-schema"] }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.79", features = ["json-schema"] }
 uuid = { version = "1.11", features = ["serde"] }
 
 [lints]
