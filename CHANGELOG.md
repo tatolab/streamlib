@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.68.77](https://github.com/tatolab/streamlib/compare/v0.68.76...v0.68.77) (2026-11-12)
+
+
+### Features
+
+* **runtime-client:** generate a validated client, one method per operation ([c1412d7](https://github.com/tatolab/streamlib/commit/c1412d75ea2eb6848cfebd1ce002de6e6c190b4f))
+* **runtime-client:** generate a validated client, one method per operation ([01eacac](https://github.com/tatolab/streamlib/commit/01eacacf587bfe421ac0bad9f5384df6d74cbb10)), closes [#3616](https://github.com/tatolab/streamlib/issues/3616)
+
 ## [0.68.76](https://github.com/tatolab/streamlib/compare/v0.68.75...v0.68.76) (2026-11-12)
 
 
