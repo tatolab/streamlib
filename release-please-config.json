@@ -20,6 +20,11 @@
           "jsonpath": "$.project.version"
         },
         {
+          "type": "json",
+          "path": "sdk/tatolab-runtime-client/package.json",
+          "jsonpath": "$.version"
+        },
+        {
           "type": "toml",
           "path": "packages/streamlib-webrtc/Cargo.toml",
           "jsonpath": "$.package.version"

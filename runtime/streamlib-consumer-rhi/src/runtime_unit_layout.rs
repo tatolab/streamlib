@@ -149,6 +149,20 @@ pub fn first_party_modules_directory_beside_the_lend(lend_directory: &Path) -> O
     )
 }
 
+/// The directory beside the lend that holds `@tatolab/runtime-client`, the TypeScript client
+/// of the control API the runtime unit serves, at the unit's own contract version.
+pub const RUNTIME_CLIENT_PACKAGE_DIRECTORY_NAME: &str = "runtime-client";
+
+/// The TypeScript client package's directory beside the lend at `lend_directory`, or `None`
+/// for a lend at the filesystem root.
+pub fn runtime_client_package_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(RUNTIME_CLIENT_PACKAGE_DIRECTORY_NAME),
+    )
+}
+
 /// The directory beside the lend that holds the third-party wheels the core
 /// modules require, for the unit's own platform, which every project's sync
 /// finds through its `.tatolab/carried-wheels` link before any index.

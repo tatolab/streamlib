@@ -27,6 +27,7 @@ pub mod extension_build_script_fetched_notices;
 pub mod generate_built_in_node_classes;
 pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;
+pub mod generate_runtime_client;
 pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
@@ -35,6 +36,7 @@ pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
 pub mod stage_first_party_modules;
+pub mod stage_runtime_client_package;
 pub mod stage_runtime_unit_carried_packages;
 pub mod stage_runtime_unit_uv;
 pub mod stage_sample_projects;
@@ -718,6 +720,16 @@ enum Commands {
         check: bool,
     },
 
+    /// Regenerate the generated files of `sdk/tatolab-runtime-client`, the TypeScript client
+    /// of the control API, from the committed contract file. `--check` is the CI gate: it
+    /// fails when a checked-in generated file differs from a regeneration. See
+    /// [`generate_runtime_client`].
+    GenerateRuntimeClient {
+        /// Fail when a checked-in file differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `tatolab-module-sdk`'s `include/tatolab_module_host_table.h`
     /// from the table's Rust mirror. `--check` fails when the checked-in header
     /// differs from a regeneration; `check-all-source-gates` runs it. See
@@ -828,6 +840,9 @@ fn main() -> Result<()> {
         }
         Commands::GenerateControlContract { check } => {
             generate_control_contract::run(&workspace_root()?, check)?
+        }
+        Commands::GenerateRuntimeClient { check } => {
+            generate_runtime_client::run(&workspace_root()?, check)?
         }
         Commands::GenerateModuleHostTableCHeader { check } => {
             generate_module_host_table_c_header::run(&workspace_root()?, check)?
