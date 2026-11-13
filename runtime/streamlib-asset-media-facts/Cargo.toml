@@ -18,7 +18,7 @@ path = "src/lib.rs"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff", "hdr", "exr"] }
 serde.workspace = true
 serde_json.workspace = true
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.82" }
+streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.89" }
 # MPL-2.0, file-level: it binds only its own files. Format readers alone; no audio is decoded.
 symphonia = { version = "0.5.4", default-features = false, features = ["aac", "adpcm", "aiff", "alac", "caf", "flac", "isomp4", "mkv", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 thiserror.workspace = true

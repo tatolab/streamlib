@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-webrtc"
-version = "0.68.82"
+version = "0.68.89"
 description = "WHIP publish and WHEP play nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
