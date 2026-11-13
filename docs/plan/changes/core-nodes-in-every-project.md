@@ -128,13 +128,19 @@ project, not wheel, the runtime unit gives to every project.
   unit and an import of every project, built exactly the way a third party builds a project, so
   the runtime still ships no node of its own. The node list in the entry becomes Core Nodes'
   groups.
-- **The one name the engine knows.** `FEEDBACK_FUNCTION_NODE_TYPE` becomes
-  `imports/core-nodes/core_nodes.logic:Feedback` under a project that imports Core Nodes.
-  **[NEEDS DECISION 2, built as (a) until the owner says otherwise (session, 2026-11-13)]** Core Nodes opened on its own names the node `core_nodes.logic:Feedback`, which
-  that constant does not match. Options: (a) the engine knows Feedback by a mark its declaration
-  carries, `@node.function(closes_a_loop=True)`, read from source as `category` is, so any
-  project's node may close a loop and no type name is known to the engine (recommended); (b) the
-  engine matches both spellings; (c) Feedback closes a loop only where Core Nodes is imported.
+- **The one name the engine knows.** **[NEEDS DECISION 2]** `FEEDBACK_FUNCTION_NODE_TYPE` is
+  `tatolab.ops:Feedback`, which this change deletes, and Core Nodes' own `Feedback` matches no
+  name the engine holds. The owner ruled out a mark on the decorator and any name or rule for a
+  core node (project thread, 2026-11-13: "Every type of node we build or any operation we do
+  should be accessible to other builders and 3rd party modules"); the plan already rejects a
+  `delay=True` flag, any stateful node closing a loop, and the engine inserting the delay
+  (`ARCHITECTURE.md:2099-2100`). The evaluator already reads any input from the last evaluation
+  when its source is ordered after it (`sdk/streamlib-python-wheel/src/python_function_node_island.rs:1155-1160`);
+  only the compiler's three checks look for the name (`function_node_island.rs:817`, `:941`,
+  `:975`). Options put to the owner, each removing the `Feedback` node: (a) the delay is a
+  property of a link, set by whoever wires it, and a cycle is legal when one of its links holds
+  it (recommended); (b) a `GetVariable` upstream of its own `SetVariable` reads the last
+  evaluation. `tatolab-ops` is not deleted until this is settled.
 - **The function node compile entry** (`ARCHITECTURE.md:2053`, `:2059`): "`tatolab-ops`' included"
   reads "Core Nodes' included".
 - **The import entry's first-party clause** (`ARCHITECTURE.md:2250-2256`): the unit carries its
@@ -190,12 +196,12 @@ served to the app wherever the import is named.
 
 ## Tickets
 
-Decision 1 is the owner's; 2, 3 and 4 were put to the owner in the project thread as assumptions
-and are built as recommended. The cut, each a tracer bullet:
+Decision 1 is the owner's and decision 2 is open; 3 and 4 were put to the owner in the project
+thread as assumptions and are built as recommended. The cut, each a tracer bullet:
 
 1. The unit carries the core project, and a project loads with it as an import: node types
    listed, a node placed and run, Program listed and served. `tatolab-ops` still ships.
-2. Feedback closes a loop by its declaration (decision 2).
+2. A loop of function nodes closes as decision 2 settles.
 3. `tatolab-ops` is deleted everywhere the REMOVED list names, and the plan entries are rewritten.
 
 ## Consumers
