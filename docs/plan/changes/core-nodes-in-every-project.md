@@ -90,9 +90,15 @@ project, not wheel, the runtime unit gives to every project.
     Core Nodes' file layout, and one more type grammar the catalog, `add_node` and the load each
     resolve, held by the engine for one project.
   Either way `add_dependency` refuses the folder name `core-nodes`, naming who holds it.
-- **Its requirements join the project's lock** through a uv path source on the link with
-  `package = false`, as an import's do, so `numba`, `numpy` and `pillow` resolve from the wheels
-  the unit carries and a new project still creates and runs with no network.
+- **Its requirements are declared, never installed behind the project's back.** Each time the
+  runtime makes, syncs or locks a `.venv` it writes Core Nodes in the project's `pyproject.toml`
+  as a requirement and a uv path source through the link, `tatolab-core-nodes = { path =
+  ".tatolab/core-imports/core-nodes", package = false }`, as an import's folder is written. So
+  any `uv sync`, the runtime's or a person's, keeps `numba`, `numpy` and `pillow`, the rule the
+  plan holds for the first-party wheels (`ARCHITECTURE.md:2259-2261`, where a sync uninstalled
+  what the manifest did not name). They resolve from the wheels the unit carries, so a new
+  project still creates and runs with no network. The source's path does not change with the
+  runtime's version, as a wheel's file name does.
 - **Its views are every project's.** `list_project_views` answers Program after the project's own
   views, its type `Core Nodes:program`, and the runtime serves its files through
   `read_project_file` under the reserved folder.
@@ -134,8 +140,10 @@ project, not wheel, the runtime unit gives to every project.
 - **Marketplace assembly** (`scripts/tatolab_module_projects.py`) reads every
   `packages/*/tatolab-project.json` as a module project. It names Core Nodes as the unit's, not
   the Marketplace's, and leaves it out by that rule instead of by its missing wheel.
-- **Core Nodes' version.** Its `pyproject.toml` version and its `tatolab-stream` floor join
-  `release-version-files.json`, so the project the unit carries states the unit's version.
+- **Core Nodes' version stays as written.** `uv.lock` records a path source's version and its
+  requirements, so a version or a `tatolab-stream` floor that moved at each release would rewrite
+  every project's `uv.lock` at each release. Core Nodes' `pyproject.toml` is outside
+  `release-version-files.json`; its lock entry changes only when its requirements do.
 
 ## REMOVED
 
