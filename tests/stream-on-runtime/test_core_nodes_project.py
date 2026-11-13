@@ -5,7 +5,7 @@
 
 The project is loaded from a copy, since the runtime writes a project's
 `pyproject.toml` and `.venv`. Beside the streams it brings, the copy is given
-one more: a canvas into every image input of one of each shader node, so every
+one more: canvases into every image input of one of each shader node, so every
 shader compiles, binds and dispatches with no stream kept in the project for it.
 """
 
@@ -43,6 +43,9 @@ FRAMES_WRITTEN_TIMEOUT_SECONDS = 120.0
 
 GRAPH_POLL_INTERVAL_SECONDS = 0.5
 
+#: A channel carries at most 32 destinations; each canvas feeds fewer.
+LINKS_OUT_OF_ONE_CANVAS = 16
+
 
 def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
     """Each shader node type of the project with the inputs of its signature, in order."""
@@ -65,18 +68,28 @@ def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
     return signature_inputs_by_node_type
 
 
-def a_stream_of_a_canvas_into_one_of_each_shader_node() -> "dict[str, Any]":
-    canvas_id = str(uuid.uuid4())
-    nodes: "list[dict[str, Any]]" = [
-        {
-            "id": canvas_id,
-            "name": "canvas",
-            "type": "nodes.solid_color:SolidColor",
-            "config": {"width": 64, "height": 36},
-        }
-    ]
+def a_stream_of_canvases_into_one_of_each_shader_node() -> "dict[str, Any]":
+    nodes: "list[dict[str, Any]]" = []
     links: "list[dict[str, Any]]" = []
+    canvas_id = ""
+    links_out_of_the_canvas = LINKS_OUT_OF_ONE_CANVAS
     for node_type, signature_inputs in sorted(shader_nodes_the_project_declares().items()):
+        image_ports = [
+            signature_input["port"]
+            for signature_input in signature_inputs
+            if signature_input["value_type"] == "image_frame"
+        ]
+        if links_out_of_the_canvas + len(image_ports) > LINKS_OUT_OF_ONE_CANVAS:
+            canvas_id = str(uuid.uuid4())
+            links_out_of_the_canvas = 0
+            nodes.append(
+                {
+                    "id": canvas_id,
+                    "name": f"canvas_before_{node_type.rsplit(':', 1)[1]}",
+                    "type": "nodes.solid_color:SolidColor",
+                    "config": {"width": 64, "height": 36},
+                }
+            )
         node_id = str(uuid.uuid4())
         nodes.append(
             {"id": node_id, "name": node_type.rsplit(":", 1)[1], "type": node_type, "config": {}}
@@ -84,11 +97,11 @@ def a_stream_of_a_canvas_into_one_of_each_shader_node() -> "dict[str, Any]":
         links.extend(
             {
                 "source": {"node": canvas_id, "port": "image"},
-                "target": {"node": node_id, "port": signature_input["port"]},
+                "target": {"node": node_id, "port": image_port},
             }
-            for signature_input in signature_inputs
-            if signature_input["value_type"] == "image_frame"
+            for image_port in image_ports
         )
+        links_out_of_the_canvas += len(image_ports)
     return {
         "asset": str(uuid.uuid4()),
         "display_name": "Every shader node",
@@ -104,7 +117,7 @@ def a_copy_of_the_core_nodes_project(directory: Path) -> Path:
         CORE_NODES_PROJECT_DIRECTORY, project_directory, ignore=NOT_COPIED_WITH_THE_PROJECT
     )
     (project_directory / "streams" / f"{EVERY_SHADER_NODE_STREAM_NAME}.graph.json").write_text(
-        json.dumps(a_stream_of_a_canvas_into_one_of_each_shader_node(), indent=2, sort_keys=True)
+        json.dumps(a_stream_of_canvases_into_one_of_each_shader_node(), indent=2, sort_keys=True)
         + "\n",
         encoding="utf-8",
     )
@@ -171,8 +184,12 @@ def test_each_stream_of_the_core_nodes_project_starts_and_each_shader_node_write
     assert listed_by_display_name.keys() == {
         stream_document["display_name"] for stream_document in stream_documents.values()
     }
-    for display_name, listed in listed_by_display_name.items():
-        assert listed["failed_because"] is None, f"{display_name}: {listed['failed_because']}"
+    why_each_failed_stream_failed = {
+        display_name: listed["failed_because"]
+        for display_name, listed in listed_by_display_name.items()
+        if listed["failed_because"] is not None
+    }
+    assert why_each_failed_stream_failed == {}
 
     for stream_name, stream_document in stream_documents.items():
         node_names_awaited = (
