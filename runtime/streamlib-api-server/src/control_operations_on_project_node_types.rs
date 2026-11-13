@@ -14,8 +14,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectNodeTypesToolResult, NodeModuleNotReadable, NodeTypeSourceOrigin,
     NodeTypeSourceReadWithoutRunningIt,
 };
+use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
+use crate::project_node_types_followed_for_changes::NodeTypesChangedSinceTheLastListing;
 
 const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
@@ -25,7 +27,7 @@ const NESTED_IMPORTS_DIRECTORY_PREFIX: &str = "imports/";
 /// What the listing needs from the project's repository, read under its writer.
 struct ProjectReadForItsNodeTypeListing {
     project_directory: PathBuf,
-    project: String,
+    project: Uuid,
     project_name: String,
     import_sources: Vec<ImportedProjectPythonSources>,
     unread_files_of_each_import: BTreeMap<String, Vec<NodeModuleNotReadable>>,
@@ -93,7 +95,7 @@ impl ControlOperationDispatcher {
                     }
                     Ok(ProjectReadForItsNodeTypeListing {
                         project_directory: project_repository.project_directory().to_path_buf(),
-                        project: project_repository.project_file().project.to_string(),
+                        project: project_repository.project_file().project,
                         project_name: project_repository.project_file().name.clone(),
                         import_sources,
                         unread_files_of_each_import,
@@ -132,11 +134,33 @@ impl ControlOperationDispatcher {
                 source.unreadable_modules.extend(unread_files);
             }
         }
-        Ok(ListProjectNodeTypesToolResult {
+        let listing = ListProjectNodeTypesToolResult {
             project_directory: project_read.project_directory,
-            project: project_read.project,
+            project: project_read.project.to_string(),
             project_name: project_read.project_name,
             sources,
-        })
+        };
+        self.take_in_the_node_type_listing(project_read.project, &listing);
+        Ok(listing)
+    }
+
+    /// Keep `listing` as `project`'s last, announce on its feed what it changed from the one
+    /// before, and follow the feed for the changes that list it again.
+    fn take_in_the_node_type_listing(
+        &self,
+        project: Uuid,
+        listing: &ListProjectNodeTypesToolResult,
+    ) {
+        let NodeTypesChangedSinceTheLastListing {
+            added,
+            removed,
+            updated,
+        } = self
+            .project_node_types_last_listed
+            .take_in_the_listing(project, listing);
+        self.project_repositories
+            .announce_the_node_types_changed(project, added, removed, updated);
+        self.project_node_types_last_listed
+            .follow_the_change_feed_once(self);
     }
 }

@@ -962,14 +962,15 @@ def test_a_function_node_run_as_python_that_crashes_its_reader_moves_out_of_it(
 
 def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a_restart(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
+    start_tatolabd: Callable[..., TatolabdUnderTest],
 ):
     """A stateful function node's state belongs to its stream, not to the
     process that evaluates it.
 
     The counter starts at one in its reader's first helper, which takes itself
     down at twenty; the reader's next helper resumes the count where the dead
-    one left it, `graph` shows the count the node holds, and a reload of its
-    project resumes it again.
+    one left it, `graph` shows the count the node holds, and a restart of the
+    runtime resumes it again.
 
     Fail-without-fix: with the state kept only in the helper, each new helper
     counts from one again, and its reader dies at twenty every time.
@@ -983,13 +984,12 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
     graph = local_api.call_tool("graph", {"stream": stream_id})
     counter = next(node for node in graph["nodes"] if node["name"] == "counter")
     count_the_graph_showed = counter["components"]["function_node_state"]["calls"]
-    [listed] = [listed for listed in local_api.list_streams() if listed["stream"] == stream_id]
-    project_directory = listed["location"]["project_directory"]
-    queued_reload = local_api.call_tool("reload_project", {"project_directory": project_directory})
-    assert local_api.stream_action_once_ended(queued_reload["action"])["state"] == "done"
-    first_read_after_the_restart = tatolabd.await_marker("FIRST_COUNT_READ", occurrence=3)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
+    restarted_tatolabd = start_tatolabd()
+    first_read_after_the_restart = restarted_tatolabd.await_marker("FIRST_COUNT_READ")
+    restarted_tatolabd.interrupt()
+    restarted_tatolabd.await_clean_exit()
 
     assert first_read_of_the_first_helper["count"] == 1.0, first_read_of_the_first_helper
     assert count_its_helper_died_at >= COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES
@@ -1002,7 +1002,7 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
         f"`graph` shows the count the node holds: {counter['components']}"
     )
     assert first_read_after_the_restart["count"] > count_the_graph_showed, (
-        f"a reload resumes the count from {count_the_graph_showed}, and the reader "
+        f"a runtime restart resumes the count from {count_the_graph_showed}, and the reader "
         f"first read {first_read_after_the_restart}"
     )
     assert len(tatolabd.marker_payloads("FRESH_COUNT_SINK_ABOUT_TO_DIE")) == 1, (

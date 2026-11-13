@@ -6,7 +6,9 @@
 
 use schemars::{JsonSchema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
-use streamlib_runtime_client_contract::local_api_wire_contract::ProjectTransactionOnTheWire;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    NodeTypeOfOneProjectSource, ProjectTransactionOnTheWire,
+};
 use uuid::Uuid;
 
 use crate::control_operation::{ControlOperationExposure, ControlOperationStability};
@@ -82,8 +84,16 @@ pub enum ProjectChangeKindOnTheWire {
     /// The runtime finished reading an asset's media facts.
     MediaFactsRead,
     /// The runtime made the project's venv current with what it holds, as after an import is
-    /// added, updated or removed; the client lists the project's node types again.
+    /// added, updated or removed.
     VenvMadeCurrent,
+    /// The project offers node types its last listing did not; `node_types` names them.
+    NodeTypesAdded,
+    /// The project no longer offers node types its last listing did; `node_types` names them as
+    /// that listing read them.
+    NodeTypesRemoved,
+    /// Node types the project still offers by the same `type` changed their declaration or
+    /// source; `node_types` names them as they read now.
+    NodeTypesUpdated,
     /// Files in the project's folder changed, appeared or went away, an editor's saves and a
     /// transaction's own writes alike; `files` names them.
     FilesChanged,
@@ -107,6 +117,10 @@ pub struct ProjectChangedNotificationParams {
     /// virtual environment are never named.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
+    /// The node types that changed, each beside the source its code comes from, when `change` is
+    /// `node_types_added`, `node_types_removed` or `node_types_updated`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_types: Option<Vec<NodeTypeOfOneProjectSource>>,
 }
 
 /// `project_changed`: one change on a subscribed project's feed.
@@ -115,7 +129,7 @@ pub struct ProjectChanged;
 impl ControlNotification for ProjectChanged {
     type Params = ProjectChangedNotificationParams;
     const METHOD_NAME: &'static str = "project_changed";
-    const ONE_LINE_DOC: &'static str = "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.";
+    const ONE_LINE_DOC: &'static str = "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, its venv made current, node types it offers added, removed or updated, or files in its folder changed.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_project_changes";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;

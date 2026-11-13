@@ -3768,12 +3768,83 @@ export interface ProjectChangedNotificationParams {
    * virtual environment are never named.
    */
   files?: Array<string> | null;
+  /**
+   * The node types that changed, each beside the source its code comes from, when `change` is
+   * `node_types_added`, `node_types_removed` or `node_types_updated`.
+   */
+  node_types?: Array<NodeTypeOfOneProjectSource> | null;
 }
 
 /**
  * What changed on a project's change feed.
  */
-export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "venv_made_current" | "files_changed" | "missed";
+export type ProjectChangeKindOnTheWire = "applied" | "refused" | "media_facts_read" | "venv_made_current" | "node_types_added" | "node_types_removed" | "node_types_updated" | "files_changed" | "missed";
+
+/**
+ * One node type a project offers and the source its code comes from, as a change on the
+ * project's feed names it: the source's fields beside the node type's, as
+ * `list_project_node_types` lists each.
+ */
+export type NodeTypeOfOneProjectSource = {
+  /**
+   * The type `add_node` takes: the import path `<module>:<qualname>`.
+   */
+  type: string;
+  /**
+   * `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
+   */
+  kind?: string | null;
+  /**
+   * The declared description, or the docstring.
+   */
+  description: string;
+  /**
+   * The palette category, the declaring module when none is declared.
+   */
+  category: string;
+  /**
+   * The input ports, `None` where only the node's native half states them.
+   */
+  inputs?: Array<NodeTypePortReadFromSource> | null;
+  /**
+   * The output ports, `None` where only the node's native half states them.
+   */
+  outputs?: Array<NodeTypePortReadFromSource> | null;
+  /**
+   * The file declaring it, relative to its source's root.
+   */
+  path?: string | null;
+  /**
+   * The line of its `class`, `def` or assignment.
+   */
+  line?: number | null;
+} & ({
+  source: "project";
+} | {
+  /**
+   * The imported project's UUID.
+   */
+  project: string;
+  /**
+   * Its folder under `imports/`.
+   */
+  folder: string;
+  /**
+   * The version its copy carried.
+   */
+  version: string;
+  source: "dependency";
+} | {
+  /**
+   * The distribution's name.
+   */
+  distribution: string;
+  /**
+   * The distribution's version.
+   */
+  distribution_version: string;
+  source: "installed_distribution";
+});
 
 /**
  * `stream_graph_changed`'s params.
@@ -4842,7 +4913,7 @@ export interface ControlOperations {
 /** Every notification the runtime sends a subscribed connection, by method name: the params it carries. */
 export interface ControlNotifications {
   /**
-   * A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
+   * A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, its venv made current, node types it offers added, removed or updated, or files in its folder changed.
    *
    * Since contract version 1, experimental.
    */

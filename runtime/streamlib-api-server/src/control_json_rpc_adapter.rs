@@ -32,6 +32,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
+    NodeTypeOfOneProjectSource,
 };
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
@@ -353,6 +354,7 @@ async fn send_project_changes_until_the_connection_ends(
                         change: ProjectChangeKindOnTheWire::Missed,
                         transaction: None,
                         files: None,
+                        node_types: None,
                     })
                     .collect()
             }
@@ -597,37 +599,72 @@ fn the_notification_of_an_announcement(
                 &Default::default(),
             )),
             files: None,
+            node_types: None,
         },
         ProjectChangeOnTheFeed::Refused => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::Refused,
             transaction: None,
             files: None,
+            node_types: None,
         },
         ProjectChangeOnTheFeed::MediaFactsRead => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::MediaFactsRead,
             transaction: None,
             files: None,
+            node_types: None,
         },
         ProjectChangeOnTheFeed::FilesChanged(files) => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::FilesChanged,
             transaction: None,
             files: Some(files),
+            node_types: None,
         },
         ProjectChangeOnTheFeed::VenvMadeCurrent => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::VenvMadeCurrent,
             transaction: None,
             files: None,
+            node_types: None,
         },
+        ProjectChangeOnTheFeed::NodeTypesAdded(node_types) => the_notification_naming_node_types(
+            project,
+            ProjectChangeKindOnTheWire::NodeTypesAdded,
+            node_types,
+        ),
+        ProjectChangeOnTheFeed::NodeTypesRemoved(node_types) => the_notification_naming_node_types(
+            project,
+            ProjectChangeKindOnTheWire::NodeTypesRemoved,
+            node_types,
+        ),
+        ProjectChangeOnTheFeed::NodeTypesUpdated(node_types) => the_notification_naming_node_types(
+            project,
+            ProjectChangeKindOnTheWire::NodeTypesUpdated,
+            node_types,
+        ),
         ProjectChangeOnTheFeed::FilesChangedUnnamed => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::Missed,
             transaction: None,
             files: None,
+            node_types: None,
         },
+    }
+}
+
+fn the_notification_naming_node_types(
+    project: Uuid,
+    change: ProjectChangeKindOnTheWire,
+    node_types: Vec<NodeTypeOfOneProjectSource>,
+) -> ProjectChangedNotificationParams {
+    ProjectChangedNotificationParams {
+        project,
+        change,
+        transaction: None,
+        files: None,
+        node_types: Some(node_types),
     }
 }
 
