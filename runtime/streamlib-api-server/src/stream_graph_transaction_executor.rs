@@ -27,6 +27,7 @@ use streamlib_project_repository::{
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     StreamGraphOperation, StreamGraphOperationOnAStream,
     asset_references_made_references_into_the_import,
+    config_holding_the_default_name_of_a_graph_port_or_variable,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
     is_a_graph_interface_node_type, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import,
@@ -1534,12 +1535,17 @@ fn graph_operation_for_the_request(
         } => {
             let node = Uuid::new_v4();
             label_the_node(label, node, node_by_label)?;
+            let config = config_holding_the_default_name_of_a_graph_port_or_variable(
+                &node_type,
+                config.unwrap_or_default(),
+                staged_graph,
+            );
             Ok(StreamGraphOperation::AddNode {
                 node: StreamGraphDocumentNode {
                     id: node,
                     name: name.unwrap_or_default(),
                     node_type,
-                    config: Value::Object(config.unwrap_or_default()),
+                    config: Value::Object(config),
                     pins: pins.unwrap_or_default(),
                     exposed_config_fields: exposed_config_fields.unwrap_or_default(),
                     studio: studio

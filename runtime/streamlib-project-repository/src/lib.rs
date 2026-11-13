@@ -30,6 +30,7 @@ mod project_views;
 mod sample_project;
 mod stream_fragment_references;
 mod stream_graph_action;
+mod stream_graph_default_port_and_variable_names;
 mod stream_graph_document;
 mod stream_graph_fragment_fold;
 mod stream_graph_placed_stream_level;
@@ -119,6 +120,10 @@ pub use stream_graph_action::{
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
+};
+pub use stream_graph_default_port_and_variable_names::{
+    GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+    config_holding_the_default_name_of_a_graph_port_or_variable,
 };
 pub use stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
