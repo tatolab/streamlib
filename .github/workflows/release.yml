@@ -53,6 +53,13 @@ jobs:
             exit 1
           fi
 
+      # A dispatch runs on the ref it names; only main is released.
+      - name: The release is cut from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::a release is cut only from main, not $GITHUB_REF"
+          exit 1
+
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
@@ -65,7 +72,7 @@ jobs:
           REQUESTED_BUMP: ${{ inputs.bump || 'patch' }}
         run: |
           set -euo pipefail
-          last_release_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)"
+          last_release_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | sed -n 1p)"
           bump="$REQUESTED_BUMP"
           contract_path=sdk/tatolab-runtime-client/contract.json
           contract_version_at() {
@@ -144,7 +151,7 @@ jobs:
               merged = re.match(r"Merge pull request (#\d+) ", subject)
               if subject:
                   print(f"- {body.strip().splitlines()[0]} ({merged.group(1)})" if merged and body.strip() else f"- {subject}")' \
-            | head -200)"
+            | sed -n 1,200p)"
           git tag -a "v$RELEASE_VERSION" -m "streamlib $RELEASE_VERSION" -m "$release_notes"
           git push origin "refs/tags/v$RELEASE_VERSION"
           echo "tag_name=v$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
