@@ -3398,7 +3398,7 @@
   "x-notifications": [
     {
       "name": "project_changed",
-      "summary": "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.",
+      "summary": "A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, its venv made current, node types it offers added, removed or updated, or files in its folder changed.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -10039,6 +10039,16 @@
               "type": "string"
             },
             "description": "The files that changed, by path relative to the project with `/` between segments, when\n`change` is `files_changed`; a hidden folder, `node_modules`, `__pycache__` and a Python\nvirtual environment are never named."
+          },
+          "node_types": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NodeTypeOfOneProjectSource"
+            },
+            "description": "The node types that changed, each beside the source its code comes from, when `change` is\n`node_types_added`, `node_types_removed` or `node_types_updated`."
           }
         },
         "required": [
@@ -10067,7 +10077,22 @@
           {
             "type": "string",
             "const": "venv_made_current",
-            "description": "The runtime made the project's venv current with what it holds, as after an import is\nadded, updated or removed; the client lists the project's node types again."
+            "description": "The runtime made the project's venv current with what it holds, as after an import is\nadded, updated or removed."
+          },
+          {
+            "type": "string",
+            "const": "node_types_added",
+            "description": "The project offers node types its last listing did not; `node_types` names them."
+          },
+          {
+            "type": "string",
+            "const": "node_types_removed",
+            "description": "The project no longer offers node types its last listing did; `node_types` names them as\nthat listing read them."
+          },
+          {
+            "type": "string",
+            "const": "node_types_updated",
+            "description": "Node types the project still offers by the same `type` changed their declaration or\nsource; `node_types` names them as they read now."
           },
           {
             "type": "string",
@@ -10081,6 +10106,138 @@
           }
         ],
         "description": "What changed on a project's change feed."
+      },
+      "NodeTypeOfOneProjectSource": {
+        "type": "object",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "const": "project"
+              }
+            },
+            "required": [
+              "source"
+            ],
+            "description": "The project's own node code, outside `imports/`."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "The imported project's UUID."
+              },
+              "folder": {
+                "type": "string",
+                "description": "Its folder under `imports/`."
+              },
+              "version": {
+                "type": "string",
+                "description": "The version its copy carried."
+              },
+              "source": {
+                "type": "string",
+                "const": "dependency"
+              }
+            },
+            "required": [
+              "source",
+              "project",
+              "folder",
+              "version"
+            ],
+            "description": "An import's node code as its folder under `imports/` holds it now."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "distribution": {
+                "type": "string",
+                "description": "The distribution's name."
+              },
+              "distribution_version": {
+                "type": "string",
+                "description": "The distribution's version."
+              },
+              "source": {
+                "type": "string",
+                "const": "installed_distribution"
+              }
+            },
+            "required": [
+              "source",
+              "distribution",
+              "distribution_version"
+            ],
+            "description": "An installed distribution that declares `tatolab.nodes` entry points."
+          }
+        ],
+        "description": "One node type a project offers and the source its code comes from, as a change on the\nproject's feed names it: the source's fields beside the node type's, as\n`list_project_node_types` lists each.",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The type `add_node` takes: the import path `<module>:<qualname>`."
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`process`, `function` or `shader`; `None` for an entry point whose declaration source does not show."
+          },
+          "description": {
+            "type": "string",
+            "description": "The declared description, or the docstring."
+          },
+          "category": {
+            "type": "string",
+            "description": "The palette category, the declaring module when none is declared."
+          },
+          "inputs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
+            },
+            "description": "The input ports, `None` where only the node's native half states them."
+          },
+          "outputs": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/NodeTypePortReadFromSource"
+            },
+            "description": "The output ports, `None` where only the node's native half states them."
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The file declaring it, relative to its source's root."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line of its `class`, `def` or assignment."
+          }
+        },
+        "required": [
+          "type",
+          "description",
+          "category"
+        ]
       },
       "StreamGraphChangedNotificationParams": {
         "type": "object",

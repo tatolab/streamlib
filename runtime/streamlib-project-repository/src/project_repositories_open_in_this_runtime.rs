@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeOfOneProjectSource;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -44,9 +45,16 @@ pub enum ProjectChangeOnTheFeed {
     /// Files in the project's folder changed that the OS did not name, so a client lists the
     /// project again.
     FilesChangedUnnamed,
-    /// The runtime made the project's venv current with what it holds, so the node types its
-    /// installed distributions declare are listed anew; no history records it.
+    /// The runtime made the project's venv current with what it holds; no history records it.
     VenvMadeCurrent,
+    /// Node types the project offers now that its last listing did not.
+    NodeTypesAdded(Vec<NodeTypeOfOneProjectSource>),
+    /// Node types the project's last listing offered that it offers no more, as that listing
+    /// read them.
+    NodeTypesRemoved(Vec<NodeTypeOfOneProjectSource>),
+    /// Node types the project still offers, each by the same `type`, whose declaration or source
+    /// changed since its last listing, as it reads now.
+    NodeTypesUpdated(Vec<NodeTypeOfOneProjectSource>),
 }
 
 /// A hold on the watch of one project's folder, watched while any hold lives and the project is
@@ -157,6 +165,27 @@ impl ProjectRepositoriesOpenInThisRuntime {
             project,
             change: ProjectChangeOnTheFeed::VenvMadeCurrent,
         });
+    }
+
+    /// Announce the node types `project` offers that were `added`, `removed` or `updated` since
+    /// its last listing, one announcement for each of the three that names any.
+    pub fn announce_the_node_types_changed(
+        &self,
+        project: Uuid,
+        added: Vec<NodeTypeOfOneProjectSource>,
+        removed: Vec<NodeTypeOfOneProjectSource>,
+        updated: Vec<NodeTypeOfOneProjectSource>,
+    ) {
+        for change in [
+            (!added.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesAdded(added)),
+            (!removed.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesRemoved(removed)),
+            (!updated.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesUpdated(updated)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement { project, change });
+        }
     }
 
     fn announce_on_the_change_feed(&self, announcement: ProjectChangeFeedAnnouncement) {

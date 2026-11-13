@@ -871,7 +871,7 @@ Hand a value to the Input `input` of the stream `stream`: the stream's top-level
 
 ### `project_changed`
 
-A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
+A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, its venv made current, node types it offers added, removed or updated, or files in its folder changed.
 
 - Sent after `subscribe_project_changes`.
 - Since contract version 1, experimental.
