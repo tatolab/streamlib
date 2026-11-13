@@ -8,11 +8,12 @@ Every node runs in a processor interpreter of its own. The probe reports one
 compares them with a reference composite built with numpy.
 """
 
+import dataclasses
 import json
 import os
 import struct
 import traceback
-from typing import Any, Callable, TypedDict
+from typing import Any, Callable
 
 from tatolab.stream import (
     ColorInfo,
@@ -61,10 +62,11 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 """
 
 
-class SolidPremultipliedColourSourceConfig(TypedDict):
-    width: int
-    height: int
-    premultiplied_rgba: "list[int]"
+@dataclasses.dataclass
+class SolidPremultipliedColourSourceConfig:
+    width: int = 64
+    height: int = 64
+    premultiplied_rgba: "list[int]" = dataclasses.field(default_factory=lambda: [0, 0, 0, 255])
 
 
 @node.process(
@@ -78,10 +80,10 @@ class SolidPremultipliedColourSource:
     video = Output(Image, formats=("rgba8_unorm",))
 
     def __init__(self, config: SolidPremultipliedColourSourceConfig) -> None:
-        self.width = config["width"]
-        self.height = config["height"]
+        self.width = config.width
+        self.height = config.height
         self.fill_push_constants = struct.pack(
-            "<4f", *(channel / 255 for channel in config["premultiplied_rgba"])
+            "<4f", *(channel / 255 for channel in config.premultiplied_rgba)
         )
         self.frame_ring = NodeOutputTextureRing("rgba8_unorm", ["storage_binding", "texture_binding"])
 

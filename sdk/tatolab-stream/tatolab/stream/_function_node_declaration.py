@@ -32,7 +32,7 @@ from ._description import (
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
 from ._node_config_schema import (
-    derive_config_class_json_schema,
+    derive_node_config_json_schema_refusing_a_key_with_no_default,
     json_schema_for_a_node_declaring_no_config,
 )
 
@@ -125,7 +125,9 @@ def declare_function_node(
         declaration_stamps["config_schema"]: (
             json_schema_for_a_node_declaring_no_config()
             if config_class is None
-            else derive_config_class_json_schema(config_class)
+            else derive_node_config_json_schema_refusing_a_key_with_no_default(
+                config_class, f"@node.function on {function.__name__}"
+            )
         ),
         declaration_stamps["description"]: refuse_a_description_that_is_not_a_string(
             description, f"@node.function on {function.__name__}"

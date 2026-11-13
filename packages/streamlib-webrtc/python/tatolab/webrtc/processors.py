@@ -158,8 +158,8 @@ def refuse_audio_rtp_cannot_carry(channels: "int | None", inbound_link: str) -> 
 def _required_url(url: Any, processor_name: str) -> str:
     if not isinstance(url, str) or not url:
         raise ValueError(
-            f"{processor_name}: `url` is required and must be the endpoint's "
-            f"address; got {url!r}"
+            f"{processor_name}: `url` is not set; it takes the endpoint's address, "
+            f"got {url!r}"
         )
     return url
 
@@ -172,7 +172,7 @@ def _optional_bearer_token(bearer_token: Any) -> "str | None":
 class WhipPublisherConfig:
     """What a `WhipPublisher` is configured with."""
 
-    url: Annotated[str, "The WHIP endpoint to publish to."]
+    url: Annotated[str, "The WHIP endpoint to publish to; the node fails, naming `url`, until it is set."] = ""
     bearer_token: Annotated[
         "str | None", "Sent as `Authorization: Bearer` when the endpoint wants one."
     ] = None
@@ -376,7 +376,7 @@ class WhipPublisher:
 class WhepPlayerConfig:
     """What a `WhepPlayer` is configured with."""
 
-    url: Annotated[str, "The WHEP endpoint to play from."]
+    url: Annotated[str, "The WHEP endpoint to play from; the node fails, naming `url`, until it is set."] = ""
     bearer_token: Annotated[
         "str | None", "Sent as `Authorization: Bearer` when the endpoint wants one."
     ] = None

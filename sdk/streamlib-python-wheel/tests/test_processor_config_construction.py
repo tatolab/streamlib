@@ -27,7 +27,7 @@ from tatolab.runtime._processor_hosting import (
 # ---------------------------------------------------------------------------
 
 
-class BlurConfigTypedDict(TypedDict):
+class BlurConfigTypedDict(TypedDict, total=False):
     """Admits anything at run time — the loosest dial an author can pick."""
 
     width: int
@@ -38,7 +38,7 @@ class BlurConfigTypedDict(TypedDict):
 class BlurConfigDataclass:
     """Refuses an unknown key but not a mistyped value."""
 
-    width: int
+    width: int = 1
     label: str = "unlabelled"
     tags: "list[str]" = dataclasses.field(default_factory=list)
     quality: Literal["fast", "good"] = "fast"
@@ -49,7 +49,7 @@ class BlurConfigDataclass:
 class BlurConfigModel(pydantic.BaseModel):
     """Validates values — the strictest dial, and it carries its own schema."""
 
-    width: int
+    width: int = 1
     label: str = "unlabelled"
 
 
@@ -243,7 +243,7 @@ def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open()
 class TrackConfigNamingItsGateway:
     """Holds a reference to another node, and a plain mapping beside it."""
 
-    gateway: "NodeReference"
+    gateway: "Optional[NodeReference]" = None
     fallback_gateway: "Optional[NodeReference]" = None
     metadata: "dict[str, str]" = dataclasses.field(default_factory=dict)
 

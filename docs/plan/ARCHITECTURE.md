@@ -1383,7 +1383,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `$schema` and `title`, recognised by the method rather than by importing pydantic; an
   annotation the deriver does not know renders `{}`, a config class of a kind it cannot
   read is accepted with an open schema, and a self-referential class stops at an open
-  object rather than recursing. The helper constructs
+  object rather than recursing. A node's config class gives every key a default, so a node
+  placed with no config takes it and runs: `@node.process` and `@node.function` refuse one
+  whose document carries `required`, naming each key and the fix — a dataclass field's
+  default, or a `total=False` TypedDict read with a fallback — and a key with nothing
+  sensible to default to is left unset, `None` or an empty string, and fails the node,
+  naming the key, until it is set (owner, 2026-11-13). The helper constructs
   `processor_class(config=config_class(**configuration))` and whatever the config class
   raises is what the author sees; a class declaring no config takes an empty
   configuration and refuses a non-empty one by name; reconfiguration calls

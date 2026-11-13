@@ -34,7 +34,7 @@ from ._rust_function_node_declaration import RustFunctionNode, declare_rust_func
 from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
 from ._node_config_schema import (
-    derive_config_class_json_schema,
+    derive_node_config_json_schema_refusing_a_key_with_no_default,
     json_schema_for_a_node_declaring_no_config,
 )
 
@@ -500,7 +500,9 @@ def _declare_node(
         NODE_DECLARATION_CONFIG_SCHEMA_STAMP,
         json_schema_for_a_node_declaring_no_config()
         if config_class is None
-        else derive_config_class_json_schema(config_class),
+        else derive_node_config_json_schema_refusing_a_key_with_no_default(
+            config_class, f"@node.process on {node_class.__name__}"
+        ),
     )
     setattr(
         node_class,

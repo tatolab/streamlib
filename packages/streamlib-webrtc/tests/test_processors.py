@@ -633,14 +633,12 @@ def test_more_links_than_a_session_can_carry_are_refused_naming_the_count(reques
 def test_a_publisher_whose_endpoint_is_not_an_address_is_refused_by_name(
     request, config
 ):
-    with pytest.raises(ValueError, match="`url` is required"):
+    with pytest.raises(ValueError, match="`url` is not set"):
         PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), config)
 
 
-def test_a_publisher_added_with_no_endpoint_at_all_is_refused_by_its_config_class(request):
-    """`url` has no default, so the config class refuses the empty mapping and
-    names the missing key before any of this wheel's own validation runs."""
-    with pytest.raises(TypeError, match="missing 1 required positional argument"):
+def test_a_publisher_added_with_no_config_takes_its_defaults_and_names_the_unset_url(request):
+    with pytest.raises(ValueError, match="`url` is not set"):
         PublisherWiredToEncoders(request, numbered_encoder_output_ports(1), {})
 
 

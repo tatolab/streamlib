@@ -44,6 +44,7 @@ from ._project_asset_uuid import project_asset_uuid_an_annotation_carries
 
 __all__ = [
     "derive_config_class_json_schema",
+    "derive_node_config_json_schema_refusing_a_key_with_no_default",
     "json_schema_for_a_node_declaring_no_config",
 ]
 
@@ -111,6 +112,27 @@ def json_schema_for_a_node_declaring_no_config() -> "dict[str, Any]":
 def derive_config_class_json_schema(config_class: type) -> "dict[str, Any]":
     """The JSON Schema of `config_class`, derived from what its author wrote."""
     return _document_for_class(config_class, ())
+
+
+def derive_node_config_json_schema_refusing_a_key_with_no_default(
+    config_class: type, declared_on: str
+) -> "dict[str, Any]":
+    """The JSON Schema of a node's `config_class`, refusing a key the config cannot leave out.
+
+    A node placed with no config, as Tato Studio's palette places one, takes every key's
+    default and runs, so each key has one.
+    """
+    document = derive_config_class_json_schema(config_class)
+    keys_with_no_default = document.get("required", [])
+    if keys_with_no_default:
+        named = ", ".join(f"`{key}`" for key in keys_with_no_default)
+        raise TypeError(
+            f"{declared_on}: config class {config_class.__name__} gives {named} no default; "
+            f"every key of a node's config has one, so a node placed with no config runs. "
+            f"Give a dataclass field a default (`url: str = \"\"`), or declare the TypedDict "
+            f"`total=False` and read the key with a fallback."
+        )
+    return document
 
 
 def _document_for_class(

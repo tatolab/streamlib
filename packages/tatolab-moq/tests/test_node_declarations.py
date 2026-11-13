@@ -78,7 +78,19 @@ def test_each_node_is_named_by_its_import_path_in_the_module_and_names_others_by
 
 def node_reference_keyword_of(node_class: type, config_key: str) -> "dict[str, Any]":
     schema = getattr(node_class, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)
-    return schema["properties"][config_key][NODE_REFERENCE_SCHEMA_KEYWORD]
+    [reference_branch] = [
+        branch
+        for branch in schema["properties"][config_key]["anyOf"]
+        if NODE_REFERENCE_SCHEMA_KEYWORD in branch
+    ]
+    return reference_branch[NODE_REFERENCE_SCHEMA_KEYWORD]
+
+
+def test_each_config_left_empty_takes_its_defaults_as_a_node_placed_with_no_config_does():
+    assert MoqTrackConfig().track is None
+    assert MoqTrackReceiveConfig().family == "records"
+    for node_class in (MoqGateway, MoqTrack, MoqTrackSend, MoqTrackReceive):
+        assert "required" not in getattr(node_class, NODE_DECLARATION_CONFIG_SCHEMA_STAMP)
 
 
 def test_a_send_is_the_one_referrer_of_its_track_and_each_reference_names_its_node_type():
