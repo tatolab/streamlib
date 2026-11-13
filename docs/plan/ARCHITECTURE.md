@@ -3805,7 +3805,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the extension into a venv holding `tatolab-stream`, `cargo test` and clippy over its
   crate, `mypy.stubtest` over its `_native`, pyright over its Python, and pytest with
   `-m "not requires_gpu"`, the portability gate over its `.so` among them.
-  `release-please-config.json` bumps the extension with everything else, one
+  `release-version-files.json` lists the extension's manifests with everything else, one
   version (§Distribution & versioning); the release builds `tatolab-webrtc` for manylinux
   and Apple Silicon and uploads it to PyPI beside `tatolab-stream`, attaching nothing.
   [networking-extension-wheels — SHIPPED #2152; package-split-and-lend — SHIPPED #2691,
@@ -4215,6 +4215,15 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   as a stream's `tatolab-stream` runs it; an older one refuses what it lacks by name, and the
   refusal names the runtime's own version. Owner, 2026-10-02. [package-split-and-lend —
   SHIPPED #2671, #2691, #2697]
+- **DECIDED** — Every merge to `main` is a release, whatever its title says. `release.yml` takes
+  the next version, writes it into every manifest `release-version-files.json` lists on a commit
+  off `main` whose parent is the merge, moves the in-tree pins and lockfiles with it, and pushes
+  only the `v<version>` tag on that commit, whose message lists the merges it releases. `main`
+  is never written to by a release, and there is no GitHub release: get.tatolab.com and PyPI
+  serve the distributions. The patch moves on every merge; the minor moves when the control
+  contract's `x-contract-version` changed since the last release, or on a dispatch with
+  `bump: minor`; the major only on a dispatch with `bump: major` (`scripts/release_version.py`).
+  Owner, 2026-11-12.
 - **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
   and nothing else is linked. On Linux, system libraries (libcuda, the audio servers) are
   dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape. A stock machine
@@ -4336,7 +4345,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #3192]
 - **DECIDED** — The installer. `install.sh` installs the runtime on a Linux machine without
   Tato Studio; the app runs the runtime unit it carries and never runs `install.sh`. Each
-  release attaches `tatolab-runtime-<version>-x86_64-linux.tar.gz`, built in `manylinux_2_28`,
+  release builds `tatolab-runtime-<version>-x86_64-linux.tar.gz` in `manylinux_2_28`,
   and serves it, `install.sh` and a `latest` naming the
   version from `get.tatolab.com`, an R2 bucket. The release runs no check over it: nightly on
   `main`, `distribution-checks.yml` runs the portability gate over the same build at the glibc
@@ -4359,11 +4368,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   SHIPPED #3192]
 - **DECIDED** — Tato Studio, a tray app carrying the runtime, lives in the private
   repository `tatolab/tatolab-app` — Tailscale's split: the runtime and CLI public, the app
-  private — and is an Electron app. On macOS it ships as a notarised `.dmg` on this
-  repository's release and as `brew install --cask tatolab/tap/tatolab` from
+  private — and is an Electron app. On macOS it ships as a notarised `.dmg` from
+  get.tatolab.com and as `brew install --cask tatolab/tap/tatolab` from
   `tatolab/homebrew-tap`, whose `Casks/tatolab.rb` the app repository bumps per release. The
   app repository checks this repository out at the release tag, builds the runtime unit, wraps
-  it, signs, notarises, and attaches the `.dmg`. The bundle carries the runtime as
+  it, signs, notarises, and serves the `.dmg`. The bundle carries the runtime as
   `Tatolab Runtime.app`, a helper bundle inside it, holding `tatolabd` and the CLI
   as `tatolab-cli` in `Contents/MacOS/` — a name that does not case-fold onto an executable
   beside it on a default APFS volume — and the lend laid out by Apple's code rules: every

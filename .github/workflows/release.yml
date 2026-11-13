@@ -1,61 +1,95 @@
 name: Release
 
+# Every merge to main is a release. This cuts it: the next version, a commit off
+# main that writes it into every manifest release-version-files.json lists and
+# moves the in-tree pins and lockfiles with it, and a `v<version>` tag on that
+# commit, which is the only thing pushed. main itself is never written to, so no
+# release pull request rides the merge queue, and there is no GitHub release:
+# get.tatolab.com and PyPI serve the distributions. The tagged commit's parent is
+# the merge, so the tag contains every commit main held.
+#
+# The patch moves on every merge. The minor moves when the control contract's
+# `x-contract-version` changed since the last release, or on a dispatch with
+# `bump: minor`; the major only on a dispatch with `bump: major`
+# (scripts/release_version.py). Runs are serialised; a merge that lands while
+# one runs is released by the next.
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Which part of the version this release moves"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
-  pull-requests: write
   packages: write
   actions: write
 
-# `main` takes changes only through its merge queue, whose required checks must
-# pass on a pull request before it can join. GitHub holds a pull request run
-# raised by the default GITHUB_TOKEN for approval, so a release PR opened with it
-# never runs those checks and never merges. Every write here is made with
-# RELEASE_PLEASE_TOKEN, a fine-grained token for this repository (contents and
-# pull requests, read and write) that Infisical syncs to the repository's
-# secrets, so the release PR runs CI like any other.
-#
-# A release takes two runs: one opens the release PR and queues it, and the push
-# the queue makes when it merges runs this again, which cuts the tag and the
-# GitHub release and publishes the distributions.
 jobs:
-  release-please:
+  cut-the-release:
+    name: Cut the release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      tag_name: ${{ steps.tag.outputs.tag_name }}
     steps:
+      # RELEASE_PLEASE_TOKEN is a fine-grained token for this repository (contents
+      # read and write) that Infisical syncs to the repository's secrets; the tag it
+      # pushes is what the publish jobs and Tato Studio's release check out.
       - name: The release token reaches this repository
         env:
           RELEASE_PLEASE_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           if [ -z "$RELEASE_PLEASE_TOKEN" ]; then
-            echo "::error::RELEASE_PLEASE_TOKEN does not reach this repository — add a fine-grained token for tatolab/streamlib (contents and pull requests, read and write) to Infisical's prod environment, which syncs it to the organization's secrets"
+            echo "::error::RELEASE_PLEASE_TOKEN does not reach this repository — add a fine-grained token for tatolab/streamlib (contents, read and write) to Infisical's prod environment, which syncs it to the organization's secrets"
             exit 1
           fi
 
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          fetch-depth: 0
+          fetch-tags: true
 
-      # Cuts the tag and the GitHub release when the merged release PR is what
-      # this push landed; otherwise opens or refreshes the standing release PR
-      # (version bump + changelog) for the feat/fix commits since the last one.
-      - uses: googleapis/release-please-action@v5
-        id: release
-        with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+      - name: The version this release takes
+        id: version
+        env:
+          REQUESTED_BUMP: ${{ inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+          last_release_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)"
+          bump="$REQUESTED_BUMP"
+          contract_path=sdk/tatolab-runtime-client/contract.json
+          contract_version_at() {
+            git show "$1:$contract_path" 2>/dev/null \
+              | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["x-contract-version"])' 2>/dev/null || true
+          }
+          if [ "$bump" = patch ] && [ -n "$last_release_tag" ]; then
+            released_contract_version="$(contract_version_at "$last_release_tag")"
+            current_contract_version="$(contract_version_at HEAD)"
+            if [ -n "$released_contract_version" ] && [ "$released_contract_version" != "$current_contract_version" ]; then
+              echo "the control contract moved from version $released_contract_version to $current_contract_version since $last_release_tag"
+              bump=minor
+            fi
+          fi
+          release_version="$(python3 scripts/release_version.py next --last-release "${last_release_tag#v}" \
+            --tree "$(python3 scripts/release_version.py tree)" --bump "$bump")"
+          if git rev-parse -q --verify "refs/tags/v$release_version" >/dev/null; then
+            echo "::error::v$release_version is already tagged"
+            exit 1
+          fi
+          echo "releases $release_version ($bump) after ${last_release_tag:-no earlier release}"
+          echo "last_release_tag=$last_release_tag" >> "$GITHUB_OUTPUT"
+          echo "release_version=$release_version" >> "$GITHUB_OUTPUT"
 
-      # `cargo` resolves the whole workspace before it builds any member, so the
-      # pin-sync tool cannot be built once the bump has landed: the resolve it
-      # exists to repair is the one that fails. Build it here, while `main` still
-      # resolves, and run the binary against the release branch below. `target/`
-      # is gitignored, so it survives that checkout.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -64,91 +98,56 @@ jobs:
         with:
           shared-key: xtask
 
-      - name: Build the version-pin sync tool while main still resolves
+      # `cargo` resolves the whole workspace before it builds any member, so the
+      # pin-sync tool is built before the version moves: a minor bump leaves every
+      # sibling pin excluding its own crate until the tool has moved it.
+      - name: Build the version-pin sync tool while the tree still resolves
         run: cargo build --locked -q -p xtask
 
-      # The `simple` release-type bumps [workspace.package].version in Cargo.toml
-      # but ships no cargo dependency-requirement updater. Every in-tree crate
-      # pins its workspace-versioned sibling crates with a frozen
-      # `version = "X.Y.Z"` requirement (e.g. streamlib-error). Those
-      # requirements never move on their own: caret-compatible within a 0.17.x
-      # line but silently EXCLUDING the next breaking bump (0.18.0), which leaves
-      # the release branch holding a workspace that cannot resolve at all.
-      #
-      # This step used to run `cargo update --workspace` alone, which is the half
-      # that cannot work: the lockfile cannot be resolved while the manifests
-      # exclude their own siblings, so the step exited 101, the auto-merge below
-      # never ran, and no tag was cut. That wedged release 0.18.0 shut from
-      # 2026-08-11 and starved the PEP 503 index of every wheel since. Moving the
-      # pins first is what the comment here always claimed the step did.
-      #
-      # `cargo xtask check-workspace-version-pins` gates the same rule on every
-      # PR, so the pins can only ever drift here, at the bump.
-      - name: Sync the version pins and Cargo.lock to the release version
+      - name: Write the version, the pins and the lockfiles
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.release_version }}
         run: |
-          BRANCH=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
-            --json headRefName,labels \
-            --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].headRefName // empty')
-          if [ -z "$BRANCH" ]; then
-            echo "no open release PR this run"
-            exit 0
-          fi
-          git fetch origin "$BRANCH"
-          git checkout "$BRANCH"
+          set -euo pipefail
+          python3 scripts/release_version.py apply "$RELEASE_VERSION"
           ./target/debug/xtask check-workspace-version-pins --fix
           cargo update --workspace
-          # An extension wheel is its own workspace with its own lockfile, and a
-          # lockfile records its root package's version. release-please bumps
-          # each extension's Cargo.toml through `extra-files`, so without this
-          # the bump alone leaves that lockfile a version behind and every
-          # `--locked` build in the extension's CI lane fails on main. Not an
-          # enrolment in `check-workspace-version-pins`, which stays workspace-
-          # only by design: this is one lockfile catching up to its own manifest.
-          #
-          # Discovered by the `tatolab-` distribution name, so a second
-          # extension needs no edit here — and so the held pre-pivot packages
-          # beside them, which have not resolved since the plugin SDK was
-          # deleted, are never handed to cargo.
+          # An extension wheel is its own workspace with its own lockfile, which
+          # records its root package's version, so it catches up to its manifest
+          # here. Discovered by the `tatolab-` distribution name, so the held
+          # pre-pivot packages beside them, which no longer resolve, are never
+          # handed to cargo; a pure-Python extension has no manifest to update.
           for extension_pyproject in packages/*/pyproject.toml; do
             grep -q '^name = "tatolab-' "$extension_pyproject" || continue
             extension_manifest="$(dirname "$extension_pyproject")/Cargo.toml"
-            # An extension needs no Rust — a pure-Python one is a complete
-            # extension — and handing cargo a directory with no manifest would
-            # exit non-zero and wedge the release under this step's `bash -e`.
             [ -f "$extension_manifest" ] || continue
             cargo update --workspace --manifest-path "$extension_manifest"
           done
-          if git diff --quiet; then
-            echo "version pins and Cargo.lock already in sync"
-            exit 0
-          fi
+
+      # The tag's message lists the merges it releases, in place of a changelog.
+      - name: Tag the release
+        id: tag
+        env:
+          LAST_RELEASE_TAG: ${{ steps.version.outputs.last_release_tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.release_version }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -u -- '*Cargo.lock' '*Cargo.toml'
-          # The release PR's required checks run on this commit, its head.
-          git commit -m "chore: sync the version pins and Cargo.lock to the release version"
-          git push origin "$BRANCH"
-
-      # A version cut is pure bookkeeping — version + changelog, no code — so it
-      # needs no human gate: the release PR joins the merge queue the moment it
-      # exists, and merges once its checks pass. The PR is found by
-      # release-please's own `autorelease: pending` label rather than an action
-      # output, so a freshly-opened PR is caught unambiguously.
-      - name: Queue the release PR
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
-        run: |
-          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
-            --json number,labels \
-            --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].number // empty')
-          if [ -z "$PR_NUMBER" ]; then
-            echo "no open release PR to queue this run"
-            exit 0
-          fi
-          gh pr merge "$PR_NUMBER" --auto --repo "$GITHUB_REPOSITORY"
-          echo "release PR #$PR_NUMBER merges through the queue once its checks pass"
+          git add -u
+          git commit -q -m "chore: release $RELEASE_VERSION"
+          # A merge commit's subject names only its branch; the pull request's title is its body's first line.
+          release_notes="$(git log --first-parent --format='%s%x1f%b%x1e' "${LAST_RELEASE_TAG:+$LAST_RELEASE_TAG..}HEAD^" \
+            | python3 -c 'import re, sys
+          for entry in sys.stdin.read().split("\x1e"):
+              subject, _, body = entry.strip("\n").partition("\x1f")
+              merged = re.match(r"Merge pull request (#\d+) ", subject)
+              if subject:
+                  print(f"- {body.strip().splitlines()[0]} ({merged.group(1)})" if merged and body.strip() else f"- {subject}")' \
+            | head -200)"
+          git tag -a "v$RELEASE_VERSION" -m "streamlib $RELEASE_VERSION" -m "$release_notes"
+          git push origin "refs/tags/v$RELEASE_VERSION"
+          echo "tag_name=v$RELEASE_VERSION" >> "$GITHUB_OUTPUT"
 
   # `trigger-schemas` is deliberately not called, and `control-plane-client.yml` no longer
   # offers a `workflow_call` to call. The half that failed on every release since
@@ -163,14 +162,12 @@ jobs:
   # other run of reusable-distributions.yml is a dry run unless dispatched with
   # `dry_run` unticked.
   publish-the-release:
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created }}
-    # Write, for attaching the Linux runtime tarball to the release just cut.
+    needs: cut-the-release
     permissions:
-      contents: write
+      contents: read
     uses: ./.github/workflows/reusable-distributions.yml
     with:
-      tag_name: ${{ needs.release-please.outputs.tag_name }}
+      tag_name: ${{ needs.cut-the-release.outputs.tag_name }}
       dry_run: false
     secrets: inherit
 
@@ -178,13 +175,12 @@ jobs:
   # module that fails to build is left out of the index and withholds neither
   # the core nor Tato Studio's release.
   publish-the-modules:
-    needs: [release-please, publish-the-release]
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: [cut-the-release, publish-the-release]
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-module-distributions.yml
     with:
-      tag_name: ${{ needs.release-please.outputs.tag_name }}
+      tag_name: ${{ needs.cut-the-release.outputs.tag_name }}
       dry_run: false
     secrets: inherit
 
@@ -193,8 +189,7 @@ jobs:
   # tatolab/tatolab-app with Actions read and write, the one permission a workflow dispatch needs.
   release-tato-studio:
     name: Start Tato Studio's release
-    needs: [release-please, publish-the-release]
-    if: ${{ needs.release-please.outputs.release_created }}
+    needs: [cut-the-release, publish-the-release]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -202,7 +197,7 @@ jobs:
       - name: Dispatch tatolab-app's release with this streamlib version
         env:
           GH_TOKEN: ${{ secrets.TATOLAB_APP_RELEASE_DISPATCH_TOKEN }}
-          RELEASE_TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_TAG_NAME: ${{ needs.cut-the-release.outputs.tag_name }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then

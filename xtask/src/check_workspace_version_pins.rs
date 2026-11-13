@@ -7,9 +7,9 @@
 //! every sibling that path-depends on it also states a registry requirement —
 //! `{ path = "../streamlib-error", version = "0.17.0" }` — so the closure still
 //! resolves when it is published from a registry rather than from a checkout.
-//! release-please bumps `[workspace.package] version` and nothing else: the
-//! `simple` release type ships no cargo dependency-requirement updater. The
-//! pins therefore sit still while the crates they name move.
+//! A release writes `[workspace.package] version` and the manifests
+//! `release-version-files.json` lists, none of them a requirement. The pins
+//! therefore sit still while the crates they name move.
 //!
 //! Within one minor line that is invisible, because `^0.17.0` matches `0.17.1`.
 //! The next breaking bump is where it bites: `^0.17.0` excludes `0.18.0`, so
@@ -547,8 +547,8 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 /// Move every drifted pin onto the workspace version, returning the manifests
 /// rewritten.
 ///
-/// This is what the release workflow calls on the release-please branch, after
-/// the bump and before `cargo update --workspace`.
+/// This is what the release workflow calls on the commit it tags, after the
+/// version is written and before `cargo update --workspace`.
 pub fn rewrite_version_pins_to_workspace_version(workspace_root: &Path) -> Result<Vec<String>> {
     let workspace_package_version = read_workspace_package_version(workspace_root)?;
     let scans = scan_every_manifest(workspace_root, &workspace_package_version)?;

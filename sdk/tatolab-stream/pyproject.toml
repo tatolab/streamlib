@@ -7,8 +7,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tatolab-stream"
-# The one version everything this repository releases carries; release-please
-# bumps it with the rest.
+# The one version everything this repository releases carries; each release
+# writes its version here on the commit it tags (release-version-files.json).
 version = "0.68.82"
 description = "The Python SDK for Tatolab streams. To get started, install the Tatolab app: see tatolab.com/docs/install"
 readme = "README.md"

@@ -1,7 +1,7 @@
 name: Distributions
 
-# The release channel: release-please cuts a GitHub release, and this publishes
-# the core of it at that release's version — the runtime, `tatolab-stream` to
+# The release channel: release.yml tags every merge to main, and this publishes
+# the core of it at that tag's version — the runtime, `tatolab-stream` to
 # PyPI and the core modules the runtime unit carries to Tatolab's own package
 # index, https://get.tatolab.com/simple/. Every other first-party module
 # publishes after it, from reusable-module-distributions.yml, and a module that
@@ -11,8 +11,8 @@ name: Distributions
 # interpreter borrows the runtime from the runtime unit's lend, so no stream's
 # venv installs it.
 #
-# The runtime itself ships as the Linux runtime tarball, attached to the GitHub
-# release and served with install.sh from get.tatolab.com.
+# The runtime itself ships as the Linux runtime tarball, served with install.sh
+# from get.tatolab.com.
 #
 # Every distribution carries the repository's one version and releases on its
 # one tag, and both uploads wait for every core distribution, for the Linux
@@ -25,12 +25,7 @@ name: Distributions
 # skip a file they hold byte for byte, and the Linux runtime overwrites a partial
 # upload.
 #
-# Called from release.yml rather than triggered by `on: release`:
-# release-please runs on the default GITHUB_TOKEN, and GitHub does not start
-# workflow runs from events that token raises. An `on: release` trigger here
-# would simply never fire.
-#
-# Only a run whose `dry_run` is false uploads. release-please's call passes
+# Only a run whose `dry_run` is false uploads. release.yml's call passes
 # false; every other run is a dry run unless dispatched with `dry_run` unticked,
 # which is how a release whose distributions were never built or uploaded is
 # published by hand. A partially failed upload is recovered by re-running the
@@ -464,7 +459,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
     env:
       GET_TATOLAB_COM_BUCKET: get-tatolab-com
       GET_TATOLAB_COM_URL: https://get.tatolab.com
@@ -513,21 +508,8 @@ jobs:
           TARBALL_NAME: ${{ steps.tarball.outputs.name }}
           TARBALL_VERSION: ${{ steps.tarball.outputs.version }}
         run: |
-          echo "the GitHub release: $TARBALL_NAME, $TARBALL_NAME.sha256"
           echo "s3://$GET_TATOLAB_COM_BUCKET/releases/$TARBALL_VERSION/: $TARBALL_NAME, $TARBALL_NAME.sha256"
           echo "s3://$GET_TATOLAB_COM_BUCKET/: install.sh, latest = $TARBALL_VERSION"
-
-      - name: Attach the tarball to the GitHub release
-        if: ${{ !inputs.dry_run }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_TAG_NAME: ${{ inputs.tag_name }}
-          TARBALL_NAME: ${{ steps.tarball.outputs.name }}
-        run: >-
-          gh release upload "$RELEASE_TAG_NAME" --clobber
-          "linux-runtime-tarball/$TARBALL_NAME"
-          "linux-runtime-tarball/$TARBALL_NAME.sha256"
 
       # R2 through its S3 API, with a token scoped to this one bucket. The
       # checksum settings are the ones Cloudflare's R2 docs give for the AWS CLI,
