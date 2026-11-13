@@ -3490,6 +3490,10 @@ export interface LogsRequest {
    */
   after?: string | null;
   /**
+   * Return no record at or past this opaque cursor, a `next_after` a result or a `project_log_records_written` notification answered: a page that reaches it answers it as `next_after`. Omit it to read to the log's end.
+   */
+  until?: string | null;
+  /**
    * The most records to return. Defaults to 256; a larger value than 4096 is clamped to it.
    */
   count?: number | null;
@@ -3908,16 +3912,24 @@ export interface ProjectLogRecordsWrittenNotificationParams {
    */
   project_directory: string;
   /**
-   * `written`, or `missed` when the connection fell behind; either way the client reads `logs`
-   * on from its cursor.
+   * The records written after `after`, oldest first, each as the project's JSONL log holds it.
    */
-  change: ProjectLogRecordsChangeKindOnTheWire;
+  records: Array<unknown>;
+  /**
+   * The cursor these records follow: the previous notification's `next_after`, or the log's
+   * end when the connection subscribed. A client whose own cursor is another reads `logs` from
+   * its cursor `until` `next_after` instead of appending these.
+   */
+  after: string;
+  /**
+   * The cursor just past these records, which the next notification for the project follows.
+   */
+  next_after: string;
+  /**
+   * Whether retention deleted records between `after` and these.
+   */
+  records_no_longer_held: boolean;
 }
-
-/**
- * What a `project_log_records_written` tells of a project's log.
- */
-export type ProjectLogRecordsChangeKindOnTheWire = "written" | "missed";
 
 /**
  * `list_operation_groups`' params: none.
@@ -4108,9 +4120,9 @@ export interface ControlOperations {
     result: SubscribeStreamActionChangesResult;
   };
   /**
-   * Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
+   * Send this connection each new record of the named projects' logs as `project_log_records_written` notifications.
    *
-   * Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+   * Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, `project_log_records_written` carries them, at most 500 to a notification, naming its `project_directory` as the connection spelled it. Each notification's `after` is the previous one's `next_after`, starting at the log's end as the project is subscribed; a client that read the log with `logs` to another cursor reads `logs` from its cursor `until` the notification's `next_after` instead, and appends the notifications after that. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
    *
    * Since contract version 2, experimental.
    */
@@ -4931,7 +4943,7 @@ export interface ControlNotifications {
    */
   stream_action_changed: StreamActionChangedNotificationParams;
   /**
-   * A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.
+   * The new records of a project's log the connection subscribed to, with the cursors they follow and end at.
    *
    * Since contract version 2, experimental.
    */

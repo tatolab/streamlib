@@ -1350,6 +1350,11 @@ pub struct LogsRequest {
         description = "Return the records after this opaque cursor, the previous result's `next_after`. Omit it for the oldest the project's log holds."
     )]
     pub after: Option<String>,
+    /// Return no record at or past this opaque cursor.
+    #[schemars(
+        description = "Return no record at or past this opaque cursor, a `next_after` a result or a `project_log_records_written` notification answered: a page that reaches it answers it as `next_after`. Omit it to read to the log's end."
+    )]
+    pub until: Option<String>,
     /// The most records to return.
     #[schemars(
         range(min = 1),

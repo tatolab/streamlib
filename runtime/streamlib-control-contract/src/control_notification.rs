@@ -244,15 +244,9 @@ impl ControlNotification for StreamActionChanged {
     ];
 }
 
-/// What a `project_log_records_written` tells of a project's log.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ProjectLogRecordsChangeKindOnTheWire {
-    /// The runtime wrote new records to the project's log.
-    Written,
-    /// The connection fell behind and may have missed a write.
-    Missed,
-}
+/// The most records one `project_log_records_written` carries; a longer run of writes is sent
+/// as several, one after another.
+pub const PROJECT_LOG_RECORDS_PER_NOTIFICATION: usize = 500;
 
 /// `project_log_records_written`'s params.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -260,18 +254,25 @@ pub struct ProjectLogRecordsWrittenNotificationParams {
     /// The project, by its directory as the connection spelled it to
     /// `subscribe_project_log_records`; once for each spelling of one project subscribed.
     pub project_directory: std::path::PathBuf,
-    /// `written`, or `missed` when the connection fell behind; either way the client reads `logs`
-    /// on from its cursor.
-    pub change: ProjectLogRecordsChangeKindOnTheWire,
+    /// The records written after `after`, oldest first, each as the project's JSONL log holds it.
+    pub records: Vec<serde_json::Value>,
+    /// The cursor these records follow: the previous notification's `next_after`, or the log's
+    /// end when the connection subscribed. A client whose own cursor is another reads `logs` from
+    /// its cursor `until` `next_after` instead of appending these.
+    pub after: String,
+    /// The cursor just past these records, which the next notification for the project follows.
+    pub next_after: String,
+    /// Whether retention deleted records between `after` and these.
+    pub records_no_longer_held: bool,
 }
 
-/// `project_log_records_written`: a subscribed project's log has new records to read.
+/// `project_log_records_written`: the new records of a subscribed project's log.
 pub struct ProjectLogRecordsWritten;
 
 impl ControlNotification for ProjectLogRecordsWritten {
     type Params = ProjectLogRecordsWrittenNotificationParams;
     const METHOD_NAME: &'static str = "project_log_records_written";
-    const ONE_LINE_DOC: &'static str = "A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.";
+    const ONE_LINE_DOC: &'static str = "The new records of a project's log the connection subscribed to, with the cursors they follow and end at.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_project_log_records";
     const SINCE_CONTRACT_VERSION: u32 = 2;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;

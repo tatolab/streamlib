@@ -511,9 +511,9 @@ Subscribe the connection to the live graphs of `streams`, by stream id, each loa
 
 ### `subscribe_project_log_records`
 
-Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.
+Send this connection each new record of the named projects' logs as `project_log_records_written` notifications.
 
-Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
+Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, `project_log_records_written` carries them, at most 500 to a notification, naming its `project_directory` as the connection spelled it. Each notification's `after` is the previous one's `next_after`, starting at the log's end as the project is subscribed; a client that read the log with `logs` to another cursor reads `logs` from its cursor `until` the notification's `next_after` instead, and appends the notifications after that. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.
 
 - Since contract version 2, experimental.
 - Params: `SubscribeProjectLogRecordsRequest`
@@ -895,7 +895,7 @@ A stream action changed, which `describe_stream_action` describes, or `missed`.
 
 ### `project_log_records_written`
 
-A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.
+The new records of a project's log the connection subscribed to, with the cursors they follow and end at.
 
 - Sent after `subscribe_project_log_records`.
 - Since contract version 2, experimental.

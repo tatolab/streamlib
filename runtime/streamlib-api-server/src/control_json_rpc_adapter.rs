@@ -21,8 +21,8 @@ use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
     CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATION_FAILED_ERROR_CODE,
     CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlNotification, ControlOperationCall,
-    ControlOperationCallParseRefusal, ProjectChangeKindOnTheWire, ProjectChanged,
-    ProjectChangedNotificationParams, ProjectLogRecordsChangeKindOnTheWire,
+    ControlOperationCallParseRefusal, PROJECT_LOG_RECORDS_PER_NOTIFICATION,
+    ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
     ProjectLogRecordsWritten, ProjectLogRecordsWrittenNotificationParams,
     StreamActionChangeKindOnTheWire, StreamActionChanged, StreamActionChangedNotificationParams,
     StreamGraphChangeKindOnTheWire, StreamGraphChanged, StreamGraphChangedNotificationParams,
@@ -34,6 +34,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
     NodeTypeOfOneProjectSource,
 };
+use streamlib_runtime_client_contract::project_log_records::{
+    ProjectLogRecordsPage, project_log_records_after,
+};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -43,7 +46,9 @@ use crate::control_operation_dispatcher::{
     ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
     ControlRequestOrigin, refuse_another_contract_version,
 };
-use crate::control_subscriptions_of_one_connection::ControlSubscriptionsOfOneConnection;
+use crate::control_subscriptions_of_one_connection::{
+    ControlSubscriptionsOfOneConnection, ProjectLogNextPush,
+};
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::stream_graph_drops_raises_and_link_states::{
     STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY,
@@ -371,8 +376,10 @@ async fn send_project_changes_until_the_connection_ends(
     }
 }
 
-/// Send each write of a subscribed project's log as a `project_log_records_written` notification
-/// until the connection ends.
+/// Send the new records of each subscribed project's log as `project_log_records_written`
+/// notifications, read on from the connection's cursor each time the log is written, until the
+/// connection ends. A connection that fell behind the writes reads every subscribed project's log
+/// on from its cursor.
 async fn send_project_log_writes_until_the_connection_ends(
     mut project_log_writes: tokio::sync::broadcast::Receiver<std::path::PathBuf>,
     subscriptions: Arc<ControlSubscriptionsOfOneConnection>,
@@ -384,42 +391,112 @@ async fn send_project_log_writes_until_the_connection_ends(
             () = connection_ended.cancelled() => return,
             received = project_log_writes.recv() => received,
         };
-        let notifications: Vec<ProjectLogRecordsWrittenNotificationParams> = match received {
-            Ok(project_directory_with_symlinks_resolved) => subscriptions
-                .the_project_log_as_subscribed(&project_directory_with_symlinks_resolved)
-                .into_iter()
-                .map(
-                    |project_directory| ProjectLogRecordsWrittenNotificationParams {
-                        project_directory,
-                        change: ProjectLogRecordsChangeKindOnTheWire::Written,
-                    },
-                )
-                .collect(),
+        let project_logs_written_with_symlinks_resolved = match received {
+            Ok(project_directory_with_symlinks_resolved) => {
+                vec![project_directory_with_symlinks_resolved]
+            }
             Err(RecvError::Lagged(missed_project_log_write_count)) => {
                 tracing::debug!(
                     missed_project_log_write_count,
-                    "a control WebSocket fell behind the project log writes; every subscribed project is sent `missed`"
+                    "a control WebSocket fell behind the project log writes; every subscribed project's log is read on from its cursor"
                 );
-                subscriptions
-                    .every_subscribed_project_log()
-                    .into_iter()
-                    .map(
-                        |project_directory| ProjectLogRecordsWrittenNotificationParams {
-                            project_directory,
-                            change: ProjectLogRecordsChangeKindOnTheWire::Missed,
-                        },
-                    )
-                    .collect()
+                subscriptions.every_subscribed_project_log_with_symlinks_resolved()
             }
             Err(RecvError::Closed) => return,
         };
-        for params in notifications {
-            if send_a_notification::<ProjectLogRecordsWritten>(&outgoing_message_sender, params)
-                .await
-                .is_err()
+        for project_directory_with_symlinks_resolved in project_logs_written_with_symlinks_resolved
+        {
+            if send_the_new_records_of_a_project_log(
+                &project_directory_with_symlinks_resolved,
+                &subscriptions,
+                &outgoing_message_sender,
+            )
+            .await
+            .is_err()
             {
                 return;
             }
+        }
+    }
+}
+
+/// Send the records of the log of the project in `project_directory_with_symlinks_resolved` after
+/// the connection's cursor, at most [`PROJECT_LOG_RECORDS_PER_NOTIFICATION`] to a notification,
+/// once for each directory the connection subscribed to it as; nothing when it did not subscribe
+/// to it. An error once the connection has ended.
+async fn send_the_new_records_of_a_project_log(
+    project_directory_with_symlinks_resolved: &std::path::Path,
+    subscriptions: &ControlSubscriptionsOfOneConnection,
+    outgoing_message_sender: &mpsc::Sender<Value>,
+) -> Result<(), ()> {
+    loop {
+        let Some(ProjectLogNextPush {
+            directories_as_subscribed,
+            cursor_the_next_push_follows,
+        }) = subscriptions
+            .the_next_push_of_the_project_log(project_directory_with_symlinks_resolved)
+        else {
+            return Ok(());
+        };
+        let read_project_directory = project_directory_with_symlinks_resolved.to_path_buf();
+        let read_after = cursor_the_next_push_follows.clone();
+        let page = tokio::task::spawn_blocking(move || {
+            project_log_records_after(
+                &read_project_directory,
+                None,
+                None,
+                Some(&read_after),
+                PROJECT_LOG_RECORDS_PER_NOTIFICATION,
+            )
+        })
+        .await;
+        let ProjectLogRecordsPage {
+            records,
+            next_after,
+            records_no_longer_held,
+        } = match page {
+            Ok(Ok(page)) => page,
+            Ok(Err(not_read)) => {
+                tracing::warn!(
+                    %not_read,
+                    project_directory = %project_directory_with_symlinks_resolved.display(),
+                    "a control WebSocket could not read a subscribed project's new log records"
+                );
+                return Ok(());
+            }
+            Err(not_finished) => {
+                tracing::warn!(
+                    %not_finished,
+                    project_directory = %project_directory_with_symlinks_resolved.display(),
+                    "a control WebSocket's read of a subscribed project's new log records did not finish"
+                );
+                return Ok(());
+            }
+        };
+        let the_page_was_full = records.len() >= PROJECT_LOG_RECORDS_PER_NOTIFICATION;
+        subscriptions.move_the_project_log_cursor_past_a_push(
+            project_directory_with_symlinks_resolved,
+            &cursor_the_next_push_follows,
+            next_after.clone(),
+        );
+        if records.is_empty() {
+            return Ok(());
+        }
+        for project_directory in directories_as_subscribed {
+            send_a_notification::<ProjectLogRecordsWritten>(
+                outgoing_message_sender,
+                ProjectLogRecordsWrittenNotificationParams {
+                    project_directory,
+                    records: records.clone(),
+                    after: cursor_the_next_push_follows.clone(),
+                    next_after: next_after.clone(),
+                    records_no_longer_held,
+                },
+            )
+            .await?;
+        }
+        if !the_page_was_full {
+            return Ok(());
         }
     }
 }

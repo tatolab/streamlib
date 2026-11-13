@@ -172,14 +172,21 @@ playback-controls. This change touches the entries listed under MODIFIED and no 
   each action it follows.
 - **Push for a project's new log records.** The contract gains
   `subscribe_project_log_records(project_directories)` and the notification
-  `project_log_records_written` (`{ project_directory, change }`, where `change` is `written` or
-  `missed`), so Studio's log view follows a project's log without its 1.5 s `logs` read (owner,
-  2026-11-12). The engine's log drain worker announces each project whose log it handed new
-  records to the OS, once per flush, at most every 100 ms, on one process-wide broadcast; each
-  connection sends it for the projects it subscribed to, matched with symlinks resolved and named
-  by the directory the connection spelled, and the client reads `logs` on from its cursor. The notification carries no records,
-  so a burst of writes costs one read. The names and the record-free notification are the
-  implementer's (session, 2026-11-12).
+  `project_log_records_written`, so Studio's log view follows a project's log without its 1.5 s
+  `logs` read (owner, 2026-11-12). The notification carries the records themselves, as the
+  engines that run a server and a client apart do for an append-only log — Godot's remote
+  debugger, Unity's PlayerConnection, Chrome DevTools' `Log.entryAdded`, `docker logs -f`
+  (owner, 2026-11-13). The engine's log drain worker announces each project whose log it handed
+  new records to the OS, once per flush, at most every 100 ms, on one process-wide broadcast.
+  Each connection holds a cursor for each project it subscribed to, starting at the log's end,
+  reads on from it on each announcement, and sends
+  `{ project_directory, records, after, next_after, records_no_longer_held }`, at most 500
+  records to a notification, a longer run as several; a connection that falls behind the
+  broadcast reads every subscribed project on from its cursor, so nothing is missed. A client
+  whose own cursor is not a notification's `after` reads `logs` from its cursor `until` that
+  notification's `next_after`, and `logs` gains `until` for it. Projects are matched with
+  symlinks resolved and named by the directory the connection spelled. The names, the 500 and
+  the cursor-per-connection shape are the implementer's (session, 2026-11-13).
 - **Push for files changed outside the runtime.** `project_changed` gains the change
   `files_changed`, with `files` naming each changed file relative to the project, so Studio
   learns of an editor's save without its 5 s project listing read. The runtime watches a
