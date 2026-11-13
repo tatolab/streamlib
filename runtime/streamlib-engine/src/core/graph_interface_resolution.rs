@@ -461,6 +461,7 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
     direction_of_the_interface_port: GraphInterfacePortDirection,
 ) -> Option<PortFamily> {
     let mut port_to_read = linked_port.clone();
+    let mut direction_of_the_port_to_read = direction_of_the_interface_port;
     let mut ports_read = std::collections::HashSet::new();
     loop {
         if !ports_read.insert((port_to_read.node.clone(), port_to_read.port.clone())) {
@@ -472,14 +473,24 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
             .iter()
             .find(|node| cast_of(&node.name).is_ok_and(|cast| cast == node_cast))?;
         if is_a_graph_interface_node_type(node.processor_type.as_str()) {
-            return port_and_family_an_interface_nodes_config_declares(node)
-                .ok()
-                .and_then(|(_, family)| family);
+            let (_, declared_family) =
+                port_and_family_an_interface_nodes_config_declares(node).ok()?;
+            if declared_family.is_some() || node.processor_type.as_str() != GRAPH_INPUT_NODE_TYPE {
+                return declared_family;
+            }
+            port_to_read = graph
+                .the_first_port_linked_to_the_interface_node(
+                    &node_cast,
+                    GraphInterfacePortDirection::Input,
+                )
+                .ok()??;
+            direction_of_the_port_to_read = GraphInterfacePortDirection::Input;
+            continue;
         }
         let (inputs, outputs) =
             the_ports_of_a_graph_document_node(node_types, &port_to_read.node, node).ok()??;
         let port_cast = cast_of(&port_to_read.port).ok()?;
-        if direction_of_the_interface_port == GraphInterfacePortDirection::Input {
+        if direction_of_the_port_to_read == GraphInterfacePortDirection::Input {
             return inputs
                 .into_iter()
                 .find(|port| port.name == port_cast)
@@ -1244,6 +1255,95 @@ mod tests {
             serde_json::json!({"port": "cue"}),
             "the node renders back as drawn"
         );
+    }
+
+    #[test]
+    fn an_output_following_an_input_fed_by_a_graph_input_naming_no_family_carries_that_inputs_family()
+     {
+        use crate::core::descriptors::{
+            PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+        };
+        use crate::core::processors::PROCESSOR_REGISTRY;
+
+        const PASSER_TYPE: &str = "interface_resolution_fixtures.follows_its_input:Passer";
+        const READER_TYPE: &str = "interface_resolution_fixtures.reads_channels:Reader";
+        let register =
+            |node_type: &str, inputs: Vec<PortDescriptor>, outputs: Vec<PortDescriptor>| {
+                let class_name = node_type
+                    .rsplit(':')
+                    .next()
+                    .expect("the type names a class");
+                let mut descriptor = ProcessorDescriptor::new(
+                    ProcessorClassShortName::new(class_name).expect("the class name is short"),
+                    ProcessorClassImportPath::new(node_type).expect("the type is an import path"),
+                    class_name,
+                );
+                descriptor.inputs = inputs;
+                descriptor.outputs = outputs;
+                PROCESSOR_REGISTRY
+                    .register_descriptor_only(descriptor)
+                    .expect("the fixture type registers");
+            };
+        register(
+            PASSER_TYPE,
+            vec![PortDescriptor::new(
+                "value",
+                "input",
+                true,
+                PortFamilyDeclaration {
+                    also_takes_families: vec![PortFamily::Channels],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+            )],
+            vec![PortDescriptor::new(
+                "result",
+                "output",
+                true,
+                PortFamilyDeclaration {
+                    family_follows_input_port: Some("value".into()),
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+            )],
+        );
+        register(
+            READER_TYPE,
+            vec![PortDescriptor::new(
+                "signals",
+                "input",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            )],
+            Vec::new(),
+        );
+        let graph = GraphSnapshot::from_graph_document(serde_json::json!({
+            "nodes": [
+                {"name": "cue", "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "cue"}},
+                {"name": "reader", "type": READER_TYPE, "config": {}},
+                {"name": "passer", "type": PASSER_TYPE, "config": {}},
+                {"name": "out", "type": GRAPH_OUTPUT_NODE_TYPE, "config": {"port": "out"}},
+            ],
+            "links": [
+                {"source": {"node": "cue", "port": "value"},
+                 "target": {"node": "reader", "port": "signals"}},
+                {"source": {"node": "cue", "port": "value"},
+                 "target": {"node": "passer", "port": "value"}},
+                {"source": {"node": "passer", "port": "result"},
+                 "target": {"node": "out", "port": "value"}},
+            ],
+        }))
+        .expect("the graph is a graph document");
+
+        let family_into_out = the_family_a_port_linked_to_an_interface_node_carries(
+            &NodeTypesOneStreamResolves::new(),
+            &graph,
+            &LinkPortRefOutput {
+                node: "passer".into(),
+                port: "result".into(),
+            },
+            GraphInterfacePortDirection::Output,
+        );
+
+        assert_eq!(family_into_out, Some(PortFamily::Channels));
     }
 
     #[test]
