@@ -150,7 +150,7 @@ def stream_id_of_the_project(app_directory: Path) -> str:
 
 
 def the_stream_stopped_log_line(stream_id: str) -> str:
-    """The engine's line once the stream's unload has finished."""
+    """The engine's line once the stream's teardown has finished."""
     return f"[stop] The stream `{stream_id}` stopped"
 
 
@@ -264,9 +264,9 @@ def test_a_loaded_stream_runs_on_past_the_verb_that_loaded_it_until_tatolab_stop
     tatolabd.await_stderr_containing(
         the_stream_stopped_log_line(stream_id), timeout=CLEAN_EXIT_TIMEOUT_SECONDS
     )
-    assert local_api.list_streams() == [
-        {**listed_running, "state": "stopped", "node_count": None}
-    ], "`tatolab stop` unloads the stream and records it stopped"
+    assert local_api.list_streams() == [{**listed_running, "state": "stopped"}], (
+        "`tatolab stop` holds the stream stopped with its graph and records it stopped"
+    )
     assert tatolabd.process.poll() is None, "the runtime outlives the stream it unloaded"
 
 
