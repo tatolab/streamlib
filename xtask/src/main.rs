@@ -37,6 +37,7 @@ pub mod runtime_client_zod_schemas;
 pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod source_call_site_scan;
 pub mod stage_browser_host;
+pub mod stage_core_projects;
 pub mod stage_first_party_modules;
 pub mod stage_runtime_client_package;
 pub mod stage_runtime_unit_carried_packages;

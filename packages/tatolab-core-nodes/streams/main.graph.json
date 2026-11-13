@@ -128,7 +128,7 @@
           0
         ]
       },
-      "type": "nodes.solid_color:SolidColor"
+      "type": "core_nodes.solid_color:SolidColor"
     },
     {
       "config": {},
@@ -141,7 +141,7 @@
           200
         ]
       },
-      "type": "nodes.animation:Timer"
+      "type": "core_nodes.animation:Timer"
     },
     {
       "config": {},
@@ -157,7 +157,7 @@
           200
         ]
       },
-      "type": "nodes.math_nodes:Multiply"
+      "type": "core_nodes.math_nodes:Multiply"
     },
     {
       "config": {},
@@ -173,7 +173,7 @@
           0
         ]
       },
-      "type": "nodes.generators:Noise"
+      "type": "core_nodes.generators:Noise"
     },
     {
       "config": {},
@@ -186,7 +186,7 @@
           0
         ]
       },
-      "type": "nodes.color:Duotone"
+      "type": "core_nodes.color:Duotone"
     },
     {
       "config": {},
@@ -202,7 +202,7 @@
           260
         ]
       },
-      "type": "nodes.animation:Ramp"
+      "type": "core_nodes.animation:Ramp"
     },
     {
       "config": {},
@@ -218,7 +218,7 @@
           0
         ]
       },
-      "type": "nodes.transform:Kaleidoscope"
+      "type": "core_nodes.transform:Kaleidoscope"
     },
     {
       "config": {},
@@ -234,7 +234,7 @@
           420
         ]
       },
-      "type": "nodes.animation:Lfo"
+      "type": "core_nodes.animation:Lfo"
     },
     {
       "config": {},
@@ -247,7 +247,7 @@
           420
         ]
       },
-      "type": "nodes.math_nodes:Remap"
+      "type": "core_nodes.math_nodes:Remap"
     },
     {
       "config": {},
@@ -260,7 +260,7 @@
           0
         ]
       },
-      "type": "nodes.color:HsvAdjust"
+      "type": "core_nodes.color:HsvAdjust"
     },
     {
       "config": {
@@ -276,7 +276,7 @@
           420
         ]
       },
-      "type": "nodes.oscillator:Oscillator"
+      "type": "core_nodes.oscillator:Oscillator"
     },
     {
       "config": {},

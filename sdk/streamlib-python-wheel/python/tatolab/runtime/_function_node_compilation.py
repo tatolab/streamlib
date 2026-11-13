@@ -989,8 +989,7 @@ def compile_function_node_to_its_evaluate_entry(
     except ImportError as numba_missing:
         raise FunctionNodeDoesNotCompile(
             f"{import_path} is a function node, and Numba, which compiles function nodes, is "
-            f"not installed in this stream's environment. To compile it: install `numba`, or "
-            f"`tatolab-ops`, which depends on it."
+            f"not installed in this stream's environment. To compile it: install `numba`."
         ) from numba_missing
 
     constructor_by_dataclass = {

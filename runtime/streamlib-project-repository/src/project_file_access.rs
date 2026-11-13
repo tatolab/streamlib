@@ -6,7 +6,11 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
+#[cfg(feature = "history")]
+use crate::core_project_import::{CORE_PROJECT_IMPORT_FOLDER, the_core_project_link_in};
 use crate::project_asset::DIRECTORIES_A_PROJECT_SCAN_SKIPS;
+#[cfg(feature = "history")]
+use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
 /// A file's path inside its project as the file verbs name it: relative, `/`-separated, never
@@ -88,6 +92,47 @@ impl ProjectRelativeFilePath {
             }
         }
         Ok(())
+    }
+
+    /// Refuse a read of the path when a folder on its way, or the file itself, is a symbolic
+    /// link, save the one link the runtime makes to the core project it carries: a path into
+    /// that import passes through the link while it points at
+    /// `core_project_directory_the_runtime_carries`, and a link below it, or `imports` being
+    /// one, is refused as any other.
+    #[cfg(feature = "history")]
+    pub(crate) fn refuse_a_symbolic_link_on_the_way_to_a_read_under(
+        &self,
+        project_directory: &Path,
+        core_project_directory_the_runtime_carries: Option<&Path>,
+    ) -> Result<(), ProjectRepositoryRefusal> {
+        let the_link_points_at_the_runtimes_core_project = || {
+            let imports_is_a_link =
+                std::fs::symlink_metadata(project_directory.join(PROJECT_IMPORTS_DIRECTORY))
+                    .is_ok_and(|metadata| metadata.is_symlink());
+            !imports_is_a_link
+                && core_project_directory_the_runtime_carries.is_some_and(|carried| {
+                    std::fs::read_link(the_core_project_link_in(project_directory))
+                        .is_ok_and(|pointed_at| pointed_at == carried)
+                })
+        };
+        let into_the_core_project = self
+            .0
+            .strip_prefix(PROJECT_IMPORTS_DIRECTORY)
+            .and_then(|below_imports| below_imports.strip_prefix('/'))
+            .and_then(|below_imports| below_imports.strip_prefix(CORE_PROJECT_IMPORT_FOLDER))
+            .and_then(|below_the_link| below_the_link.strip_prefix('/'))
+            .filter(|_| the_link_points_at_the_runtimes_core_project());
+        match into_the_core_project {
+            Some(inside_the_core_project) => Self(inside_the_core_project.to_owned())
+                .refuse_a_symbolic_link_on_the_way_under(&the_core_project_link_in(
+                    project_directory,
+                ))
+                .map_err(|_| ProjectRepositoryRefusal::ProjectFilePathRefused {
+                    path: self.0.clone(),
+                    why: "it passes through a symbolic link, which could lead outside the project",
+                }),
+            None => self.refuse_a_symbolic_link_on_the_way_under(project_directory),
+        }
     }
 }
 

@@ -470,17 +470,25 @@ class TatolabRunOrDevOnTheRuntime(RuntimeProcessUnderTest):
             "stream_asset": listed_stream["location"]["stream_asset"],
         }
 
+    def actions_once_ended(
+        self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
+    ) -> "list[dict[str, Any]]":
+        """`describe_stream_action` of the `occurrence`-th load — or, for `open --play`, of its
+        open and its playback, the open first — once each ended."""
+        if self.verb == "dev":
+            return [self.action_once_ended(timeout=timeout, occurrence=occurrence)]
+        return [
+            self._local_api().stream_action_once_ended(queued.group("action"), timeout=timeout)
+            for queued in self._actions_open_and_play_queued(timeout=timeout)
+        ]
+
     def failed_stream(
         self, *, timeout: float = DEFAULT_RUNTIME_WAIT_TIMEOUT_SECONDS, occurrence: int = 1
     ) -> "tuple[str, str] | None":
-        """The stream the `occurrence`-th load — or, for `open --play`, its open — recorded
-        failed and why, as the runtime lists it; `None` when it took in none failed."""
-        ended_actions = [self.action_once_ended(timeout=timeout, occurrence=occurrence)]
-        if self.verb != "dev":
-            ended_actions = [
-                self._local_api().stream_action_once_ended(queued.group("action"), timeout=timeout)
-                for queued in self._actions_open_and_play_queued(timeout=timeout)
-            ]
+        """The stream the `occurrence`-th load — or, for `open --play`, its open or its
+        playback — recorded failed and why, as the runtime lists it; `None` when it took in
+        none failed."""
+        ended_actions = self.actions_once_ended(timeout=timeout, occurrence=occurrence)
         failed_stream_ids = [
             stream["stream"]
             for ended_action in ended_actions
@@ -885,19 +893,25 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         if exit_status != 0:
             failed_or_refused_because = stream_run.refusal()
         else:
-            ended_action = stream_run.action_once_ended(
+            ended_actions = stream_run.actions_once_ended(
                 timeout=TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS
             )
             failed_stream = stream_run.failed_stream()
             ids_of_the_streams_the_run_took_in = {
-                stream["stream"] for stream in ended_action["streams"]
+                stream["stream"]
+                for ended_action in ended_actions
+                for stream in ended_action["streams"]
             }
-            if ended_action["state"] == "failed":
-                failed_or_refused_because = ended_action["failed_because"]
-            elif failed_stream is not None:
+            failed_action = next(
+                (ended_action for ended_action in ended_actions if ended_action["state"] == "failed"),
+                None,
+            )
+            if failed_stream is not None:
                 failed_or_refused_because = failed_stream[1]
-            elif not ended_action["streams"]:
-                failed_or_refused_because = f"the load took in no stream: {ended_action}"
+            elif failed_action is not None:
+                failed_or_refused_because = failed_action["failed_because"]
+            elif not ids_of_the_streams_the_run_took_in:
+                failed_or_refused_because = f"the load took in no stream: {ended_actions}"
         listed_streams = local_api.list_streams()
         assert all(
             listed["state"] == "failed" and listed["stream"] in ids_of_the_streams_the_run_took_in

@@ -98,7 +98,7 @@
           0
         ]
       },
-      "type": "nodes.solid_color:SolidColor"
+      "type": "core_nodes.solid_color:SolidColor"
     },
     {
       "config": {},
@@ -120,7 +120,7 @@
           0
         ]
       },
-      "type": "nodes.generators:Gradient"
+      "type": "core_nodes.generators:Gradient"
     },
     {
       "config": {},
@@ -136,7 +136,7 @@
           300
         ]
       },
-      "type": "nodes.animation:Lfo"
+      "type": "core_nodes.animation:Lfo"
     },
     {
       "config": {},
@@ -153,7 +153,7 @@
           300
         ]
       },
-      "type": "nodes.math_nodes:Remap"
+      "type": "core_nodes.math_nodes:Remap"
     },
     {
       "config": {},
@@ -173,7 +173,7 @@
           300
         ]
       },
-      "type": "nodes.generators:Circle"
+      "type": "core_nodes.generators:Circle"
     },
     {
       "config": {},
@@ -186,7 +186,7 @@
           0
         ]
       },
-      "type": "nodes.composite:Over"
+      "type": "core_nodes.composite:Over"
     },
     {
       "config": {},
@@ -199,7 +199,7 @@
           0
         ]
       },
-      "type": "nodes.filters:Vignette"
+      "type": "core_nodes.filters:Vignette"
     },
     {
       "config": {},

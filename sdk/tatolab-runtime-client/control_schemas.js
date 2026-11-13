@@ -1348,7 +1348,30 @@ const UndoOrRedoRequest = z.strictObject({
 });
 
 /** @type {z.ZodType<ControlContract.ProjectChangeKindOnTheWire>} */
-const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("venv_made_current"), z.literal("files_changed"), z.literal("missed")]);
+const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("venv_made_current"), z.literal("node_types_added"), z.literal("node_types_removed"), z.literal("node_types_updated"), z.literal("files_changed"), z.literal("missed")]);
+
+/** @type {z.ZodType<ControlContract.NodeTypeOfOneProjectSource>} */
+const NodeTypeOfOneProjectSource = z.intersection(z.looseObject({
+  type: z.string(),
+  kind: z.string().nullable().optional(),
+  description: z.string(),
+  category: z.string(),
+  inputs: z.array(NodeTypePortReadFromSource).nullable().optional(),
+  outputs: z.array(NodeTypePortReadFromSource).nullable().optional(),
+  path: z.string().nullable().optional(),
+  line: z.number().int().min(0).nullable().optional(),
+}), z.union([z.looseObject({
+  source: z.literal("project"),
+}), z.looseObject({
+  project: z.string(),
+  folder: z.string(),
+  version: z.string(),
+  source: z.literal("dependency"),
+}), z.looseObject({
+  distribution: z.string(),
+  distribution_version: z.string(),
+  source: z.literal("installed_distribution"),
+})]));
 
 /** @type {z.ZodType<ControlContract.ProjectChangedNotificationParams>} */
 const ProjectChangedNotificationParams = z.looseObject({
@@ -1356,6 +1379,7 @@ const ProjectChangedNotificationParams = z.looseObject({
   change: ProjectChangeKindOnTheWire,
   transaction: ProjectTransactionOnTheWire.nullable().optional(),
   files: z.array(z.string()).nullable().optional(),
+  node_types: z.array(NodeTypeOfOneProjectSource).nullable().optional(),
 });
 
 /** @type {z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>} */
@@ -1613,6 +1637,7 @@ export const ControlSchemas = Object.freeze({
     UndoOrRedoRequest,
     ProjectChangedNotificationParams,
     ProjectChangeKindOnTheWire,
+    NodeTypeOfOneProjectSource,
     StreamGraphChangedNotificationParams,
     StreamGraphChangeKindOnTheWire,
     NodeStateOnTheWire,

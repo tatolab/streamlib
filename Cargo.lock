@@ -5729,6 +5729,7 @@ dependencies = [
  "serde_path_to_error",
  "sha2",
  "streamlib-processor-schema",
+ "streamlib-runtime-client-contract",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

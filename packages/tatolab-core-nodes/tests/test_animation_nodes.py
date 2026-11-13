@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from nodes.animation import (
+from core_nodes.animation import (
     Envelope,
     EnvelopeLevel,
     Pulse,

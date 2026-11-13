@@ -613,6 +613,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf> {
+        OperationsOnTheStreamsLoadedInThisRuntime::the_core_nodes_project_directory_this_runtime_carries(
+            self.engine.as_ref(),
+        )
+    }
     fn record_first_party_package_moves_in(
         &self,
         history: Arc<dyn streamlib::sdk::runtime::ProjectHistoryRecordingFirstPartyPackageMoves>,
@@ -2841,7 +2846,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
         )
         .await;
     assert_eq!(
-        subscriber.next_message().await["result"]["streams"],
+        the_next_answer_but_its_notifications(&mut subscriber).await["result"]["streams"],
         json!([stream_id])
     );
     subscriber
@@ -5061,6 +5066,144 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
             "project": arm.project, "folder": folder, "version": version,
             "files": { "nodes/gripper.py": "from tatolab.stream import node\n" },
         }] })
+    );
+}
+
+/// The next announcement on `change_feed` that names node types, within a few seconds.
+async fn the_next_node_types_announced(
+    change_feed: &mut tokio::sync::broadcast::Receiver<
+        streamlib_project_repository::ProjectChangeFeedAnnouncement,
+    >,
+) -> streamlib_project_repository::ProjectChangeOnTheFeed {
+    use streamlib_project_repository::ProjectChangeOnTheFeed;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let announced = change_feed.recv().await.expect("the feed carries on");
+            if matches!(
+                announced.change,
+                ProjectChangeOnTheFeed::NodeTypesAdded(_)
+                    | ProjectChangeOnTheFeed::NodeTypesRemoved(_)
+                    | ProjectChangeOnTheFeed::NodeTypesUpdated(_)
+            ) {
+                return announced.change;
+            }
+        }
+    })
+    .await
+    .expect("node types are announced")
+}
+
+fn the_node_types_named_by(
+    change: &streamlib_project_repository::ProjectChangeOnTheFeed,
+) -> (&'static str, Vec<String>) {
+    use streamlib_project_repository::ProjectChangeOnTheFeed;
+    let (kind, node_types) = match change {
+        ProjectChangeOnTheFeed::NodeTypesAdded(node_types) => ("added", node_types),
+        ProjectChangeOnTheFeed::NodeTypesRemoved(node_types) => ("removed", node_types),
+        ProjectChangeOnTheFeed::NodeTypesUpdated(node_types) => ("updated", node_types),
+        other => panic!("not a node type change: {other:?}"),
+    };
+    (
+        kind,
+        node_types
+            .iter()
+            .map(|offered| offered.node_type.node_type.clone())
+            .collect(),
+    )
+}
+
+/// Once a client has listed a project's node types, a node file saved in its folder and its venv
+/// made current each list them again, and the feed names each node type added, removed or
+/// updated, carrying the source it comes from.
+///
+/// Mental-revert: with no follower nothing is announced after the save; with no diff every type is
+/// announced as added on every listing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_feed() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    write_an_executable_script_from_a_child_process(
+        &cell.interpreter(),
+        STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
+    );
+    let a_listing_offering = |node_types: Value| {
+        std::fs::write(
+            cell.path().join("listing.json"),
+            json!({ "sources": [{
+                "source": "installed_distribution", "distribution": "tatolab-camera",
+                "distribution_version": "0.68.90", "node_types": node_types,
+                "graph_generators": [], "unreadable_modules": [],
+            }] })
+            .to_string(),
+        )
+        .expect("the listing document");
+    };
+    let a_node_type = |node_type: &str, description: &str| {
+        json!({ "type": node_type, "kind": "process", "description": description,
+                "category": "camera", "inputs": [], "outputs": [] })
+    };
+    let handler = crate::mcp::LocalApiMcpServerHandler::new(
+        engine.operations_on_the_loaded_streams(),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let dispatcher = handler.control_operation_dispatcher();
+    let _files_watched = dispatcher
+        .project_repositories
+        .watch_the_files_of(cell.project);
+    let mut change_feed = dispatcher
+        .project_repositories
+        .subscribe_to_the_change_feed();
+    a_listing_offering(json!([
+        a_node_type("tatolab.camera:CameraSource", "a camera"),
+        a_node_type("tatolab.camera:LatencyProbe", "a probe"),
+    ]));
+    dispatcher
+        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
+            project_directory: cell.path().to_path_buf(),
+        })
+        .await
+        .expect("the cell's node types are listed");
+
+    a_listing_offering(json!([
+        a_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
+        a_node_type("tatolab.camera:LatencyProbe", "a probe"),
+        a_node_type("tatolab.camera:FrameCounter", "counts frames"),
+    ]));
+    std::fs::write(cell.path().join("counter.py"), "x = 1\n").expect("a node file saved");
+
+    let added = the_next_node_types_announced(&mut change_feed).await;
+    assert_eq!(
+        the_node_types_named_by(&added),
+        ("added", vec!["tatolab.camera:FrameCounter".to_owned()])
+    );
+    let updated = the_next_node_types_announced(&mut change_feed).await;
+    assert_eq!(
+        the_node_types_named_by(&updated),
+        ("updated", vec!["tatolab.camera:CameraSource".to_owned()])
+    );
+    let streamlib_project_repository::ProjectChangeOnTheFeed::NodeTypesUpdated(updated) = updated
+    else {
+        unreachable!()
+    };
+    assert_eq!(updated[0].node_type.description, "a camera, now with HDR");
+    assert_eq!(
+        serde_json::to_value(&updated[0].origin).expect("the origin serializes"),
+        json!({ "source": "installed_distribution", "distribution": "tatolab-camera",
+                "distribution_version": "0.68.90" })
+    );
+
+    a_listing_offering(json!([
+        a_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
+        a_node_type("tatolab.camera:FrameCounter", "counts frames"),
+    ]));
+    dispatcher
+        .project_repositories
+        .announce_the_venv_made_current(cell.project);
+
+    let removed = the_next_node_types_announced(&mut change_feed).await;
+    assert_eq!(
+        the_node_types_named_by(&removed),
+        ("removed", vec!["tatolab.camera:LatencyProbe".to_owned()])
     );
 }
 

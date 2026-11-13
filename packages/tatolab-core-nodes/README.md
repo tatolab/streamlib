@@ -3,8 +3,7 @@
 The nodes every Tato Studio project is meant to start with, as a project you open in Tato
 Studio: add its nodes to a graph, play its streams, and use its views.
 
-It will replace `tatolab-ops`. Until the runtime carries this project into every new project,
-`tatolab-ops` still ships and this project holds its own copy of those nodes.
+The runtime carries it and links it into every project as the import `imports/core-nodes`.
 
 ## Open it
 
@@ -18,7 +17,7 @@ tatolab dev
 
 ## What it holds
 
-`nodes/` is one module per group the Add node search lists.
+`core_nodes/` is one module per group the Add node search lists. The package is not named `nodes`, since one interpreter holds one module per top-level name and every project that uses these nodes may hold a `nodes/` of its own.
 
 | Group | Module | Nodes |
 | --- | --- | --- |
@@ -30,7 +29,7 @@ tatolab dev
 | Composite | `composite.py` | Mix, Over, Blend Add, Blend Multiply, Blend Screen, Blend Difference, Mask, Wipe |
 | Math | `math_nodes.py` | Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Absolute, Modulo, Lerp, Clamp, Remap, Smoothstep, Step, Constant, Random, Perlin Noise |
 | Animation | `animation.py` | Lfo, Timer, Lag, Ramp, Pulse, Speed, Envelope |
-| Logic | `logic.py` | Compare, Switch, Select, Gate, Trigger, Counter, Sample And Hold, Feedback, Hold Frame |
+| Logic | `logic.py` | Compare, Switch, Select, Gate, Trigger, Counter, Sample And Hold, Hold Frame |
 | Audio | `oscillator.py` | Oscillator |
 
 Every Color, Filters, Transform and Composite node, and every generator but Solid Color, is a
@@ -57,11 +56,12 @@ number node can drive.
   frame and stretch on any other shape.
 - **A shader is not handed the time.** Wire a Timer, Ramp or Speed into the input that moves it.
 
-## What a number node cannot do yet
+## Loops
 
-- **Feedback here closes no loop.** The runtime closes a loop only through
-  `tatolab.ops:Feedback`, so a loop through this project's Feedback is refused. The runtime takes
-  this project's name for it in the change that carries the project into every new project.
+A loop of number nodes closes through Previous Value, a node the runtime ships under Logic. Wire
+a number node's output back into a node that feeds it and the runtime adds a Previous Value on
+that wire; you can also place one yourself. It hands on the number it was given at the last
+evaluation, starting at 0, so Add with 1 on its other input counts up through one.
 
 ## Check it
 

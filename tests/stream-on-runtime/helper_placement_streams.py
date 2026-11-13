@@ -8,7 +8,7 @@ from typing import Any
 from rust_function_node_fixture import CountsItsOwnCalls as RustCountsItsOwnCalls
 from rust_function_node_fixture import RustGate
 from rust_function_node_fixture import ScaleAndOffset
-from tatolab.ops import Clamp, Gate, Lfo, Remap
+from helper_placement_function_nodes import Clamp, Gate, Lfo, Remap
 from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
 
 from helper_placement_processors import (
@@ -133,7 +133,7 @@ def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> N
 
 @graph_generator
 def lfo_into_remap_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """`tatolab.ops`' `Lfo` into `Remap` into a Python class reading the value they evaluate to."""
+    """`Lfo` into `Remap` into a Python class reading the value they evaluate to."""
     lfo = stream_builder.add(Lfo)
     remap = stream_builder.add(Remap)
     sink = stream_builder.add(ReportsTheFunctionNodeValuesItReadSink)
@@ -170,7 +170,7 @@ def function_nodes_read_by_two_native_converters_into_python_records_sink(
 
 @graph_generator
 def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBuilder) -> None:
-    """`tatolab.ops`' `Lfo` read directly by a Python class reporting each batch of values."""
+    """`Lfo` read directly by a Python class reporting each batch of values."""
     lfo = stream_builder.add(Lfo, name="lfo")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(lfo.output("result"), sink.input("brightness"))
@@ -178,7 +178,7 @@ def lfo_into_python_sink_reporting_each_batch_it_reads(stream_builder: StreamBui
 
 @graph_generator
 def clamp_with_its_input_linked_to_nothing_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """`tatolab.ops`' `Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
+    """`Clamp`, its `x` linked to nothing and unpinned, read by a Python class."""
     clamp = stream_builder.add(Clamp, name="clamp")
     sink = stream_builder.add(ReportsEachBatchOfFunctionNodeValuesItReadSink, name="sink")
     stream_builder.connect(clamp.output("result"), sink.input("brightness"))
@@ -314,7 +314,7 @@ def two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock(
 
 
 @graph_generator
-def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuilder) -> None:
+def rust_function_nodes_in_islands_beside_python_ones(stream_builder: StreamBuilder) -> None:
     """`Lfo` into a Rust `ScaleAndOffset` into `Clamp`, and a Rust `CountsItsOwnCalls`
     into `Remap`, each island read by its own Python class."""
     lfo = stream_builder.add(Lfo)
@@ -334,7 +334,7 @@ def rust_function_nodes_in_islands_beside_tatolab_ops(stream_builder: StreamBuil
 
 @graph_generator
 def python_source_through_a_gate_into_python_sink(stream_builder: StreamBuilder) -> None:
-    """A Python class's counts through `tatolab.ops`' `Gate` into another Python class."""
+    """A Python class's counts through `Gate` into another Python class."""
     _python_source_through_this_gate_into_python_sink(stream_builder, Gate)
 
 

@@ -132,7 +132,7 @@ url = "https://get.tatolab.com/simple/"
 ```
 
 The runtime carries a wheel of `tatolab-stream`
-and of its core modules — `tatolab-ops`, `tatolab-testpattern` and `tatolab-compositor` — built at
+and of its core modules — `tatolab-testpattern` and `tatolab-compositor` — built at
 its own commit, and each time it makes a project's `.venv` it links them into
 `.tatolab/first-party-imports/` and declares each as a uv path source, so they always match the
 runtime and a project never waits on PyPI for them.
@@ -672,7 +672,7 @@ module, served from Tatolab's package index, and the core ones ride the runtime 
 | Module | |
 |---|---|
 | `tatolab-testpattern` | `TestPatternSource`: the sample animation, for a machine with no camera. |
-| `tatolab-ops` | The small function nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …), compiled to native code and run inside the node that reads them; the runtime installs it into every project. |
+| Core Nodes | A project, not a module: number nodes (`Lfo`, `Remap`, `Clamp`, `Gate`, …) compiled to native code and run inside the node that reads them, shader nodes, and the Program view. The runtime links it into every project as the import `imports/core-nodes`. |
 | `tatolab-virtualcamera` | `VirtualCameraSink`, Linux only: a v4l2loopback camera any other application can select. |
 
 The microphone and speaker are modules: `pip install tatolab-microphone tatolab-speaker`, then

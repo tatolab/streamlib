@@ -1,7 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The Core Nodes project on `tatolabd`: its streams start, and each picture node keeps running.
+"""The Core Nodes project on `tatolabd`: its streams start, and each picture node keeps running;
+and a project that holds no node of its own places Core Nodes' nodes and its Program view from
+the copy the runtime unit carries.
 
 The project is loaded from a copy, since the runtime writes a project's
 `pyproject.toml` and `.venv`. Beside the streams it brings, the copy is given
@@ -21,7 +23,10 @@ from typing import Any
 import pytest
 
 from conftest import TatolabdUnderTest
-from stream_runs_on_tatolabd import TatolabRunOfAProject
+from stream_runs_on_tatolabd import (
+    TatolabRunOfAProject,
+    write_the_project_file_unless_there,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -30,7 +35,9 @@ CORE_NODES_PROJECT_DIRECTORY = (
 )
 
 #: What a copy of the project leaves behind: what a run of it writes, and its own tests.
-NOT_COPIED_WITH_THE_PROJECT = shutil.ignore_patterns(".venv", ".tatolab", "__pycache__", "tests")
+NOT_COPIED_WITH_THE_PROJECT = shutil.ignore_patterns(
+    ".venv", ".tatolab", "__pycache__", "tests"
+)
 
 EVERY_SHADER_NODE_STREAM_NAME = "every_shader_node"
 
@@ -53,7 +60,9 @@ LINKS_OUT_OF_ONE_CANVAS = 16
 def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
     """Each shader node type of the project with the inputs of its signature, in order."""
     signature_inputs_by_node_type: "dict[str, list[dict[str, Any]]]" = {}
-    for module_path in sorted((CORE_NODES_PROJECT_DIRECTORY / "nodes").glob("*.py")):
+    for module_path in sorted(
+        (CORE_NODES_PROJECT_DIRECTORY / "core_nodes").glob("*.py")
+    ):
         if "@node.shader" not in module_path.read_text(encoding="utf-8"):
             continue
         spec = importlib.util.spec_from_file_location(
@@ -65,9 +74,9 @@ def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
         for name, member in vars(module).items():
             signature = getattr(member, "__tatolab_node_shader_signature__", None)
             if signature is not None and member.__module__ == module.__name__:
-                signature_inputs_by_node_type[f"nodes.{module_path.stem}:{name}"] = signature[
-                    "inputs"
-                ]
+                signature_inputs_by_node_type[
+                    f"core_nodes.{module_path.stem}:{name}"
+                ] = signature["inputs"]
     return signature_inputs_by_node_type
 
 
@@ -76,7 +85,9 @@ def a_stream_of_canvases_into_one_of_each_shader_node() -> "dict[str, Any]":
     links: "list[dict[str, Any]]" = []
     canvas_id = ""
     links_out_of_the_canvas = LINKS_OUT_OF_ONE_CANVAS
-    for node_type, signature_inputs in sorted(shader_nodes_the_project_declares().items()):
+    for node_type, signature_inputs in sorted(
+        shader_nodes_the_project_declares().items()
+    ):
         image_ports = [
             signature_input["port"]
             for signature_input in signature_inputs
@@ -89,7 +100,7 @@ def a_stream_of_canvases_into_one_of_each_shader_node() -> "dict[str, Any]":
                 {
                     "id": canvas_id,
                     "name": f"canvas_before_{node_type.rsplit(':', 1)[1].lower()}",
-                    "type": "nodes.solid_color:SolidColor",
+                    "type": "core_nodes.solid_color:SolidColor",
                     "config": {"width": 64, "height": 36},
                 }
             )
@@ -122,17 +133,27 @@ def a_copy_of_the_core_nodes_project(directory: Path) -> Path:
     """The project copied under `directory`, with the stream of every shader node added."""
     project_directory = directory / "tatolab-core-nodes"
     shutil.copytree(
-        CORE_NODES_PROJECT_DIRECTORY, project_directory, ignore=NOT_COPIED_WITH_THE_PROJECT
+        CORE_NODES_PROJECT_DIRECTORY,
+        project_directory,
+        ignore=NOT_COPIED_WITH_THE_PROJECT,
     )
-    (project_directory / "streams" / f"{EVERY_SHADER_NODE_STREAM_NAME}.graph.json").write_text(
-        json.dumps(a_stream_of_canvases_into_one_of_each_shader_node(), indent=2, sort_keys=True)
+    (
+        project_directory / "streams" / f"{EVERY_SHADER_NODE_STREAM_NAME}.graph.json"
+    ).write_text(
+        json.dumps(
+            a_stream_of_canvases_into_one_of_each_shader_node(),
+            indent=2,
+            sort_keys=True,
+        )
         + "\n",
         encoding="utf-8",
     )
     return project_directory
 
 
-def names_of_the_nodes_feeding_the_program_view(stream_document: "dict[str, Any]") -> "set[str]":
+def names_of_the_nodes_feeding_the_program_view(
+    stream_document: "dict[str, Any]",
+) -> "set[str]":
     node_by_id = {node["id"]: node for node in stream_document["nodes"]}
     return {
         node_by_id[link["source"]["node"]]["name"]
@@ -152,7 +173,9 @@ def evaluations_of_each_node(graph: "dict[str, Any]") -> "dict[str, int]":
         if isinstance(fused_group, dict):
             evaluations[node["name"]] = fused_group.get("submissions", 0)
         else:
-            written = components.get("metrics", {}).get("written_bags_by_output_port", {})
+            written = components.get("metrics", {}).get(
+                "written_bags_by_output_port", {}
+            )
             evaluations[node["name"]] = max(written.values(), default=0)
     return evaluations
 
@@ -194,11 +217,14 @@ def test_each_stream_of_the_core_nodes_project_and_each_shader_node_keeps_runnin
     tatolabd = start_tatolabd_running_stream(
         TatolabRunOfAProject(working_directory=project_directory)
     )
-    ended_load = tatolabd.stream_runs[-1].action_once_ended(timeout=PROJECT_LOAD_TIMEOUT_SECONDS)
+    ended_load = tatolabd.stream_runs[-1].action_once_ended(
+        timeout=PROJECT_LOAD_TIMEOUT_SECONDS
+    )
     assert ended_load["state"] == "done", ended_load
 
     listed_by_display_name = {
-        listed["display_name"]: listed for listed in tatolabd.local_api_client().list_streams()
+        listed["display_name"]: listed
+        for listed in tatolabd.local_api_client().list_streams()
     }
     assert listed_by_display_name.keys() == {
         stream_document["display_name"] for stream_document in stream_documents.values()
@@ -223,6 +249,127 @@ def test_each_stream_of_the_core_nodes_project_and_each_shader_node_keeps_runnin
             node_names_awaited,
             at_least=EVALUATIONS_SHOWING_A_STREAM_KEEPS_RUNNING,
         )
+
+    stderr_text = tatolabd.stderr_text
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert "shader node wrote no frame" not in stderr_text, stderr_text
+
+
+#: The folder under `imports/` the runtime links the Core Nodes project it carries at.
+CORE_NODES_IMPORT_FOLDER = "imports/core-nodes"
+
+PYPROJECT_OF_A_PROJECT_WITH_NO_NODE_OF_ITS_OWN = """\
+[project]
+name = "a-show"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream"]
+"""
+
+
+def a_stream_of_core_nodes_placed_from_the_runtimes_copy() -> "dict[str, Any]":
+    """A canvas tinted by an amount an `Lfo` moves, into the Program view: a process node, a
+    shader node, a function node and a view, each named as an import's."""
+    canvas, tint, lfo, program = (str(uuid.uuid4()) for _ in range(4))
+    return {
+        "asset": str(uuid.uuid4()),
+        "display_name": "Main",
+        "nodes": [
+            {
+                "id": canvas,
+                "name": "canvas",
+                "type": f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.solid_color:SolidColor",
+                "config": {"width": 64, "height": 36},
+            },
+            {
+                "id": lfo,
+                "name": "lfo",
+                "type": f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.animation:Lfo",
+                "config": {},
+            },
+            {
+                "id": tint,
+                "name": "tint",
+                "type": f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.color:Tint",
+                "config": {},
+            },
+            {"id": program, "name": "program", "type": PROGRAM_VIEW_TYPE, "config": {}},
+        ],
+        "links": [
+            {
+                "source": {"node": canvas, "port": "image"},
+                "target": {"node": tint, "port": "image"},
+            },
+            {
+                "source": {"node": lfo, "port": "result"},
+                "target": {"node": tint, "port": "amount"},
+            },
+            {
+                "source": {"node": tint, "port": "result"},
+                "target": {"node": program, "port": "video"},
+            },
+        ],
+    }
+
+
+def test_a_project_with_no_node_of_its_own_places_core_nodes_from_the_runtimes_copy(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+    tmp_path: Path,
+):
+    project_directory = tmp_path / "a-show"
+    (project_directory / "streams").mkdir(parents=True)
+    project_file_as_written = write_the_project_file_unless_there(project_directory)
+    (project_directory / "pyproject.toml").write_text(
+        PYPROJECT_OF_A_PROJECT_WITH_NO_NODE_OF_ITS_OWN, encoding="utf-8"
+    )
+    (project_directory / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (project_directory / "streams" / "main.graph.json").write_text(
+        json.dumps(a_stream_of_core_nodes_placed_from_the_runtimes_copy(), indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    tatolabd = start_tatolabd_running_stream(
+        TatolabRunOfAProject(working_directory=project_directory)
+    )
+    ended_load = tatolabd.stream_runs[-1].action_once_ended(
+        timeout=PROJECT_LOAD_TIMEOUT_SECONDS
+    )
+    assert ended_load["state"] == "done", ended_load
+
+    core_nodes_link = project_directory / CORE_NODES_IMPORT_FOLDER
+    assert core_nodes_link.is_symlink(), (
+        "the runtime links its copy, and copies nothing in"
+    )
+    assert (core_nodes_link / "tatolab-project.json").is_file()
+    project_file_now = json.loads(
+        (project_directory / "tatolab-project.json").read_text(encoding="utf-8")
+    )
+    assert (
+        project_file_now["dependencies"]
+        == project_file_as_written["dependencies"]
+        == []
+    )
+
+    local_api = tatolabd.local_api_client()
+    [listed] = local_api.list_streams()
+    assert listed["failed_because"] is None, listed
+    node_types = local_api.call_tool(
+        "list_project_node_types", {"project_directory": str(project_directory)}
+    )
+    assert f"{CORE_NODES_IMPORT_FOLDER}/core_nodes.color:Tint" in json.dumps(node_types)
+    views = local_api.call_tool(
+        "list_project_views", {"project_directory": str(project_directory)}
+    )
+    assert PROGRAM_VIEW_TYPE in json.dumps(views)
+
+    await_evaluations_of(
+        tatolabd,
+        listed["stream"],
+        {"tint"},
+        at_least=EVALUATIONS_SHOWING_A_STREAM_KEEPS_RUNNING,
+    )
 
     stderr_text = tatolabd.stderr_text
     tatolabd.interrupt()

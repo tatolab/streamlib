@@ -72,14 +72,6 @@
     "marked_lines": "x-release-version"
   },
   {
-    "path": "packages/tatolab-ops/pyproject.toml",
-    "table": "project"
-  },
-  {
-    "path": "packages/tatolab-ops/pyproject.toml",
-    "marked_lines": "x-release-version"
-  },
-  {
     "path": "packages/streamlib-h265/Cargo.toml",
     "table": "package"
   },

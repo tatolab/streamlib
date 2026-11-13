@@ -3046,6 +3046,13 @@ impl Runner {
         }
     }
 
+    /// Where the Core Nodes project the runtime unit carries is, when this runtime was handed a
+    /// lend and its unit carries one.
+    pub fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf> {
+        self.packages_this_runtime_unit_carries()
+            .core_nodes_project_directory
+    }
+
     /// What the runtime unit carries beside this runtime's lend, nothing when it was handed no
     /// lend.
     fn packages_this_runtime_unit_carries(&self) -> PackagesTheRuntimeUnitCarries {
@@ -3353,12 +3360,7 @@ impl Runner {
         let streams = self
             .loaded_streams_of_the_project(&project_directory)
             .iter()
-            .map(|held| StreamOfAStreamAction {
-                stream_id: held.stream_id().to_string(),
-                display_name: held.display_name(),
-                stream_location: Some(held.stream_location().clone()),
-                state: None,
-            })
+            .map(|held| stream_of_a_stream_action_not_yet_taken_in(held))
             .collect();
         let action = StreamAction {
             action_id: action_id.clone(),
@@ -3380,8 +3382,9 @@ impl Runner {
     }
 
     /// Run the playback start the stream action `action_id` queued of the project in
-    /// `project_directory`: record each held stopped stream running and start it, and finish
-    /// the action. A stream whose start is refused is held stopped and recorded failed with the
+    /// `project_directory`: name the held stopped streams as the ones it takes in — an open
+    /// queued ahead of it loads them only after this action is queued — record each running and
+    /// start it, and finish the action. A stream whose start is refused is held stopped and recorded failed with the
     /// reason; a project holding no stream stopped fails the action.
     fn start_the_playback_of_the_held_project(&self, action_id: &str, project_directory: &Path) {
         let progress = self.progress_of_the_stream_action(action_id);
@@ -3401,6 +3404,12 @@ impl Runner {
             )));
             return;
         }
+        progress.works_on(
+            held_streams
+                .iter()
+                .map(|held| stream_of_a_stream_action_not_yet_taken_in(held))
+                .collect(),
+        );
         for held in held_streams {
             if progress.is_cancelled() {
                 break;
@@ -4556,6 +4565,18 @@ fn unload_every_stream_an_action_took_back(
 /// end in its own log — the action that unloaded it goes on regardless.
 /// Hold `stream`, whose start was refused, stopped with its graph kept to read and edit;
 /// unloaded instead while the machine shuts down, or when its graph is not put back.
+/// `stream` as an action names it before taking it in.
+fn stream_of_a_stream_action_not_yet_taken_in(
+    stream: &LoadedStreamInThisRuntime,
+) -> StreamOfAStreamAction {
+    StreamOfAStreamAction {
+        stream_id: stream.stream_id().to_string(),
+        display_name: stream.display_name(),
+        stream_location: Some(stream.stream_location().clone()),
+        state: None,
+    }
+}
+
 fn hold_a_stream_whose_start_was_refused_stopped(stream: &Arc<LoadedStreamInThisRuntime>) {
     if is_the_machines_shutdown_requested() {
         unload_a_stream_an_action_took_back(stream, "its start was refused");
@@ -5491,6 +5512,40 @@ mod tests {
         assert!(Arc::ptr_eq(&held, &still_held), "the stream stays held");
         assert!(still_held.is_held_stopped() && still_held.runtime_context.lock().is_none());
         assert!(the_record_of(state_directory.path(), &camera).is_failed());
+    }
+
+    #[test]
+    #[serial]
+    fn a_play_queued_behind_the_open_that_loads_the_stream_names_the_stream_and_how_it_ended() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(
+            the_graph_of_a_stream_naming_a_type_not_described("camera"),
+        );
+        let camera = project.stream_id_of("camera");
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        let open = runner
+            .open_project(project_open_or_reload_request_of(project.path()))
+            .unwrap();
+        let play = runner.start_playback(project.path()).unwrap();
+        assert!(runner.loaded_stream_of_the_id(&camera).is_err());
+        std::fs::write(&gate, "").unwrap();
+
+        let opened = the_stream_action_once_finished(&runner, &open.action_id);
+        let played = the_stream_action_once_finished(&runner, &play.action_id);
+
+        assert_eq!(opened.state, StreamActionState::Done, "{opened:?}");
+        assert_eq!(played.state, StreamActionState::Done, "{played:?}");
+        assert_eq!(
+            played
+                .streams
+                .iter()
+                .map(|stream| (stream.stream_id.as_str(), stream.state))
+                .collect::<Vec<_>>(),
+            [(camera.as_str(), Some(StreamListingState::Failed))],
+            "{played:?}"
+        );
     }
 
     /// The graph of a stream named `stream_name`: a source linked into a sink, and with

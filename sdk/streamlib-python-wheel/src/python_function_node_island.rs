@@ -384,7 +384,7 @@ enum WhereAFunctionNodeInputTakesItsValue {
         output_index: usize,
     },
     /// An output of a node evaluated later in the island, as it was at the
-    /// last evaluation: how a `Feedback` node reads the loop it closes.
+    /// last evaluation: how a `PreviousValue` node reads the loop it closes.
     ALaterNodesOutputAtTheLastEvaluation {
         node_index: usize,
         output_index: usize,

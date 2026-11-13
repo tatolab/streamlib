@@ -24,6 +24,7 @@ use crate::sign_the_carried_packages_with_a_developer_id::{
     sign_the_mach_o_inside_the_python_archive, sign_the_mach_o_inside_the_wheel,
     write_the_uv_python_download_metadata,
 };
+use crate::stage_core_projects::CORE_NODES_PROJECT_RELATIVE_TO_WORKSPACE;
 use crate::stage_first_party_modules::FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE;
 use crate::stage_runtime_unit_uv::{
     pinned_uv_release_archive_for_this_host, sha256_hex_of_the_file,
@@ -438,10 +439,14 @@ pub fn pin_the_carried_packages(workspace_root: &Path, uv: &Path) -> Result<()> 
     Ok(())
 }
 
-/// The requirements the core modules declare on packages that are not Tatolab's own, deduplicated.
+/// The requirements the core modules and the Core Nodes project declare on packages that are
+/// not Tatolab's own, deduplicated.
 fn the_third_party_requirements_of_the_core_modules(workspace_root: &Path) -> Result<Vec<String>> {
     let mut third_party_requirements = BTreeSet::new();
-    for package in FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE {
+    for package in FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE
+        .into_iter()
+        .chain([CORE_NODES_PROJECT_RELATIVE_TO_WORKSPACE])
+    {
         let pyproject_path = workspace_root.join(package).join("pyproject.toml");
         let pyproject: toml::Table = std::fs::read_to_string(&pyproject_path)
             .with_context(|| format!("reading {}", pyproject_path.display()))?

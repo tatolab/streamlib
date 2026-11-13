@@ -277,7 +277,7 @@ impl ControlOperation for Connect {
     const METHOD_NAME: &'static str = "connect";
     const ONE_LINE_DOC: &'static str =
         "Link an output port to an input port in one loaded stream, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`.";
+    const AGENT_USAGE_NOTE: &'static str = "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes` and both of its links under `connected_links`.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;

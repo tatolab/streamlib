@@ -161,3 +161,37 @@ fn a_directory_holding_no_project_is_refused() {
         Err(ProjectRepositoryRefusal::NotAProject { .. })
     ));
 }
+
+#[test]
+fn the_core_projects_views_are_listed_after_the_projects_own_through_its_link() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_directory = workspace.path().join("acme-dj");
+    a_project_named(&project_directory, "acme-dj");
+    a_view_folder_holding(&project_directory, "deck", DECK_MANIFEST);
+    let core_project_directory = workspace.path().join("unit/tatolab-core-nodes");
+    let core_project = a_project_named(&core_project_directory, "Core Nodes");
+    a_view_folder_holding(&core_project_directory, "meter", METER_MANIFEST);
+    crate::core_project_import::link_the_core_project_into(
+        &project_directory,
+        &core_project_directory,
+    )
+    .unwrap();
+
+    let views = every_view_a_project_and_its_imports_bring(&project_directory).unwrap();
+
+    assert_eq!(
+        views
+            .iter()
+            .map(|view| view.view_type.as_str())
+            .collect::<Vec<_>>(),
+        ["acme-dj:deck", "Core Nodes:meter"]
+    );
+    assert_eq!(
+        views[1].brought_by,
+        ProjectBringingAView {
+            project: core_project.project,
+            project_name: "Core Nodes".into(),
+            import_folder: Some(crate::core_project_import::CORE_PROJECT_IMPORT_FOLDER.into()),
+        }
+    );
+}

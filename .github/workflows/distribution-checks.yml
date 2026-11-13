@@ -5,8 +5,8 @@ name: Distribution Checks
 # only builds and publishes. Each distribution is built from this run's ref and
 # nothing is uploaded:
 #
-#   Core module distributions   `tatolab-stream`, `tatolab-compositor`,
-#                               `tatolab-ops` and `tatolab-testpattern` ship
+#   Core module distributions   `tatolab-stream`, `tatolab-compositor`
+#                               and `tatolab-testpattern` ship
 #                               `tatolab` as a namespace, install, import and
 #                               carry their licence; a scaffold locks this
 #                               run's `tatolab-stream`
@@ -53,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           uv build --out-dir sdk/tatolab-stream/dist sdk/tatolab-stream
-          for core_module_directory in packages/tatolab-compositor packages/tatolab-ops packages/tatolab-testpattern; do
+          for core_module_directory in packages/tatolab-compositor packages/tatolab-testpattern; do
             uv build --wheel --out-dir "$core_module_directory/dist" "$core_module_directory"
           done
 
@@ -122,31 +122,6 @@ jobs:
           assert node_entry_points, 'tatolab-compositor registers no node'
           for node_entry_point in node_entry_points:
               print('tatolab-compositor exports', node_entry_point.name, node_entry_point.load())
-          "
-
-      - name: tatolab-ops installs beside this run's tatolab-stream, loads every node, and carries its licence
-        run: |
-          set -euo pipefail
-          if unzip -Z1 packages/tatolab-ops/dist/*.whl | grep -qx 'tatolab/__init__.py'; then
-            echo "::error::the tatolab-ops wheel lists tatolab/__init__.py — tatolab must stay a PEP 420 namespace package"
-            exit 1
-          fi
-          python3 -m venv /tmp/ops-wheel-check
-          /tmp/ops-wheel-check/bin/pip install 'numba>=0.61' 'numpy>=1.26' 'pillow>=10.0'
-          /tmp/ops-wheel-check/bin/pip install \
-            --no-index --find-links sdk/tatolab-stream/dist \
-            packages/tatolab-ops/dist/*.whl
-          /tmp/ops-wheel-check/bin/python -c "
-          from importlib.metadata import distribution, entry_points
-          license_text = distribution('tatolab-ops').read_text('licenses/LICENSE') or ''
-          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
-          node_entry_points = [
-              node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
-              if node_entry_point.dist.name == 'tatolab-ops'
-          ]
-          assert node_entry_points, 'tatolab-ops registers no node'
-          for node_entry_point in node_entry_points:
-              print('tatolab-ops exports', node_entry_point.name, node_entry_point.load())
           "
 
       # The kernel source and the two baked overlays are read from the package

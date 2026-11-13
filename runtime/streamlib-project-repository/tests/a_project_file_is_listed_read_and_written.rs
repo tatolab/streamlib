@@ -530,3 +530,92 @@ fn a_file_another_verb_changes_or_history_does_not_record_is_never_written() {
     );
     assert_eq!(project.on_disk("media/intro.mp4").unwrap(), b"take");
 }
+
+#[test]
+fn a_read_passes_through_the_link_to_the_core_project_and_no_link_below_it() {
+    let mut project = AProjectWithNodeCode::new();
+    let core_project_directory = project.root.path().join("unit/tatolab-core-nodes");
+    let carried_by_the_runtime = core_project_directory.clone();
+    project
+        .repository
+        .read_the_core_project_the_runtime_carries_at(std::sync::Arc::new(move || {
+            Some(carried_by_the_runtime.clone())
+        }));
+    std::fs::create_dir_all(core_project_directory.join("views/program")).unwrap();
+    let outside = project.root.path().join("outside.txt");
+    std::fs::write(&outside, b"not the project's").unwrap();
+    std::fs::write(
+        core_project_directory.join("tatolab-project.json"),
+        streamlib_project_repository::TatolabProjectFile::of_a_new_project("Core Nodes")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        core_project_directory.join("views/program/index.html"),
+        b"<p>program</p>",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, core_project_directory.join("views/leak.txt")).unwrap();
+    streamlib_project_repository::link_the_core_project_into(
+        &project.project_directory,
+        &core_project_directory,
+    )
+    .unwrap();
+
+    assert_eq!(
+        project
+            .repository
+            .read_project_file("imports/core-nodes/views/program/index.html")
+            .unwrap(),
+        b"<p>program</p>"
+    );
+    assert!(matches!(
+        project
+            .repository
+            .read_project_file("imports/core-nodes/views/leak.txt"),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
+}
+
+#[test]
+fn a_read_passes_through_no_link_that_points_anywhere_but_the_runtimes_core_project() {
+    let mut project = AProjectWithNodeCode::new();
+    let another_project = project.root.path().join("another-project");
+    std::fs::create_dir_all(&another_project).unwrap();
+    std::fs::write(
+        another_project.join("tatolab-project.json"),
+        streamlib_project_repository::TatolabProjectFile::of_a_new_project("another")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(another_project.join("secret.txt"), b"not the project's").unwrap();
+    let link = streamlib_project_repository::the_core_project_link_in(&project.project_directory);
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&another_project, &link).unwrap();
+    let read_the_secret = |project: &AProjectWithNodeCode| {
+        project
+            .repository
+            .read_project_file("imports/core-nodes/secret.txt")
+    };
+
+    assert!(
+        matches!(
+            read_the_secret(&project),
+            Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+        ),
+        "a project handed no core project directory reads through no link"
+    );
+
+    let carried_by_the_runtime = project.root.path().join("unit/tatolab-core-nodes");
+    project
+        .repository
+        .read_the_core_project_the_runtime_carries_at(std::sync::Arc::new(move || {
+            Some(carried_by_the_runtime.clone())
+        }));
+    assert!(matches!(
+        read_the_secret(&project),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
+}

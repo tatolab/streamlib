@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
 use parking_lot::Mutex;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeTypeOfOneProjectSource;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -13,7 +14,9 @@ use crate::project_file::PROJECT_FILE_NAME;
 use crate::project_files_changed_outside_the_runtime_watch::{
     ProjectFilesChangedOutsideTheRuntimeWatch, ProjectFilesToldChanged,
 };
-use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
+use crate::project_repository::{
+    CoreProjectDirectoryTheRuntimeCarries, ProjectPythonRequirementsLock, ProjectRepository,
+};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::{AppliedProjectTransaction, ProjectActionApplyOutcome};
 
@@ -44,9 +47,16 @@ pub enum ProjectChangeOnTheFeed {
     /// Files in the project's folder changed that the OS did not name, so a client lists the
     /// project again.
     FilesChangedUnnamed,
-    /// The runtime made the project's venv current with what it holds, so the node types its
-    /// installed distributions declare are listed anew; no history records it.
+    /// The runtime made the project's venv current with what it holds; no history records it.
     VenvMadeCurrent,
+    /// Node types the project offers now that its last listing did not.
+    NodeTypesAdded(Vec<NodeTypeOfOneProjectSource>),
+    /// Node types the project's last listing offered that it offers no more, as that listing
+    /// read them.
+    NodeTypesRemoved(Vec<NodeTypeOfOneProjectSource>),
+    /// Node types the project still offers, each by the same `type`, whose declaration or source
+    /// changed since its last listing, as it reads now.
+    NodeTypesUpdated(Vec<NodeTypeOfOneProjectSource>),
 }
 
 /// A hold on the watch of one project's folder, watched while any hold lives and the project is
@@ -79,6 +89,7 @@ pub struct ProjectRepositoriesOpenInThisRuntime {
     project_files_watch_wanted_by_project: Mutex<BTreeMap<Uuid, Weak<ProjectFilesWatchWanted>>>,
     project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
+    core_project_directory_the_runtime_carries: Option<CoreProjectDirectoryTheRuntimeCarries>,
 }
 
 impl Default for ProjectRepositoriesOpenInThisRuntime {
@@ -88,6 +99,7 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
             project_files_watch_wanted_by_project: Mutex::default(),
             project_change_feed: broadcast::channel(PROJECT_CHANGE_FEED_CAPACITY).0,
             python_requirements_lock: None,
+            core_project_directory_the_runtime_carries: None,
         }
     }
 }
@@ -102,6 +114,18 @@ impl ProjectRepositoriesOpenInThisRuntime {
             python_requirements_lock: Some(python_requirements_lock),
             ..Self::default()
         }
+    }
+
+    /// These projects, each one opened from now on reading through its link to the core
+    /// project while it points at the directory `core_project_directory_the_runtime_carries`
+    /// answers.
+    pub fn reading_the_core_project_the_runtime_carries_at(
+        mut self,
+        core_project_directory_the_runtime_carries: CoreProjectDirectoryTheRuntimeCarries,
+    ) -> Self {
+        self.core_project_directory_the_runtime_carries =
+            Some(core_project_directory_the_runtime_carries);
+        self
     }
 
     /// The open project whose `tatolab-project.json` names `project`, if this runtime has opened it.
@@ -157,6 +181,27 @@ impl ProjectRepositoriesOpenInThisRuntime {
             project,
             change: ProjectChangeOnTheFeed::VenvMadeCurrent,
         });
+    }
+
+    /// Announce the node types `project` offers that were `added`, `removed` or `updated` since
+    /// its last listing, one announcement for each of the three that names any.
+    pub fn announce_the_node_types_changed(
+        &self,
+        project: Uuid,
+        added: Vec<NodeTypeOfOneProjectSource>,
+        removed: Vec<NodeTypeOfOneProjectSource>,
+        updated: Vec<NodeTypeOfOneProjectSource>,
+    ) {
+        for change in [
+            (!added.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesAdded(added)),
+            (!removed.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesRemoved(removed)),
+            (!updated.is_empty()).then(|| ProjectChangeOnTheFeed::NodeTypesUpdated(updated)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement { project, change });
+        }
     }
 
     fn announce_on_the_change_feed(&self, announcement: ProjectChangeFeedAnnouncement) {
@@ -332,6 +377,13 @@ impl ProjectRepositoriesOpenInThisRuntime {
         let mut opened = ProjectRepository::open(&resolved_project_directory)?;
         if let Some(python_requirements_lock) = &self.python_requirements_lock {
             opened.lock_the_python_requirements_with(Arc::clone(python_requirements_lock));
+        }
+        if let Some(core_project_directory_the_runtime_carries) =
+            &self.core_project_directory_the_runtime_carries
+        {
+            opened.read_the_core_project_the_runtime_carries_at(Arc::clone(
+                core_project_directory_the_runtime_carries,
+            ));
         }
         let project = opened.project_file().project;
         let opened = Arc::new(Mutex::new(opened));

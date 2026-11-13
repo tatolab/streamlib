@@ -256,7 +256,7 @@ Add a node to a loaded stream's graph by its type's import path, as one transact
 
 Link an output port to an input port in one loaded stream, as one transaction.
 
-Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`.
+Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes` and both of its links under `connected_links`.
 
 - Since contract version 1, stable.
 - Params: `OneLinkGraphEditRequest`
@@ -871,7 +871,7 @@ Hand a value to the Input `input` of the stream `stream`: the stream's top-level
 
 ### `project_changed`
 
-A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, or files in its folder changed.
+A change on the feed of a project the connection subscribed to: a transaction applied, an action refused, media facts read, its venv made current, node types it offers added, removed or updated, or files in its folder changed.
 
 - Sent after `subscribe_project_changes`.
 - Since contract version 1, experimental.

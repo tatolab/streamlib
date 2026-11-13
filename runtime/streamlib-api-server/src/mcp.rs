@@ -101,6 +101,8 @@ pub(crate) struct LocalApiMcpServerHandler {
         Arc<crate::mcp_project_change_feed::ProjectActionsRefusedSinceTheRuntimeStarted>,
     pub(crate) asset_media_facts_reads_in_this_runtime:
         Arc<crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime>,
+    project_node_types_last_listed:
+        Arc<crate::project_node_types_followed_for_changes::ProjectNodeTypesLastListed>,
     agent_tools_listed: Arc<Vec<Tool>>,
     prompt_router: Arc<PromptRouter<Self>>,
 }
@@ -114,13 +116,18 @@ impl LocalApiMcpServerHandler {
         local_api_stopping_token: CancellationToken,
     ) -> Self {
         let runtime_locking_python_requirements = Arc::clone(&operations_on_the_loaded_streams);
+        let runtime_carrying_the_core_nodes_project = Arc::clone(&operations_on_the_loaded_streams);
         let project_repositories_open_in_this_runtime = Arc::new(
             ProjectRepositoriesOpenInThisRuntime::locking_python_requirements_with(Arc::new(
                 move |project_directory| {
                     runtime_locking_python_requirements
                         .lock_the_python_requirements_of_the_project_in(project_directory)
                 },
-            )),
+            ))
+            .reading_the_core_project_the_runtime_carries_at(Arc::new(move || {
+                runtime_carrying_the_core_nodes_project
+                    .the_core_nodes_project_directory_this_runtime_carries()
+            })),
         );
         operations_on_the_loaded_streams.record_first_party_package_moves_in(Arc::new(
             crate::first_party_package_moves_recorded_in_the_open_projects::FirstPartyPackageMovesRecordedInTheOpenProjects {
@@ -143,6 +150,7 @@ impl LocalApiMcpServerHandler {
             project_repositories_open_in_this_runtime,
             project_actions_refused_since_the_runtime_started: Arc::default(),
             asset_media_facts_reads_in_this_runtime,
+            project_node_types_last_listed: Arc::default(),
             agent_tools_listed: Arc::new(crate::mcp_agent_tools::the_agent_tools_listed_over_mcp()),
             prompt_router: Arc::new(Self::prompt_router()),
         }
@@ -166,6 +174,7 @@ impl LocalApiMcpServerHandler {
                 &self.project_actions_refused_since_the_runtime_started,
             ),
             asset_media_facts_reads: Arc::clone(&self.asset_media_facts_reads_in_this_runtime),
+            project_node_types_last_listed: Arc::clone(&self.project_node_types_last_listed),
         }
     }
 

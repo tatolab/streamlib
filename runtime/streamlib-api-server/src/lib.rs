@@ -33,6 +33,7 @@ mod mcp_stream_action_resources;
 mod new_node_file_template;
 #[cfg(test)]
 mod project_asset_tools_tests;
+mod project_node_types_followed_for_changes;
 mod state;
 mod stream_graph_drops_raises_and_link_states;
 mod stream_graph_transaction_executor;
