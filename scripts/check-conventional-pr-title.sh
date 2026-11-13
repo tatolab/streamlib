@@ -2,9 +2,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Exits non-zero unless the title given is a conventional-commit title. The repo
-# squash-merges, so a PR's title becomes the commit release-please reads to
-# compute the version bump; run this on a title before opening the PR.
+# Exits non-zero unless the title given is a conventional-commit title, the form
+# a PR title takes for its readers; run this on a title before opening the PR.
 #
 # Usage: scripts/check-conventional-pr-title.sh "<title>"
 
