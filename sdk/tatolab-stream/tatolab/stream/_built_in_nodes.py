@@ -29,23 +29,25 @@ __all__ = [
 ]
 
 
-class _ArrayToChannelsConfigRequiredKeys(TypedDict):
-    """The keys `ArrayToChannels`'s config cannot leave out."""
-
-    channel_names: list[str]
-    """The names of the channels `channels` carries, one per row of the attribute."""
-
-    sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel."""
-
-
-class ArrayToChannelsConfig(_ArrayToChannelsConfigRequiredKeys, total=False):
+class ArrayToChannelsConfig(TypedDict, total=False):
     """`ArrayToChannels`'s config: the keys `stream_builder.add` takes."""
 
     attribute: str
     """The attribute of each Array frame read as the block's samples.
 
     Default: `"samples"`.
+    """
+
+    channel_names: list[str]
+    """The names of the channels `channels` carries, one per row of the attribute.
+
+    Default: `["value"]`.
+    """
+
+    sample_rate: int
+    """The sample rate `channels` states, in samples per second per channel.
+
+    Default: `48000`.
     """
 
 
@@ -135,15 +137,14 @@ class ChannelsToArray(BuiltInNode[ChannelsToArrayConfig]):
     type: ClassVar[str] = "tatolab.stream:ChannelsToArray"
 
 
-class _ChannelsToRecordsConfigRequiredKeys(TypedDict):
-    """The keys `ChannelsToRecords`'s config cannot leave out."""
+class ChannelsToRecordsConfig(TypedDict, total=False):
+    """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
 
     channel_names: list[str]
-    """The key each channel's value is written under, in the block's channel order."""
+    """The key each channel's value is written under, in the block's channel order.
 
-
-class ChannelsToRecordsConfig(_ChannelsToRecordsConfigRequiredKeys, total=False):
-    """`ChannelsToRecords`'s config: the keys `stream_builder.add` takes."""
+    Default: `["value"]`.
+    """
 
 
 class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
@@ -196,18 +197,20 @@ class ImageToArray(BuiltInNode[ImageToArrayConfig]):
     type: ClassVar[str] = "tatolab.stream:ImageToArray"
 
 
-class _RecordsToChannelsConfigRequiredKeys(TypedDict):
-    """The keys `RecordsToChannels`'s config cannot leave out."""
+class RecordsToChannelsConfig(TypedDict, total=False):
+    """`RecordsToChannels`'s config: the keys `stream_builder.add` takes."""
 
     channel_names: list[str]
-    """The record keys read, one channel each, in channel order."""
+    """The record keys read, one channel each, in channel order.
+
+    Default: `["value"]`.
+    """
 
     sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel."""
+    """The sample rate `channels` states, in samples per second per channel.
 
-
-class RecordsToChannelsConfig(_RecordsToChannelsConfigRequiredKeys, total=False):
-    """`RecordsToChannels`'s config: the keys `stream_builder.add` takes."""
+    Default: `48000`.
+    """
 
 
 class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):

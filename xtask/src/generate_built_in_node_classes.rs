@@ -328,43 +328,26 @@ fn render_config_typed_dict(
         }
     };
 
-    let mut required_fields = String::new();
+    if let Some(key_with_no_default) = required_keys.first() {
+        bail!(
+            "{refused_item_label}'s config key `{key_with_no_default}` has no default; every key a \
+             built-in's config takes has one, so a node placed with no config runs"
+        );
+    }
     let mut optional_fields = String::new();
     for (key, property_schema) in properties {
         let config_key_refused_item_label = format!("{refused_item_label}'s config key `{key}`");
-        let rendered_field = render_config_field(
+        optional_fields.push_str(&render_config_field(
             key,
             property_schema,
             definitions,
             &config_key_refused_item_label,
-        )?;
-        if required_keys.contains(&key.as_str()) {
-            required_fields.push_str(&rendered_field);
-        } else {
-            optional_fields.push_str(&rendered_field);
-        }
+        )?);
     }
 
     let config_doc = format!("`{class_name}`'s config: the keys `stream_builder.add` takes.");
     let mut text = String::new();
-    if required_fields.is_empty() {
-        write!(text, "\n\nclass {config_name}(TypedDict, total=False):\n")?;
-    } else {
-        // The required keys ride a total base, the optional ones its `total=False` subclass.
-        let required_keys_name = format!("_{config_name}RequiredKeys");
-        write!(text, "\n\nclass {required_keys_name}(TypedDict):\n")?;
-        text.push_str(&render_docstring(
-            &[format!(
-                "The keys `{class_name}`'s config cannot leave out."
-            )],
-            4,
-        ));
-        text.push_str(&required_fields);
-        write!(
-            text,
-            "\n\nclass {config_name}({required_keys_name}, total=False):\n"
-        )?;
-    }
+    write!(text, "\n\nclass {config_name}(TypedDict, total=False):\n")?;
     text.push_str(&render_docstring(&[config_doc], 4));
     text.push_str(&optional_fields);
     Ok(text)
@@ -413,7 +396,7 @@ fn render_config_field(
         None | Some(Value::Null) => {}
         Some(default) => paragraphs.push(format!(
             "Default: `{}`.",
-            python_scalar_literal(default, refused_item_label)?
+            python_default_literal(default, refused_item_label)?
         )),
     }
 
@@ -640,13 +623,27 @@ fn python_string_literal(value: &str, refused_item_label: &str) -> Result<String
     Ok(format!("\"{value}\""))
 }
 
+/// `value` as Python: a scalar, or a list of scalars.
+fn python_default_literal(value: &Value, refused_item_label: &str) -> Result<String> {
+    let Value::Array(items) = value else {
+        return python_scalar_literal(value, refused_item_label);
+    };
+    let item_literals = items
+        .iter()
+        .map(|item| python_scalar_literal(item, refused_item_label))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(format!("[{}]", item_literals.join(", ")))
+}
+
 fn python_scalar_literal(value: &Value, refused_item_label: &str) -> Result<String> {
     match value {
         Value::Bool(true) => Ok("True".to_owned()),
         Value::Bool(false) => Ok("False".to_owned()),
         Value::Number(number) => Ok(number.to_string()),
         Value::String(string) => python_string_literal(string, refused_item_label),
-        other => bail!("{refused_item_label} has the default {other}, which is not a scalar"),
+        other => bail!(
+            "{refused_item_label} has the default {other}, which is neither a scalar nor a list of scalars"
+        ),
     }
 }
 
@@ -895,9 +892,9 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
     }
 
     #[test]
-    fn a_required_key_renders_in_a_total_base_and_a_test_named_class_opts_out_of_pytest() {
+    fn a_config_key_with_no_default_is_refused_naming_it() {
         let descriptor = json!({
-            "type": "tatolab.stream:TestRecorder",
+            "type": "tatolab.stream:Recorder",
             "description": "Records",
             "config_schema": {
                 "type": "object",
@@ -907,18 +904,30 @@ class FrameSink(BuiltInNode[FrameSinkConfig]):
             "inputs": [],
             "outputs": [{"name": "done", "description": "Done", "required": true, "delivery_profile": null}]
         });
+        let refusal = render_built_in_node_classes_module(&[descriptor_from(descriptor)])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("config key `path` has no default"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_test_named_class_opts_out_of_pytest() {
+        let descriptor = json!({
+            "type": "tatolab.stream:TestRecorder",
+            "description": "Records",
+            "config_schema": {
+                "type": "object",
+                "properties": {"path": {"description": "The file.", "type": "string", "default": "recording.bin"}}
+            },
+            "inputs": [],
+            "outputs": [{"name": "done", "description": "Done", "required": true, "delivery_profile": null}]
+        });
         let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
         assert!(
-            rendered.contains(
-                "class _TestRecorderConfigRequiredKeys(TypedDict):\n    \"\"\"The keys \
-                 `TestRecorder`'s config cannot leave out.\"\"\"\n\n    path: str\n"
-            ),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "class TestRecorderConfig(_TestRecorderConfigRequiredKeys, total=False):"
-            ),
+            rendered.contains("class TestRecorderConfig(TypedDict, total=False):"),
             "{rendered}"
         );
         assert!(rendered.contains("        `done`: Done.\n"), "{rendered}");

@@ -14,6 +14,9 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
+use super::conversion_node_config_defaults::{
+    forty_eight_thousand_samples_per_second, one_channel_named_value,
+};
 use super::conversion_node_config_refusals::refuse_a_channels_output_config;
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
@@ -22,14 +25,25 @@ const CHANNELS_OUTPUT_PORT: &str = "channels";
 
 /// Configuration for [`RecordsToChannels`].
 #[streamlib::sdk::processor_config]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct RecordsToChannelsConfig {
+    #[serde(default = "one_channel_named_value")]
     #[description = "The record keys read, one channel each, in channel order."]
     pub channel_names: Vec<String>,
+    #[serde(default = "forty_eight_thousand_samples_per_second")]
     #[description = "The sample rate `channels` states, in samples per second per channel."]
     pub sample_rate: u32,
+}
+
+impl Default for RecordsToChannelsConfig {
+    fn default() -> Self {
+        Self {
+            channel_names: one_channel_named_value(),
+            sample_rate: forty_eight_thousand_samples_per_second(),
+        }
+    }
 }
 
 #[streamlib::sdk::processor(
