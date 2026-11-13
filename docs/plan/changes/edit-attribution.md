@@ -90,7 +90,7 @@ contract, so it carries an ADR once approved.
   - Version 1 or 2 `Person` → author `{account: null, display_name: name}`.
   - `Agent` → no author, client `{name}`.
   - `Runtime` → no author, adapter `runtime`, client `tatolabd`.
-  - The adapter of an older record is unknown, read as `null`.
+  - Any other older record's adapter is unknown, read as `null`.
 - MODIFIED: ARCHITECTURE.md §Processor model (the project's transactions, around line 2174) and
   §Control plane (around line 4500, "each change is one transaction by its `author` … which
   `undo` and `redo` walk per author") say a transaction records its adapter, its client and
@@ -121,7 +121,15 @@ optional author, an edit with none needs a key too, or no one can undo it.
   strands every unnamed client's edits.
 
 With A, the `undo` and `redo` key is `(author, client name)` matched on the account when there
-is one and the display name otherwise, and an older record maps as above.
+is one and the display name otherwise, and an older record maps as above. Two cases A leaves
+open, to settle with it:
+
+- **No author and no client name.** Two unnamed clients share an empty key and would undo each
+  other's edits. Options: add the adapter to the key; or let such edits be undone only by
+  naming their transaction.
+- **Older `Person` records.** They map with no client, so a person undoing from a named client
+  after the upgrade would not reach them. Options: let a key with no client match any client of
+  the same author; or leave older edits undoable only from a caller that sends no client name.
 
 ## Not in this change
 
