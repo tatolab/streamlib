@@ -432,7 +432,8 @@ fn spawn_dedicated_thread(
                 .with_processor_id(proc_id_clone.clone())
                 .with_processor_display_name(processor_display_name)
                 .with_node_uuid(node_uuid)
-                .with_pause_gate(pause_gate_inner.clone());
+                .with_pause_gate(pause_gate_inner.clone())
+                .with_processor_state(Arc::clone(&state_arc));
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
                 // The trust-axis moat: an untrusted tier yields no

@@ -12,9 +12,9 @@ suite inside the child.
 import json
 import struct
 import time
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from tatolab.stream import Channels, Input, Output, Packets, node
+from tatolab.stream import Channels, Image, Input, Output, Packets, node
 
 
 class PassThroughProbeConfig(TypedDict, total=False):
@@ -284,3 +284,56 @@ class ExposedGainProbe:
 
     def process(self, ctx) -> None:
         pass
+
+
+@node.process(execution="manual")
+class NotReadyInStartProbe:
+    """Reports itself not ready from `start()`, and ready on its next config
+    update, through the context it kept from `start()`."""
+
+    frames_to_downstream = Output(Packets)
+
+    def __init__(self, config: ReconfigurableProbeConfig) -> None:
+        self._context = None
+
+    def start(self, ctx) -> None:
+        self._context = ctx
+        ctx.report_not_ready("`riv_path` is not set", image_width=64, image_height=32)
+
+    def configure(self, config: ReconfigurableProbeConfig) -> None:
+        assert self._context is not None
+        self._context.report_ready()
+
+
+CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT: "list[Any]" = []
+
+
+@node.process(execution="manual")
+class ReportedFromAnotherThreadProbe:
+    """Keeps the context `start()` is handed in
+    `CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT`, so a test reports
+    the node not ready or ready from a thread of its own."""
+
+    video = Output(Image, formats=("rgba8_unorm",))
+
+    def start(self, ctx) -> None:
+        CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.append(ctx)
+
+
+NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY = [True]
+PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE = [0]
+
+
+@node.process(execution="continuous", interval_ms=20)
+class NotReadyUntilToldOtherwiseProbe:
+    """Reports itself not ready from each `process()` until a test clears
+    `NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY`, then ready."""
+
+    video = Output(Image, formats=("rgba8_unorm",))
+
+    def process(self, ctx) -> None:
+        PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0] += 1
+        if NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY[0]:
+            ctx.report_not_ready("the image asset `poster.png` is missing")
+        else:
+            ctx.report_ready()

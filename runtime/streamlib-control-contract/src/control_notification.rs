@@ -135,8 +135,9 @@ pub enum StreamGraphChangeKindOnTheWire {
     NodeStateChanged,
     /// The stream's playback started, stopped, paused or resumed, or failed to.
     PlaybackStateChanged,
-    /// A node's dropped or refused bag counts, the raise its `process()` keeps, or a link's state
-    /// changed; sent at most once every 500 ms per stream, and the client reads the graph again.
+    /// A node's dropped or refused bag counts, the raise its `process()` keeps, why it is not
+    /// ready, or a link's state changed; sent at most once every 500 ms per stream, and the
+    /// client reads the graph again.
     DropsRaisesOrLinkStatesChanged,
     /// The connection missed changes, or the stream was loaded again or unloaded, and the client
     /// reads the graph again.

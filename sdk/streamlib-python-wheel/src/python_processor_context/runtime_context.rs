@@ -67,6 +67,55 @@ impl StreamAndNodeTheHelperHosts {
     }
 }
 
+/// What a node said the last time it reported itself not ready: why, and the
+/// size the runtime's transparent frames on its Image outputs take meanwhile.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NodeNotReadyReport {
+    reason: String,
+    placeholder_image_width: u32,
+    placeholder_image_height: u32,
+}
+
+/// The width of the transparent frames a not-ready node's Image outputs carry
+/// when the node names none.
+const NOT_READY_PLACEHOLDER_IMAGE_WIDTH_WHEN_THE_NODE_NAMES_NONE: u32 = 1920;
+/// Their height when the node names none.
+const NOT_READY_PLACEHOLDER_IMAGE_HEIGHT_WHEN_THE_NODE_NAMES_NONE: u32 = 1080;
+
+/// Whether the node is ready, as it last reported on either view of its
+/// context; `None` while it is.
+type NodeNotReadyReportShared = Arc<parking_lot::Mutex<Option<NodeNotReadyReport>>>;
+
+/// Keep the node's not-ready report, refusing an empty reason or a side of zero pixels.
+fn record_a_not_ready_report(
+    not_ready_report: &NodeNotReadyReportShared,
+    reason: String,
+    image_width: Option<u32>,
+    image_height: Option<u32>,
+) -> PyResult<()> {
+    if reason.is_empty() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "report_not_ready takes the reason the node is not ready, in words a person reads \
+             on the node; it was empty",
+        ));
+    }
+    if image_width == Some(0) || image_height == Some(0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "report_not_ready's placeholder image is {}x{}; each side is at least one pixel",
+            image_width.unwrap_or(NOT_READY_PLACEHOLDER_IMAGE_WIDTH_WHEN_THE_NODE_NAMES_NONE),
+            image_height.unwrap_or(NOT_READY_PLACEHOLDER_IMAGE_HEIGHT_WHEN_THE_NODE_NAMES_NONE),
+        )));
+    }
+    *not_ready_report.lock() = Some(NodeNotReadyReport {
+        reason,
+        placeholder_image_width: image_width
+            .unwrap_or(NOT_READY_PLACEHOLDER_IMAGE_WIDTH_WHEN_THE_NODE_NAMES_NONE),
+        placeholder_image_height: image_height
+            .unwrap_or(NOT_READY_PLACEHOLDER_IMAGE_HEIGHT_WHEN_THE_NODE_NAMES_NONE),
+    });
+    Ok(())
+}
+
 /// Privileged runtime context passed to `setup` / `teardown` / `start` / `stop`.
 ///
 /// Built in the helper process the processor runs in — there is no engine in
@@ -91,6 +140,8 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     /// Set once the parent asks the node to stop, before its `stop` runs, and
     /// read by the native code a module host table was lent to.
     stop_requested_by_parent: Arc<AtomicBool>,
+    /// Shared with the limited-access view derived from this one.
+    not_ready_report: NodeNotReadyReportShared,
 }
 
 /// The context a helper process hands its own node's privileged hooks.
@@ -186,6 +237,7 @@ pub(crate) fn open_runtime_context_full_access_for_helper_process(
         escalate_request_to_parent: escalate_request_to_parent
             .map(|requester| requester.clone().unbind()),
         stop_requested_by_parent: Arc::new(AtomicBool::new(false)),
+        not_ready_report: NodeNotReadyReportShared::default(),
     })
 }
 
@@ -218,7 +270,28 @@ pub(crate) fn limited_access_view_of_runtime_context_for_helper_process(
         pause_state_announced_by_parent: Arc::clone(
             &full_access_context.pause_state_announced_by_parent,
         ),
+        not_ready_report: Arc::clone(&full_access_context.not_ready_report),
     }
+}
+
+/// What the node last reported on its context: `(reason, placeholder image
+/// width, placeholder image height)` while it is not ready, `None` while it is.
+#[pyfunction]
+pub(crate) fn not_ready_report_on_runtime_context(
+    full_access_context: &Bound<'_, PythonRuntimeContextFullAccess>,
+) -> Option<(String, u32, u32)> {
+    full_access_context
+        .get()
+        .not_ready_report
+        .lock()
+        .as_ref()
+        .map(|report| {
+            (
+                report.reason.clone(),
+                report.placeholder_image_width,
+                report.placeholder_image_height,
+            )
+        })
 }
 
 /// Record on a helper's context whether the parent has asked the node to stop,
@@ -350,6 +423,24 @@ impl PythonRuntimeContextFullAccess {
         !self.pause_state_announced_by_parent.load(Ordering::Relaxed)
     }
 
+    /// Report the node running but not ready, in `reason`'s words, in place of
+    /// raising; `image_width` and `image_height` size the transparent frames
+    /// its Image outputs carry meanwhile.
+    #[pyo3(signature = (reason, *, image_width = None, image_height = None))]
+    fn report_not_ready(
+        &self,
+        reason: String,
+        image_width: Option<u32>,
+        image_height: Option<u32>,
+    ) -> PyResult<()> {
+        record_a_not_ready_report(&self.not_ready_report, reason, image_width, image_height)
+    }
+
+    /// Report the node ready again after `report_not_ready`.
+    fn report_ready(&self) {
+        *self.not_ready_report.lock() = None;
+    }
+
     /// Lend `output_ports` and `input_ports` to the node's native code, and
     /// hand back the module host table it reaches them through, as a capsule
     /// `tatolab-module-sdk` reads.
@@ -404,6 +495,8 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
     store_scoped_to_this_node: Py<PythonStoreScopedToThisNode>,
     /// Shared with the full-access view this one was derived from.
     pause_state_announced_by_parent: Arc<AtomicBool>,
+    /// Shared with the full-access view this one was derived from.
+    not_ready_report: NodeNotReadyReportShared,
 }
 
 #[pymethods]
@@ -486,6 +579,24 @@ impl PythonRuntimeContextLimitedAccess {
     /// Whether processing should proceed (not paused).
     fn should_process(&self) -> bool {
         !self.pause_state_announced_by_parent.load(Ordering::Relaxed)
+    }
+
+    /// Report the node running but not ready, in `reason`'s words, in place of
+    /// raising; `image_width` and `image_height` size the transparent frames
+    /// its Image outputs carry meanwhile.
+    #[pyo3(signature = (reason, *, image_width = None, image_height = None))]
+    fn report_not_ready(
+        &self,
+        reason: String,
+        image_width: Option<u32>,
+        image_height: Option<u32>,
+    ) -> PyResult<()> {
+        record_a_not_ready_report(&self.not_ready_report, reason, image_width, image_height)
+    }
+
+    /// Report the node ready again after `report_not_ready`.
+    fn report_ready(&self) {
+        *self.not_ready_report.lock() = None;
     }
 }
 

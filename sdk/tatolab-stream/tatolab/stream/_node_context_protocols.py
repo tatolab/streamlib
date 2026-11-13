@@ -544,6 +544,24 @@ class _RuntimeContextMembersBothCapabilitiesShare(Protocol):
         """Whether the node should process now."""
         ...
 
+    def report_not_ready(
+        self, reason: str, *, image_width: int | None = None, image_height: int | None = None
+    ) -> None:
+        """Report the node running but not ready, in `reason`'s words — a setting left unset, a
+        file that is missing — in place of raising.
+
+        The stream keeps running and the graph shows `reason` on the node until `report_ready`.
+        Meanwhile the runtime sends a transparent frame of `image_width` by `image_height`
+        (1920 by 1080 when unnamed) on each Image output at the node's pace, Array, Channels and
+        Records outputs send nothing, and `process()` is still called, so the node can report
+        ready from it. Raises `ValueError` for an empty `reason` or a side of zero pixels.
+        """
+        ...
+
+    def report_ready(self) -> None:
+        """Report the node ready again after `report_not_ready`."""
+        ...
+
 
 @runtime_backed_protocol
 class RuntimeContextFullAccess(_RuntimeContextMembersBothCapabilitiesShare, Protocol):

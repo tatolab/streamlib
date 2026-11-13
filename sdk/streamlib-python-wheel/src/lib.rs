@@ -78,6 +78,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_processor_context::note_execution_mode_from_parent_on_runtime_context,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_context::not_ready_report_on_runtime_context,
+        module
+    )?)?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;

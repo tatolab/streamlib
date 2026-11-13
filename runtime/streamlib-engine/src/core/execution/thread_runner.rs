@@ -431,6 +431,8 @@ fn run_manual_mode(
                 has_failed_unrecoverably,
                 why_the_helper_process_died_on_its_own,
                 why_process_is_raising_as_its_helper_reports,
+                why_the_node_is_not_ready_as_its_helper_reports,
+                its_helper_reports_whether_the_node_is_ready,
             ) = {
                 let mut processor = processor.lock();
                 processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
@@ -439,9 +441,16 @@ fn run_manual_mode(
                     processor.has_failed_unrecoverably(),
                     processor.why_the_out_of_process_helper_died_on_its_own(),
                     processor.why_process_is_raising_as_its_helper_reports(),
+                    processor.why_the_node_is_not_ready_as_its_helper_reports(),
+                    processor.out_of_process_link_wiring().is_some(),
                 )
             };
             state.note_why_process_is_raising(why_process_is_raising_as_its_helper_reports);
+            if its_helper_reports_whether_the_node_is_ready {
+                state.note_why_the_node_is_not_ready(
+                    why_the_node_is_not_ready_as_its_helper_reports,
+                );
+            }
             match (
                 failure_the_node_reported_of_itself,
                 has_failed_unrecoverably,

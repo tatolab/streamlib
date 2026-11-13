@@ -118,6 +118,8 @@ fn escalate_request_vectors_round_trip() {
         FailTheNode => r#"{"op":"fail_the_node","reason":"the page's renderer ended 6 times in 60s","request_id":"fail_the_node.request_id-282"}"#,
         SetProcessRaisingBecause => r#"{"op":"set_process_raising_because","raising_because":"process() raised RuntimeError: broke on purpose","request_id":"set_process_raising_because.request_id-283"}"#,
         SetProcessRaisingBecause => r#"{"op":"set_process_raising_because","raising_because":null,"request_id":"set_process_raising_because.request_id-284"}"#,
+        SetNotReadyBecause => r#"{"op":"set_not_ready_because","not_ready_because":"`riv_path` is not set","request_id":"set_not_ready_because.request_id-291"}"#,
+        SetNotReadyBecause => r#"{"op":"set_not_ready_because","not_ready_because":null,"request_id":"set_not_ready_because.request_id-292"}"#,
         Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","rhi_op":"log.rhi_op-244","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26","target":"log.target-245"}"#,
         OpenCpuReadbackStaging => r#"{"op":"open_cpu_readback_staging","request_id":"open_cpu_readback_staging.request_id-201","surface_id":"open_cpu_readback_staging.surface_id-202"}"#,
         OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
