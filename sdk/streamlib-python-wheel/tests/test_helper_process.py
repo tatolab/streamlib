@@ -1072,6 +1072,90 @@ def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_re
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_running_manual_node_reported_from_another_thread_is_fed_transparent_frames_on_a_beat(
+    stand_in_parent, monkeypatch
+):
+    """A manual node the runtime never calls is told of, and fed, from the wait
+    for the next lifecycle command: a report from a thread of the node's own
+    reaches the parent, its Image outputs are sent a frame on a steady beat
+    while it is not ready, and none once it reports itself ready.
+
+    Fail-without-fix: the wait blocks until the next command, so the report
+    never reaches the parent and no frame is sent.
+    """
+    from helper_process_probes import CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT
+
+    CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.clear()
+    transparent_frame_sends: "list[tuple[int, int]]" = []
+    monkeypatch.setattr(
+        processor_interpreter_bootstrap.TransparentFramesOnTheImageOutputsOfANodeNotReady,
+        "send_one_transparent_frame_on_each_image_output",
+        lambda self, context, image_width, image_height: transparent_frame_sends.append(
+            (image_width, image_height)
+        ),
+    )
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ReportedFromAnotherThreadProbe")
+    )
+
+    def the_next_frame_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert the_next_frame_other_than_a_log() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
+    deadline = time.monotonic() + 5.0
+    while not CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT and time.monotonic() < deadline:
+        time.sleep(0.01)
+    context_of_the_node = CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT[0]
+    assert transparent_frame_sends == [], "a node that is ready is sent no placeholder frame"
+
+    context_of_the_node.report_not_ready(
+        "the image asset `poster.png` is missing", image_width=64, image_height=32
+    )
+    not_ready = the_next_frame_other_than_a_log()
+    assert not_ready["op"] == "set_not_ready_because"
+    assert not_ready["not_ready_because"] == "the image asset `poster.png` is missing"
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": not_ready["request_id"], "result": "ok"}
+    )
+
+    sends_when_reported = len(transparent_frame_sends)
+    time.sleep(0.3)
+    sends_over_the_wait = len(transparent_frame_sends) - sends_when_reported
+    assert sends_over_the_wait >= 3, (
+        f"a not-ready manual node was sent {sends_over_the_wait} frames in 0.3 s"
+    )
+    assert set(transparent_frame_sends) == {(64, 32)}
+
+    context_of_the_node.report_ready()
+    ready = the_next_frame_other_than_a_log()
+    assert ready["op"] == "set_not_ready_because"
+    assert ready["not_ready_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ready["request_id"], "result": "ok"}
+    )
+    time.sleep(0.05)
+    sends_once_ready = len(transparent_frame_sends)
+    time.sleep(0.2)
+    assert len(transparent_frame_sends) == sends_once_ready, (
+        "a node that reported itself ready is still sent placeholder frames"
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_frame_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_it_reports_ready(
     stand_in_parent,
 ):

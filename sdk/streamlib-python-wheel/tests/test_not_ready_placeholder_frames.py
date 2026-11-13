@@ -7,6 +7,8 @@ from typing import Any
 
 import numpy
 
+from tatolab.stream import Output
+
 from tatolab.runtime._not_ready_placeholder_frames import (
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
     the_placeholder_texture_format_of_an_image_output,
@@ -56,8 +58,11 @@ class OutputsRecordingEachWrite:
     def __init__(self) -> None:
         self.writes: "list[tuple[str, Any]]" = []
 
-    def write(self, port_name: str, frame: Any) -> None:
-        self.writes.append((port_name, frame))
+    def write(self, port: Any, frame: Any) -> None:
+        assert isinstance(port, Output), (
+            "an Image frame is written through an Output attribute; by name a write takes only a buffer"
+        )
+        self.writes.append((port.port_name, frame))
 
 
 class NodeContextOfTheTest:
