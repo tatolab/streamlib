@@ -317,6 +317,8 @@ pub enum StreamActionKindOnTheWire {
     Delete,
     /// Re-loads, at the runtime's start, a project's streams neither closed nor failed.
     ReloadAtStart,
+    /// Makes a project's venv current with what it holds now, touching no stream.
+    MakeVenvCurrent,
 }
 
 /// Where a stream action is in its life.

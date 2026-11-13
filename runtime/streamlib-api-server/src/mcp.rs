@@ -333,6 +333,7 @@ pub(crate) fn describe_stream_action_tool_result_of(
             StreamActionKind::Remove => StreamActionKindOnTheWire::Remove,
             StreamActionKind::Delete => StreamActionKindOnTheWire::Delete,
             StreamActionKind::ReloadAtStart => StreamActionKindOnTheWire::ReloadAtStart,
+            StreamActionKind::MakeTheVenvCurrent => StreamActionKindOnTheWire::MakeVenvCurrent,
         },
         state: stream_action_state_on_the_wire(stream_action.state),
         step: stream_action.step.map(stream_action_step_on_the_wire),

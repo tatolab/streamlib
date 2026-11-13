@@ -46,6 +46,8 @@ pub enum StreamActionKind {
     /// Re-loads, at the runtime's start, a project's streams neither closed nor failed,
     /// holding each stopped one stopped.
     ReloadAtStart,
+    /// Makes a project's venv current with what it holds now, touching no stream.
+    MakeTheVenvCurrent,
 }
 
 impl StreamActionKind {
@@ -60,6 +62,7 @@ impl StreamActionKind {
             Self::Remove => "remove",
             Self::Delete => "delete",
             Self::ReloadAtStart => "reload_at_start",
+            Self::MakeTheVenvCurrent => "make_venv_current",
         }
     }
 

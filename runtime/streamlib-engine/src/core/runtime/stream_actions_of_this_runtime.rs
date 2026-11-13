@@ -3277,6 +3277,65 @@ impl Runner {
         Ok(self.queue_the_playback_of_the_held_project(project_directory))
     }
 
+    /// Queue the making current of the `.venv` of the project in `project_directory` on its
+    /// stream action queue, answering the action's id at once: the venv is made, or synced
+    /// again when what it was synced with changed, as a load makes it, and no stream is read,
+    /// loaded, started or stopped. Refused, with nothing queued, for a directory not named by
+    /// its absolute path.
+    pub fn make_the_projects_venv_current(
+        &self,
+        project_directory: &Path,
+    ) -> Result<StreamActionQueued> {
+        let project_directory = the_absolute_project_directory_resolved(project_directory)?;
+        let queue_of_each_project = &self.stream_actions.stream_action_queue_of_each_project;
+        let action_id = queue_of_each_project.next_action_id(
+            self.engine_resources_shared_by_every_stream
+                .runtime_id
+                .as_str(),
+        );
+        let action = StreamAction {
+            action_id: action_id.clone(),
+            project_directory: project_directory.clone(),
+            kind: StreamActionKind::MakeTheVenvCurrent,
+            state: StreamActionState::Queued,
+            step: None,
+            venv_sync: None,
+            streams: Vec::new(),
+            failed_because: None,
+        };
+        Ok(queue_of_each_project.queue_the_stream_action(
+            action,
+            Box::new(move |runner: &Runner| {
+                runner.make_the_projects_venv_current_for_its_stream_action(
+                    &action_id,
+                    &project_directory,
+                );
+            }),
+            &self.tokio_handle(),
+        ))
+    }
+
+    /// Run the making current of the venv the stream action `action_id` queued of the project
+    /// in `project_directory`, and finish the action, failed for why the venv was not made.
+    fn make_the_projects_venv_current_for_its_stream_action(
+        &self,
+        action_id: &str,
+        project_directory: &Path,
+    ) {
+        let progress = self.progress_of_the_stream_action(action_id);
+        progress.is_on(StreamActionStep::MakingTheVenv);
+        let made = self.make_the_projects_venv(
+            project_directory,
+            &|| progress.is_interrupted(),
+            Some(progress.report_of_the_next_venv_sync()),
+        );
+        progress.finish(match made {
+            Ok(()) => Ok(Vec::new()),
+            Err(ProjectVenvNotMade::Refused(refusal)) => Err(refusal.to_string()),
+            Err(ProjectVenvNotMade::Failed { failed_because }) => Err(failed_because),
+        });
+    }
+
     /// Queue the start of the playback of every held stopped stream of the project in
     /// `project_directory`, answering the action's id at once. The action reads no document
     /// and makes no venv: each stream starts fresh from the graph it holds, paused while its
@@ -7703,6 +7762,63 @@ mod tests {
         the_one_running_stream_of(&run);
         assert_eq!(stub_uv.runs(), ["sync"]);
         assert!(project.interpreter().is_file());
+    }
+
+    #[test]
+    #[serial]
+    fn making_a_projects_venv_current_syncs_it_with_the_runtime_unit_uv_and_loads_no_stream() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let stub_uv = StubRuntimeUnitUv::making_the_venv_moved_aside_from(&project);
+        stub_uv.handed_to(&runner);
+
+        let queued = runner
+            .make_the_projects_venv_current(project.path())
+            .unwrap();
+
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        assert_eq!(done.kind, StreamActionKind::MakeTheVenvCurrent);
+        assert!(done.streams.is_empty(), "{:?}", done.streams);
+        assert_eq!(stub_uv.runs(), ["sync"]);
+        assert!(project.interpreter().is_file());
+        assert!(runner.list_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn making_a_projects_venv_current_fails_in_uvs_words_when_its_sync_fails() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::with_no_venv();
+        let stub_uv = StubRuntimeUnitUv::failing_writing(UV_RESOLUTION_FAILURE);
+        stub_uv.handed_to(&runner);
+
+        let queued = runner
+            .make_the_projects_venv_current(project.path())
+            .unwrap();
+
+        let failed = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(failed.state, StreamActionState::Failed, "{failed:?}");
+        assert!(
+            failed
+                .failed_because
+                .as_deref()
+                .is_some_and(|why| why.contains(UV_RESOLUTION_FAILURE)),
+            "{failed:?}"
+        );
+    }
+
+    #[test]
+    fn making_the_venv_current_of_a_project_not_named_by_its_absolute_path_is_refused() {
+        let runner = a_runner_recording_its_streams_in(None);
+
+        let refused = runner
+            .make_the_projects_venv_current(Path::new("relative/project"))
+            .unwrap_err();
+
+        assert!(refused.to_string().contains("absolute"), "{refused}");
     }
 
     #[test]

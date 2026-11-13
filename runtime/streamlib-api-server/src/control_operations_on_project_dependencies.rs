@@ -4,16 +4,21 @@
 //! The operations on a project's imports of other projects: added, updated, listed and removed,
 //! and an imported project's stream placed in a graph.
 
+use std::path::PathBuf;
 use std::sync::Arc;
+
+use streamlib::sdk::runtime::StreamActionState;
+use tokio::sync::broadcast::error::RecvError;
 
 use streamlib_control_contract::{
     AddDependencyRequest, ListDependenciesRequest, RemoveDependencyRequest,
     UpdateDependencyRequest, UseDependencyStreamRequest,
 };
 use streamlib_project_repository::{
-    AppliedProjectTransaction, ProjectImport, ProjectImportOperation, ProjectOperation,
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepositoryOneWriterAtATime,
-    ProjectRepositoryRefusal, StreamGraphAction,
+    AppliedProjectTransaction, PYPROJECT_FILE_NAME, ProjectActionApplyOutcome, ProjectImport,
+    ProjectImportOperation, ProjectOperation, ProjectRepositoriesOpenInThisRuntime,
+    ProjectRepository, ProjectRepositoryOneWriterAtATime, ProjectRepositoryRefusal,
+    StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     DependencyTransactionToolResult, ListDependenciesToolResult, ListedProjectDependencyOnTheWire,
@@ -59,19 +64,26 @@ impl ControlOperationDispatcher {
                 .map_err(|refusal| refusal.to_string())?;
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let venv_to_make_current =
+                VenvToMakeCurrent::once_applied_now(&project_repository_held, &outcome);
             let applied = outcome.into_applied_transaction();
             let added = the_import_the_transaction_placed(&applied)?;
-            Ok::<_, String>(DependencyTransactionToolResult {
-                dependency: the_dependency_on_the_wire(&added),
-                transaction: applied.transaction.transaction.to_string(),
-                commit: applied.commit,
-            })
+            Ok::<_, String>((
+                DependencyTransactionToolResult {
+                    dependency: the_dependency_on_the_wire(&added),
+                    transaction: applied.transaction.transaction.to_string(),
+                    commit: applied.commit,
+                },
+                venv_to_make_current,
+            ))
         })
         .await
         .map_err(|join_failure| {
             format!("add_dependency failed: the call did not finish: {join_failure}")
         })?
         .map_err(|refusal| format!("add_dependency failed: {refusal}"))?;
+        let (answered, venv_to_make_current) = answered;
+        self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
     }
 
@@ -120,18 +132,23 @@ impl ControlOperationDispatcher {
                     let held = project_repository_held
                         .import(project)
                         .map_err(|refusal| refusal.to_string())?;
-                    return Ok::<_, String>(UpdateDependencyToolResult {
-                        dependency: the_dependency_on_the_wire(&held),
-                        edited_files,
-                        overwrite_confirmation_needed: true,
-                        transaction: None,
-                        commit: None,
-                    });
+                    return Ok::<_, String>((
+                        UpdateDependencyToolResult {
+                            dependency: the_dependency_on_the_wire(&held),
+                            edited_files,
+                            overwrite_confirmation_needed: true,
+                            transaction: None,
+                            commit: None,
+                        },
+                        None,
+                    ));
                 }
                 Err(refusal) => return Err(refusal.to_string()),
             };
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let venv_to_make_current =
+                VenvToMakeCurrent::once_applied_now(&project_repository_held, &outcome);
             let applied_now = outcome.was_applied_now();
             let applied = outcome.into_applied_transaction();
             let updated = the_import_the_transaction_placed(&applied)?;
@@ -148,19 +165,24 @@ impl ControlOperationDispatcher {
                     &importing_project_directory,
                 );
             }
-            Ok(UpdateDependencyToolResult {
-                dependency: the_dependency_on_the_wire(&updated),
-                edited_files: files_the_update_overwrites,
-                overwrite_confirmation_needed: false,
-                transaction: Some(applied.transaction.transaction.to_string()),
-                commit: Some(applied.commit),
-            })
+            Ok((
+                UpdateDependencyToolResult {
+                    dependency: the_dependency_on_the_wire(&updated),
+                    edited_files: files_the_update_overwrites,
+                    overwrite_confirmation_needed: false,
+                    transaction: Some(applied.transaction.transaction.to_string()),
+                    commit: Some(applied.commit),
+                },
+                venv_to_make_current,
+            ))
         })
         .await
         .map_err(|join_failure| {
             format!("update_dependency failed: the call did not finish: {join_failure}")
         })?
         .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
+        let (answered, venv_to_make_current) = answered;
+        self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
     }
 
@@ -242,19 +264,26 @@ impl ControlOperationDispatcher {
                 .map_err(|refusal| refusal.to_string())?;
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
+            let venv_to_make_current =
+                VenvToMakeCurrent::once_applied_now(&project_repository_held, &outcome);
             let applied = outcome.into_applied_transaction();
             let removed = the_import_the_transaction_removed(&applied)?;
-            Ok::<_, String>(DependencyTransactionToolResult {
-                dependency: the_dependency_on_the_wire(&removed),
-                transaction: applied.transaction.transaction.to_string(),
-                commit: applied.commit,
-            })
+            Ok::<_, String>((
+                DependencyTransactionToolResult {
+                    dependency: the_dependency_on_the_wire(&removed),
+                    transaction: applied.transaction.transaction.to_string(),
+                    commit: applied.commit,
+                },
+                venv_to_make_current,
+            ))
         })
         .await
         .map_err(|join_failure| {
             format!("remove_dependency failed: the call did not finish: {join_failure}")
         })?
         .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
+        let (answered, venv_to_make_current) = answered;
+        self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
     }
 
@@ -289,6 +318,96 @@ impl ControlOperationDispatcher {
             request_origin,
         )
         .await
+    }
+}
+
+/// The project whose venv an import transaction applied now leaves behind what its
+/// `pyproject.toml` declares.
+struct VenvToMakeCurrent {
+    project_directory: PathBuf,
+    project: Uuid,
+}
+
+impl VenvToMakeCurrent {
+    /// The venv of the project `project_repository_held` holds, when `outcome` applied now and
+    /// the project declares its Python in a `pyproject.toml`.
+    fn once_applied_now(
+        project_repository_held: &ProjectRepository,
+        outcome: &ProjectActionApplyOutcome,
+    ) -> Option<Self> {
+        let project_directory = project_repository_held.project_directory().to_path_buf();
+        (outcome.was_applied_now() && project_directory.join(PYPROJECT_FILE_NAME).is_file()).then(
+            || Self {
+                project_directory,
+                project: project_repository_held.project_file().project,
+            },
+        )
+    }
+}
+
+impl ControlOperationDispatcher {
+    /// Queue the making current of `venv_to_make_current`'s venv, off the answer, and announce
+    /// it on its project's change feed once the action is done, so a client lists the node types
+    /// the import's installed distributions declare.
+    fn make_the_venv_current_and_announce_it(
+        &self,
+        venv_to_make_current: Option<VenvToMakeCurrent>,
+    ) {
+        let Some(VenvToMakeCurrent {
+            project_directory,
+            project,
+        }) = venv_to_make_current
+        else {
+            return;
+        };
+        let mut stream_action_changes = self
+            .operations_on_the_loaded_streams
+            .listen_for_each_stream_action_change();
+        let queued = match self
+            .operations_on_the_loaded_streams
+            .make_the_projects_venv_current(&project_directory)
+        {
+            Ok(queued) => queued,
+            Err(not_queued) => {
+                tracing::warn!(
+                    project_directory = %project_directory.display(),
+                    %not_queued,
+                    "the venv was not made current after the project's imports changed"
+                );
+                return;
+            }
+        };
+        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
+        let project_repositories = Arc::clone(&self.project_repositories);
+        tokio::spawn(async move {
+            loop {
+                match stream_action_changes.recv().await {
+                    Ok(changed_action_id) if changed_action_id != queued.action_id => continue,
+                    Ok(_) | Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => return,
+                }
+                let Ok(action) =
+                    operations_on_the_loaded_streams.describe_stream_action(&queued.action_id)
+                else {
+                    return;
+                };
+                match action.state {
+                    StreamActionState::Done => {
+                        project_repositories.announce_the_venv_made_current(project);
+                        return;
+                    }
+                    StreamActionState::Failed | StreamActionState::Cancelled => {
+                        tracing::warn!(
+                            project_directory = %project_directory.display(),
+                            failed_because = action.failed_because.as_deref().unwrap_or(""),
+                            "the venv was not made current after the project's imports changed"
+                        );
+                        return;
+                    }
+                    StreamActionState::Queued | StreamActionState::InProgress => {}
+                }
+            }
+        });
     }
 }
 

@@ -60,7 +60,7 @@ pub use project_history_repository::{
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
-    PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, distribution_names_are_one,
+    PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,
     first_party_module_links_a_pyproject_names,
     pyproject_with_each_first_party_module_as_a_uv_path_source,
     pyproject_with_the_carried_wheels_as_a_uv_find_links_source,

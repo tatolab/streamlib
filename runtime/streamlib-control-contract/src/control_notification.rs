@@ -81,6 +81,9 @@ pub enum ProjectChangeKindOnTheWire {
     Refused,
     /// The runtime finished reading an asset's media facts.
     MediaFactsRead,
+    /// The runtime made the project's venv current with what it holds, as after an import is
+    /// added, updated or removed; the client lists the project's node types again.
+    VenvMadeCurrent,
     /// Files in the project's folder changed, appeared or went away, an editor's saves and a
     /// transaction's own writes alike; `files` names them.
     FilesChanged,
