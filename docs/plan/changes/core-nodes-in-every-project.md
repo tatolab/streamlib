@@ -57,6 +57,43 @@
   findings).
 - **Its engine test loads it from `packages/`**: `tests/stream-on-runtime/test_core_nodes_project.py`.
 
+## What `tatolab-ops` taught about `uv sync` (binding on every option below)
+
+Carrying `tatolab-ops` surfaced these; Core Nodes inherits each.
+
+- **Declared, never installed behind the project's back.** A first-party module the venv has but
+  `pyproject.toml` and `uv.lock` do not name is uninstalled, with its requirements, by the next
+  `uv sync` — the runtime's or a person's (`ARCHITECTURE.md:2259-2261`, rejected 2026-11-10).
+  So Core Nodes' Python is linked into `.tatolab/first-party-imports/` and declared as a
+  requirement and a uv path source at each make, sync and lock, exactly as `tatolab-ops` is
+  (`ARCHITECTURE.md:2250-2256`), whatever shape decision 1 picks. Its views alone may resolve in
+  the runtime unit; its Python may not.
+- **It must build as a wheel.** The carried modules are linked as
+  `.tatolab/first-party-imports/<wheel file name>`. Core Nodes' `pyproject.toml` has no
+  `[build-system]` today; it gains one.
+- **Its package cannot be named `nodes`.** Core Nodes' modules are `nodes.color`, `nodes.animation`
+  — and every project has its own `nodes/` package. On one interpreter the second `nodes` is
+  refused or shadows the first (`ARCHITECTURE.md:2245-2247`). The package is renamed, which also
+  settles part of decision 2.
+- **Offline first, so its requirements must be carried.** Every sync tries `uv sync --offline`
+  against the unit's carried wheels and uv's cache before going online
+  (`ARCHITECTURE.md:344-352`). Core Nodes needs `numba`, `numpy`, `pillow` (and `llvmlite`), all
+  already pinned in `xtask/runtime_unit_carried_packages.toml` (numpy 2.5.4, inside Core Nodes'
+  `numpy>=2.1`). A requirement outside that set makes a new project wait on the network.
+- **No dependency group rides along.** On the owner's Mac the project's own
+  `[dependency-groups] test = ["pytest"]` failed the offline sync ("pytest was not found in the
+  cache") and fell back online; PR #3663 removed it. The carried copy declares no group.
+- **The rewrite shows in Git.** The runtime rewrites `pyproject.toml` with each carried module's
+  requirement and versioned wheel path, so a release changes every project's `pyproject.toml`;
+  the owner saw it as ` M packages/tatolab-core-nodes/pyproject.toml`. Swapping `tatolab-ops` for
+  Core Nodes keeps that count the same.
+- **Not an import of itself.** When the Core Nodes project is the one open, as on the owner's Mac,
+  the runtime must not declare it as its own first-party import.
+- **Old declarations go.** Each existing project's `pyproject.toml` names `tatolab-ops` as a
+  requirement and source; the first load under the new runtime drops both, or `uv sync` fails on
+  a link that no longer exists (`project_first_party_packages_moved_to_the_runtime_version.rs`
+  already moves first-party names; it learns that one is gone).
+
 ## [NEEDS DECISION] 1 — How Core Nodes reaches a project
 
 The fork this change turns on. A wheel brings nodes and no view; a project brings both but the
@@ -64,7 +101,7 @@ runtime only ever copies a project in.
 
 - **A. A carried project import (recommended).** The runtime unit carries the Core Nodes project
   folder, as it carries samples, and every project resolves it as an import that lives in the
-  runtime unit instead of `imports/` — Decided 10's exception (first-party modules ride the
+  runtime unit instead of `imports/` for its views — Decided 10's exception (first-party modules ride the
   runtime, never copied in) extended from wheels to one project. Its views resolve as for any
   import, so `Core Nodes:program` works unchanged; its Python joins the project's venv the way a
   carried wheel does today (built from the project and linked under
