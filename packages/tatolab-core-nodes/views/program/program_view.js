@@ -1,10 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+import { ProgramAudioPlayback } from "./program_audio_playback.js";
+
 // Wire contract with Tato Studio, view contract 1.0: Studio posts one
 // `tatolab_view_port` message into this frame carrying a MessagePort; over it
 // Studio says `hello`, the view sends `watch` with a subject, and each reading
-// arrives as `watched` under the watch's id.
+// arrives as `watched` under the watch's id. An `audio` Channels reading
+// carries `channel_samples`, one Float32Array per channel, when Studio hands
+// a view the samples.
 const VIEW_PORT_HANDOVER = "tatolab_view_port";
 
 const VIDEO_INPUT = "video";
@@ -20,6 +24,7 @@ const pictureNotice = document.querySelector(".program-picture-notice");
 const audioMeters = document.querySelector(".program-audio-meters");
 const audioNotice = document.querySelector(".program-audio-notice");
 const pictureContext = pictureCanvas.getContext("2d");
+const audioPlayback = new ProgramAudioPlayback();
 
 function showThePicture(source, width, height) {
   if (pictureCanvas.width !== width || pictureCanvas.height !== height) {
@@ -114,12 +119,15 @@ function showTheLevels(channelWaveforms) {
 function onAudioEvent(event) {
   switch (event.kind) {
     case "message":
-      if (event.reading.family === "channels") showTheLevels(event.reading.channel_waveforms);
-      else audioNotice.textContent = `audio carries ${event.reading.family}, not Channels.`;
+      if (event.reading.family === "channels") {
+        audioPlayback.play(event.reading);
+        showTheLevels(event.reading.channel_waveforms);
+      } else audioNotice.textContent = `audio carries ${event.reading.family}, not Channels.`;
       return;
     case "unwired":
     case "reopening":
     case "ended":
+      audioPlayback.stop();
       audioMeters.replaceChildren();
       audioNotice.textContent = event.because;
       return;

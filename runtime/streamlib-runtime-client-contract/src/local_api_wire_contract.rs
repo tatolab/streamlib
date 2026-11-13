@@ -522,8 +522,21 @@ pub struct DescribeStreamActionToolResultStream {
     pub state: Option<ListedStreamState>,
 }
 
+/// Which messages of an output port a viewer reads off the channel's reserved slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum OutputPortViewerReads {
+    /// The latest message the node wrote; the viewer's ring is one message deep, so the channel
+    /// overwrites what the viewer falls behind on. Every family but Channels.
+    LatestMessage,
+    /// Every message, in order, as far back as the channel's depth holds them for a reader; the
+    /// channel overwrites the oldest past that. A Channels port, so a viewer can play its sound.
+    EveryMessage,
+}
+
 /// The `open_viewer` tool's result: what a viewer subscribes to, from its own process, to read
-/// the latest message an output port's node wrote.
+/// the messages an output port's node writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct OpenViewerToolResult {
@@ -544,6 +557,8 @@ pub struct OpenViewerToolResult {
     /// The iceoryx2 notify service the port's node notifies on each write, whose one listener the
     /// viewer takes, so it waits for a message rather than reading on a timer.
     pub wake_service: String,
+    /// Which of the port's messages the viewer reads, by the port's family.
+    pub viewer_reads: OutputPortViewerReads,
     /// Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
     /// Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
     /// named no `viewer_process_id`, since the service admits only a named process.

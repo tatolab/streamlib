@@ -11,6 +11,8 @@ use std::time::Duration;
 use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
 
+use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
+
 use crate::engine_owned_iceoryx2_domain::{
     ChannelDataServiceOpenError, ChannelDataServicePortFactory, ChannelDataServiceSubscriber,
     ChannelReservedSlotSubscribeError, Iceoryx2DomainRefusal, channel_data_service_builder,
@@ -22,8 +24,9 @@ use crate::{
     MessageGroupBoundary, data_channel_payload_bytes_of,
 };
 
-/// The ring a viewer's subscriber takes: one sample, so a viewer always reads
-/// the latest message and the channel overwrites what it fell behind on.
+/// The ring a viewer reading the latest message takes: one sample, so it
+/// always reads the latest message and the channel overwrites what it fell
+/// behind on.
 pub const OUTPUT_PORT_VIEWER_RING_DEPTH: usize = 1;
 
 /// The most samples one viewer read takes off its ring before answering.
@@ -136,9 +139,9 @@ impl std::fmt::Display for OutputPortViewerSubscribeRefusal {
 impl std::error::Error for OutputPortViewerSubscribeRefusal {}
 
 /// A viewer's subscriber on an output port's channel, in the viewer's own
-/// process: each read answers the latest message the port's node wrote and how
-/// many it skipped since the read before, and a wait sleeps on the port's wake
-/// until the node writes.
+/// process: a read answers the latest message the port's node wrote, or every
+/// message its ring holds, each with how many were lost ahead of it, and a wait
+/// sleeps on the port's wake until the node writes.
 pub struct OutputPortViewerReader {
     subscriber: ChannelDataServiceSubscriber,
     wake: OutputPortViewerWake,
@@ -151,7 +154,9 @@ impl OutputPortViewerReader {
     /// Subscribe to the reserved slot of channel `channel_service_name` in the
     /// iceoryx2 domain rooted at `iceoryx2_domain_root`, and listen on the
     /// notify service `wake_service_name` the port's node wakes on each write,
-    /// from an iceoryx2 node of this process named `viewer_node_name`.
+    /// from an iceoryx2 node of this process named `viewer_node_name`, on a
+    /// ring as deep as `viewer_reads` takes: one message for the latest, the
+    /// channel's whole depth for every message.
     ///
     /// iceoryx2 binds the wake's listener socket under a process-wide umask
     /// for an instant; a child process the viewer's process starts in that
@@ -161,6 +166,7 @@ impl OutputPortViewerReader {
         channel_service_name: &str,
         wake_service_name: &str,
         viewer_node_name: &str,
+        viewer_reads: OutputPortViewerReads,
     ) -> Result<Self, OutputPortViewerSubscribeRefusal> {
         let iceoryx2_node = create_iceoryx2_node_in_domain(
             iceoryx2_domain_root,
@@ -215,21 +221,26 @@ impl OutputPortViewerReader {
                  `{channel_service_name}`: {failure:?}"
                 ))
             })?;
-        let subscriber =
-            create_the_reserved_slot_subscriber_of(&channel_service, OUTPUT_PORT_VIEWER_RING_DEPTH)
-                .map_err(|refusal| match refusal {
-                    ChannelReservedSlotSubscribeError::ReservedSlotOccupied => {
-                        OutputPortViewerSubscribeRefusal::ReservedSlotOccupied(
-                            channel_service_name.to_string(),
-                        )
-                    }
-                    ChannelReservedSlotSubscribeError::Transport(detail) => {
-                        OutputPortViewerSubscribeRefusal::Transport(format!(
-                            "a viewer could not subscribe to the reserved slot of channel \
+        let ring_depth = match viewer_reads {
+            OutputPortViewerReads::LatestMessage => OUTPUT_PORT_VIEWER_RING_DEPTH,
+            OutputPortViewerReads::EveryMessage => {
+                channel_service.static_config().subscriber_max_buffer_size()
+            }
+        };
+        let subscriber = create_the_reserved_slot_subscriber_of(&channel_service, ring_depth)
+            .map_err(|refusal| match refusal {
+                ChannelReservedSlotSubscribeError::ReservedSlotOccupied => {
+                    OutputPortViewerSubscribeRefusal::ReservedSlotOccupied(
+                        channel_service_name.to_string(),
+                    )
+                }
+                ChannelReservedSlotSubscribeError::Transport(detail) => {
+                    OutputPortViewerSubscribeRefusal::Transport(format!(
+                        "a viewer could not subscribe to the reserved slot of channel \
                              `{channel_service_name}`: {detail}"
-                        ))
-                    }
-                })?;
+                    ))
+                }
+            })?;
         Ok(Self {
             subscriber,
             wake: OutputPortViewerWake {
@@ -272,6 +283,32 @@ impl OutputPortViewerReader {
             latest = Some(message);
         }
         Ok(latest)
+    }
+
+    /// Every message the port's node wrote since the read before, oldest
+    /// first, each with the messages lost ahead of it, the ring having
+    /// overwritten them or the writer having declared them lost; empty when it
+    /// wrote nothing since. One read takes at most
+    /// [`SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST`] samples, so a writer that
+    /// never pauses cannot hold it.
+    pub fn read_every_message(&mut self) -> Result<Vec<MessageReadFromAReservedSlot>, String> {
+        let mut messages = Vec::new();
+        for _ in 0..SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST {
+            let sample = self.subscriber.receive().map_err(|receive_failure| {
+                format!("a viewer's subscriber failed to receive: {receive_failure:?}")
+            })?;
+            let Some(sample) = sample else {
+                break;
+            };
+            if let Some(message) = self.loss_tally.message_from_a_bag_headed(
+                sample.origin(),
+                *sample.user_header(),
+                data_channel_payload_bytes_of(sample.payload()),
+            ) {
+                messages.push(message);
+            }
+        }
+        Ok(messages)
     }
 
     /// The wake the port's node notifies on each write, which another thread

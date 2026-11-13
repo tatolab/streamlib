@@ -4151,7 +4151,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   allocates, publishes or links changes, and neither does a CUDA consumer's import. Whoever may open the local
   API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
   viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
-  reads.
+  reads. A viewer of a Channels port reads every block instead, in order, on a ring as deep as the
+  channel holds for a reader, `open_viewer` answering `viewer_reads: every_message`, so Studio
+  hands a view the samples and Program plays the sound; the channel still overwrites what the
+  viewer has not read, so it never slows the stream either (session, 2026-11-13, after the owner
+  found Program silent).
   [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; display-importable-viewer-frames — SHIPPED #3524, #3530]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).

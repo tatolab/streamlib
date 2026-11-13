@@ -13,7 +13,7 @@
     {
       "name": "audio",
       "family": "channels",
-      "description": "The sound of the show, drawn as one level meter per channel."
+      "description": "The sound of the show, played on the default output device and drawn as one level meter per channel."
     }
   ]
 }

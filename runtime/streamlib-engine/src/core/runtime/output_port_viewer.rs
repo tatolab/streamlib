@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use streamlib_processor_schema::PortFamily;
+use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
+
 use super::LoadedStreamInThisRuntime;
 use super::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 use crate::core::compiler::compiler_ops::{
@@ -77,6 +80,9 @@ pub struct OutputPortViewerChannelHandOff {
     /// The iceoryx2 notify service the port's node notifies on each write,
     /// whose one listener the viewer takes.
     pub wake_service_name: String,
+    /// Which of the port's messages the viewer reads: every one for a Channels
+    /// port, so a viewer can play its sound, the latest for any other family.
+    pub viewer_reads: OutputPortViewerReads,
     /// Where the viewer imports an Image frame's surface, as a helper process
     /// does: the surface-sharing socket's path on Linux, the surface-sharing
     /// Mach service's name on macOS. `None` on macOS when no viewer process
@@ -198,23 +204,26 @@ impl LoadedStreamInThisRuntime {
         // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
-                let (node_name, source_side) = compiler.scope(|graph, _tx| -> Result<_> {
-                    let node = the_running_node_with_its_output_port(
-                        graph,
-                        &stream_id,
-                        &node_id,
-                        &port_name,
-                        why_a_node_that_has_not_failed_does_not_run,
-                    )?;
-                    let node_name = node.display_name.clone();
-                    let source = OutputLinkPortRef::new(node.id.clone(), port_name.as_str());
-                    let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
-                        graph,
-                        &source,
-                        &iceoryx2_node,
-                    )?;
-                    Ok((node_name, source_side))
-                })?;
+                let (node_name, viewer_reads, source_side) =
+                    compiler.scope(|graph, _tx| -> Result<_> {
+                        let node = the_running_node_with_its_output_port(
+                            graph,
+                            &stream_id,
+                            &node_id,
+                            &port_name,
+                            why_a_node_that_has_not_failed_does_not_run,
+                        )?;
+                        let node_name = node.display_name.clone();
+                        let viewer_reads =
+                            what_a_viewer_of_the_port_reads(graph, &node.id, &port_name);
+                        let source = OutputLinkPortRef::new(node.id.clone(), port_name.as_str());
+                        let source_side = open_the_source_side_for_a_reader_on_the_reserved_slot(
+                            graph,
+                            &source,
+                            &iceoryx2_node,
+                        )?;
+                        Ok((node_name, viewer_reads, source_side))
+                    })?;
                 Ok::<_, Error>(OutputPortViewerHeldOpen {
                     hand_off: OutputPortViewerChannelHandOff {
                         stream: stream_id,
@@ -224,6 +233,7 @@ impl LoadedStreamInThisRuntime {
                         iceoryx2_domain_root,
                         channel_service_name: source_side.channel_service_name.clone(),
                         wake_service_name: source_side.wake_service_name.clone(),
+                        viewer_reads,
                         surface_share_address: surface_share_access_of_the_viewer
                             .surface_share_address
                             .clone(),
@@ -333,6 +343,22 @@ fn the_running_node_with_its_output_port<'graph>(
     Ok(node)
 }
 
+/// What a viewer of output `port_name` of `node_id` reads: every message for a
+/// port carrying Channels, the latest for any other family or one not settled.
+fn what_a_viewer_of_the_port_reads(
+    graph: &crate::core::graph::Graph,
+    node_id: &crate::core::ProcessorUniqueId,
+    port_name: &str,
+) -> OutputPortViewerReads {
+    match crate::core::graph::the_family_a_link_out_of_an_output_carries(graph, node_id, port_name)
+    {
+        Some(declaration) if declaration.family == PortFamily::Channels => {
+            OutputPortViewerReads::EveryMessage
+        }
+        _ => OutputPortViewerReads::LatestMessage,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! A viewer against a loaded stream read as running without the GPU
@@ -358,6 +384,7 @@ mod tests {
         ensure_test_mocks_registered,
     };
     use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
+    use streamlib_processor_schema::ProcessorClassImportPath;
 
     /// How long a message has to reach a viewer.
     const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
@@ -376,6 +403,18 @@ mod tests {
 
     impl ARunningCameraWithNoLinks {
         fn load() -> Self {
+            Self::load_running::<MockOutputOnlyProcessor::Processor>(
+                MockOutputOnlyProcessor::processor_class_import_path(),
+            )
+        }
+
+        /// The stream with a node `camera` of the type `import_path`, `P`'s
+        /// processor, running instead of the Records mock.
+        fn load_running<P>(import_path: ProcessorClassImportPath) -> Self
+        where
+            P: crate::core::GeneratedProcessor + 'static,
+            P::Config: Default,
+        {
             ensure_test_mocks_registered();
             let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
             let runner = Runner::new().expect("the engine builds");
@@ -387,18 +426,12 @@ mod tests {
                 .expect("the stream loads");
             let camera_id = stream
                 .add_processor(
-                    ProcessorSpec::new(
-                        MockOutputOnlyProcessor::processor_class_import_path(),
-                        Value::Null,
-                    )
-                    .with_display_name("camera".to_string()),
+                    ProcessorSpec::new(import_path, Value::Null)
+                        .with_display_name("camera".to_string()),
                 )
                 .expect("the node is added");
             let mut instance = ProcessorInstance::new(Box::new(
-                <MockOutputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
-                    Default::default(),
-                )
-                .expect("the mock constructs"),
+                P::from_config(Default::default()).expect("the mock constructs"),
             ));
             instance
                 .install_iceoryx2_resources()
@@ -496,6 +529,7 @@ mod tests {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-viewer",
+            hand_off.viewer_reads,
         )
         .expect("the viewer subscribes to the port's channel");
         camera.write(b"first", 10);
@@ -535,6 +569,7 @@ mod tests {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-waiting-viewer",
+            hand_off.viewer_reads,
         )
         .expect("the viewer subscribes to the port's channel and its wake");
         let wake = reader.wake();
@@ -704,6 +739,7 @@ mod tests {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-viewer",
+            hand_off.viewer_reads,
         )
         .unwrap();
 
@@ -722,6 +758,87 @@ mod tests {
             (&b"frame 50"[..], 50, 48)
         );
         assert!(reader.read_the_latest_message().unwrap().is_none());
+    }
+
+    /// A viewer of a Records port reads the latest message, and a viewer of a
+    /// Channels port reads every block the node wrote since its read before, in
+    /// order, so a view can play the sound with no gap.
+    ///
+    /// Mental-revert: on a one-message ring the Channels viewer reads only the
+    /// last block, the rest overwritten.
+    #[test]
+    #[serial]
+    fn a_viewer_of_a_channels_port_reads_every_block_and_any_other_port_the_latest() {
+        use streamlib_ipc_types::{
+            ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
+        };
+
+        let records_camera = ARunningCameraWithNoLinks::load();
+        let records_viewer = records_camera.open_a_viewer("out1").unwrap();
+        assert_eq!(
+            records_viewer.hand_off().viewer_reads,
+            OutputPortViewerReads::LatestMessage
+        );
+        drop(records_viewer);
+        drop(records_camera);
+
+        let tone = ARunningCameraWithNoLinks::load_running::<
+            crate::core::test_support::MockChannelsSourceProcessor::Processor,
+        >(
+            crate::core::test_support::MockChannelsSourceProcessor::processor_class_import_path(),
+        );
+        let viewer = tone.open_a_viewer("audio").unwrap();
+        let hand_off = viewer.hand_off().clone();
+        assert_eq!(hand_off.viewer_reads, OutputPortViewerReads::EveryMessage);
+        let mut reader = OutputPortViewerReader::subscribe(
+            &hand_off.iceoryx2_domain_root,
+            &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
+            "a-listening-viewer",
+            hand_off.viewer_reads,
+        )
+        .unwrap();
+
+        for block_index in 0..8u64 {
+            let block = ChannelsBlockDescriptorBody {
+                start_sample: block_index * 4,
+                sample_rate: 48_000,
+                channel_count: 1,
+                samples_per_channel: 4,
+                sample_type: ChannelsBlockSampleType::F32 as u32,
+            };
+            let samples: Vec<u8> = (0..4)
+                .flat_map(|sample| ((block_index * 4 + sample) as f32).to_le_bytes())
+                .collect();
+            tone.camera_output
+                .write_bytes_described_by(
+                    "audio",
+                    &samples,
+                    block_index as i64,
+                    MessageGroupBoundary::StartsGroup,
+                    DataChannelPayloadDescriptor::channels_block(block),
+                )
+                .expect("the tone writes its block");
+        }
+        let gave_up_at = Instant::now() + ARRIVES_WITHIN;
+        let mut blocks_read = Vec::new();
+        while blocks_read.len() < 8 {
+            blocks_read.extend(reader.read_every_message().expect("the viewer reads"));
+            assert!(
+                Instant::now() < gave_up_at,
+                "not every block reached the viewer"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            blocks_read
+                .iter()
+                .map(|block| (block.timestamp_ns, block.lost_since_last_read))
+                .collect::<Vec<_>>(),
+            (0..8)
+                .map(|timestamp_ns| (timestamp_ns, 0))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// A viewer reads a Channels block and a Records message whole: each one's
@@ -743,6 +860,7 @@ mod tests {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-viewer",
+            hand_off.viewer_reads,
         )
         .unwrap();
 
@@ -922,6 +1040,7 @@ mod tests {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-viewer",
+            hand_off.viewer_reads,
         )
         .unwrap();
         camera

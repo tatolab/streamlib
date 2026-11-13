@@ -162,6 +162,7 @@ impl AStreamOfAProjectBringingViews {
             &hand_off.channel_service_name,
             &hand_off.wake_service_name,
             "a-reader",
+            hand_off.viewer_reads,
         )
         .expect("the reader subscribes to the port's channel");
         (viewer, reader)
@@ -830,6 +831,7 @@ fn the_value_a_new_reader_of_the_input_is_handed(
         &hand_off.channel_service_name,
         &hand_off.wake_service_name,
         "a-reader",
+        hand_off.viewer_reads,
     )
     .expect("the reader subscribes to the port's channel");
     let read_back = rmp_serde::from_slice(&the_next_message_read(&mut reader).payload).unwrap();

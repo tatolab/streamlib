@@ -157,6 +157,7 @@ export interface ControlSchemasOfTheContract {
     readonly LogsToolResult: z.ZodType<ControlContract.LogsToolResult>;
     readonly OpenViewerRequest: z.ZodType<ControlContract.OpenViewerRequest>;
     readonly OpenViewerToolResult: z.ZodType<ControlContract.OpenViewerToolResult>;
+    readonly OutputPortViewerReads: z.ZodType<ControlContract.OutputPortViewerReads>;
     readonly CloseViewerRequest: z.ZodType<ControlContract.CloseViewerRequest>;
     readonly CloseViewerToolResult: z.ZodType<ControlContract.CloseViewerToolResult>;
     readonly SetStreamClockScaleRequest: z.ZodType<ControlContract.SetStreamClockScaleRequest>;

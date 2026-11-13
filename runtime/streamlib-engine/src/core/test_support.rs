@@ -82,6 +82,31 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
     }
 }
 
+/// Mock source with one Channels output, written to by a test.
+#[crate::processor(execution = manual, output("audio", family = Channels))]
+pub(crate) struct MockChannelsSourceProcessor;
+
+impl crate::core::ManualProcessor for MockChannelsSourceProcessor::Processor {
+    fn setup(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn teardown(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mock processor with only input ports.
 #[crate::processor(
     execution = manual,
@@ -342,6 +367,7 @@ pub(crate) fn ensure_test_mocks_registered() {
     REGISTER.call_once(|| {
         PROCESSOR_REGISTRY.register::<MockProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOutputOnlyProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockChannelsSourceProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockWindowedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockDeviceMatchedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockBorrowingConsumerProcessor::Processor>();
