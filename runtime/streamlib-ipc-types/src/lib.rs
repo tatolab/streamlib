@@ -50,7 +50,7 @@ pub use gpu_pool_claim_table_memfd::GpuPoolClaimTableMemfd;
 pub use port_family_payload_descriptor_bodies::*;
 pub use reserved_slot_reader::{
     LossTallyOfAReservedSlotReader, MessageReadFromAReservedSlot, OUTPUT_PORT_VIEWER_RING_DEPTH,
-    OutputPortViewerReader, OutputPortViewerSubscribeRefusal,
+    OutputPortViewerReader, OutputPortViewerSubscribeRefusal, OutputPortViewerWake,
     SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST,
 };
 

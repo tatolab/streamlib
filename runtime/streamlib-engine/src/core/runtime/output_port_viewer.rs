@@ -74,6 +74,9 @@ pub struct OutputPortViewerChannelHandOff {
     pub iceoryx2_domain_root: PathBuf,
     /// The channel's iceoryx2 service name.
     pub channel_service_name: String,
+    /// The iceoryx2 notify service the port's node notifies on each write,
+    /// whose one listener the viewer takes.
+    pub wake_service_name: String,
     /// Where the viewer imports an Image frame's surface, as a helper process
     /// does: the surface-sharing socket's path on Linux, the surface-sharing
     /// Mach service's name on macOS. `None` on macOS when no viewer process
@@ -220,6 +223,7 @@ impl LoadedStreamInThisRuntime {
                         port: port_name,
                         iceoryx2_domain_root,
                         channel_service_name: source_side.channel_service_name.clone(),
+                        wake_service_name: source_side.wake_service_name.clone(),
                         surface_share_address: surface_share_access_of_the_viewer
                             .surface_share_address
                             .clone(),
@@ -490,6 +494,7 @@ mod tests {
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
             &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
             "a-viewer",
         )
         .expect("the viewer subscribes to the port's channel");
@@ -511,6 +516,60 @@ mod tests {
             "the port's channel goes with its viewer"
         );
         assert_eq!(the_links_of(&camera.stream), graph_before);
+    }
+
+    /// A viewer's wake hears nothing from a port its node writes nothing to,
+    /// and a write wakes a thread already waiting on it, after which the
+    /// viewer reads the message written.
+    ///
+    /// Mental-revert: without the wake the waiting thread sleeps its whole
+    /// wait and answers that nothing was written.
+    #[test]
+    #[serial]
+    fn a_viewers_wake_is_woken_by_a_write_and_hears_nothing_from_a_silent_port() {
+        let camera = ARunningCameraWithNoLinks::load();
+        let viewer = camera.open_a_viewer("out1").expect("the viewer opens");
+        let hand_off = viewer.hand_off().clone();
+        let mut reader = OutputPortViewerReader::subscribe(
+            &hand_off.iceoryx2_domain_root,
+            &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
+            "a-waiting-viewer",
+        )
+        .expect("the viewer subscribes to the port's channel and its wake");
+        let wake = reader.wake();
+        assert!(
+            !wake
+                .wait_for_a_write(Duration::from_millis(50))
+                .expect("the wake waits"),
+            "a silent port wakes no one"
+        );
+
+        let (woken, waited_for) = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                let waited_from = Instant::now();
+                let woken = wake
+                    .wait_for_a_write(ARRIVES_WITHIN)
+                    .expect("the wake waits");
+                (woken, waited_from.elapsed())
+            });
+            std::thread::sleep(Duration::from_millis(100));
+            camera.write(b"woken", 20);
+            waiting.join().unwrap()
+        });
+        assert!(woken, "the write wakes the waiting thread");
+        assert!(
+            waited_for < Duration::from_secs(2),
+            "the wake answers on the write, not when its wait runs out: {waited_for:?}"
+        );
+        let message = reader
+            .read_the_latest_message()
+            .expect("the viewer reads")
+            .expect("the message written is waiting");
+        assert_eq!(
+            (&message.payload[..], message.timestamp_ns),
+            (&b"woken"[..], 20)
+        );
     }
 
     /// A viewer names its node by id, so a name or an id the stream does not
@@ -643,6 +702,7 @@ mod tests {
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
             &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
             "a-viewer",
         )
         .unwrap();
@@ -681,6 +741,7 @@ mod tests {
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
             &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
             "a-viewer",
         )
         .unwrap();
@@ -859,6 +920,7 @@ mod tests {
         let mut reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
             &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
             "a-viewer",
         )
         .unwrap();

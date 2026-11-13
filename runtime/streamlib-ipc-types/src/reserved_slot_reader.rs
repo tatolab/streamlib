@@ -5,6 +5,8 @@
 //! bag's payload, stamp and group flag, with every message lost ahead of it.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Duration;
 
 use iceoryx2::node::Node;
 use iceoryx2::prelude::*;
@@ -135,9 +137,11 @@ impl std::error::Error for OutputPortViewerSubscribeRefusal {}
 
 /// A viewer's subscriber on an output port's channel, in the viewer's own
 /// process: each read answers the latest message the port's node wrote and how
-/// many it skipped since the read before.
+/// many it skipped since the read before, and a wait sleeps on the port's wake
+/// until the node writes.
 pub struct OutputPortViewerReader {
     subscriber: ChannelDataServiceSubscriber,
+    wake: OutputPortViewerWake,
     loss_tally: LossTallyOfAReservedSlotReader<iceoryx2::identifiers::UniquePublisherId>,
     _channel_service: ChannelDataServicePortFactory,
     _iceoryx2_node: Node<ipc_threadsafe::Service>,
@@ -145,11 +149,17 @@ pub struct OutputPortViewerReader {
 
 impl OutputPortViewerReader {
     /// Subscribe to the reserved slot of channel `channel_service_name` in the
-    /// iceoryx2 domain rooted at `iceoryx2_domain_root`, from an iceoryx2 node of
-    /// this process named `viewer_node_name`.
+    /// iceoryx2 domain rooted at `iceoryx2_domain_root`, and listen on the
+    /// notify service `wake_service_name` the port's node wakes on each write,
+    /// from an iceoryx2 node of this process named `viewer_node_name`.
+    ///
+    /// iceoryx2 binds the wake's listener socket under a process-wide umask
+    /// for an instant; a child process the viewer's process starts in that
+    /// instant inherits it.
     pub fn subscribe(
         iceoryx2_domain_root: &Path,
         channel_service_name: &str,
+        wake_service_name: &str,
         viewer_node_name: &str,
     ) -> Result<Self, OutputPortViewerSubscribeRefusal> {
         let iceoryx2_node = create_iceoryx2_node_in_domain(
@@ -195,8 +205,36 @@ impl OutputPortViewerReader {
                         ))
                     }
                 })?;
+        let wake_service_name_for_iceoryx2 =
+            ServiceName::new(wake_service_name).map_err(|refusal| {
+                OutputPortViewerSubscribeRefusal::Transport(format!(
+                    "`{wake_service_name}` is not an iceoryx2 service name: {refusal:?}"
+                ))
+            })?;
+        let wake_service = iceoryx2_node
+            .service_builder(&wake_service_name_for_iceoryx2)
+            .event()
+            .open()
+            .map_err(|failure| {
+                OutputPortViewerSubscribeRefusal::Transport(format!(
+                    "a viewer could not open the wake `{wake_service_name}` of channel \
+                     `{channel_service_name}`: {failure:?}"
+                ))
+            })?;
+        let wake_listener = wake_service
+            .listener_builder()
+            .create()
+            .map_err(|failure| {
+                OutputPortViewerSubscribeRefusal::Transport(format!(
+                    "a viewer could not listen on the wake `{wake_service_name}` of channel \
+                 `{channel_service_name}`: {failure:?}"
+                ))
+            })?;
         Ok(Self {
             subscriber,
+            wake: OutputPortViewerWake {
+                listener_and_its_service: Arc::new((wake_listener, wake_service)),
+            },
             loss_tally: LossTallyOfAReservedSlotReader::default(),
             _channel_service: channel_service,
             _iceoryx2_node: iceoryx2_node,
@@ -234,6 +272,37 @@ impl OutputPortViewerReader {
             latest = Some(message);
         }
         Ok(latest)
+    }
+
+    /// The wake the port's node notifies on each write, which another thread
+    /// may wait on while this reader is held elsewhere.
+    pub fn wake(&self) -> OutputPortViewerWake {
+        self.wake.clone()
+    }
+}
+
+/// The wake of one viewer's port: the port's node notifies it on each write.
+#[derive(Clone)]
+pub struct OutputPortViewerWake {
+    listener_and_its_service: Arc<(
+        iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
+        iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service>,
+    )>,
+}
+
+impl OutputPortViewerWake {
+    /// Wait up to `at_most` for the port's node to write, answering whether it
+    /// wrote since the wait before; every write already told is taken with it.
+    pub fn wait_for_a_write(&self, at_most: Duration) -> Result<bool, String> {
+        let (listener, _wake_service) = &*self.listener_and_its_service;
+        let mut writes_told = 0usize;
+        listener
+            .timed_wait(|_| writes_told += 1, at_most)
+            .map_err(|wait_failure| format!("a viewer's wake failed: {wait_failure:?}"))?;
+        listener
+            .try_wait(|_| writes_told += 1)
+            .map_err(|wait_failure| format!("a viewer's wake failed: {wait_failure:?}"))?;
+        Ok(writes_told > 0)
     }
 }
 

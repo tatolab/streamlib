@@ -1277,6 +1277,7 @@ const OpenViewerToolResult = z.looseObject({
   port: z.string(),
   iceoryx2_domain_root: z.string(),
   channel: z.string(),
+  wake_service: z.string(),
   surface_share_address: z.string().nullable().optional(),
 });
 

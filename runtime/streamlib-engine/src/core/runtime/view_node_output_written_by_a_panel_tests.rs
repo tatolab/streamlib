@@ -160,6 +160,7 @@ impl AStreamOfAProjectBringingViews {
         let reader = OutputPortViewerReader::subscribe(
             &hand_off.iceoryx2_domain_root,
             &hand_off.channel_service_name,
+            &hand_off.wake_service_name,
             "a-reader",
         )
         .expect("the reader subscribes to the port's channel");
@@ -827,6 +828,7 @@ fn the_value_a_new_reader_of_the_input_is_handed(
     let mut reader = OutputPortViewerReader::subscribe(
         &hand_off.iceoryx2_domain_root,
         &hand_off.channel_service_name,
+        &hand_off.wake_service_name,
         "a-reader",
     )
     .expect("the reader subscribes to the port's channel");

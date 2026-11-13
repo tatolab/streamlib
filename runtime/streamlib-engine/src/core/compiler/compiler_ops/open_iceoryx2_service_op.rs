@@ -647,6 +647,9 @@ const A_RESERVED_SLOT_READER_AS_A_DESTINATION_PORT: &str = "a-reserved-slot-read
 /// releases the source's side, then the services.
 pub(crate) struct SourceSideHeldOpenForAReaderOnTheReservedSlot {
     pub(crate) channel_service_name: String,
+    /// The notify service the source notifies on each write, whose one
+    /// listener is the reader's.
+    pub(crate) wake_service_name: String,
     /// Where a helper source answers whether it opened its port; `None` for a
     /// source with nothing to answer.
     pub(crate) wire_reply_awaited_from_the_source: Option<Arc<OutOfProcessLinkWireReply>>,
@@ -700,6 +703,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
     );
     Ok(SourceSideHeldOpenForAReaderOnTheReservedSlot {
         channel_service_name: opened.channel_service_name,
+        wake_service_name: destination.notify_service_name.clone(),
         wire_reply_awaited_from_the_source: opened.wire_reply_awaited_from_the_source,
         _source_side: source_side,
         _services: Iceoryx2ServicesHeldOpenForLinkComponent {
