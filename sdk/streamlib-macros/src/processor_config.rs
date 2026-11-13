@@ -5,7 +5,9 @@
 //! description its config schema serves. Each described field's schema goes
 //! through `ProcessorConfigKeyDescribedBy<FieldType, Marker>`, whose generated
 //! `Marker` holds the text as a `const`, so a literal and a `const` path read
-//! alike.
+//! alike. The struct takes container-level `#[serde(default)]`, so a key a
+//! config leaves out is filled from the struct's `Default`, which it must
+//! implement.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -28,6 +30,7 @@ pub fn expand_processor_config(
         ));
     }
     refuse_a_struct_whose_json_schema_is_not_derived_below(&item)?;
+    refuse_a_struct_that_already_declares_container_serde_default(&item)?;
     let Fields::Named(named_fields) = &mut item.fields else {
         return Err(syn::Error::new(
             item.fields.span(),
@@ -64,10 +67,65 @@ pub fn expand_processor_config(
         description_markers.push(description_marker(&sdk_root, &marker, &description));
     }
 
+    item.attrs.push(syn::parse_quote! { #[serde(default)] });
+    let filled_from_default_check = config_filled_from_its_default_check(&sdk_root, &item);
+
     Ok(quote! {
         #item
         #(#description_markers)*
+        #filled_from_default_check
     })
+}
+
+/// A compile-time check that the config implements `Default`, through a trait
+/// whose diagnostic names the fix rather than serde's bare `Default` bound.
+fn config_filled_from_its_default_check(sdk_root: &TokenStream, item: &ItemStruct) -> TokenStream {
+    let struct_name = &item.ident;
+    let (impl_generics, type_generics, where_clause) = item.generics.split_for_impl();
+    quote! {
+        const _: () = {
+            fn processor_config_is_filled_from_its_default<
+                ProcessorConfig: #sdk_root::descriptors::ProcessorConfigFilledFromItsDefault,
+            >() {
+            }
+            #[allow(dead_code)]
+            fn check #impl_generics () #where_clause {
+                processor_config_is_filled_from_its_default::<#struct_name #type_generics>();
+            }
+        };
+    }
+}
+
+/// Container-level `#[serde(default)]` is what `#[processor_config]` adds, and
+/// serde refuses it twice.
+fn refuse_a_struct_that_already_declares_container_serde_default(
+    item: &ItemStruct,
+) -> syn::Result<()> {
+    for attribute in &item.attrs {
+        if !attribute.path().is_ident("serde") {
+            continue;
+        }
+        let mut declares_default = false;
+        let _ = attribute.parse_nested_meta(|nested| {
+            if nested.path.is_ident("default") {
+                declares_default = true;
+            }
+            if nested.input.peek(syn::Token![=]) {
+                nested.value()?.parse::<Expr>()?;
+            } else if nested.input.peek(syn::token::Paren) {
+                nested.parse_nested_meta(|_| Ok(()))?;
+            }
+            Ok(())
+        });
+        if declares_default {
+            return Err(syn::Error::new(
+                attribute.span(),
+                "#[processor_config] already fills every key a config leaves out from the \
+                 struct's `Default`; remove this container-level `#[serde(default)]`",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn description_marker(sdk_root: &TokenStream, marker: &Ident, description: &Expr) -> TokenStream {
@@ -247,6 +305,42 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("# [description"), "{rendered}");
+    }
+
+    #[test]
+    fn the_struct_is_filled_from_its_default_and_checked_for_one() {
+        let rendered = expanded(quote! {
+            #[derive(JsonSchema)]
+            struct CameraConfig {
+                width: u32,
+            }
+        })
+        .expect("expands");
+        assert!(rendered.contains("# [serde (default)]"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "ProcessorConfig : :: streamlib :: sdk :: descriptors :: \
+                 ProcessorConfigFilledFromItsDefault"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_struct_already_declaring_container_serde_default_is_refused() {
+        let refusal = expanded(quote! {
+            #[derive(JsonSchema)]
+            #[serde(deny_unknown_fields, default)]
+            struct CameraConfig {
+                width: u32,
+            }
+        })
+        .expect_err("refused");
+        assert!(
+            refusal
+                .to_string()
+                .contains("remove this container-level `#[serde(default)]`")
+        );
     }
 
     #[test]
