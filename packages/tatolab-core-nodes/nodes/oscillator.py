@@ -18,6 +18,10 @@ OSCILLATOR_OUTPUT_PORT = "audio"
 # rather than emitting the whole backlog: a burst that large outruns any mailbox.
 MAXIMUM_BLOCKS_OF_CATCH_UP = 4
 
+#: The least an `Oscillator` catches up on before it starts a new run: several of its ticks,
+#: so a block shorter than a tick still owes less than the limit at every tick.
+LEAST_CATCH_UP_MS = 100
+
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
@@ -105,8 +109,9 @@ class Oscillator:
         samples_owed = (
             (now_ns - self.run_anchor_timestamp_ns) * self.sample_rate
         ) // NANOSECONDS_PER_SECOND
-        if samples_owed - self.samples_emitted_in_this_run > (
-            MAXIMUM_BLOCKS_OF_CATCH_UP * self.block_size
+        if samples_owed - self.samples_emitted_in_this_run > max(
+            MAXIMUM_BLOCKS_OF_CATCH_UP * self.block_size,
+            self.sample_rate * LEAST_CATCH_UP_MS // 1000,
         ):
             log.warn(
                 "fell far enough behind real time to start a new run; the gap is "

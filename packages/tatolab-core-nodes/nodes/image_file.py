@@ -38,6 +38,10 @@ class ImageFileConfig:
     asset: Annotated[str, ProjectAssetUuid(media=("image",))] = ""
 
 
+#: The Pillow modes whose channels an embedded colour profile of that mode reads directly.
+MODES_AN_EMBEDDED_COLOUR_PROFILE_READS_AS_THEY_ARE = ("RGB", "CMYK", "L")
+
+
 def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
     """The PNG or JPEG at `path`, upright by its EXIF orientation and in sRGB by its embedded colour profile, decoded to an `(height, width, 4)` array of 8-bit RGBA."""
     import io
@@ -52,19 +56,31 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
                 f"the image asset at {path} is {image_file.format or 'no format Pillow knows'}, "
                 f"and an ImageFile decodes PNG and JPEG"
             )
-        upright = ImageOps.exif_transpose(image_file).convert("RGBA")
+        upright = ImageOps.exif_transpose(image_file)
         embedded_colour_profile = image_file.info.get("icc_profile")
         if embedded_colour_profile:
-            alpha = upright.getchannel("A")
+            # A profile reads the channels of its own colour mode, so a CMYK
+            # image is handed over as CMYK; a mode carrying alpha or a palette
+            # goes through RGB with its alpha set aside.
+            if upright.mode in MODES_AN_EMBEDDED_COLOUR_PROFILE_READS_AS_THEY_ARE:
+                alpha, in_the_mode_of_the_profile = None, upright
+            else:
+                with_alpha = upright.convert("RGBA")
+                alpha, in_the_mode_of_the_profile = (
+                    with_alpha.getchannel("A"),
+                    with_alpha.convert("RGB"),
+                )
             in_srgb = ImageCms.profileToProfile(
-                upright.convert("RGB"),
+                in_the_mode_of_the_profile,
                 ImageCms.ImageCmsProfile(io.BytesIO(embedded_colour_profile)),
                 ImageCms.createProfile("sRGB"),
                 outputMode="RGB",
             )
             assert in_srgb is not None
-            in_srgb.putalpha(alpha)
+            if alpha is not None:
+                in_srgb.putalpha(alpha)
             upright = in_srgb
+        upright = upright.convert("RGBA")
         return numpy.asarray(upright)
 
 

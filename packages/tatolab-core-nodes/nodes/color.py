@@ -156,7 +156,7 @@ def Duotone(  # noqa: N802
     """
 float4 Posterize(ImageInput image, float levels)
 {
-    float steps = max(levels, 2.0) - 1.0;
+    float steps = max(floor(levels + 0.5), 2.0) - 1.0;
     return float4(floor(image.pixel.rgb * steps + 0.5) / steps, image.pixel.a);
 }
 """,

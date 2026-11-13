@@ -27,7 +27,10 @@ float4 Over(ImageInput background, ImageInput foreground, float opacity)
 {
     float4 top = foreground.sample(background.uv);
     float cover = top.a * saturate(opacity);
-    return float4(lerp(background.pixel.rgb, top.rgb, cover), max(background.pixel.a, cover));
+    float background_shown = background.pixel.a * (1.0 - cover);
+    float alpha = cover + background_shown;
+    float3 colour = top.rgb * cover + background.pixel.rgb * background_shown;
+    return float4(alpha > 0.0 ? colour / alpha : float3(0.0, 0.0, 0.0), alpha);
 }
 """,
     description="Lay a foreground over a background, showing the background wherever the foreground is see-through.",

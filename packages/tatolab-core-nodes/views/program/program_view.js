@@ -26,6 +26,7 @@ function showThePicture(source, width, height) {
     pictureCanvas.width = width;
     pictureCanvas.height = height;
   }
+  pictureContext.clearRect(0, 0, width, height);
   pictureContext.drawImage(source, 0, 0, width, height);
   pictureNotice.textContent = "";
 }
