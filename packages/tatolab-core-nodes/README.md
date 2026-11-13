@@ -57,6 +57,12 @@ number node can drive.
   frame and stretch on any other shape.
 - **A shader is not handed the time.** Wire a Timer, Ramp or Speed into the input that moves it.
 
+## What a number node cannot do yet
+
+- **Feedback here closes no loop.** The runtime closes a loop only through
+  `tatolab.ops:Feedback`, so a loop through this project's Feedback is refused. The runtime takes
+  this project's name for it in the change that carries the project into every new project.
+
 ## Check it
 
 ```bash
