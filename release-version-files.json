@@ -1,0 +1,126 @@
+[
+  {
+    "path": "Cargo.toml",
+    "table": "workspace.package"
+  },
+  {
+    "path": "sdk/tatolab-stream/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "sdk/tatolab-runtime-client/package.json",
+    "key": "version"
+  },
+  {
+    "path": "packages/streamlib-webrtc/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/streamlib-webrtc/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-microphone/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-microphone/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-speaker/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-speaker/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/streamlib-h264/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/streamlib-h264/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-browser/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-browser/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-opus/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-opus/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-moq/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-moq/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-moq/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
+    "path": "packages/tatolab-ops/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-ops/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
+    "path": "packages/streamlib-h265/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/streamlib-h265/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-camera/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-camera/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-rive/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-rive/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-compositor/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-compositor/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
+    "path": "packages/tatolab-testpattern/pyproject.toml",
+    "table": "project"
+  },
+  {
+    "path": "packages/tatolab-virtualcamera/Cargo.toml",
+    "table": "package"
+  },
+  {
+    "path": "packages/tatolab-virtualcamera/pyproject.toml",
+    "table": "project"
+  }
+]

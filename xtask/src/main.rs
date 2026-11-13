@@ -600,9 +600,9 @@ enum Commands {
     CheckVendoredTrees,
 
     /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement
-    /// equal to `[workspace.package] version`. release-please's `simple` release
-    /// type bumps the workspace version and ships no cargo dependency-requirement
-    /// updater, so the pins sit still while the crates move. Inside one minor line
+    /// equal to `[workspace.package] version`. A release writes the workspace
+    /// version and no dependency requirement, so the pins sit still while the
+    /// crates move. Inside one minor line
     /// that is invisible (`^0.17.0` matches `0.17.1`); the next breaking bump makes
     /// the workspace unresolvable, because `^0.17.0` excludes `0.18.0`, and holds
     /// the release shut. `cargo metadata --no-deps` parses it clean, so only a

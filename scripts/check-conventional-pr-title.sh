@@ -2,9 +2,8 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Exits non-zero unless the title given is a conventional-commit title. The repo
-# squash-merges, so a PR's title becomes the commit release-please reads to
-# compute the version bump; run this on a title before opening the PR.
+# Exits non-zero unless the title given is a conventional-commit title, the form
+# a PR title takes for its readers; run this on a title before opening the PR.
 #
 # Usage: scripts/check-conventional-pr-title.sh "<title>"
 
@@ -15,6 +14,5 @@ if printf '%s' "$title" | grep -qE '^(feat|fix|perf|refactor|docs|chore|test|ci|
   exit 0
 fi
 echo "not a conventional-commit title: $title" >&2
-echo "pre-1.0: feat, fix and perf -> patch; ! or a 'BREAKING CHANGE:' footer -> minor;" >&2
-echo "refactor, chore, docs, test, ci, build and revert land no version bump." >&2
+echo "write it as type(scope): summary, type one of feat fix perf refactor docs chore test ci build revert" >&2
 exit 1
