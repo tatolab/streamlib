@@ -85,9 +85,16 @@ project, not wheel, the runtime unit gives to every project.
   A is the rule the plan already holds for what the runtime owns ("the runtime unit carries its
   first-party modules … never copied into a project", `ARCHITECTURE.md:2250`); B is the rule it
   holds for what a person imports. The rest of this change is written for A.
-- **How a Core Nodes node is named.** Its type is led by the reserved folder as any import's is:
-  `imports/core-nodes/nodes.color:Tint`. A stream document stores that spelling, the same under A
-  and B. `add_dependency` refuses the folder name `core-nodes`, naming who holds it.
+- **How a Core Nodes node is named.** **[NEEDS DECISION 4]** A stream document stores a node's
+  type as a string, for good.
+  - **(a) The import spelling, unchanged (recommended):** `imports/core-nodes/nodes.color:Tint`,
+    led by the reserved folder as any import's type is. No new naming rule and no second
+    resolver; moving a node between Core Nodes' files breaks stored documents, as it does for any
+    import. A person never reads this string: Add node shows the group and the node's name.
+  - **(b) A short first-party prefix:** `core:Tint`, `core:Lfo`, `core:Feedback`. Stable across
+    Core Nodes' file layout, and one more type grammar the catalog, `add_node` and the load each
+    resolve, held by the engine for one project.
+  Either way `add_dependency` refuses the folder name `core-nodes`, naming who holds it.
 - **Its requirements join the project's lock** through a uv path source on the link with
   `package = false`, as an import's do, so `numba`, `numpy` and `pillow` resolve from the wheels
   the unit carries and a new project still creates and runs with no network.
@@ -126,8 +133,9 @@ project, not wheel, the runtime unit gives to every project.
   group, with the behaviour the DECIDED entry states.
 - **The starter stream.** **[NEEDS DECISION 3]** A new project's one stream is `TestPatternSource`
   alone (first-party-package-index). Options: (a) leave it (recommended for this change: the
-  starter is a separate question from what Add node offers); (b) the starter becomes a Core Nodes
-  generator into Program, and `tatolab-testpattern` leaves the unit.
+  starter is a separate question from what Add node offers); (b) the starter becomes `SolidColor` into `Noise`,
+  moved by a `Timer`, into Program, so a new project opens on something moving in a view;
+  (c) `TestPatternSource` into Program.
 - **Marketplace assembly** (`scripts/tatolab_module_projects.py`) reads every
   `packages/*/tatolab-project.json` as a module project. It names Core Nodes as the unit's, not
   the Marketplace's, and leaves it out by that rule instead of by its missing wheel.
@@ -168,7 +176,7 @@ served to the app wherever the import is named.
 
 ## Tickets
 
-Not derived until the three decisions above are settled. The expected cut, each a tracer bullet:
+Not derived until the four decisions above are settled. The expected cut, each a tracer bullet:
 
 1. The unit carries the core project, and a project loads with it as an import: node types
    listed, a node placed and run, Program listed and served. `tatolab-ops` still ships.
