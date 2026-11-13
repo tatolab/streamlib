@@ -414,6 +414,7 @@ def node_names_loaded_by_tatolabd(
         + what_the_run_and_the_runtime_said()
     )
 
+    standard_error_mark_before_the_removal = len(tatolabd.standard_error_lines)
     removal_run = subprocess.run(
         [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "rm", "--dir", str(project_directory)],
         cwd=working_directory,
@@ -430,7 +431,7 @@ def node_names_loaded_by_tatolabd(
     unload_line_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
     while True:
         unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(
-            tatolabd.standard_error_text_since(standard_error_mark)
+            tatolabd.standard_error_text_since(standard_error_mark_before_the_removal)
         )
         if unload is not None or time.monotonic() > unload_line_deadline:
             break
