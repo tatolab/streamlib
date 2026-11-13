@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-virtualcamera"
-version = "0.68.82"
+version = "0.68.92"
 description = "A virtual camera for Tatolab streams: video frames in, a v4l2loopback or PipeWire camera any Linux application can select out."
 readme = "README.md"
 requires-python = ">=3.12"
