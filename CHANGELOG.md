@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.83](https://github.com/tatolab/streamlib/compare/v0.68.82...v0.68.83) (2026-11-13)
+
+
+### CI/CD
+
+* **release:** publishing an older release again keeps the newer latest ([1373191](https://github.com/tatolab/streamlib/commit/13731915e11b05cfca056234a028efb9af435dcf))
+
 ## [0.68.82](https://github.com/tatolab/streamlib/compare/v0.68.81...v0.68.82) (2026-11-12)
 
 
