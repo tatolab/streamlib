@@ -8,6 +8,7 @@ pub mod array_to_channels;
 pub mod array_to_image;
 pub mod channels_to_array;
 pub mod channels_to_records;
+mod conversion_node_config_defaults;
 mod conversion_node_config_refusals;
 pub mod image_to_array;
 mod port_family_messages_read_by_a_conversion;
