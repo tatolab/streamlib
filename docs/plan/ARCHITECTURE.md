@@ -2282,7 +2282,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   node, named and of one family, the way DaVinci Resolve's Fusion page and Effect House do; there
   is no `expose` verb. One added with no `port` takes the next free name of its kind on its
   level, `input1`, `input2` … or `output1` …, as TouchDesigner, Blender and Unreal name a new
-  one (owner, 2026-11-13). Tato Studio shows a graph's Outputs as what it displays, at every level.
+  one (owner, 2026-11-13). One added with no `family` takes the family of the first port linked
+  to it, as Unreal's wildcard pins do, and runs nothing, drawn with no family, until a link
+  reaches it; a family its config names wins (owner, 2026-11-13). Tato Studio shows a graph's
+  Outputs as what it displays, at every level.
   A subgraph is a fragment, and comes two ways: a `@graph_generator` function's frozen output
   (§Product), and another stream of the project or of an import placed by reference, a
   `tatolab.project:StreamFragment` node holding only `{"stream": {"asset", "from"?}}`.

@@ -23,8 +23,9 @@ class GraphOutputConfig(TypedDict):
 
     port: Required[str]
     """The Output's name, cast as every exposed name is."""
-    family: Required["PortFamily[Any] | str"]
-    """The Output's family: `Image`, `Array`, `Channels`, `Packets` or `Records`."""
+    family: NotRequired["PortFamily[Any] | str"]
+    """The Output's family: `Image`, `Array`, `Channels`, `Packets` or `Records`. Left out,
+    the Output takes the family of the port linked into it, and runs nothing until one is."""
 
 
 class GraphOutput(BuiltInNode[GraphOutputConfig]):
@@ -45,8 +46,10 @@ class GraphInputConfig(TypedDict):
 
     port: Required[str]
     """The Input's name, cast as every exposed name is."""
-    family: Required["PortFamily[Any] | str"]
-    """The Input's family: `Image`, `Array`, `Channels`, `Packets` or `Records`."""
+    family: NotRequired["PortFamily[Any] | str"]
+    """The Input's family: `Image`, `Array`, `Channels`, `Packets` or `Records`. Left out,
+    the Input takes the family of its first reader's port, and runs nothing until one is
+    linked."""
     default: NotRequired[Any]
     """What the Input's readers see until a client writes it, of its family: a stream's
     top-level Array, Channels or Records Input only."""

@@ -3,8 +3,9 @@
 
 use std::collections::HashSet;
 use streamlib_project_repository::{
-    STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
-    StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
@@ -147,6 +148,7 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
                     || node.node_type == STREAM_FRAGMENT_NODE_TYPE
+                    || is_a_graph_interface_node_naming_no_family(&node.node_type, &node.config)
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -185,18 +187,29 @@ impl LoadedStreamInThisRuntime {
         &self,
         mut graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
-        if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
-            if node.name.is_empty() {
-                return Err(Error::GraphError(format!(
-                    "node {} is added with no name, and a fragment is placed under one",
-                    node.id
-                )));
-            }
-            node.name = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
-        }
         let graph_as_drawn = self.to_json()?;
         let mut graph_document =
             StreamGraphDocument::from_value(graph_as_drawn.clone()).map_err(Error::GraphError)?;
+        if let StreamGraphOperation::AddNode { node, .. } = &mut graph_operation {
+            if node.name.is_empty() {
+                if node.fragment.is_some() || node.node_type == STREAM_FRAGMENT_NODE_TYPE {
+                    return Err(Error::GraphError(format!(
+                        "node {} is added with no name, and a fragment is placed under one",
+                        node.id
+                    )));
+                }
+                let names_at_the_level: HashSet<String> = graph_document
+                    .nodes()
+                    .into_iter()
+                    .map(|held| held.name)
+                    .collect();
+                node.name = self.the_name_a_node_of_the_type_takes_at_a_level(
+                    &node.node_type,
+                    &names_at_the_level,
+                )?;
+            }
+            node.name = cast_exposed_name_to_url_safe(&node.name)?.into_owned();
+        }
         graph_document
             .apply(&graph_operation)
             .map_err(Error::GraphError)?;
@@ -331,4 +344,13 @@ impl LoadedStreamInThisRuntime {
                 })
         })
     }
+}
+
+/// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
+/// names no family, so the family it carries is resolved with the graph's links.
+fn is_a_graph_interface_node_naming_no_family(node_type: &str, config: &serde_json::Value) -> bool {
+    is_a_graph_interface_node_type(node_type)
+        && config
+            .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
+            .is_none_or(serde_json::Value::is_null)
 }
