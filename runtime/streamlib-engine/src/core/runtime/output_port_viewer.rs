@@ -518,15 +518,15 @@ mod tests {
         assert_eq!(the_links_of(&camera.stream), graph_before);
     }
 
-    /// A viewer waiting on a port its node writes nothing to is handed
-    /// nothing once its wait runs out, and a write wakes a viewer already
-    /// waiting with the message written.
+    /// A viewer's wake hears nothing from a port its node writes nothing to,
+    /// and a write wakes a thread already waiting on it, after which the
+    /// viewer reads the message written.
     ///
-    /// Mental-revert: without the wake the waiting viewer sleeps its whole
-    /// wait and the write is read only on the next read.
+    /// Mental-revert: without the wake the waiting thread sleeps its whole
+    /// wait and answers that nothing was written.
     #[test]
     #[serial]
-    fn a_waiting_viewer_is_woken_by_a_write_and_hears_nothing_from_a_silent_port() {
+    fn a_viewers_wake_is_woken_by_a_write_and_hears_nothing_from_a_silent_port() {
         let camera = ARunningCameraWithNoLinks::load();
         let viewer = camera.open_a_viewer("out1").expect("the viewer opens");
         let hand_off = viewer.hand_off().clone();
@@ -537,34 +537,38 @@ mod tests {
             "a-waiting-viewer",
         )
         .expect("the viewer subscribes to the port's channel and its wake");
-        assert_eq!(
-            reader
-                .wait_for_the_next_message(Duration::from_millis(50))
-                .expect("the viewer waits"),
-            None,
-            "a silent port hands a waiting viewer nothing"
+        let wake = reader.wake();
+        assert!(
+            !wake
+                .wait_for_a_write(Duration::from_millis(50))
+                .expect("the wake waits"),
+            "a silent port wakes no one"
         );
 
-        let woken = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(100));
-                camera.write(b"woken", 20);
+        let (woken, waited_for) = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                let waited_from = Instant::now();
+                let woken = wake
+                    .wait_for_a_write(ARRIVES_WITHIN)
+                    .expect("the wake waits");
+                (woken, waited_from.elapsed())
             });
-            let waited_from = Instant::now();
-            let message = reader
-                .wait_for_the_next_message(ARRIVES_WITHIN)
-                .expect("the viewer waits");
-            (message, waited_from.elapsed())
+            std::thread::sleep(Duration::from_millis(100));
+            camera.write(b"woken", 20);
+            waiting.join().unwrap()
         });
-        let (message, waited_for) = woken;
-        let message = message.expect("the write wakes the viewer");
+        assert!(woken, "the write wakes the waiting thread");
+        assert!(
+            waited_for < Duration::from_secs(2),
+            "the wake answers on the write, not when its wait runs out: {waited_for:?}"
+        );
+        let message = reader
+            .read_the_latest_message()
+            .expect("the viewer reads")
+            .expect("the message written is waiting");
         assert_eq!(
             (&message.payload[..], message.timestamp_ns),
             (&b"woken"[..], 20)
-        );
-        assert!(
-            waited_for < Duration::from_secs(2),
-            "the viewer is woken by the write, not by its wait running out: {waited_for:?}"
         );
     }
 

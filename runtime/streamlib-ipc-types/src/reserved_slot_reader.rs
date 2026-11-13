@@ -5,6 +5,7 @@
 //! bag's payload, stamp and group flag, with every message lost ahead of it.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use iceoryx2::node::Node;
@@ -140,8 +141,7 @@ impl std::error::Error for OutputPortViewerSubscribeRefusal {}
 /// until the node writes.
 pub struct OutputPortViewerReader {
     subscriber: ChannelDataServiceSubscriber,
-    wake_listener: iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
-    _wake_service: iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service>,
+    wake: OutputPortViewerWake,
     loss_tally: LossTallyOfAReservedSlotReader<iceoryx2::identifiers::UniquePublisherId>,
     _channel_service: ChannelDataServicePortFactory,
     _iceoryx2_node: Node<ipc_threadsafe::Service>,
@@ -232,8 +232,9 @@ impl OutputPortViewerReader {
             })?;
         Ok(Self {
             subscriber,
-            wake_listener,
-            _wake_service: wake_service,
+            wake: OutputPortViewerWake {
+                listener_and_its_service: Arc::new((wake_listener, wake_service)),
+            },
             loss_tally: LossTallyOfAReservedSlotReader::default(),
             _channel_service: channel_service,
             _iceoryx2_node: iceoryx2_node,
@@ -273,23 +274,35 @@ impl OutputPortViewerReader {
         Ok(latest)
     }
 
-    /// The latest message the port's node wrote since the read before, waiting
-    /// up to `at_most` on the port's wake when it wrote nothing since; `None`
-    /// when it wrote nothing in that time.
-    pub fn wait_for_the_next_message(
-        &mut self,
-        at_most: Duration,
-    ) -> Result<Option<MessageReadFromAReservedSlot>, String> {
-        self.wake_listener
-            .try_wait(|_| {})
+    /// The wake the port's node notifies on each write, which another thread
+    /// may wait on while this reader is held elsewhere.
+    pub fn wake(&self) -> OutputPortViewerWake {
+        self.wake.clone()
+    }
+}
+
+/// The wake of one viewer's port: the port's node notifies it on each write.
+#[derive(Clone)]
+pub struct OutputPortViewerWake {
+    listener_and_its_service: Arc<(
+        iceoryx2::port::listener::Listener<ipc_threadsafe::Service>,
+        iceoryx2::service::port_factory::event::PortFactory<ipc_threadsafe::Service>,
+    )>,
+}
+
+impl OutputPortViewerWake {
+    /// Wait up to `at_most` for the port's node to write, answering whether it
+    /// wrote since the wait before; every write already told is taken with it.
+    pub fn wait_for_a_write(&self, at_most: Duration) -> Result<bool, String> {
+        let (listener, _wake_service) = &*self.listener_and_its_service;
+        let mut writes_told = 0usize;
+        listener
+            .timed_wait(|_| writes_told += 1, at_most)
             .map_err(|wait_failure| format!("a viewer's wake failed: {wait_failure:?}"))?;
-        if let Some(message) = self.read_the_latest_message()? {
-            return Ok(Some(message));
-        }
-        self.wake_listener
-            .timed_wait(|_| {}, at_most)
+        listener
+            .try_wait(|_| writes_told += 1)
             .map_err(|wait_failure| format!("a viewer's wake failed: {wait_failure:?}"))?;
-        self.read_the_latest_message()
+        Ok(writes_told > 0)
     }
 }
 
