@@ -117,7 +117,7 @@ NO_RUNTIME_REFUSAL_PREFIX = "no runtime is running on this machine: nothing answ
 NO_RUNTIME_REFUSAL_REMEDY = "Start one by opening Tato Studio, or by running `tatolabd` in a terminal."
 
 STREAM_RECORD_FILE_MODE = 0o600
-STREAM_RECORD_SCHEMA_VERSION = 8
+STREAM_RECORD_SCHEMA_VERSION = 9
 
 #: `tatolabd`'s line once it serves, naming the re-load it queued for each project.
 RELOADS_QUEUED_AT_THE_START_LOG_LINE_PATTERN = re.compile(
@@ -899,7 +899,7 @@ def test_a_stop_or_rm_made_while_tatolabd_re_loads_its_recorded_streams_holds(
     """`tatolabd` serves before it re-loads its recorded streams. An owner who
     stops a stream and removes another the moment the socket answers — before
     the re-load reaches them — is never overruled by it: the stopped stream
-    stays unloaded, and the removed one is not loaded."""
+    stays held stopped with its graph, and the removed one is not loaded."""
     projects_by_stream_function = {
         stream_function_name: make_project_running_a_pattern_stream(
             make_tatolab_project, stream_function_name
@@ -971,11 +971,14 @@ def test_a_stop_or_rm_made_while_tatolabd_re_loads_its_recorded_streams_holds(
             for stream_function_name in stream_functions_running
         },
         stopped_stream_id: listing_of_the_recorded(
-            STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION, "stopped", None
+            STOPPED_WHILE_RE_LOADING_STREAM_FUNCTION, "stopped", PROJECT_STREAM_NODE_COUNT
         ),
     }, f"a re-load had already loaded one of them when the owner acted: {re_load_reached_them_first}"
     assert stream_ids_in_the_machine_graph(local_api) == sorted(
-        stream_id_of[stream_function_name] for stream_function_name in stream_functions_running
+        [
+            *(stream_id_of[stream_function_name] for stream_function_name in stream_functions_running),
+            stopped_stream_id,
+        ]
     )
     stop_tatolabd_cleanly(tatolabd)
 

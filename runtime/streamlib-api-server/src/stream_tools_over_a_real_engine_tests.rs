@@ -2841,7 +2841,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
         )
         .await;
     assert_eq!(
-        subscriber.next_message().await["result"]["streams"],
+        the_next_answer_but_its_notifications(&mut subscriber).await["result"]["streams"],
         json!([stream_id])
     );
     subscriber
