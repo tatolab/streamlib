@@ -359,8 +359,9 @@ def node_names_loaded_by_tatolabd(
 
     `tatolab open --play` queues the load and its playback, and exits 0. The engine loads the compiled
     names unsuffixed, so they are the names it holds. Its start is then refused
-    at the GPU, which the runtime logs, and its unload counts the processors the
-    load added. Fails naming what the runtime said when the load is refused.
+    at the GPU, which the runtime logs, holding the stream stopped with its graph;
+    `tatolab rm` then unloads it, counting the processors the load added. Fails
+    naming what the runtime said when the load is refused.
     """
     graph = run_graph_generator(stream_function)
     stream_name = stream_function.__name__
@@ -394,14 +395,13 @@ def node_names_loaded_by_tatolabd(
 
     # The queued load runs after `tatolab open --play` exits, and its lines reach this
     # process through the drain thread.
-    load_and_unload_lines_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
+    load_lines_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
     while True:
         standard_error_text = tatolabd.standard_error_text_since(standard_error_mark)
         start_began = STREAM_START_BEGAN_LINE.search(standard_error_text)
-        unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(standard_error_text)
         refused_at_the_gpu = NO_VULKAN_DRIVER_REFUSAL in standard_error_text
-        if (start_began is not None and unload is not None and refused_at_the_gpu) or (
-            time.monotonic() > load_and_unload_lines_deadline
+        if (start_began is not None and refused_at_the_gpu) or (
+            time.monotonic() > load_lines_deadline
         ):
             break
         time.sleep(0.05)
@@ -413,6 +413,28 @@ def node_names_loaded_by_tatolabd(
         "the loaded stream was to be refused at its start for the missing Vulkan driver; "
         + what_the_run_and_the_runtime_said()
     )
+
+    removal_run = subprocess.run(
+        [str(_runtime_unit_executable(TATOLAB_EXECUTABLE)), "rm", "--dir", str(project_directory)],
+        cwd=working_directory,
+        env=tatolabd.cli_environment,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        errors="replace",
+        timeout=LOAD_DEADLINE_SECONDS,
+    )
+    assert removal_run.returncode == 0, (
+        f"`tatolab rm` exited {removal_run.returncode}:\n{removal_run.stdout}{removal_run.stderr}"
+    )
+    unload_line_deadline = time.monotonic() + LOAD_DEADLINE_SECONDS
+    while True:
+        unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LINE.search(
+            tatolabd.standard_error_text_since(standard_error_mark)
+        )
+        if unload is not None or time.monotonic() > unload_line_deadline:
+            break
+        time.sleep(0.05)
     assert unload is not None, what_the_run_and_the_runtime_said()
     assert int(unload.group("processor_count")) == len(graph["nodes"])
     return [loaded_node["name"] for loaded_node in graph["nodes"]]

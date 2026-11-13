@@ -643,16 +643,20 @@ def test_the_scaffolded_app_reaches_a_running_graph(
 ):
     """What `tatolab new` writes must actually run, frame after frame.
 
-    Run exactly as scaffolded: `new` has the runtime write the starter and load its
-    graph document, one test pattern source. A listed stream alone proves almost
-    nothing here: it is listed whether or not the source ever writes, so the
-    assertion that carries this test is the count of frames the source wrote on
-    `video` while a viewer read it, which catches a source that is correct but so
-    slow the first minute is a slideshow.
+    Run exactly as scaffolded: `new` has the runtime write the starter, one test
+    pattern source, and open it held stopped, and `start_playback` plays it. A
+    listed stream alone proves almost nothing here: it is listed whether or not
+    the source ever writes, so the assertion that carries this test is the count
+    of frames the source wrote on `video` while a viewer read it, which catches a
+    source that is correct but so slow the first minute is a slideshow.
     """
     tatolabd = start_tatolabd()
     app_directory = make_scaffolded_tatolab_project(tatolabd)
     local_api = tatolabd.local_api_client()
+    queued_playback = local_api.call_tool(
+        "start_playback", {"project_directory": str(app_directory)}
+    )
+    assert local_api.stream_action_once_ended(queued_playback["action"])["state"] == "done"
 
     stream_id = stream_id_of_the_project(app_directory)
     live_graph = local_api.await_every_node_running(stream=stream_id)
@@ -1011,19 +1015,21 @@ def test_a_run_takes_in_every_graph_document_and_forgets_a_stream_whose_document
 
     stream_run = load_the_projects_stream(tatolabd, app_directory)
 
-    ended_load = stream_run.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)
-    assert ended_load["state"] == "done", ended_load
-    assert {stream["stream"]: stream["state"] for stream in ended_load["streams"]} == {
+    ended_playback = stream_run.action_once_ended(timeout=NODE_READY_TIMEOUT_SECONDS)
+    assert ended_playback["state"] == "done", ended_playback
+    assert {stream["stream"]: stream["state"] for stream in ended_playback["streams"]} == {
         stream_id_of("camera"): "running",
         stream_id_of("preview"): "running",
-        stream_id_of("broken"): "failed",
-    }, ended_load
+    }, ended_playback
+    open_action = stream_run.stdout_text.split(" ", 1)[0]
     assert stream_run.stdout_text == (
-        f"{ended_load['action']} queued: load of {app_directory.resolve()}\n"
+        f"{open_action} queued: open of {app_directory.resolve()}\n"
+        "  follow it: tatolab logs -f\n"
+        f"{ended_playback['action']} queued: start_playback of {app_directory.resolve()}\n"
         "  follow it: tatolab logs -f\n"
     ), stream_run.stdout_text
     failed_stream = stream_run.failed_stream()
-    assert failed_stream is not None, ended_load
+    assert failed_stream is not None, ended_playback
     assert failed_stream[0] == stream_id_of("broken"), failed_stream
     assert "`streams/broken.graph.json` does not load" in failed_stream[1], failed_stream[1]
 
