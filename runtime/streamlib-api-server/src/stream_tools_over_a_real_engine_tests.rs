@@ -3188,6 +3188,115 @@ async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_re
     assert_eq!(links_by_node_name_in(&live), Vec::<String>::new(), "{live}");
 }
 
+/// A `GraphInput` added with no `port` takes the next free `input1`, `input2` …, numbered
+/// against the Inputs the level already declares, those an earlier add of the same transaction
+/// declared included.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_input_added_with_no_port_takes_the_next_free_input_name() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let add_a_records_graph_input = || {
+        json!({ "operation": "add_node", "stream": stream_asset,
+                "type": "tatolab.stream:GraphInput", "config": { "family": "records" } })
+    };
+    let add_the_graph_inputs = |operations: Vec<Value>| {
+        tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+    };
+
+    tool_answer(
+        &add_the_graph_inputs(vec![
+            add_a_records_graph_input(),
+            add_a_records_graph_input(),
+        ])
+        .await,
+    )
+    .expect("both Inputs are added");
+    tool_answer(&add_the_graph_inputs(vec![add_a_records_graph_input()]).await)
+        .expect("a third Input is added");
+
+    let kept = project.the_graph_document_of("main");
+    let mut ports_declared: Vec<&str> = kept["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|node| node["type"] == "tatolab.stream:GraphInput")
+        .filter_map(|node| node["config"]["port"].as_str())
+        .collect();
+    ports_declared.sort_unstable();
+    assert_eq!(ports_declared, ["input1", "input2", "input3"], "{kept}");
+}
+
+/// A `GraphInput` or `GraphOutput` added with no family runs nothing and renders no family
+/// until a link reaches it, then takes the family of the port linked to it, its config left as
+/// drawn.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_interface_node_added_with_no_family_takes_the_family_of_its_first_link() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let transact = |operations: Value| {
+        tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": operations }),
+        )
+    };
+
+    tool_answer(
+        &transact(json!([
+            { "operation": "add_node", "stream": stream_asset,
+              "type": "tatolab.stream:GraphInput" },
+            { "operation": "add_node", "stream": stream_asset,
+              "type": "tatolab.stream:GraphOutput", "as": "output" },
+        ]))
+        .await,
+    )
+    .expect("interface nodes naming no family are added");
+    let live = engine.the_live_graph_of(&stream_id);
+    let waiting_input = the_node_named(&live, "graphinput");
+    assert_eq!(
+        waiting_input["components"]["graph_interface"],
+        json!({ "direction": "input", "port": "input1", "family": null }),
+        "{waiting_input}"
+    );
+    assert_eq!(waiting_input["config"], json!({ "port": "input1" }));
+
+    let the_graph_output_in = |graph: &Value| -> Value {
+        graph["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|node| node["type"] == "tatolab.stream:GraphOutput")
+            .cloned()
+            .expect("the graph holds the GraphOutput")
+    };
+    let output_node = the_graph_output_in(&live)["id"].clone();
+    tool_answer(
+        &transact(json!([
+            { "operation": "connect", "stream": stream_asset,
+              "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+              "target": { "node": output_node, "port": "value" } },
+        ]))
+        .await,
+    )
+    .expect("the source is linked into the output");
+    let live = engine.the_live_graph_of(&stream_id);
+    let linked_output = the_graph_output_in(&live);
+    assert_eq!(
+        linked_output["components"]["graph_interface"],
+        json!({ "direction": "output", "port": "output1", "family": "image" }),
+        "{linked_output}"
+    );
+    assert_eq!(linked_output["config"], json!({ "port": "output1" }));
+}
+
 /// Two authors' edits interleave, and each author's `undo` reverses only that author's own;
 /// `redo` brings back what the author's undo reversed.
 #[tokio::test(flavor = "multi_thread")]

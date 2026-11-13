@@ -20,7 +20,7 @@ use crate::core::graph::{
 };
 use crate::core::graph_interface_resolution::{
     GraphInterfaceAsDrawn, GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
-    is_a_graph_interface_node_type,
+    is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph_variable_resolution::{
@@ -186,7 +186,7 @@ fn flatten_one_level(
             &fragment.links,
             node_types,
         )?;
-        let interface = GraphSnapshot {
+        let fragment_level = GraphSnapshot {
             asset: None,
             display_name: None,
             stream: None,
@@ -195,13 +195,24 @@ fn flatten_one_level(
             links: inner.links,
             groups: Vec::new(),
             studio: None,
-        }
-        .with_graph_interface_resolved(GraphInterfaceLevel::AFragment)
-        .map_err(|refusal| {
-            Error::GraphError(format!(
-                "fragment `{fragment_path_of_names}` does not flatten: {refusal}"
-            ))
-        })?;
+        };
+        let interface = fragment_level
+            .with_graph_interface_resolved(
+                GraphInterfaceLevel::AFragment,
+                &|linked_port, direction| {
+                    the_family_a_port_linked_to_an_interface_node_carries(
+                        node_types,
+                        &fragment_level,
+                        linked_port,
+                        direction,
+                    )
+                },
+            )
+            .map_err(|refusal| {
+                Error::GraphError(format!(
+                    "fragment `{fragment_path_of_names}` does not flatten: {refusal}"
+                ))
+            })?;
         nodes_of_the_fragments_held.extend(interface.graph_the_runtime_runs.nodes);
         links_of_the_fragments_held.extend(interface.graph_the_runtime_runs.links);
         fragment_by_cast_name.insert(cast_of(&node.name)?, fragments.len());

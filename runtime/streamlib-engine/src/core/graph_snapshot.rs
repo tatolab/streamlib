@@ -29,6 +29,7 @@ use crate::core::graph::{
 use crate::core::graph_fragment_flattening::GraphFragmentsAsDrawn;
 use crate::core::graph_interface_resolution::{
     GraphInterfaceAsDrawn, GraphInterfaceLevel, is_a_graph_interface_node_type,
+    the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph_variable_resolution::{
     GraphVariablesAsDrawn, SetVariableAndTheValueItHolds, ValueASetVariableHolds,
@@ -425,9 +426,18 @@ impl GraphSnapshot {
         let variables = fragments
             .graph_the_runtime_runs
             .with_graph_variables_resolved(&fragments.fragments_as_drawn)?;
-        let interface = variables
-            .graph_the_runtime_runs
-            .with_graph_interface_resolved(GraphInterfaceLevel::TheStreamsTopLevel)?;
+        let top_level = &variables.graph_the_runtime_runs;
+        let interface = top_level.with_graph_interface_resolved(
+            GraphInterfaceLevel::TheStreamsTopLevel,
+            &|linked_port, direction| {
+                the_family_a_port_linked_to_an_interface_node_carries(
+                    node_types,
+                    top_level,
+                    linked_port,
+                    direction,
+                )
+            },
+        )?;
         Ok(GraphSnapshotWithGraphOnlyNodesResolved {
             graph_the_runtime_runs: interface.graph_the_runtime_runs,
             graph_only_nodes_as_drawn: GraphOnlyNodesAsDrawn {

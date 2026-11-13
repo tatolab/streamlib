@@ -148,7 +148,7 @@ pub struct AddNodeRequest {
     pub name: Option<String>,
     /// The node's config.
     #[schemars(
-        description = "The node's config, as the keys its type's schema declares. Omit for none."
+        description = "The node's config, as the keys its type's schema declares. Omit for none. A `GraphInput`, `GraphOutput` or `SetVariable` whose config names no `port` or `variable` takes the next free `input1`, `output1` or `var1` on its level; a `GetVariable` naming no `variable` reads the variable of its level's last `SetVariable`. A `GraphInput` or `GraphOutput` naming no `family` takes the family of the first port linked to it, and runs nothing until one is."
     )]
     pub config: Option<Map<String, Value>>,
     /// The value on each unlinked input.

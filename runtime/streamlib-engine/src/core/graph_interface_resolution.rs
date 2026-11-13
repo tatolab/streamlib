@@ -29,6 +29,7 @@ use crate::core::json_schema::{
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, PortDirection, Result};
+use streamlib_processor_schema::output_port_family_resolved_against_config;
 
 pub use streamlib_project_repository::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
@@ -100,7 +101,9 @@ pub struct GraphInterfacePort {
     pub interface_node: String,
     /// The port's name, as the interface node's config wrote it.
     pub port: String,
-    pub family: PortFamily,
+    /// The port's family: the one its config names, else the one the first port linked to it
+    /// carries; `None` while it names none and nothing is linked, when the node runs nothing.
+    pub family: Option<PortFamily>,
     pub direction: GraphInterfacePortDirection,
     /// A `GraphOutput`'s one source port; a `GraphInput`'s every reader.
     pub linked_ports: Vec<LinkPortRefOutput>,
@@ -210,13 +213,19 @@ pub struct GraphSnapshotWithInterfaceResolved {
 
 impl GraphSnapshot {
     /// Resolve this graph's interface nodes, at `level`, out of it, keeping a top-level
-    /// `GraphInput` a client writes and its links in it; refusing by name two nodes whose names
-    /// cast alike, an interface node naming no port or no family, a config key it does not
-    /// take, two declaring one port name in one direction, a `GraphOutput` linked from no port
-    /// or from several, and a link into a `GraphInput` or out of a `GraphOutput`.
+    /// `GraphInput` a client writes and its links in it. An interface node whose config names
+    /// no family takes the one `family_of_a_linked_port` gives the first port linked to it, and
+    /// runs nothing while nothing is linked. Refuses by name two nodes whose names cast alike,
+    /// an interface node naming no port, a config key it does not take, two declaring one port
+    /// name in one direction, a `GraphOutput` of a family linked from no port or from several,
+    /// and a link into a `GraphInput` or out of a `GraphOutput`.
     pub fn with_graph_interface_resolved(
         &self,
         level: GraphInterfaceLevel,
+        family_of_a_linked_port: &dyn Fn(
+            &LinkPortRefOutput,
+            GraphInterfacePortDirection,
+        ) -> Option<PortFamily>,
     ) -> Result<GraphSnapshotWithInterfaceResolved> {
         if !self
             .nodes
@@ -230,6 +239,8 @@ impl GraphSnapshot {
         }
 
         let mut direction_of_each_interface_node_by_cast = HashMap::new();
+        let mut family_of_each_interface_node_by_cast: HashMap<String, Option<PortFamily>> =
+            HashMap::new();
         let mut running_graph_input_casts = std::collections::HashSet::new();
         let mut node_name_by_cast: HashMap<String, &str> = HashMap::new();
         for node in &self.nodes {
@@ -245,13 +256,22 @@ impl GraphSnapshot {
                 GRAPH_OUTPUT_NODE_TYPE => GraphInterfacePortDirection::Output,
                 _ => continue,
             };
-            let (_, family) = port_and_family_an_interface_node_declares(node, level)?;
+            let (_, family_the_config_names) =
+                port_and_family_an_interface_nodes_config_declares(node)?;
+            let family = match family_the_config_names {
+                Some(family) => Some(family),
+                None => self
+                    .the_first_port_linked_to_the_interface_node(&cast, direction)?
+                    .and_then(|linked_port| family_of_a_linked_port(&linked_port, direction)),
+            };
+            refuse_a_config_key_the_interface_node_does_not_take(node, level, family)?;
             if direction == GraphInterfacePortDirection::Input
                 && level == GraphInterfaceLevel::TheStreamsTopLevel
-                && a_top_level_graph_input_of_the_family_runs(family)
+                && family.is_some_and(a_top_level_graph_input_of_the_family_runs)
             {
                 running_graph_input_casts.insert(cast.clone());
             }
+            family_of_each_interface_node_by_cast.insert(cast.clone(), family);
             direction_of_each_interface_node_by_cast.insert(cast, direction);
         }
 
@@ -320,10 +340,20 @@ impl GraphSnapshot {
                 runtime_nodes.push(node.clone());
                 continue;
             };
-            let (port, family) = port_and_family_an_interface_node_declares(node, level)?;
+            let (port, family_the_config_names) =
+                port_and_family_an_interface_nodes_config_declares(node)?;
+            let family = family_of_each_interface_node_by_cast
+                .get(&node_cast)
+                .copied()
+                .flatten();
             let runs_as_a_source_node = running_graph_input_casts.contains(&node_cast);
             if runs_as_a_source_node {
-                runtime_nodes.push(node.clone());
+                runtime_nodes.push(match (family_the_config_names, family) {
+                    (None, Some(resolved_family)) => {
+                        node_with_the_family_a_link_resolved(node, resolved_family)
+                    }
+                    _ => node.clone(),
+                });
             }
             let port_cast = cast_of(&port)?;
             let is_an_output = direction == GraphInterfacePortDirection::Output;
@@ -340,7 +370,25 @@ impl GraphSnapshot {
             let linked_ports = linked_ports_by_interface_node_cast
                 .remove(&node_cast)
                 .unwrap_or_default();
-            if is_an_output && linked_ports.len() != 1 {
+            if let (None, Some(linked_port)) = (family, linked_ports.first()) {
+                return Err(Error::GraphError(format!(
+                    "`{}` node `{}` names no family, and `{}/{}` linked to it states none for \
+                     it to take; name one in its config's `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}`",
+                    if is_an_output {
+                        "GraphOutput"
+                    } else {
+                        "GraphInput"
+                    },
+                    node.name,
+                    linked_port.node,
+                    linked_port.port
+                )));
+            }
+            let is_waiting_for_a_link_to_resolve_its_family = family.is_none();
+            if is_an_output
+                && linked_ports.len() != 1
+                && !is_waiting_for_a_link_to_resolve_its_family
+            {
                 return Err(Error::GraphError(format!(
                     "`GraphOutput` node `{}` declares the Output `{port}` from {} links; link \
                      exactly one port into its `{GRAPH_INTERFACE_VALUE_PORT_NAME}` input",
@@ -379,6 +427,96 @@ impl GraphSnapshot {
             },
         })
     }
+}
+
+impl GraphSnapshot {
+    /// The other end of the first link that meets the interface node cast `interface_node_cast`
+    /// from its `direction`'s side: a `GraphInput`'s first reader, a `GraphOutput`'s source.
+    fn the_first_port_linked_to_the_interface_node(
+        &self,
+        interface_node_cast: &str,
+        direction: GraphInterfacePortDirection,
+    ) -> Result<Option<LinkPortRefOutput>> {
+        for link in &self.links {
+            let (interface_end, other_end) = match direction {
+                GraphInterfacePortDirection::Input => (&link.source, &link.target),
+                GraphInterfacePortDirection::Output => (&link.target, &link.source),
+            };
+            if cast_of(&interface_end.node)? == interface_node_cast {
+                return Ok(Some(other_end.clone()));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// The family the port `linked_port` of `graph` carries to or from an interface node as
+/// `node_types` declare it: a reader's input family, or a source's output family resolved
+/// against its node's config and followed upstream through an output whose family follows one
+/// of its inputs; `None` when nothing states one.
+pub fn the_family_a_port_linked_to_an_interface_node_carries(
+    node_types: &NodeTypesOneStreamResolves,
+    graph: &GraphSnapshot,
+    linked_port: &LinkPortRefOutput,
+    direction_of_the_interface_port: GraphInterfacePortDirection,
+) -> Option<PortFamily> {
+    let mut port_to_read = linked_port.clone();
+    let mut ports_read = std::collections::HashSet::new();
+    loop {
+        if !ports_read.insert((port_to_read.node.clone(), port_to_read.port.clone())) {
+            return None;
+        }
+        let node_cast = cast_of(&port_to_read.node).ok()?;
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| cast_of(&node.name).is_ok_and(|cast| cast == node_cast))?;
+        if is_a_graph_interface_node_type(node.processor_type.as_str()) {
+            return port_and_family_an_interface_nodes_config_declares(node)
+                .ok()
+                .and_then(|(_, family)| family);
+        }
+        let (inputs, outputs) =
+            the_ports_of_a_graph_document_node(node_types, &port_to_read.node, node).ok()??;
+        let port_cast = cast_of(&port_to_read.port).ok()?;
+        if direction_of_the_interface_port == GraphInterfacePortDirection::Input {
+            return inputs
+                .into_iter()
+                .find(|port| port.name == port_cast)
+                .map(|port| port.family.family);
+        }
+        let output = outputs.into_iter().find(|port| port.name == port_cast)?;
+        let Some(followed_input) = output.family.family_follows_input_port.clone() else {
+            return output_port_family_resolved_against_config(&output.family, Some(&node.config))
+                .ok();
+        };
+        let followed_input_cast = cast_of(&followed_input).ok()?;
+        port_to_read = graph
+            .links
+            .iter()
+            .find(|link| {
+                cast_of(&link.target.node).is_ok_and(|cast| cast == node_cast)
+                    && cast_of(&link.target.port).is_ok_and(|cast| cast == followed_input_cast)
+            })?
+            .source
+            .clone();
+    }
+}
+
+/// `node`, a top-level `GraphInput` whose config names no family, with `resolved_family` in its
+/// config, so the node it runs as carries the family a link resolved.
+fn node_with_the_family_a_link_resolved(
+    node: &GraphSnapshotNode,
+    resolved_family: PortFamily,
+) -> GraphSnapshotNode {
+    let mut node_with_the_family = node.clone();
+    if let Some(config) = node_with_the_family.config.as_object_mut() {
+        config.insert(
+            GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string(),
+            serde_json::Value::String(resolved_family.wire_name().to_string()),
+        );
+    }
+    node_with_the_family
 }
 
 impl GraphInterfaceAsDrawn {
@@ -562,10 +700,10 @@ impl GraphInterfacePort {
                 the_input_without_what_only_the_graphs_producer_can_meet(declaration)
             }
         });
-        let Some(linked_declaration) = linked_declaration else {
+        let (Some(linked_declaration), Some(family)) = (linked_declaration, self.family) else {
             return Ok(());
         };
-        let declared_family = PortFamilyDeclaration::of_family(self.family);
+        let declared_family = PortFamilyDeclaration::of_family(family);
         let interface_end = PortFamilyLinkEndpoint {
             node_name: &self.interface_node,
             port_name: GRAPH_INTERFACE_VALUE_PORT_NAME,
@@ -595,7 +733,7 @@ impl GraphInterfacePort {
                 },
                 self.interface_node,
                 self.port,
-                self.family
+                family
             ))),
             None => Ok(()),
         }
@@ -629,7 +767,7 @@ impl GraphInterfacePort {
             audio_window: None,
             stream_facts: None,
             values_checked: None,
-            family: Some(PortFamilyDeclaration::of_family(self.family)),
+            family: self.family.map(PortFamilyDeclaration::of_family),
             pin_default: None,
         }
     }
@@ -641,7 +779,7 @@ impl GraphInterfacePort {
                 GraphInterfacePortDirection::Output => "output",
             },
             GRAPH_INTERFACE_PORT_CONFIG_KEY: cast_or_as_written(&self.port),
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY: self.family.wire_name(),
+            GRAPH_INTERFACE_FAMILY_CONFIG_KEY: self.family.map(PortFamily::wire_name),
         })
     }
 }
@@ -659,15 +797,20 @@ fn the_input_without_what_only_the_graphs_producer_can_meet(
     }
 }
 
-fn port_and_family_an_interface_node_declares(
-    node: &GraphSnapshotNode,
-    level: GraphInterfaceLevel,
-) -> Result<(String, PortFamily)> {
-    let kind = if node.processor_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {
+fn interface_node_kind(node: &GraphSnapshotNode) -> &'static str {
+    if node.processor_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {
         "GraphOutput"
     } else {
         "GraphInput"
-    };
+    }
+}
+
+/// The port an interface node's config names, and the family it names, `None` when it leaves
+/// `family` out or `null`.
+fn port_and_family_an_interface_nodes_config_declares(
+    node: &GraphSnapshotNode,
+) -> Result<(String, Option<PortFamily>)> {
+    let kind = interface_node_kind(node);
     let port = node
         .config
         .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)
@@ -680,26 +823,43 @@ fn port_and_family_an_interface_node_declares(
                 node.name
             ))
         })?;
-    let family_wire_name = node
-        .config
-        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-        .and_then(serde_json::Value::as_str);
-    let family = PortFamily::ALL
-        .into_iter()
-        .find(|family| Some(family.wire_name()) == family_wire_name)
-        .ok_or_else(|| {
-            Error::GraphError(format!(
-                "`{kind}` node `{}` declares its port of family {}, and its config's \
-                 `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}` is one of {}",
-                node.name,
-                family_wire_name.map_or_else(|| "nothing".to_string(), |name| format!("{name:?}")),
-                PortFamily::ALL.map(|family| family.wire_name()).join(", ")
-            ))
-        })?;
-    let runs_as_a_source_node = kind == "GraphInput"
+    let family = match node.config.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY) {
+        None | Some(serde_json::Value::Null) => None,
+        Some(named) => {
+            let family_wire_name = named.as_str();
+            Some(
+                PortFamily::ALL
+                    .into_iter()
+                    .find(|family| Some(family.wire_name()) == family_wire_name)
+                    .ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "`{kind}` node `{}` declares its port of family {named}, and its \
+                             config's `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}` is one of {}, or \
+                             left out for the family of the first port linked to it",
+                            node.name,
+                            PortFamily::ALL.map(|family| family.wire_name()).join(", ")
+                        ))
+                    })?,
+            )
+        }
+    };
+    Ok((port.to_string(), family))
+}
+
+/// Refuse a config key `node` does not take at `level` with `family`, and on a top-level
+/// `GraphInput` a client writes, a `default`, `range` or `lifetime` its family does not take.
+/// A top-level `GraphInput` whose family is not resolved yet takes all three, checked once a
+/// link resolves it.
+fn refuse_a_config_key_the_interface_node_does_not_take(
+    node: &GraphSnapshotNode,
+    level: GraphInterfaceLevel,
+    family: Option<PortFamily>,
+) -> Result<()> {
+    let kind = interface_node_kind(node);
+    let may_run_as_a_source_node = kind == "GraphInput"
         && level == GraphInterfaceLevel::TheStreamsTopLevel
-        && a_top_level_graph_input_of_the_family_runs(family);
-    let keys_it_takes: &[&str] = if runs_as_a_source_node {
+        && family.is_none_or(a_top_level_graph_input_of_the_family_runs);
+    let keys_it_takes: &[&str] = if may_run_as_a_source_node {
         &[
             GRAPH_INTERFACE_PORT_CONFIG_KEY,
             GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
@@ -742,10 +902,12 @@ fn port_and_family_an_interface_node_declares(
                 .join(", ")
         )));
     }
-    if runs_as_a_source_node {
+    if let Some(family) = family
+        && may_run_as_a_source_node
+    {
         refuse_a_default_or_range_its_family_does_not_take(node, family)?;
     }
-    Ok((port.to_string(), family))
+    Ok(())
 }
 
 fn refuse_a_default_or_range_its_family_does_not_take(
@@ -817,9 +979,20 @@ fn cast_or_as_written(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn the_family_no_linked_port_states(
+        _linked_port: &LinkPortRefOutput,
+        _direction: GraphInterfacePortDirection,
+    ) -> Option<PortFamily> {
+        None
+    }
+
     fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithInterfaceResolved> {
-        GraphSnapshot::from_graph_document(graph)
-            .and_then(|graph| graph.with_graph_interface_resolved(GraphInterfaceLevel::AFragment))
+        GraphSnapshot::from_graph_document(graph).and_then(|graph| {
+            graph.with_graph_interface_resolved(
+                GraphInterfaceLevel::AFragment,
+                &the_family_no_linked_port_states,
+            )
+        })
     }
 
     fn refusal_of(graph: serde_json::Value) -> String {
@@ -864,7 +1037,7 @@ mod tests {
         assert_eq!(ports.len(), 2);
         assert_eq!(ports[0].direction, GraphInterfacePortDirection::Output);
         assert_eq!(ports[0].port, "video");
-        assert_eq!(ports[0].family, PortFamily::Image);
+        assert_eq!(ports[0].family, Some(PortFamily::Image));
         assert_eq!(ports[0].linked_ports[0].node, "camera");
         assert_eq!(ports[1].direction, GraphInterfacePortDirection::Input);
         assert_eq!(ports[1].linked_ports[0].node, "display");
@@ -874,7 +1047,10 @@ mod tests {
         graph: serde_json::Value,
     ) -> Result<GraphSnapshotWithInterfaceResolved> {
         GraphSnapshot::from_graph_document(graph).and_then(|graph| {
-            graph.with_graph_interface_resolved(GraphInterfaceLevel::TheStreamsTopLevel)
+            graph.with_graph_interface_resolved(
+                GraphInterfaceLevel::TheStreamsTopLevel,
+                &the_family_no_linked_port_states,
+            )
         })
     }
 
@@ -985,6 +1161,100 @@ mod tests {
                                "range": [0, 1]}),
         ))
         .expect("a Channels Input takes a bool default and a range");
+    }
+
+    #[test]
+    fn an_interface_node_naming_no_family_and_linked_to_nothing_runs_nothing() {
+        let resolution = resolved_on_the_streams_top_level(serde_json::json!({
+            "nodes": [
+                {"name": "input1", "type": GRAPH_INPUT_NODE_TYPE, "config": {"port": "input1"}},
+                {"name": "output1", "type": GRAPH_OUTPUT_NODE_TYPE, "config": {"port": "output1"}},
+            ],
+            "links": [],
+        }))
+        .expect("an interface node waiting for a link resolves");
+        assert!(resolution.graph_the_runtime_runs.nodes.is_empty());
+        let declared: Vec<&GraphInterfacePort> =
+            resolution.interface_as_drawn.declared_ports().collect();
+        assert_eq!(declared.len(), 2);
+        assert!(declared.iter().all(|port| port.family.is_none()));
+        assert!(declared.iter().all(|port| !port.runs_as_a_source_node));
+        let rendered = resolution.interface_as_drawn.interface_nodes[0].rendered_as_a_node();
+        assert_eq!(rendered.ports.outputs[0].family, None);
+        assert_eq!(
+            rendered.components[GRAPH_INTERFACE_COMPONENT_KEY]["family"],
+            serde_json::Value::Null
+        );
+    }
+
+    #[test]
+    fn an_interface_node_naming_no_family_takes_the_family_of_the_first_port_linked_to_it() {
+        let the_reader_takes_channels_and_the_camera_writes_image =
+            |linked_port: &LinkPortRefOutput, direction: GraphInterfacePortDirection| match (
+                linked_port.node.as_str(),
+                direction,
+            ) {
+                ("left", GraphInterfacePortDirection::Input) => Some(PortFamily::Channels),
+                ("camera", GraphInterfacePortDirection::Output) => Some(PortFamily::Image),
+                _ => None,
+            };
+        let mut graph = a_records_input_read_by_two_nodes(serde_json::json!({"port": "cue"}));
+        graph["nodes"]
+            .as_array_mut()
+            .expect("the graph has nodes")
+            .extend([
+                serde_json::json!({"name": "camera", "type": "tatolab.camera:CameraSource",
+                                   "config": {}}),
+                serde_json::json!({"name": "video", "type": GRAPH_OUTPUT_NODE_TYPE,
+                                   "config": {"port": "video"}}),
+            ]);
+        graph["links"]
+            .as_array_mut()
+            .expect("the graph has links")
+            .push(
+                serde_json::json!({"source": {"node": "camera", "port": "video"},
+                                     "target": {"node": "video", "port": "value"}}),
+            );
+        let resolution = GraphSnapshot::from_graph_document(graph)
+            .and_then(|graph| {
+                graph.with_graph_interface_resolved(
+                    GraphInterfaceLevel::TheStreamsTopLevel,
+                    &the_reader_takes_channels_and_the_camera_writes_image,
+                )
+            })
+            .expect("each interface node resolves its family from its first link");
+
+        let declared: Vec<&GraphInterfacePort> =
+            resolution.interface_as_drawn.declared_ports().collect();
+        assert_eq!(declared[0].family, Some(PortFamily::Channels));
+        assert!(declared[0].runs_as_a_source_node);
+        assert_eq!(declared[1].family, Some(PortFamily::Image));
+        let cue_as_it_runs = resolution
+            .graph_the_runtime_runs
+            .nodes
+            .iter()
+            .find(|node| node.name == "cue")
+            .expect("a top-level Channels input runs");
+        assert_eq!(
+            cue_as_it_runs.config,
+            serde_json::json!({"port": "cue", "family": "channels"})
+        );
+        assert_eq!(
+            resolution.interface_as_drawn.interface_nodes[0].node.config,
+            serde_json::json!({"port": "cue"}),
+            "the node renders back as drawn"
+        );
+    }
+
+    #[test]
+    fn an_interface_node_naming_no_family_linked_to_a_port_stating_none_is_refused() {
+        let refusal = refusal_of(a_records_input_read_by_two_nodes(
+            serde_json::json!({"port": "cue"}),
+        ));
+        assert!(
+            refusal.contains("`cue` names no family") && refusal.contains("`left/cue`"),
+            "{refusal}"
+        );
     }
 
     #[test]

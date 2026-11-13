@@ -2282,7 +2282,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
 - **DECIDED** — A graph's interface is its Input and Output nodes, at every level. A stream's
   graph and a subgraph alike declare each port they offer with a `GraphInput` or `GraphOutput`
   node, named and of one family, the way DaVinci Resolve's Fusion page and Effect House do; there
-  is no `expose` verb. Tato Studio shows a graph's Outputs as what it displays, at every level.
+  is no `expose` verb. One added with no `port` takes the next free name of its kind on its
+  level, `input1`, `input2` … or `output1` …, as TouchDesigner, Blender and Unreal name a new
+  one (owner, 2026-11-13). One added with no `family` takes the family of the first port linked
+  to it, as Unreal's wildcard pins do, and runs nothing, drawn with no family, until a link
+  reaches it; a family its config names wins (owner, 2026-11-13). Tato Studio shows a graph's
+  Outputs as what it displays, at every level.
   A subgraph is a fragment, and comes two ways: a `@graph_generator` function's frozen output
   (§Product), and another stream of the project or of an import placed by reference, a
   `tatolab.project:StreamFragment` node holding only `{"stream": {"asset", "from"?}}`.
@@ -2345,7 +2350,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   names — which it resolves to a reference edge (§Networking). A connection is held as a
   reference to its gateway node, which keeps the live session; it is never a record on a link.
   A variable that holds a port's output carries only the five families (a node reference is
-  not a family value). Owner, 2026-11-06. [lightweight-node-kinds — SHIPPED #3242; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
+  not a family value). Owner, 2026-11-06. A `SetVariable` added with no `variable` takes the next
+  free `var1`, `var2` … of its level, and a `GetVariable` added with none reads its level's last
+  `SetVariable` (owner, 2026-11-13). [lightweight-node-kinds — SHIPPED #3242; gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262]
   Rejected: a connection carried as a Records value — a live session is not data, and each reader
   would open its own (owner, 2026-11-06).
   Inside a fragment a variable is scoped by level: a setter sets its variable on its own level,

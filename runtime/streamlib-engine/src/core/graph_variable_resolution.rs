@@ -27,8 +27,9 @@ use crate::core::json_schema::{
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
-/// The config key both variable nodes name their variable under.
-pub const GRAPH_VARIABLE_NAME_CONFIG_KEY: &str = "variable";
+pub use streamlib_project_repository::{
+    GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+};
 
 /// The config key a `SetVariable` holding a node reference holds it under.
 pub const SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY: &str = "node_reference";
@@ -282,12 +283,6 @@ pub struct GraphSnapshotWithVariablesResolved {
     /// Every `SetVariable` and its value, by the setter's name.
     pub values_the_set_variables_hold: Vec<SetVariableAndTheValueItHolds>,
 }
-
-/// The import path a graph names `SetVariable` by, in the built-in node module.
-pub const SET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:SetVariable";
-
-/// The import path a graph names `GetVariable` by, in the built-in node module.
-pub const GET_VARIABLE_NODE_TYPE: &str = "tatolab.stream:GetVariable";
 
 /// Whether `node_type` is `SetVariable` or `GetVariable`.
 pub fn is_a_graph_variable_node_type(node_type: &ProcessorClassImportPath) -> bool {
