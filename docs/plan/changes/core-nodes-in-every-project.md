@@ -201,9 +201,19 @@ project, not wheel, the runtime unit gives to every project.
 
 ## Assumed
 
-- **No stream is carried over.** A stream document that names a `tatolab.ops:` type is refused
-  at load as any unknown type is, naming the node. Nothing rewrites it: pre-1.0, no back-compat
-  shim. The owner's own projects that use `tatolab-ops` nodes need their nodes placed again.
+- **A project placed with `tatolab-ops` nodes opens on Core Nodes.** (session, 2026-11-13, after
+  the owner reported that no older project loads.) Each of `tatolab-ops`' node types has a Core
+  Nodes twin of the same name, ports and config, and `Feedback` has `PreviousValue`. As a load
+  reads a project's graph documents, the runtime moves each node of a `tatolab.ops:` type in them
+  to its twin's type, `imports/core-nodes/core_nodes.<module>:<name>` or
+  `tatolab.stream:PreviousValue`: the node taken out with its links and placed again under its
+  UUID, name, config, pins and studio fields, as one transaction by the runtime under the key
+  `tatolab-runtime-moves-tatolab-ops-nodes-to-core-nodes`, announced on the change feed. History
+  holding that key, undone since or not, makes no move again, as a first-party package move to
+  a version is made once. The documents carry the new types from then on; nothing resolves a
+  `tatolab.ops:` name at load, so a document written by hand with one is refused as any unknown
+  type is, naming the node. A node of a stored fragment's graph is not moved: its generator's
+  next refresh writes it again.
 - **`tatolab-compositor` and `tatolab-testpattern` stay wheels the unit carries.** This change
   moves `tatolab-ops` only.
 - **The names on PyPI and Tatolab's index.** `tatolab-ops` stops being published; what is already

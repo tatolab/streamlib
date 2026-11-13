@@ -17,6 +17,7 @@ mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
+mod project_nodes_moved_off_tatolab_ops;
 mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
@@ -65,6 +66,9 @@ pub use project_history_repository::{
     ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
+pub use project_nodes_moved_off_tatolab_ops::{
+    TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY, the_type_that_replaced_a_tatolab_ops_type,
+};
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,

@@ -847,6 +847,7 @@ impl Runner {
             )));
         };
         report_the_step(StreamActionStep::ReadingTheGraphDocuments);
+        self.move_each_tatolab_ops_node_of_the_project_to_core_nodes(&project_directory);
         let project = ProjectAsALoadReadsIt::read(&project_directory)?;
         let every_stream_asset: Vec<StreamAssetRead> = project
             .stream_documents
@@ -3061,6 +3062,28 @@ impl Runner {
             .get()
             .map(PackagesTheRuntimeUnitCarries::beside_the_lend)
             .unwrap_or_default()
+    }
+
+    /// Move each node of a `tatolab-ops` type in the project in `project_directory` to the Core
+    /// Nodes type that replaced it, through the project history the host handed this runtime.
+    /// A move not recorded is logged in its own words, and the load goes on with the documents
+    /// as they are.
+    fn move_each_tatolab_ops_node_of_the_project_to_core_nodes(&self, project_directory: &Path) {
+        let Some(history) = self
+            .engine_resources_shared_by_every_stream
+            .project_history_recording_first_party_package_moves
+            .lock()
+            .clone()
+        else {
+            return;
+        };
+        if let Err(not_moved) = history.move_each_tatolab_ops_node_to_core_nodes(project_directory)
+        {
+            tracing::warn!(
+                "the tatolab-ops nodes of {} were not moved to Core Nodes: {not_moved}",
+                project_directory.display()
+            );
+        }
     }
 
     /// Make the `.venv` of the project in `project_directory` current with the
