@@ -73,8 +73,9 @@ class ImageFile:
     """Publishes the project image asset its config names, once at start and again on each config change.
 
     A reader that connects after a publish is sent the same picture again,
-    with no decode and no upload. A publish that fails is tried again at each
-    process until one succeeds, each failure raised once until it changes.
+    with no decode and no upload. While no asset is named, or the one named
+    cannot be read, the node reports itself not ready, saying why, and the
+    publish is tried again at each process until one succeeds.
     """
 
     image = Output(Image, formats=(IMAGE_FILE_TEXTURE_FORMAT,))
@@ -85,36 +86,32 @@ class ImageFile:
             IMAGE_FILE_TEXTURE_FORMAT, ["texture_binding"], depth=IMAGE_FILE_OUTPUT_RING_DEPTH
         )
         self._publish_on_the_next_process = True
-        self._failure_of_the_last_publish: str | None = None
         self._frame_of_the_last_publish: Any = None
 
     def configure(self, config: ImageFileConfig) -> None:
         """Publish the asset `config` names on the next process."""
         self._asset = config.asset
         self._publish_on_the_next_process = True
-        self._failure_of_the_last_publish = None
 
     def process(self, ctx) -> None:
         if not self._publish_on_the_next_process:
             self._resend_the_last_publish_to_a_reader_it_missed(ctx)
             return
-        try:
-            self._publish_the_asset(ctx)
-        except Exception as failure:
-            failure_named = f"{type(failure).__name__}: {failure}"
-            if failure_named == self._failure_of_the_last_publish:
-                return
-            self._failure_of_the_last_publish = failure_named
-            raise
-        self._publish_on_the_next_process = False
-        self._failure_of_the_last_publish = None
-
-    def _publish_the_asset(self, ctx) -> None:
         if not self._asset:
-            raise ValueError(
+            ctx.report_not_ready(
                 "ImageFile names no image asset. To fix: set its `asset` config to the UUID of "
                 "a PNG or JPEG imported into the project"
             )
+            return
+        try:
+            self._publish_the_asset(ctx)
+        except Exception as failure:
+            ctx.report_not_ready(f"ImageFile cannot read its image asset: {failure}")
+            return
+        ctx.report_ready()
+        self._publish_on_the_next_process = False
+
+    def _publish_the_asset(self, ctx) -> None:
         pixels = decoded_rgba_pixels_of_the_image_file(ctx.asset_content_path(self._asset))
         height, width = pixels.shape[0], pixels.shape[1]
         slot = self._output_texture_ring.next_texture_for_this_frame(

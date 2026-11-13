@@ -70,12 +70,27 @@ def test_a_jpeg_is_decoded_upright_by_its_exif_orientation(tmp_path: Path):
     assert pixels.shape == (3, 2, 4), "orientation 6 turns a 3x2 image a quarter turn"
 
 
-class _AssetContentPathThatFails:
+class _NodeReadinessReportsStandIn:
+    """What a node context records of `report_not_ready` and `report_ready`: the reason it last
+    reported, or `None` while it is ready."""
+
+    def __init__(self) -> None:
+        self.not_ready_because: "str | None" = None
+
+    def report_not_ready(self, reason: str, **_placeholder_image_size: int) -> None:
+        self.not_ready_because = reason
+
+    def report_ready(self) -> None:
+        self.not_ready_because = None
+
+
+class _AssetContentPathThatFails(_NodeReadinessReportsStandIn):
     """A node context whose `asset_content_path` raises, standing in for an asset not yet readable."""
 
     gpu_limited_access = None
 
     def __init__(self) -> None:
+        super().__init__()
         self.asset_content_path_calls = 0
 
     def asset_content_path(self, asset: str) -> str:
@@ -83,17 +98,24 @@ class _AssetContentPathThatFails:
         raise RuntimeError(f"asset {asset} is not readable yet")
 
 
-def test_a_failed_publish_is_tried_again_and_raised_once_until_its_failure_changes():
+def test_an_image_file_naming_no_asset_reports_itself_not_ready_naming_the_setting():
+    image_file = ImageFile(ImageFileConfig())
+    context = _AssetContentPathThatFails()
+    image_file.process(context)
+    assert context.not_ready_because is not None
+    assert "set its `asset` config" in context.not_ready_because
+    assert context.asset_content_path_calls == 0
+
+
+def test_a_failed_publish_reports_the_node_not_ready_and_is_tried_again_at_each_process():
     image_file = ImageFile(ImageFileConfig(asset="0f0e"))
     context = _AssetContentPathThatFails()
-    with pytest.raises(RuntimeError, match="not readable yet"):
-        image_file.process(context)
+    image_file.process(context)
+    assert context.not_ready_because == (
+        "ImageFile cannot read its image asset: asset 0f0e is not readable yet"
+    )
     image_file.process(context)
     assert context.asset_content_path_calls == 2, "the publish stays pending after a failure"
-
-    image_file.configure(ImageFileConfig(asset="0f0e"))
-    with pytest.raises(RuntimeError, match="not readable yet"):
-        image_file.process(context)
 
 
 def test_image_file_declares_the_one_texture_format_it_publishes():
@@ -155,12 +177,13 @@ class _OutputsStandIn:
         return self.a_reader_the_last_write_missed
 
 
-class _ContextReadingAssetsFrom:
+class _ContextReadingAssetsFrom(_NodeReadinessReportsStandIn):
     """A node context whose assets are files in a folder, by UUID."""
 
     gpu_limited_access = None
 
     def __init__(self, path_by_asset: "dict[str, Path]") -> None:
+        super().__init__()
         self.path_by_asset = path_by_asset
         self.outputs = _OutputsStandIn()
 
@@ -186,7 +209,9 @@ def test_image_file_publishes_its_asset_once_and_again_after_a_config_change(
     texture_ring = _TextureRingStandIn()
     setattr(image_file, "_output_texture_ring", texture_ring)
 
+    context.not_ready_because = "ImageFile cannot read its image asset: not yet"
     image_file.process(context)
+    assert context.not_ready_because is None, "a publish that succeeds reports the node ready"
     image_file.process(context)
     assert len(context.outputs.written) == 1, "an idle process publishes nothing"
     assert tuple(texture_ring.slots[0].pixels[1, 2]) == (200, 100, 50, 128)
@@ -227,7 +252,6 @@ def test_image_file_resends_its_last_picture_to_a_reader_that_connects_later(
 def test_image_file_resends_nothing_before_its_first_publish_succeeds():
     image_file = ImageFile(ImageFileConfig(asset="0f0e"))
     context = _AssetContentPathThatFails()
-    with pytest.raises(RuntimeError, match="not readable yet"):
-        image_file.process(context)
+    image_file.process(context)
     image_file.process(context)
     assert context.asset_content_path_calls == 2, "the publish stays pending; no resend is tried"
