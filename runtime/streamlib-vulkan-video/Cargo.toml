@@ -31,12 +31,12 @@ tracing.workspace = true
 # shared with the rest of the RHI.
 [target.'cfg(target_os = "linux")'.dependencies.streamlib-consumer-rhi]
 path = "../streamlib-consumer-rhi"
-version = "0.68.82"
+version = "0.68.86"
 
 # The SPS parsing and Annex-B start codes the decoder reads streams with.
 [target.'cfg(target_os = "linux")'.dependencies.streamlib-video-bitstream]
 path = "../streamlib-video-bitstream"
-version = "0.68.82"
+version = "0.68.86"
 
 # The hardware tests map an exported DMA-BUF the way an importer reads one.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
@@ -47,4 +47,4 @@ workspace = true
 
 [build-dependencies]
 # Compiles the codec's shaders for `include_bytes!`.
-streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.82" }
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.86" }
