@@ -81,6 +81,7 @@ from ._node_context_protocols import (
 from ._message import Message as Message
 from ._node_declaration import AudioWindowContract as AudioWindowContract
 from ._node_declaration import node as node
+from ._previous_value_node import PreviousValue as PreviousValue
 from ._function_node_declaration import FunctionNode as FunctionNode
 from ._function_node_declaration import State as State
 from ._function_node_declaration import Stateful as Stateful
@@ -228,6 +229,7 @@ __all__ = [
     "PacketsUnit",
     "PixelAccessToOneClaimedSurface",
     "PortFamily",
+    "PreviousValue",
     "PortNamesFromConfig",
     "PortPayloadBorrow",
     "PortPayloadLoan",

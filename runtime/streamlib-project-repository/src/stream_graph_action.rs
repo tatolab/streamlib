@@ -142,7 +142,8 @@ pub enum StreamGraphAction {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
         node: String,
     },
-    /// Link an output port to an input port.
+    /// Link an output port to an input port. A link that would close a loop of function nodes
+    /// with no `PreviousValue` node in it adds one and runs through it.
     Connect {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
         stream: Uuid,

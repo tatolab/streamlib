@@ -2092,7 +2092,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the family linked into it and can only be handed on or not. A control value on a wire is
   Channels at an irregular control rate. Links inside an island stay off the step ledger and
   cannot drop; edge links count and take loss slots as any link. Owner, 2026-11-07 and
-  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: the compiler closes a loop of function nodes by its walk and `graph` marks the link read from the last evaluation; no `Feedback` node]
+  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: a cycle closes through the built-in `tatolab.stream:PreviousValue`, which a loop-closing `connect` adds on its link; no `Feedback` node]
   Rejected: waiting for matching timestamps before an evaluation (owner, 2026-11-07).
   Rejected: once per pull, as Blueprint does — a per-pull `Random` read twice disagrees (owner,
   2026-11-07).

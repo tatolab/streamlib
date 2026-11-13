@@ -35,6 +35,9 @@ Documentation = "https://tatolab.com/docs"
 Install = "https://tatolab.com/docs/install"
 Source = "https://github.com/tatolab/streamlib"
 
+[project.entry-points."tatolab.nodes"]
+PreviousValue = "tatolab.stream:PreviousValue"
+
 # PEP 735: what the stream suite and pyright need beside the package, and never
 # the runtime. numpy is here because the Protocols type their arrays with it
 # and pyright reports an unresolved import as an error; pydantic is what proves

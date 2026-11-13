@@ -58,9 +58,10 @@ number node can drive.
 
 ## Loops
 
-Wire a number node's output back into a node that feeds it and the loop closes: the runtime reads
-that one wire as it was at the last evaluation, starting at 0, and the stream graph marks it
-`reads_the_last_evaluation`. Add wired into itself counts up.
+A loop of number nodes closes through Previous Value, a node the runtime ships under Logic. Wire
+a number node's output back into a node that feeds it and the runtime adds a Previous Value on
+that wire; you can also place one yourself. It hands on the number it was given at the last
+evaluation, starting at 0, so Add with 1 on its other input counts up through one.
 
 ## Check it
 

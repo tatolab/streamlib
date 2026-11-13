@@ -129,28 +129,31 @@ project, not wheel, the runtime unit gives to every project.
   the runtime still ships no node of its own. The node list in the entry becomes Core Nodes'
   groups.
 - **A loop of function nodes** (`ARCHITECTURE.md:2087-2088`, `:2069-2070`, `:2099-2100`). "A
-  cycle is refused by name unless it closes through `Feedback`" becomes: the compiler closes any
-  loop of function nodes itself. It walks the function nodes depth first down their links, from
-  each node no other function node feeds, in the order of the node ids the stream graph file
-  holds, and a link pointing back at a node the walk is still below is read as it was at the
-  last evaluation, 0 at the first. A node linked into itself reads its own last output. `graph`
-  renders that link with `"reads_the_last_evaluation": true`, so the one link of a loop read a
-  step late is always shown. The engine knows no node type by name, and `Feedback` leaves Core
-  Nodes: the walk treats a third party's node as it treats ours. Owner, 2026-11-13, project
-  thread: "any node that gets linked up we can do more to help out … These are things it can
-  understand from the graph and they shouldn't be special or hardcoded for particular nodes",
-  and of the 2026-11-08 rejection, "that discussion involved invisible insertions … What I
-  wanted to prevent was hidden abstractions".
+  cycle is refused by name unless it closes through `Feedback`" becomes: a cycle closes through
+  `PreviousValue`, a built-in function node the SDK ships beside `SetVariable` and
+  `GetVariable` as `tatolab.stream:PreviousValue`. It hands out its `value` input as it was at
+  the last evaluation, 0 at the first, and `list_project_node_types` lists it under Logic, so a
+  person places it like any node. A `connect` that would close a loop of function nodes with no
+  `PreviousValue` in it becomes the addition of one, with the link carried through it: the
+  transaction's result names the added node, the stream graph file holds it, the canvas draws
+  it halfway along the link, and one undo takes it out again. The compiler still refuses a
+  cycle of function nodes holding none, naming the node, which is what a stream graph file
+  written by hand with a bare loop meets at load. `Feedback` leaves Core Nodes. Owner,
+  2026-11-13, project thread, choosing "A runtime built-in node" for what a loop's wire takes,
+  after "I thought you were going to insert a node like normal?" and "If we add nodes
+  automatically they should be nodes that the user is capable of doing on their own and it shows
+  up in the stream graph. What I wanted to prevent was hidden abstractions".
   Rejected: a mark on `@node.function` naming a node that closes a loop — a decorator attribute
   is one more thing a person or an agent must know to write a node (owner, 2026-11-13).
-  Rejected: the engine knowing a core node by name or by rule — every node and operation is one a
-  third party can build (owner, 2026-11-13).
+  Rejected: the compiler reading one link of a loop late with no node there, the link marked in
+  `graph` — a link drawn or read unlike every other is a special path (owner, 2026-11-13).
   The rejection at `ARCHITECTURE.md:2099-2100` narrows to: a `delay=True` flag on
   `@node.function`, or the engine adding a node or a delay the stream graph does not show.
-  Assumed (session, 2026-11-13): no node is inserted, since the marked link shows the delay; a
-  loop's first evaluation reads the number 0 whatever the link carries; when a loop is entered
-  at two nodes, the link read late is the one the walk order gives, and adding a link into the
-  loop from a third node can move it.
+  Assumed (session, 2026-11-13): the node goes on the link the `connect` names, so the person
+  chooses where the loop is read late by which link they draw last; a loop any node other than
+  a function node is in is linked as asked; a `connect` to a stream whose function nodes the
+  running graph does not render yet (a node added earlier in the same documents-first
+  transaction) is linked as asked and meets the compiler's refusal.
 - **The function node compile entry** (`ARCHITECTURE.md:2053`, `:2059`): "`tatolab-ops`' included"
   reads "Core Nodes' included".
 - **The import entry's first-party clause** (`ARCHITECTURE.md:2250-2256`): the unit carries its
@@ -211,7 +214,8 @@ assumptions and are built as recommended. The cut, each a tracer bullet:
 
 1. The unit carries the core project, and a project loads with it as an import: node types
    listed, a node placed and run, Program listed and served. `tatolab-ops` still ships.
-2. The compiler closes a loop of function nodes by its walk, and `Feedback` leaves Core Nodes.
+2. `PreviousValue` ships in `tatolab.stream`, a loop-closing `connect` adds one, and `Feedback`
+   leaves Core Nodes.
 3. `tatolab-ops` is deleted everywhere the REMOVED list names, and the plan entries are rewritten.
 
 ## Consumers

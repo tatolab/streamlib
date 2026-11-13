@@ -38,7 +38,7 @@ from tatolab.runtime._function_node_run_as_its_helpers_processor import (
     the_processor_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._processor_hosting import apply_configuration, construct_processor_instance
-from tatolab.stream import State, Stateful, Time, UnreadMessage, node
+from tatolab.stream import PreviousValue, State, Stateful, Time, UnreadMessage, node
 from tatolab.stream import _function_node_declaration
 from tatolab.stream._node_declaration import (
     NODE_DECLARATION_INPUT_PORTS_STAMP,
@@ -1636,20 +1636,15 @@ def test_a_pin_value_that_is_not_a_number_is_refused_by_name():
 
 
 @node.function
-def pass_the_value_on(value: float = 0.0) -> float:
-    return value
-
-
-@node.function
 def add_a_step(x: float, step: float = 1.0) -> float:
     return x + step
 
 
 def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation():
-    """`pass_the_value_on -> add_a_step -> pass_the_value_on`, a loop whose link back the
-    island lists first: that node reads what `add_a_step` gave last time, so each read
-    counts one further."""
-    pass_on_path = f"{__name__}:pass_the_value_on"
+    """`PreviousValue -> add_a_step -> PreviousValue`, the loop a `PreviousValue` node
+    closes: it comes first and reads what `add_a_step` gave last time, so each read counts
+    one further."""
+    previous_value_path = "tatolab.stream:PreviousValue"
     add_path = f"{__name__}:add_a_step"
     island = {
         "input_port": "count",
@@ -1657,9 +1652,9 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
         "output": {"node": "add-1", "port": "result"},
         "nodes": [
             {
-                "node": "pass-on-1",
+                "node": "previous-value-1",
                 "breadcrumb_number": 0,
-                "import_path": pass_on_path,
+                "import_path": previous_value_path,
                 "config": None,
                 "links_into": [{"port": "value", "from": {"node": "add-1", "port": "result"}}],
             },
@@ -1668,7 +1663,7 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
                 "breadcrumb_number": 1,
                 "import_path": add_path,
                 "config": None,
-                "links_into": [{"port": "x", "from": {"node": "pass-on-1", "port": "result"}}],
+                "links_into": [{"port": "x", "from": {"node": "previous-value-1", "port": "result"}}],
             },
         ],
     }
@@ -1677,33 +1672,7 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
     feed_each_input_port_from_its_function_node_island(
         data_plane,
         [island],
-        {pass_on_path: pass_the_value_on, add_path: add_a_step}.__getitem__,
-    )
-    assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
-
-
-def test_a_node_linked_into_itself_reads_its_own_output_from_the_last_evaluation():
-    add_path = f"{__name__}:add_a_step"
-    island = {
-        "input_port": "count",
-        "link_id": "L-count",
-        "output": {"node": "add-1", "port": "result"},
-        "nodes": [
-            {
-                "node": "add-1",
-                "breadcrumb_number": 0,
-                "import_path": add_path,
-                "config": None,
-                "links_into": [{"port": "x", "from": {"node": "add-1", "port": "result"}}],
-            },
-        ],
-    }
-    data_plane = _engine.open_node_link_data_access_for_helper_process()
-    data_plane.declare_ports(["count"], [])
-    feed_each_input_port_from_its_function_node_island(
-        data_plane,
-        [island],
-        {add_path: add_a_step}.__getitem__,
+        {previous_value_path: PreviousValue, add_path: add_a_step}.__getitem__,
     )
     assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
 

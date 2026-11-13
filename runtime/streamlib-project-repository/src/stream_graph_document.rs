@@ -1251,6 +1251,16 @@ fn groups_with_each_uuid_kept_by_its_title(
 /// graph each load reads from that stream's document.
 pub const STREAM_FRAGMENT_NODE_TYPE: &str = "tatolab.project:StreamFragment";
 
+/// The type of the built-in function node a loop of function nodes closes through: it hands
+/// out its input as it was at the last evaluation.
+pub const PREVIOUS_VALUE_NODE_TYPE: &str = "tatolab.stream:PreviousValue";
+
+/// The input port of a `PreviousValue` node.
+pub const PREVIOUS_VALUE_NODE_INPUT_PORT: &str = "value";
+
+/// The output port of a `PreviousValue` node.
+pub const PREVIOUS_VALUE_NODE_OUTPUT_PORT: &str = "result";
+
 /// The namespace of the node types the runtime itself defines, none of which is a graph
 /// generator, so none holds an inline graph of its own.
 const NODE_TYPE_NAMESPACE_THE_RUNTIME_DEFINES: &str = "tatolab.";

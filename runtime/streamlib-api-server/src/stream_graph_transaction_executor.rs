@@ -5,7 +5,7 @@
 //! refused whole, written to the graph documents and committed to the project's history, or
 //! applied live to the running streams alone.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -16,7 +16,8 @@ use streamlib::sdk::runtime::{
 };
 use streamlib_control_contract::GraphEditMode;
 use streamlib_project_repository::{
-    AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, ProjectAction,
+    AppliedProjectTransaction, GRAPH_DOCUMENT_FILE_SUFFIX, PREVIOUS_VALUE_NODE_INPUT_PORT,
+    PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE, ProjectAction,
     ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation, ProjectRelativeAssetPath,
     ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
     ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionLineage,
@@ -762,6 +763,15 @@ impl StreamGraphTransactionExecutor<'_> {
                 .map_err(|refusal| refusal.to_string())?;
             the_family_of_an_output_port_in(&rendered_graph, end)
         };
+        let function_nodes_of_the_running_stream = || {
+            let rendered_graph = self
+                .async_runtime
+                .block_on(stream_operations.to_json_async())
+                .map_err(|refusal| refusal.to_string())?;
+            let mut function_nodes = HashSet::new();
+            the_function_nodes_rendered_in(&rendered_graph, &mut function_nodes);
+            Ok(function_nodes)
+        };
         let mut placed_stream_a_collapse_saves = None;
         let mut edit_as_drawn = graph_operation_for_the_request(
             request,
@@ -772,6 +782,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 place_the_imported_stream: &place_the_imported_stream,
                 document_of_a_placed_stream: &document_of_a_placed_stream,
                 family_of_an_output_port: &family_of_an_output_port,
+                function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
             },
             &mut placed_stream_a_collapse_saves,
         )?;
@@ -1387,12 +1398,16 @@ type DocumentOfAPlacedStream<'repository> =
 type FamilyOfAnOutputPortOfTheRunningStream<'stream> =
     dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, String> + 'stream;
 
+/// The UUID of each node the running stream's `graph` renders as a function node.
+type FunctionNodesOfTheRunningStream<'stream> = dyn Fn() -> Result<HashSet<Uuid>, String> + 'stream;
+
 /// What building a graph request's operation reads of the running stream and its project.
 struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     run_the_graph_generator: &'reads GraphGeneratorRunOfTheStream<'reads>,
     place_the_imported_stream: &'reads ImportedStreamPlacement<'reads>,
     document_of_a_placed_stream: &'reads DocumentOfAPlacedStream<'reads>,
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
+    function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
 }
 
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
@@ -1409,6 +1424,7 @@ fn graph_operation_for_the_request(
         place_the_imported_stream,
         document_of_a_placed_stream,
         family_of_an_output_port,
+        function_nodes_of_the_running_stream,
     } = what_the_request_reads;
     let node_named = |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, String> {
         node_by_label
@@ -1559,9 +1575,21 @@ fn graph_operation_for_the_request(
                 links: staged_graph.links_touching(node),
             })
         }
-        StreamGraphAction::Connect { source, target, .. } => Ok(StreamGraphOperation::Connect {
-            link: link_between(&source, &target, node_by_label)?,
-        }),
+        StreamGraphAction::Connect { source, target, .. } => {
+            let link = link_between(&source, &target, node_by_label)?;
+            if the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                staged_graph,
+                &link,
+                function_nodes_of_the_running_stream,
+            )? {
+                Ok(the_previous_value_node_added_on_the_link(
+                    staged_graph,
+                    link,
+                ))
+            } else {
+                Ok(StreamGraphOperation::Connect { link })
+            }
+        }
         StreamGraphAction::Disconnect { source, target, .. } => {
             Ok(StreamGraphOperation::Disconnect {
                 link: link_between(&source, &target, node_by_label)?,
@@ -1818,6 +1846,112 @@ fn graph_operation_for_the_request(
     }
 }
 
+/// Whether `link`, once `staged_graph` holds it, closes a loop every node of which is a
+/// function node and none a `PreviousValue` node: the loop the compiler refuses.
+fn the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+    staged_graph: &StreamGraphDocument,
+    link: &StreamGraphDocumentLink,
+    function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
+) -> Result<bool, String> {
+    let links = staged_graph.links();
+    let nodes_reached_from = |node: Uuid, may_pass_through: &dyn Fn(Uuid) -> bool| {
+        let mut reached = HashSet::from([node]);
+        let mut nodes_to_walk_from = vec![node];
+        while let Some(walked_from) = nodes_to_walk_from.pop() {
+            for held in &links {
+                if held.source.node == walked_from
+                    && may_pass_through(held.target.node)
+                    && reached.insert(held.target.node)
+                {
+                    nodes_to_walk_from.push(held.target.node);
+                }
+            }
+        }
+        reached
+    };
+    if !nodes_reached_from(link.target.node, &|_| true).contains(&link.source.node) {
+        return Ok(false);
+    }
+    let previous_value_nodes: HashSet<Uuid> = staged_graph
+        .nodes()
+        .into_iter()
+        .filter(|node| node.node_type == PREVIOUS_VALUE_NODE_TYPE)
+        .map(|node| node.id)
+        .collect();
+    let function_nodes = function_nodes_of_the_running_stream()?;
+    let may_be_in_the_loop =
+        |node: Uuid| function_nodes.contains(&node) && !previous_value_nodes.contains(&node);
+    Ok(may_be_in_the_loop(link.target.node)
+        && nodes_reached_from(link.target.node, &may_be_in_the_loop).contains(&link.source.node))
+}
+
+/// The addition of a `PreviousValue` node to `staged_graph` with `link` carried through it,
+/// drawn halfway between the two nodes `link` joins when the canvas places both.
+fn the_previous_value_node_added_on_the_link(
+    staged_graph: &StreamGraphDocument,
+    link: StreamGraphDocumentLink,
+) -> StreamGraphOperation {
+    let canvas_position_of = |node: Uuid| {
+        let [x, y] = staged_graph.node(node).ok()?.studio.position?;
+        Some((x.as_f64()?, y.as_f64()?))
+    };
+    let position_halfway_along_the_link = canvas_position_of(link.source.node)
+        .zip(canvas_position_of(link.target.node))
+        .and_then(|((source_x, source_y), (target_x, target_y))| {
+            Some([
+                serde_json::Number::from_f64((source_x + target_x) / 2.0)?,
+                serde_json::Number::from_f64((source_y + target_y) / 2.0)?,
+            ])
+        });
+    let previous_value_node = Uuid::new_v4();
+    StreamGraphOperation::AddNode {
+        node: StreamGraphDocumentNode {
+            id: previous_value_node,
+            name: String::new(),
+            node_type: PREVIOUS_VALUE_NODE_TYPE.to_owned(),
+            config: Value::Object(Map::new()),
+            pins: Map::new(),
+            exposed_config_fields: Vec::new(),
+            studio: Box::new(StreamGraphNodeStudioFields {
+                position: position_halfway_along_the_link,
+                ..StreamGraphNodeStudioFields::default()
+            }),
+            fragment: None,
+        },
+        links: vec![
+            StreamGraphDocumentLink {
+                source: link.source,
+                target: StreamGraphDocumentLinkEnd {
+                    node: previous_value_node,
+                    port: PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned(),
+                },
+            },
+            StreamGraphDocumentLink {
+                source: StreamGraphDocumentLinkEnd {
+                    node: previous_value_node,
+                    port: PREVIOUS_VALUE_NODE_OUTPUT_PORT.to_owned(),
+                },
+                target: link.target,
+            },
+        ],
+    }
+}
+
+/// The UUID of each node `rendered_level`, a level of a stream's `graph` render, renders as a
+/// function node, at any level of the fragments it holds.
+fn the_function_nodes_rendered_in(rendered_level: &Value, function_nodes: &mut HashSet<Uuid>) {
+    for rendered_node in rendered_level["nodes"].as_array().into_iter().flatten() {
+        if rendered_node["kind"] == "function"
+            && let Some(node) = rendered_node["id"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+        {
+            function_nodes.insert(node);
+        }
+        the_function_nodes_rendered_in(&rendered_node["fragment"], function_nodes);
+    }
+}
+
 /// The family wire name the output port `end` declares in `rendered_graph`, a stream's
 /// `graph` render, its node at any level of the fragments the render holds.
 fn the_family_of_an_output_port_in(
@@ -2044,9 +2178,165 @@ fn how_the_graph_reads_the_link(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::Path;
 
-    use super::the_module_a_project_file_is_imported_as;
+    use serde_json::json;
+    use streamlib_project_repository::{
+        PREVIOUS_VALUE_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentLink,
+        StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    };
+    use uuid::Uuid;
+
+    use super::{
+        the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in,
+        the_module_a_project_file_is_imported_as, the_previous_value_node_added_on_the_link,
+    };
+
+    fn a_link_between(source: Uuid, target: Uuid) -> StreamGraphDocumentLink {
+        StreamGraphDocumentLink {
+            source: StreamGraphDocumentLinkEnd {
+                node: source,
+                port: "result".to_owned(),
+            },
+            target: StreamGraphDocumentLinkEnd {
+                node: target,
+                port: "x".to_owned(),
+            },
+        }
+    }
+
+    /// A document of an `add` node at `[0, 0]` linked into a `scale` node at `[200, 100]`, whose
+    /// type is `type_of_the_scale_node`.
+    fn add_linked_into_scale(type_of_the_scale_node: &str) -> (StreamGraphDocument, Uuid, Uuid) {
+        let (add, scale) = (Uuid::new_v4(), Uuid::new_v4());
+        let document = StreamGraphDocument::from_value(json!({
+            "asset": Uuid::new_v4(),
+            "nodes": [
+                { "id": add, "name": "add", "type": "maths:Add",
+                  "studio": { "position": [0, 0] } },
+                { "id": scale, "name": "scale", "type": type_of_the_scale_node,
+                  "studio": { "position": [200, 100] } },
+            ],
+            "links": [{
+                "source": { "node": add, "port": "result" },
+                "target": { "node": scale, "port": "x" },
+            }],
+        }))
+        .unwrap();
+        (document, add, scale)
+    }
+
+    #[test]
+    fn a_link_closing_a_loop_of_function_nodes_is_carried_through_a_previous_value_node() {
+        let (document, add, scale) = add_linked_into_scale("maths:Scale");
+        let closing_link = a_link_between(scale, add);
+        assert!(
+            the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                &document,
+                &closing_link,
+                &|| Ok(HashSet::from([add, scale])),
+            )
+            .unwrap()
+        );
+
+        let StreamGraphOperation::AddNode { node, links } =
+            the_previous_value_node_added_on_the_link(&document, closing_link)
+        else {
+            panic!("the loop closes by adding a node");
+        };
+        assert_eq!(node.node_type, PREVIOUS_VALUE_NODE_TYPE);
+        assert_eq!(
+            node.studio
+                .position
+                .map(|pair| pair.map(|number| number.as_f64())),
+            Some([Some(100.0), Some(50.0)])
+        );
+        assert_eq!(
+            links,
+            [
+                StreamGraphDocumentLink {
+                    source: StreamGraphDocumentLinkEnd {
+                        node: scale,
+                        port: "result".to_owned(),
+                    },
+                    target: StreamGraphDocumentLinkEnd {
+                        node: node.id,
+                        port: "value".to_owned(),
+                    },
+                },
+                StreamGraphDocumentLink {
+                    source: StreamGraphDocumentLinkEnd {
+                        node: node.id,
+                        port: "result".to_owned(),
+                    },
+                    target: StreamGraphDocumentLinkEnd {
+                        node: add,
+                        port: "x".to_owned(),
+                    },
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_function_node_linked_into_itself_closes_a_loop() {
+        let (document, add, _) = add_linked_into_scale("maths:Scale");
+        assert!(
+            the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                &document,
+                &a_link_between(add, add),
+                &|| Ok(HashSet::from([add])),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_loop_through_a_node_that_is_no_function_node_is_linked_as_asked() {
+        let (document, add, scale) = add_linked_into_scale("nodes.scale:ScaleProcessor");
+        assert!(
+            !the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                &document,
+                &a_link_between(scale, add),
+                &|| Ok(HashSet::from([add])),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_loop_a_previous_value_node_is_already_in_is_linked_as_asked() {
+        let (document, add, previous_value) = add_linked_into_scale(PREVIOUS_VALUE_NODE_TYPE);
+        assert!(
+            !the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                &document,
+                &a_link_between(previous_value, add),
+                &|| Ok(HashSet::from([add, previous_value])),
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_link_closing_no_loop_reads_nothing_of_the_running_stream() {
+        let (document, add, scale) = add_linked_into_scale("maths:Scale");
+        let another_link_the_same_way = StreamGraphDocumentLink {
+            target: StreamGraphDocumentLinkEnd {
+                node: scale,
+                port: "y".to_owned(),
+            },
+            ..a_link_between(add, scale)
+        };
+        assert!(
+            !the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+                &document,
+                &another_link_the_same_way,
+                &|| Err("the running stream was read".to_owned()),
+            )
+            .unwrap()
+        );
+    }
 
     #[test]
     fn a_project_file_is_imported_as_its_dotted_path_and_a_package_as_its_folder() {
