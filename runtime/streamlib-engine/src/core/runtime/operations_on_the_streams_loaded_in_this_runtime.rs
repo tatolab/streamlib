@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use uuid::Uuid;
@@ -184,6 +184,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
         &self,
         project_directory: &Path,
     ) -> std::result::Result<(), String>;
+
+    /// [`Runner::the_core_nodes_project_directory_this_runtime_carries`].
+    fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf>;
 
     /// [`Runner::record_first_party_package_moves_in`].
     fn record_first_party_package_moves_in(
@@ -388,6 +391,10 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         project_directory: &Path,
     ) -> std::result::Result<(), String> {
         Runner::lock_the_python_requirements_of_the_project_in(self, project_directory)
+    }
+
+    fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf> {
+        Runner::the_core_nodes_project_directory_this_runtime_carries(self)
     }
 
     fn record_first_party_package_moves_in(

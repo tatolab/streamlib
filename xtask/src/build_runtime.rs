@@ -12,7 +12,8 @@
 //! the lend and uv from its own directory. A wheel of `tatolab-stream` and of each core
 //! first-party module goes beside the lend in `lib/tatolab/imports/`, and the third-party
 //! wheels they require and one CPython build in `lib/tatolab/carried-wheels/` and
-//! `lib/tatolab/python-downloads/`. Every converted example goes beside the lend as a sample
+//! `lib/tatolab/python-downloads/`. The Core Nodes project goes beside the lend in
+//! `lib/tatolab/core-projects/tatolab-core-nodes/`, and every converted example as a sample
 //! project in `lib/tatolab/samples/<name>/`.
 //!
 //! The unit's layout below its root is `streamlib-consumer-rhi`'s
@@ -22,6 +23,7 @@
 
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_browser_host::stage_the_browser_host;
+use crate::stage_core_projects::stage_the_core_nodes_project;
 use crate::stage_first_party_modules::stage_the_first_party_modules;
 use crate::stage_runtime_client_package::stage_the_runtime_client_package;
 use crate::stage_runtime_unit_carried_packages::stage_the_carried_packages;
@@ -42,7 +44,7 @@ pub(crate) use runtime_unit_layout::{
 pub(crate) use runtime_unit_layout::{
     browser_host_directory_beside_the_lend, carried_python_downloads_directory_beside_the_lend,
     carried_python_downloads_metadata_file_in, carried_wheels_directory_beside_the_lend,
-    first_party_modules_directory_beside_the_lend,
+    core_nodes_project_directory_beside_the_lend, first_party_modules_directory_beside_the_lend,
     runtime_client_package_directory_beside_the_lend, sample_projects_directory_beside_the_lend,
 };
 use std::path::{Path, PathBuf};
@@ -246,6 +248,7 @@ pub fn run(
 
     stage_the_browser_host(workspace_root)?;
     stage_the_first_party_modules(workspace_root)?;
+    stage_the_core_nodes_project(workspace_root)?;
     stage_the_sample_projects(workspace_root)?;
     stage_the_runtime_client_package(workspace_root)?;
     stage_the_carried_packages(workspace_root, macos_developer_id_application_identity)?;

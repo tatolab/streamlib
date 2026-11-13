@@ -158,6 +158,11 @@ pub enum ProjectRepositoryRefusal {
     NoSuchImport(Uuid),
     #[error("`imports/{folder}` already holds another import; name another `folder`")]
     ImportFolderAlreadyHeld { folder: String },
+    #[error(
+        "{path} is where the runtime links the Core Nodes project it carries, and something \
+         else stands there; move it away and load the project again"
+    )]
+    CoreProjectImportFolderTaken { path: std::path::PathBuf },
     #[error("`{folder}` is not an import's folder: {why}")]
     ImportFolderRefused { folder: String, why: &'static str },
     #[error(

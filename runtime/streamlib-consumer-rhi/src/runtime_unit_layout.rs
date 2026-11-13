@@ -188,6 +188,24 @@ pub fn sample_projects_directory_beside_the_lend(lend_directory: &Path) -> Optio
     )
 }
 
+/// The directory beside the lend that holds the core projects the runtime unit carries,
+/// one project directory each, which every project resolves as an import without a copy.
+pub const CORE_PROJECTS_DIRECTORY_NAME: &str = "core-projects";
+
+/// The folder of the Core Nodes project inside [`CORE_PROJECTS_DIRECTORY_NAME`].
+pub const CORE_NODES_PROJECT_DIRECTORY_NAME: &str = "tatolab-core-nodes";
+
+/// The Core Nodes project directory beside the lend at `lend_directory`, or `None` for a lend
+/// at the filesystem root.
+pub fn core_nodes_project_directory_beside_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    Some(
+        lend_directory
+            .parent()?
+            .join(CORE_PROJECTS_DIRECTORY_NAME)
+            .join(CORE_NODES_PROJECT_DIRECTORY_NAME),
+    )
+}
+
 /// The directory beside the lend that holds the CPython build the unit carries,
 /// at `<build>/<archive file name>`: the layout uv reads from a
 /// `UV_PYTHON_INSTALL_MIRROR`.

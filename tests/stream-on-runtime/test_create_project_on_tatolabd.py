@@ -137,7 +137,6 @@ def assert_every_first_party_package_came_from_the_runtime_unit(project_director
     for escaped_distribution_name in (
         "tatolab_stream",
         "tatolab_testpattern",
-        "tatolab_ops",
         "tatolab_compositor",
     ):
         source_path = uv_sources[escaped_distribution_name.replace("_", "-")]["path"]

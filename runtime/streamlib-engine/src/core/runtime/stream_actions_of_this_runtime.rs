@@ -3046,6 +3046,13 @@ impl Runner {
         }
     }
 
+    /// Where the Core Nodes project the runtime unit carries is, when this runtime was handed a
+    /// lend and its unit carries one.
+    pub fn the_core_nodes_project_directory_this_runtime_carries(&self) -> Option<PathBuf> {
+        self.packages_this_runtime_unit_carries()
+            .core_nodes_project_directory
+    }
+
     /// What the runtime unit carries beside this runtime's lend, nothing when it was handed no
     /// lend.
     fn packages_this_runtime_unit_carries(&self) -> PackagesTheRuntimeUnitCarries {

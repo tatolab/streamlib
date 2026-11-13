@@ -9,7 +9,8 @@
 # writes tatolab-runtime-<version>-x86_64-linux.tar.gz and its .sha256 there.
 # The tarball is `cargo xtask build-runtime --release`'s install prefix —
 # bin/tatolabd, bin/tatolab, bin/tatolab-video-poster-frame, bin/uv, lib/tatolab/lend/,
-# lib/tatolab/browser-host/, lib/tatolab/imports/, lib/tatolab/samples/ — plus streamlib-commit, the
+# lib/tatolab/browser-host/, lib/tatolab/imports/, lib/tatolab/core-projects/,
+# lib/tatolab/samples/ — plus streamlib-commit, the
 # commit it was built from, which names the build install.sh installs it as.
 #
 # Built inside manylinux_2_28, the glibc floor the engine wheel promises, so
@@ -94,12 +95,17 @@ for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.
 		exit 1
 	}
 done
-for first_party_module in tatolab_ops tatolab_testpattern tatolab_compositor; do
+for first_party_module in tatolab_testpattern tatolab_compositor; do
 	compgen -G "$runtime_unit_root/lib/tatolab/imports/$first_party_module-*.whl" >/dev/null || {
 		echo "the runtime unit has no lib/tatolab/imports/$first_party_module-*.whl: a release ships every first-party module" >&2
 		exit 1
 	}
 done
+
+[ -f "$runtime_unit_root/lib/tatolab/core-projects/tatolab-core-nodes/tatolab-project.json" ] || {
+	echo "the runtime unit has no lib/tatolab/core-projects/tatolab-core-nodes/: a release ships the Core Nodes project every project imports" >&2
+	exit 1
+}
 
 for converted_example in examples/*/tatolab-project.json; do
 	example_directory="$(dirname "$converted_example")"

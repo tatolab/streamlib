@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
     PROJECT_IMPORTS_DIRECTORY, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
@@ -78,6 +79,10 @@ const PROJECT_FILE_WRITE_STAGING_DIRECTORY: &str = ".tatolab/staged-file-writes"
 /// directory with, refused in the resolver's own words when they cannot be resolved.
 pub type ProjectPythonRequirementsLock = Arc<dyn Fn(&Path) -> Result<(), String> + Send + Sync>;
 
+/// What the host hands a project to learn where the core project its runtime carries is, when
+/// it carries one.
+pub type CoreProjectDirectoryTheRuntimeCarries = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
 /// A project the runtime opened: the one writer of its files, its imports and its history.
 pub struct ProjectRepository {
     project_directory: PathBuf,
@@ -85,6 +90,7 @@ pub struct ProjectRepository {
     assets_by_uuid: BTreeMap<Uuid, ProjectAsset>,
     history: ProjectHistoryRepository,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
+    core_project_directory_the_runtime_carries: Option<CoreProjectDirectoryTheRuntimeCarries>,
     asset_files_waiting_for_their_import: BTreeMap<Uuid, AssetFileWaitingForItsImport>,
     commit_of_each_idempotency_key: HashMap<ProjectActionIdempotencyKey, String>,
 }
@@ -199,6 +205,7 @@ impl ProjectRepository {
             project_file,
             assets_by_uuid: BTreeMap::new(),
             python_requirements_lock: None,
+            core_project_directory_the_runtime_carries: None,
             asset_files_waiting_for_their_import: BTreeMap::new(),
             commit_of_each_idempotency_key: HashMap::new(),
         };
@@ -281,6 +288,7 @@ impl ProjectRepository {
             project_file,
             assets_by_uuid,
             python_requirements_lock: None,
+            core_project_directory_the_runtime_carries: None,
             asset_files_waiting_for_their_import: BTreeMap::new(),
             commit_of_each_idempotency_key,
         })
@@ -353,6 +361,17 @@ impl ProjectRepository {
     /// redo and its duplicate included and a run never, `None` before its first commit.
     pub fn last_edited_at_unix_seconds(&self) -> Result<Option<i64>, ProjectRepositoryRefusal> {
         self.history.head_committed_at_unix_seconds()
+    }
+
+    /// Let a read pass through the project's link to the core project when the link points at
+    /// the directory `core_project_directory_the_runtime_carries` answers; a project never
+    /// handed one reads through no link.
+    pub fn read_the_core_project_the_runtime_carries_at(
+        &mut self,
+        core_project_directory_the_runtime_carries: CoreProjectDirectoryTheRuntimeCarries,
+    ) {
+        self.core_project_directory_the_runtime_carries =
+            Some(core_project_directory_the_runtime_carries);
     }
 
     /// Lock the project's Python requirements with `python_requirements_lock` each time an
@@ -1100,6 +1119,12 @@ impl ProjectRepository {
         ))
     }
 
+    /// Every import the project resolves: each one its project file records, then the core
+    /// project the runtime links in.
+    pub fn every_import_the_project_resolves(&self) -> Vec<ProjectImport> {
+        every_import_a_project_resolves(&self.project_directory, &self.project_file)
+    }
+
     /// Every import the project file records, each with the files edited since its copy and,
     /// when `check_for_newer`, the version its source holds now or why it could not be read.
     pub fn import_listing(&self, check_for_newer: bool) -> Vec<ProjectImportListed> {
@@ -1235,7 +1260,7 @@ impl ProjectRepository {
         let pyproject = pyproject_with_each_import_as_a_uv_path_source(
             &pyproject_as_it_was,
             &self.project_directory,
-            &self.project_file.dependencies,
+            &self.every_import_the_project_resolves(),
         )?;
         if pyproject == pyproject_as_it_was {
             return Ok(None);
@@ -1710,7 +1735,14 @@ impl ProjectRepository {
     /// The bytes of the project's file at `path`, as they are on disk now.
     pub fn read_project_file(&self, path: &str) -> Result<Vec<u8>, ProjectRepositoryRefusal> {
         let path = ProjectRelativeFilePath::parse(path)?;
-        path.refuse_a_symbolic_link_on_the_way_under(&self.project_directory)?;
+        let core_project_directory_the_runtime_carries = self
+            .core_project_directory_the_runtime_carries
+            .as_ref()
+            .and_then(|where_it_is| where_it_is());
+        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(
+            &self.project_directory,
+            core_project_directory_the_runtime_carries.as_deref(),
+        )?;
         let on_disk = path.on_disk_under(&self.project_directory);
         if !on_disk.is_file() {
             return Err(ProjectRepositoryRefusal::NoSuchProjectFile(

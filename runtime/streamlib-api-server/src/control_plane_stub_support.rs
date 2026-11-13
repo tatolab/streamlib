@@ -565,6 +565,11 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
             ) -> ::std::result::Result<(), String> {
                 Ok(())
             }
+            fn the_core_nodes_project_directory_this_runtime_carries(
+                &self,
+            ) -> ::std::option::Option<::std::path::PathBuf> {
+                None
+            }
             fn record_first_party_package_moves_in(
                 &self,
                 _history: ::std::sync::Arc<

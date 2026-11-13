@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::{PROJECT_IMPORTS_DIRECTORY, read_every_asset_sidecar};
 use crate::project_file::TatolabProjectFile;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
@@ -41,8 +42,7 @@ fn each_folder_of_an_import_nearest_first(project_directory: &Path, project: Uui
         else {
             continue;
         };
-        for import in importing_project
-            .dependencies
+        for import in every_import_a_project_resolves(&importing_directory, &importing_project)
             .iter()
             .filter(|import| is_one_folder_name(&import.folder))
         {
