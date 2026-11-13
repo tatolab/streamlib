@@ -1387,6 +1387,85 @@ async fn a_record_an_earlier_runtime_wrote_is_listed_failed_until_it_is_removed(
     );
 }
 
+/// A record an earlier runtime wrote, under the id a stream of `project_directory` computes to.
+fn write_a_record_an_earlier_runtime_wrote(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    stream_id: &str,
+    project_directory: &Path,
+) {
+    std::fs::write(
+        engine.streams_directory.join(format!("{stream_id}.json")),
+        json!({
+            "schema_version": 2,
+            "stream_name": "main",
+            "project_directory": project_directory,
+            "graph": the_graph_of_a_stream_named("main"),
+            "stopped": false,
+            "failed_because": null,
+        })
+        .to_string(),
+    )
+    .expect("the earlier runtime's record is written");
+}
+
+/// A run of a project whose stream id is held by a record an earlier runtime wrote from
+/// that same project directory runs, as the record's `failed_because` says it will, and
+/// its record replaces the earlier one.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_run_of_a_project_an_earlier_runtime_recorded_replaces_that_record() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_main_with_a_node_uuid());
+    let main_stream_id = project.stream_id_of("main");
+    write_a_record_an_earlier_runtime_wrote(&engine, &main_stream_id, project.path());
+
+    let run = the_run_of_the_project_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        project.path(),
+    )
+    .await;
+
+    assert_eq!(run["state"], "done", "{run}");
+    let ran = the_one_stream_of(&run);
+    assert_eq!(ran["stream"], main_stream_id.as_str(), "{run}");
+    let listing = the_listing_of(&engine.operations_on_the_loaded_streams(), &main_stream_id).await;
+    assert_ne!(ran["state"], "failed", "{run} {listing}");
+    assert_eq!(listing["failed_because"], Value::Null, "{listing}");
+    assert_eq!(
+        listing["location"],
+        project.location_on_the_wire_of("main"),
+        "{listing}"
+    );
+}
+
+/// A record an earlier runtime wrote from another directory still holds its id against a
+/// run, naming that directory.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_record_an_earlier_runtime_wrote_from_another_directory_still_holds_its_id() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let main_stream_id = project.stream_id_of("main");
+    write_a_record_an_earlier_runtime_wrote(
+        &engine,
+        &main_stream_id,
+        Path::new("/home/someone/elsewhere"),
+    );
+
+    let run = the_run_of_the_project_once_finished(
+        &engine.operations_on_the_loaded_streams(),
+        project.path(),
+    )
+    .await;
+
+    assert_eq!(run["state"], "failed", "{run}");
+    assert!(
+        run["failed_because"]
+            .as_str()
+            .is_some_and(|why| why
+                .contains("a record an earlier runtime wrote from /home/someone/elsewhere")),
+        "{run}"
+    );
+}
+
 /// On a runtime handed no uv, a run of a project with no venv records the project failed
 /// saying the runtime unit carries no uv, and its action is done.
 #[tokio::test(flavor = "multi_thread")]
