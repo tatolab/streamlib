@@ -17,7 +17,9 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
-use crate::project_node_types_followed_for_changes::NodeTypesChangedSinceTheLastListing;
+use crate::project_node_types_followed_for_changes::{
+    NodeTypeListingStarted, NodeTypesChangedSinceTheLastListing,
+};
 
 const PYTHON_SOURCE_FILE_SUFFIX: &str = ".py";
 
@@ -48,6 +50,7 @@ impl ControlOperationDispatcher {
         &self,
         ListProjectNodeTypesRequest { project_directory }: ListProjectNodeTypesRequest,
     ) -> Result<ListProjectNodeTypesToolResult, ControlOperationRefusal> {
+        let listing_started = self.project_node_types_last_listed.start_a_listing();
         let project_read = self
             .a_project_repository_call_off_the_async_runtime(
                 "list_project_node_types",
@@ -140,26 +143,31 @@ impl ControlOperationDispatcher {
             project_name: project_read.project_name,
             sources,
         };
-        self.take_in_the_node_type_listing(project_read.project, &listing);
+        self.take_in_the_node_type_listing(project_read.project, listing_started, &listing);
         Ok(listing)
     }
 
-    /// Keep `listing` as `project`'s last, announce on its feed what it changed from the one
-    /// before, and follow the feed for the changes that list it again.
+    /// Keep `listing`, started at `listing_started`, as `project`'s last, announce on its feed what
+    /// it changed from the one before, and follow the feed for the changes that list it again.
     fn take_in_the_node_type_listing(
         &self,
         project: Uuid,
+        listing_started: NodeTypeListingStarted,
         listing: &ListProjectNodeTypesToolResult,
     ) {
-        let NodeTypesChangedSinceTheLastListing {
-            added,
-            removed,
-            updated,
-        } = self
-            .project_node_types_last_listed
-            .take_in_the_listing(project, listing);
-        self.project_repositories
-            .announce_the_node_types_changed(project, added, removed, updated);
+        self.project_node_types_last_listed.take_in_the_listing(
+            project,
+            listing_started,
+            listing,
+            |NodeTypesChangedSinceTheLastListing {
+                 added,
+                 removed,
+                 updated,
+             }| {
+                self.project_repositories
+                    .announce_the_node_types_changed(project, added, removed, updated)
+            },
+        );
         self.project_node_types_last_listed
             .follow_the_change_feed_once(self);
     }

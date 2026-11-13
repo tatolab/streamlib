@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 use streamlib_control_contract::ListProjectNodeTypesRequest;
@@ -38,8 +39,14 @@ pub(crate) struct NodeTypesChangedSinceTheLastListing {
     pub(crate) updated: Vec<NodeTypeOfOneProjectSource>,
 }
 
+/// When a listing of node types started, among every listing this runtime started: a listing that
+/// started later read the project's files as they stood later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct NodeTypeListingStarted(u64);
+
 /// One project's last listing, and whether the follower is listing it again.
 struct OneProjectsNodeTypesLastListed {
+    listing_started: NodeTypeListingStarted,
     project_directory: PathBuf,
     node_types_offered: NodeTypesOfferedByType,
     listing_it_again: bool,
@@ -50,40 +57,52 @@ struct OneProjectsNodeTypesLastListed {
 #[derive(Default)]
 pub(crate) struct ProjectNodeTypesLastListed {
     by_project: Mutex<HashMap<Uuid, OneProjectsNodeTypesLastListed>>,
+    listings_started: AtomicU64,
     follower_started: std::sync::OnceLock<()>,
 }
 
 impl ProjectNodeTypesLastListed {
-    /// Keep `listing` as `project`'s last, and answer what it changed from the one before; a
-    /// project never listed before has nothing to change from.
+    /// Mark a listing starting, before it reads the project's files.
+    pub(crate) fn start_a_listing(&self) -> NodeTypeListingStarted {
+        NodeTypeListingStarted(self.listings_started.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Keep `listing`, started at `listing_started`, as `project`'s last and hand
+    /// `announce_what_changed` what it changed from the one before, under the one lock, so the
+    /// changes are announced in the order the listings are kept; a project never listed before has
+    /// nothing to change from, and a listing started before the one kept is dropped unannounced.
     pub(crate) fn take_in_the_listing(
         &self,
         project: Uuid,
+        listing_started: NodeTypeListingStarted,
         listing: &ListProjectNodeTypesToolResult,
-    ) -> NodeTypesChangedSinceTheLastListing {
+        announce_what_changed: impl FnOnce(NodeTypesChangedSinceTheLastListing),
+    ) {
         let node_types_offered = node_types_offered_by_type_in(listing);
         let mut by_project = self.by_project.lock();
         match by_project.get_mut(&project) {
+            Some(last_listed) if last_listed.listing_started > listing_started => {}
             Some(last_listed) => {
                 let changed = node_types_changed_between(
                     &last_listed.node_types_offered,
                     &node_types_offered,
                 );
+                last_listed.listing_started = listing_started;
                 last_listed.project_directory = listing.project_directory.clone();
                 last_listed.node_types_offered = node_types_offered;
-                changed
+                announce_what_changed(changed);
             }
             None => {
                 by_project.insert(
                     project,
                     OneProjectsNodeTypesLastListed {
+                        listing_started,
                         project_directory: listing.project_directory.clone(),
                         node_types_offered,
                         listing_it_again: false,
                         listing_wanted_again: false,
                     },
                 );
-                NodeTypesChangedSinceTheLastListing::default()
             }
         }
     }
@@ -289,6 +308,21 @@ mod tests {
         }
     }
 
+    /// What `last_listed` takes in from `listing`, started now.
+    fn what_the_listing_changed(
+        last_listed: &ProjectNodeTypesLastListed,
+        listing: &ListProjectNodeTypesToolResult,
+    ) -> NodeTypesChangedSinceTheLastListing {
+        let mut announced = NodeTypesChangedSinceTheLastListing::default();
+        last_listed.take_in_the_listing(
+            Uuid::nil(),
+            last_listed.start_a_listing(),
+            listing,
+            |changed| announced = changed,
+        );
+        announced
+    }
+
     fn the_types_of(node_types: &[NodeTypeOfOneProjectSource]) -> Vec<&str> {
         node_types
             .iter()
@@ -299,8 +333,8 @@ mod tests {
     #[test]
     fn a_projects_first_listing_changes_nothing() {
         let last_listed = ProjectNodeTypesLastListed::default();
-        let changed = last_listed.take_in_the_listing(
-            Uuid::nil(),
+        let changed = what_the_listing_changed(
+            &last_listed,
             &a_listing_of(vec![a_node_type("tatolab.camera:CameraSource", "a camera")]),
         );
         assert_eq!(changed, NodeTypesChangedSinceTheLastListing::default());
@@ -309,8 +343,8 @@ mod tests {
     #[test]
     fn a_later_listing_names_each_type_added_removed_and_updated_and_no_other() {
         let last_listed = ProjectNodeTypesLastListed::default();
-        last_listed.take_in_the_listing(
-            Uuid::nil(),
+        what_the_listing_changed(
+            &last_listed,
             &a_listing_of(vec![
                 a_node_type("tatolab.camera:CameraSource", "a camera"),
                 a_node_type("tatolab.camera:LatencyProbe", "a probe"),
@@ -318,8 +352,8 @@ mod tests {
             ]),
         );
 
-        let changed = last_listed.take_in_the_listing(
-            Uuid::nil(),
+        let changed = what_the_listing_changed(
+            &last_listed,
             &a_listing_of(vec![
                 a_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
                 a_node_type("tatolab.camera:Unchanged", "the same"),
@@ -350,10 +384,10 @@ mod tests {
     fn a_listing_the_same_as_the_last_changes_nothing() {
         let last_listed = ProjectNodeTypesLastListed::default();
         let listing = a_listing_of(vec![a_node_type("tatolab.camera:CameraSource", "a camera")]);
-        last_listed.take_in_the_listing(Uuid::nil(), &listing);
+        what_the_listing_changed(&last_listed, &listing);
 
         assert_eq!(
-            last_listed.take_in_the_listing(Uuid::nil(), &listing),
+            what_the_listing_changed(&last_listed, &listing),
             NodeTypesChangedSinceTheLastListing::default()
         );
     }
@@ -372,7 +406,7 @@ mod tests {
     #[test]
     fn a_listing_again_asked_for_while_one_runs_runs_once_after_it() {
         let last_listed = ProjectNodeTypesLastListed::default();
-        last_listed.take_in_the_listing(Uuid::nil(), &a_listing_of(Vec::new()));
+        what_the_listing_changed(&last_listed, &a_listing_of(Vec::new()));
 
         assert_eq!(
             last_listed.start_listing_again(Uuid::nil()),
@@ -385,6 +419,36 @@ mod tests {
         assert_eq!(
             last_listed.start_listing_again(Uuid::nil()),
             Some(PathBuf::from("/projects/show"))
+        );
+    }
+
+    #[test]
+    fn a_listing_started_before_the_one_kept_is_dropped_unannounced() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        what_the_listing_changed(&last_listed, &a_listing_of(Vec::new()));
+        let started_first = last_listed.start_a_listing();
+        let started_second = last_listed.start_a_listing();
+        let newer = a_listing_of(vec![a_node_type("tatolab.camera:CameraSource", "a camera")]);
+        let mut announced = Vec::new();
+        last_listed.take_in_the_listing(Uuid::nil(), started_second, &newer, |changed| {
+            announced.push(changed)
+        });
+
+        last_listed.take_in_the_listing(
+            Uuid::nil(),
+            started_first,
+            &a_listing_of(Vec::new()),
+            |changed| announced.push(changed),
+        );
+
+        assert_eq!(announced.len(), 1);
+        assert_eq!(
+            the_types_of(&announced[0].added),
+            ["tatolab.camera:CameraSource"]
+        );
+        assert_eq!(
+            what_the_listing_changed(&last_listed, &newer),
+            NodeTypesChangedSinceTheLastListing::default()
         );
     }
 
