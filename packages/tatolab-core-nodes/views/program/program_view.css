@@ -1,0 +1,122 @@
+/* Copyright (c) 2025 Jonathan Fontanez */
+/* SPDX-License-Identifier: BUSL-1.1 */
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #060607;
+  color: #c8c8ce;
+  font: 12px/17px system-ui, -apple-system, sans-serif;
+}
+
+.program {
+  display: flex;
+  gap: 4px;
+  height: 100%;
+  padding: 4px;
+}
+
+.program-picture {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.program-picture-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.program-picture-notice,
+.program-audio-notice {
+  margin: 0;
+  color: #9a9aa3;
+}
+
+.program-picture-notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+}
+
+.program-picture-notice:empty,
+.program-audio-notice:empty {
+  display: none;
+}
+
+.program-audio {
+  width: 72px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: #1a1a1d;
+  border-radius: 4px;
+}
+
+.program-audio-meters {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 3px;
+}
+
+.program-audio-meter {
+  position: relative;
+  flex: 1;
+  background: #2a2a2e;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.program-audio-meter-level,
+.program-audio-meter-peak {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.program-audio-meter-level {
+  background: #3fcf8e;
+}
+
+.program-audio-meter-level.is-loud {
+  background: #f0a845;
+}
+
+.program-audio-meter-level.is-clipping {
+  background: #e5484d;
+}
+
+.program-audio-meter-peak {
+  height: 2px;
+  background: #f0f0f2;
+}
+
+.program-audio-notice {
+  font-size: 10.5px;
+  line-height: 14px;
+}

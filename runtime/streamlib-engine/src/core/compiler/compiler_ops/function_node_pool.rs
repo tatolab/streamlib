@@ -79,7 +79,8 @@ pub(crate) fn the_function_node_pool_descriptor(
 }
 
 /// Whether `link_id` carries an island into a reader that cannot evaluate it:
-/// one that runs in the app process, which runs no node code, or a class
+/// one that runs in the app process, which runs no node code, a shader node,
+/// which the stream's shader evaluator runs with no node code, or a class
 /// driven manually, whose native half reads without the Python interpreter's
 /// lock, fed an island that runs a node as Python.
 fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
@@ -97,6 +98,9 @@ fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     };
     if matches!(reader.node_kind(), Some(NodeKind::Function { .. })) {
         return false;
+    }
+    if reader.node_kind() == Some(NodeKind::Shader) {
+        return true;
     }
     let node_types = graph.node_types_this_stream_resolves();
     let runs_in_the_app_process = !reader.has::<OutOfProcessLinkWiringComponent>()
@@ -370,6 +374,8 @@ mod tests {
         HowALinkIsWired, how_a_link_is_wired,
         wire_a_link_from_a_function_node_island_into_its_reader,
     };
+    use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
+    use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
     use crate::core::processors::HowANodeOfADescribedTypeRuns;
     use crate::core::test_support::MockInputOnlyProcessor;
 
@@ -480,6 +486,113 @@ mod tests {
                 .filter(|(_, _, carried)| carried.is_some())
                 .count(),
             4
+        );
+    }
+
+    /// Register `tint`, a shader type taking an Image and a float `amount`.
+    fn register_a_tint_shader_node_type(graph: &Graph) {
+        let import_path = ProcessorClassImportPath::new("test_shaders:tint").unwrap();
+        let mut descriptor = ProcessorDescriptor::new(
+            ProcessorClassShortName::new("tint").unwrap(),
+            import_path,
+            "a shader node type for a test",
+        );
+        descriptor.node_kind = NodeKind::Shader;
+        for (port, family) in [
+            ("image", PortFamily::Image),
+            ("amount", PortFamily::Channels),
+        ] {
+            descriptor = descriptor.with_input(
+                PortDescriptor::new(port, "", true, PortFamilyDeclaration::of_family(family))
+                    .with_delivery_profile("newest"),
+            );
+        }
+        descriptor = descriptor.with_output(PortDescriptor::new(
+            "result",
+            "",
+            true,
+            PortFamilyDeclaration::of_family(PortFamily::Image),
+        ));
+        graph
+            .node_types_this_stream_resolves()
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                descriptor,
+                HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                    shader_node_program: shader_program(
+                        "tint",
+                        "return image.pixel * amount;",
+                        &["image"],
+                        &["amount"],
+                    ),
+                    evaluator_of_the_island_it_hosts: Box::new(|node| {
+                        Err(Error::Configuration(format!(
+                            "`{}` builds no processor in this test",
+                            node.id
+                        )))
+                    }),
+                },
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn an_island_a_shader_node_reads_is_carried_through_the_pool_to_its_islands_host() {
+        let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
+        register_a_tint_shader_node_type(&graph);
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let fused_tint = add_a_node(&mut graph, "test_shaders:tint", JsonValue::Null);
+        let host_tint = add_a_node(&mut graph, "test_shaders:tint", JsonValue::Null);
+        let lfo_into_remap = link(&mut graph, (&lfo, "result"), (&remap, "x"));
+        let remap_into_the_fused_tint =
+            link(&mut graph, (&remap, "result"), (&fused_tint, "amount"));
+        let fused_tint_into_the_host =
+            link(&mut graph, (&fused_tint, "result"), (&host_tint, "image"));
+        let lfo_into_the_host = link(&mut graph, (&lfo, "result"), (&host_tint, "amount"));
+        let mut processors_to_add = vec![lfo, remap, fused_tint.clone(), host_tint.clone()];
+        let mut links_to_add = vec![
+            lfo_into_remap,
+            remap_into_the_fused_tint.clone(),
+            fused_tint_into_the_host,
+            lfo_into_the_host.clone(),
+        ];
+
+        carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+            &mut graph,
+            &mut processors_to_add,
+            &mut links_to_add,
+        )
+        .unwrap();
+
+        let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
+        let how_the_link_out_of_the_pool_is_wired = |carried_link_id: &LinkUniqueId| {
+            let carried_as = the_links_a_link_is_wired_as(&graph, carried_link_id);
+            assert_eq!(carried_as.len(), 2);
+            let out_of_the_pool = carried_as
+                .iter()
+                .find(|link_id| {
+                    graph
+                        .traversal()
+                        .e(*link_id)
+                        .first()
+                        .is_some_and(|link| link.source().processor_id() == &pool)
+                })
+                .expect("one of the two links leaves the pool");
+            how_a_link_is_wired(&graph, out_of_the_pool).unwrap()
+        };
+        assert_eq!(
+            how_the_link_out_of_the_pool_is_wired(&remap_into_the_fused_tint),
+            HowALinkIsWired::ThroughAChannelIntoTheHostOfItsShaderNodeIsland(
+                the_host_input_port_a_fused_shader_node_input_is_read_at(
+                    &host_tint,
+                    &fused_tint,
+                    "amount"
+                )
+            )
+        );
+        assert_eq!(
+            how_the_link_out_of_the_pool_is_wired(&lfo_into_the_host),
+            HowALinkIsWired::ThroughAChannel
         );
     }
 

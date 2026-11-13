@@ -633,6 +633,14 @@ jobs:
           VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install --no-deps . pillow
           "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
 
+      # The Core Nodes project: each node's group, description and Slang
+      # signature, and each of its streams against the nodes it brings.
+      - name: tatolab-core-nodes suite
+        working-directory: packages/tatolab-core-nodes
+        run: |
+          VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install pillow
+          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
+
       - name: Driver-search tests against the lend
         run: |
           uv build --wheel --out-dir "$RUNNER_TEMP/tatolab-stream-dist" sdk/tatolab-stream

@@ -1,0 +1,295 @@
+{
+  "asset": "17fb6ff1-64be-5e1a-b865-93d93df6eac0",
+  "display_name": "Kaleidoscope clouds",
+  "links": [
+    {
+      "source": {
+        "node": "7fee3fec-4a76-57ff-83b2-eb2e9c3ce981",
+        "port": "image"
+      },
+      "target": {
+        "node": "4fc65191-f092-5465-b513-d51814e6bbdc",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "1840af59-a7ed-525a-aac4-2adda2e9f04a",
+        "port": "result"
+      },
+      "target": {
+        "node": "93afe441-9234-5eec-8f28-a55d1bc96231",
+        "port": "a"
+      }
+    },
+    {
+      "source": {
+        "node": "93afe441-9234-5eec-8f28-a55d1bc96231",
+        "port": "result"
+      },
+      "target": {
+        "node": "4fc65191-f092-5465-b513-d51814e6bbdc",
+        "port": "time"
+      }
+    },
+    {
+      "source": {
+        "node": "4fc65191-f092-5465-b513-d51814e6bbdc",
+        "port": "result"
+      },
+      "target": {
+        "node": "277d20fd-1aa9-57bd-81bb-8374d9c354f5",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "277d20fd-1aa9-57bd-81bb-8374d9c354f5",
+        "port": "result"
+      },
+      "target": {
+        "node": "d2dc80f7-b7be-5a3f-aeda-caa92c47fff0",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "99d64181-fcd3-57c7-9edf-b5d9085155db",
+        "port": "result"
+      },
+      "target": {
+        "node": "d2dc80f7-b7be-5a3f-aeda-caa92c47fff0",
+        "port": "rotate"
+      }
+    },
+    {
+      "source": {
+        "node": "d2dc80f7-b7be-5a3f-aeda-caa92c47fff0",
+        "port": "result"
+      },
+      "target": {
+        "node": "8de3b01d-018b-58f9-83e6-a819983dff2e",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "6eedd107-92b5-5984-8df4-0f00759d03ca",
+        "port": "result"
+      },
+      "target": {
+        "node": "c2dca0a7-6cba-5547-975e-5b667ccae4e9",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "c2dca0a7-6cba-5547-975e-5b667ccae4e9",
+        "port": "result"
+      },
+      "target": {
+        "node": "8de3b01d-018b-58f9-83e6-a819983dff2e",
+        "port": "hue_shift"
+      }
+    },
+    {
+      "source": {
+        "node": "8de3b01d-018b-58f9-83e6-a819983dff2e",
+        "port": "result"
+      },
+      "target": {
+        "node": "87d6c15a-f2d1-5556-8301-f88cef8962bd",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "5a3bd1b2-f057-518a-8f30-908f26486073",
+        "port": "audio"
+      },
+      "target": {
+        "node": "87d6c15a-f2d1-5556-8301-f88cef8962bd",
+        "port": "audio"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "7fee3fec-4a76-57ff-83b2-eb2e9c3ce981",
+      "name": "canvas",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      "type": "nodes.solid_color:SolidColor"
+    },
+    {
+      "config": {},
+      "id": "1840af59-a7ed-525a-aac4-2adda2e9f04a",
+      "name": "timer",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          200
+        ]
+      },
+      "type": "nodes.animation:Timer"
+    },
+    {
+      "config": {},
+      "id": "93afe441-9234-5eec-8f28-a55d1bc96231",
+      "name": "drift",
+      "pins": {
+        "b": 0.3
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          260,
+          200
+        ]
+      },
+      "type": "nodes.math_nodes:Multiply"
+    },
+    {
+      "config": {},
+      "id": "4fc65191-f092-5465-b513-d51814e6bbdc",
+      "name": "noise",
+      "pins": {
+        "scale": 5.0
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          520,
+          0
+        ]
+      },
+      "type": "nodes.generators:Noise"
+    },
+    {
+      "config": {},
+      "id": "277d20fd-1aa9-57bd-81bb-8374d9c354f5",
+      "name": "duotone",
+      "studio": {
+        "contract": 1,
+        "position": [
+          780,
+          0
+        ]
+      },
+      "type": "nodes.color:Duotone"
+    },
+    {
+      "config": {},
+      "id": "99d64181-fcd3-57c7-9edf-b5d9085155db",
+      "name": "spin",
+      "pins": {
+        "rate_hz": 0.03
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          780,
+          260
+        ]
+      },
+      "type": "nodes.animation:Ramp"
+    },
+    {
+      "config": {},
+      "id": "d2dc80f7-b7be-5a3f-aeda-caa92c47fff0",
+      "name": "kaleidoscope",
+      "pins": {
+        "segments": 8.0
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      "type": "nodes.transform:Kaleidoscope"
+    },
+    {
+      "config": {},
+      "id": "6eedd107-92b5-5984-8df4-0f00759d03ca",
+      "name": "lfo",
+      "pins": {
+        "rate_hz": 0.05
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          780,
+          420
+        ]
+      },
+      "type": "nodes.animation:Lfo"
+    },
+    {
+      "config": {},
+      "id": "c2dca0a7-6cba-5547-975e-5b667ccae4e9",
+      "name": "remap",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1040,
+          420
+        ]
+      },
+      "type": "nodes.math_nodes:Remap"
+    },
+    {
+      "config": {},
+      "id": "8de3b01d-018b-58f9-83e6-a819983dff2e",
+      "name": "hsv_adjust",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      "type": "nodes.color:HsvAdjust"
+    },
+    {
+      "config": {
+        "amplitude": 0.1,
+        "frequency_hz": 110.0
+      },
+      "id": "5a3bd1b2-f057-518a-8f30-908f26486073",
+      "name": "oscillator",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1300,
+          420
+        ]
+      },
+      "type": "nodes.oscillator:Oscillator"
+    },
+    {
+      "config": {},
+      "id": "87d6c15a-f2d1-5556-8301-f88cef8962bd",
+      "name": "program",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1560,
+          0
+        ]
+      },
+      "type": "Core Nodes:program"
+    }
+  ]
+}

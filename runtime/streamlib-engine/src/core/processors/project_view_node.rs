@@ -46,6 +46,10 @@ const VIEW_NODE_ARRAY_OUTPUT_DTYPE: &str = "float64";
 /// The sample type a Channels block written onto a view node's output carries.
 const VIEW_NODE_CHANNELS_OUTPUT_SAMPLE_TYPE: ChannelsBlockSampleType = ChannelsBlockSampleType::F32;
 
+/// How a link into a view node's input delivers: the node itself reads nothing, a panel reads
+/// the port linked into it through a viewer, so the link never holds its writer back.
+const VIEW_NODE_INPUT_DELIVERY_PROFILE: &str = "newest";
+
 /// The node type the view `view` is in a stream, or why no node takes it: a view that does not
 /// open, or one placed in an area, which has no node.
 pub(crate) fn the_node_type_of_a_project_view(
@@ -75,7 +79,9 @@ pub(crate) fn the_node_type_of_a_project_view(
     descriptor.inputs = manifest
         .inputs
         .iter()
-        .map(the_port_a_view_declares)
+        .map(|port| {
+            the_port_a_view_declares(port).with_delivery_profile(VIEW_NODE_INPUT_DELIVERY_PROFILE)
+        })
         .collect();
     descriptor.outputs = manifest
         .outputs

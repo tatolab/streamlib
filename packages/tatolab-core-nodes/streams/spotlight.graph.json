@@ -1,0 +1,218 @@
+{
+  "asset": "ff62dc86-8b1a-5486-b1ce-d470d279523e",
+  "display_name": "Swinging spotlight",
+  "links": [
+    {
+      "source": {
+        "node": "b45ed153-5e84-5d27-b97e-bb9a9a6c58bd",
+        "port": "image"
+      },
+      "target": {
+        "node": "ae617918-94f5-5ea7-bd38-8c7490eff662",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "b45ed153-5e84-5d27-b97e-bb9a9a6c58bd",
+        "port": "image"
+      },
+      "target": {
+        "node": "8872965a-fb32-5837-83ec-83ed4ce66bd9",
+        "port": "size_from"
+      }
+    },
+    {
+      "source": {
+        "node": "13370e37-bb86-577d-adc5-a4aabd910d84",
+        "port": "result"
+      },
+      "target": {
+        "node": "3f16f6b3-fc38-5cc8-967a-6d286b590c0e",
+        "port": "x"
+      }
+    },
+    {
+      "source": {
+        "node": "3f16f6b3-fc38-5cc8-967a-6d286b590c0e",
+        "port": "result"
+      },
+      "target": {
+        "node": "8872965a-fb32-5837-83ec-83ed4ce66bd9",
+        "port": "center_x"
+      }
+    },
+    {
+      "source": {
+        "node": "ae617918-94f5-5ea7-bd38-8c7490eff662",
+        "port": "result"
+      },
+      "target": {
+        "node": "0ae692fa-b298-5b9e-b00d-7171b44a8d22",
+        "port": "background"
+      }
+    },
+    {
+      "source": {
+        "node": "8872965a-fb32-5837-83ec-83ed4ce66bd9",
+        "port": "result"
+      },
+      "target": {
+        "node": "0ae692fa-b298-5b9e-b00d-7171b44a8d22",
+        "port": "foreground"
+      }
+    },
+    {
+      "source": {
+        "node": "0ae692fa-b298-5b9e-b00d-7171b44a8d22",
+        "port": "result"
+      },
+      "target": {
+        "node": "ed7963a2-705f-517e-a8c8-eb4f820b5725",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "ed7963a2-705f-517e-a8c8-eb4f820b5725",
+        "port": "result"
+      },
+      "target": {
+        "node": "b838f09c-f46b-57a3-bde4-82bbaeead760",
+        "port": "video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "config": {
+        "height": 720,
+        "width": 1280
+      },
+      "id": "b45ed153-5e84-5d27-b97e-bb9a9a6c58bd",
+      "name": "canvas",
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      "type": "nodes.solid_color:SolidColor"
+    },
+    {
+      "config": {},
+      "id": "ae617918-94f5-5ea7-bd38-8c7490eff662",
+      "name": "gradient",
+      "pins": {
+        "angle": 0.25,
+        "end_blue": 0.0,
+        "end_green": 0.0,
+        "end_red": 0.0,
+        "start_blue": 0.2,
+        "start_green": 0.0,
+        "start_red": 0.05
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          260,
+          0
+        ]
+      },
+      "type": "nodes.generators:Gradient"
+    },
+    {
+      "config": {},
+      "id": "13370e37-bb86-577d-adc5-a4aabd910d84",
+      "name": "swing",
+      "pins": {
+        "rate_hz": 0.25
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          0,
+          300
+        ]
+      },
+      "type": "nodes.animation:Lfo"
+    },
+    {
+      "config": {},
+      "id": "3f16f6b3-fc38-5cc8-967a-6d286b590c0e",
+      "name": "swing_range",
+      "pins": {
+        "to_high": 0.75,
+        "to_low": 0.25
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          260,
+          300
+        ]
+      },
+      "type": "nodes.math_nodes:Remap"
+    },
+    {
+      "config": {},
+      "id": "8872965a-fb32-5837-83ec-83ed4ce66bd9",
+      "name": "circle",
+      "pins": {
+        "blue": 0.6,
+        "green": 0.9,
+        "radius": 0.18,
+        "red": 1.0,
+        "softness": 0.08
+      },
+      "studio": {
+        "contract": 1,
+        "position": [
+          520,
+          300
+        ]
+      },
+      "type": "nodes.generators:Circle"
+    },
+    {
+      "config": {},
+      "id": "0ae692fa-b298-5b9e-b00d-7171b44a8d22",
+      "name": "over",
+      "studio": {
+        "contract": 1,
+        "position": [
+          780,
+          0
+        ]
+      },
+      "type": "nodes.composite:Over"
+    },
+    {
+      "config": {},
+      "id": "ed7963a2-705f-517e-a8c8-eb4f820b5725",
+      "name": "vignette",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1040,
+          0
+        ]
+      },
+      "type": "nodes.filters:Vignette"
+    },
+    {
+      "config": {},
+      "id": "b838f09c-f46b-57a3-bde4-82bbaeead760",
+      "name": "program",
+      "studio": {
+        "contract": 1,
+        "position": [
+          1300,
+          0
+        ]
+      },
+      "type": "Core Nodes:program"
+    }
+  ]
+}

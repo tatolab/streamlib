@@ -103,6 +103,11 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
         )]
     );
     assert_eq!(
+        descriptor.inputs[0].delivery_profile.as_deref(),
+        Some("newest"),
+        "a link into a view node's input is wired as a channel, which takes a delivery profile"
+    );
+    assert_eq!(
         ports(&descriptor.outputs),
         [(
             "crossfader".to_string(),
