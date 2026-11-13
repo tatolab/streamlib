@@ -28,7 +28,7 @@ pub(crate) struct ControlSubscriptionsOfOneConnection {
     subscribed_projects_with_their_folders_watched:
         Mutex<BTreeMap<Uuid, ProjectFilesWatchedWhileHeld>>,
     subscribed_project_logs_by_directory_with_symlinks_resolved:
-        Mutex<BTreeMap<PathBuf, BTreeSet<std::ffi::OsString>>>,
+        Mutex<BTreeMap<PathBuf, ProjectLogSubscribed>>,
     followed_stream_graphs: Mutex<BTreeMap<String, Option<StreamGraphFollowedOnOneLoad>>>,
     stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
     subscribed_to_stream_actions: AtomicBool,
@@ -62,6 +62,30 @@ impl std::fmt::Debug for ControlSubscriptionsOfOneConnection {
             )
             .finish()
     }
+}
+
+/// A project log a subscription names: its directory as the connection spelled it and with
+/// symlinks resolved, and the cursor at its end as the subscription arrived.
+pub(crate) struct ProjectLogAsSubscribedWithItsEnd {
+    pub(crate) project_directory_as_subscribed: PathBuf,
+    pub(crate) project_directory_with_symlinks_resolved: PathBuf,
+    pub(crate) cursor_at_the_logs_end: String,
+}
+
+/// One project log the connection subscribed to.
+#[derive(Debug)]
+struct ProjectLogSubscribed {
+    directories_as_subscribed: BTreeSet<std::ffi::OsString>,
+    cursor_the_next_push_follows: String,
+}
+
+/// Where a subscribed project log's next push starts, and each directory it is sent as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectLogNextPush {
+    /// Each directory the connection subscribed to the project's log as.
+    pub(crate) directories_as_subscribed: Vec<PathBuf>,
+    /// The cursor the next push's records follow.
+    pub(crate) cursor_the_next_push_follows: String,
 }
 
 /// One followed stream as it is loaded now, and the listener that keeps its topic subscribed.
@@ -118,58 +142,87 @@ impl ControlSubscriptionsOfOneConnection {
         subscribed_projects.keys().copied().collect()
     }
 
-    /// The project in `project_directory_with_symlinks_resolved`, by each directory the connection
-    /// subscribed to its log as; none when it did not subscribe to it.
-    pub(crate) fn the_project_log_as_subscribed(
+    /// Where the next push of the log of the project in `project_directory_with_symlinks_resolved`
+    /// starts; none when the connection did not subscribe to it.
+    pub(crate) fn the_next_push_of_the_project_log(
         &self,
         project_directory_with_symlinks_resolved: &Path,
-    ) -> Vec<PathBuf> {
+    ) -> Option<ProjectLogNextPush> {
         self.subscribed_project_logs_by_directory_with_symlinks_resolved
             .lock()
             .get(project_directory_with_symlinks_resolved)
-            .map(|directories_as_subscribed| {
-                directories_as_subscribed
+            .map(|subscribed| ProjectLogNextPush {
+                directories_as_subscribed: subscribed
+                    .directories_as_subscribed
                     .iter()
                     .cloned()
                     .map(PathBuf::from)
-                    .collect()
+                    .collect(),
+                cursor_the_next_push_follows: subscribed.cursor_the_next_push_follows.clone(),
             })
-            .unwrap_or_default()
     }
 
-    /// Every project, by each directory the connection subscribed to its log as.
-    pub(crate) fn every_subscribed_project_log(&self) -> Vec<PathBuf> {
+    /// Every project whose log the connection subscribed to, by its directory with symlinks
+    /// resolved.
+    pub(crate) fn every_subscribed_project_log_with_symlinks_resolved(&self) -> Vec<PathBuf> {
         self.subscribed_project_logs_by_directory_with_symlinks_resolved
             .lock()
-            .values()
-            .flatten()
+            .keys()
             .cloned()
-            .map(PathBuf::from)
             .collect()
     }
 
+    /// Start the next push of the log of the project in `project_directory_with_symlinks_resolved`
+    /// at `cursor_after_the_push`, if a push from `cursor_the_push_followed` was the last one.
+    pub(crate) fn move_the_project_log_cursor_past_a_push(
+        &self,
+        project_directory_with_symlinks_resolved: &Path,
+        cursor_the_push_followed: &str,
+        cursor_after_the_push: String,
+    ) {
+        if let Some(subscribed) = self
+            .subscribed_project_logs_by_directory_with_symlinks_resolved
+            .lock()
+            .get_mut(project_directory_with_symlinks_resolved)
+            .filter(|subscribed| {
+                subscribed.cursor_the_next_push_follows == cursor_the_push_followed
+            })
+        {
+            subscribed.cursor_the_next_push_follows = cursor_after_the_push;
+        }
+    }
+
     /// Subscribe to the log of each project, keyed by its directory as subscribed, spelled exactly
-    /// as the connection spelled it, and with symlinks resolved, answering every directory a
-    /// project log is subscribed to as.
+    /// as the connection spelled it, and with symlinks resolved, its first push starting at the
+    /// cursor at its log's end, answering every directory a project log is subscribed to as. A
+    /// project already subscribed keeps the cursor its next push follows.
     pub(crate) fn subscribe_to_the_project_logs(
         &self,
-        project_directories_as_subscribed_and_with_symlinks_resolved: Vec<(PathBuf, PathBuf)>,
+        project_logs_as_subscribed_with_symlinks_resolved_and_their_end: Vec<
+            ProjectLogAsSubscribedWithItsEnd,
+        >,
     ) -> Vec<PathBuf> {
         let mut subscribed_project_logs = self
             .subscribed_project_logs_by_directory_with_symlinks_resolved
             .lock();
-        for (project_directory_as_subscribed, project_directory_with_symlinks_resolved) in
-            project_directories_as_subscribed_and_with_symlinks_resolved
+        for ProjectLogAsSubscribedWithItsEnd {
+            project_directory_as_subscribed,
+            project_directory_with_symlinks_resolved,
+            cursor_at_the_logs_end,
+        } in project_logs_as_subscribed_with_symlinks_resolved_and_their_end
         {
             subscribed_project_logs
                 .entry(project_directory_with_symlinks_resolved)
-                .or_default()
+                .or_insert_with(|| ProjectLogSubscribed {
+                    directories_as_subscribed: BTreeSet::new(),
+                    cursor_the_next_push_follows: cursor_at_the_logs_end,
+                })
+                .directories_as_subscribed
                 .insert(project_directory_as_subscribed.into_os_string());
         }
         subscribed_project_logs
             .values()
-            .flatten()
-            .cloned()
+            .flat_map(|subscribed| subscribed.directories_as_subscribed.iter().cloned())
             .map(PathBuf::from)
             .collect()
     }

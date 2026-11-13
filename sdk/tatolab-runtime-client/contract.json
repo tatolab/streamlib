@@ -188,8 +188,8 @@
     },
     {
       "name": "subscribe_project_log_records",
-      "summary": "Send this connection a `project_log_records_written` notification each time the named projects' logs have new records to read.",
-      "description": "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, a `project_log_records_written` notification names its `project_directory` as the connection spelled it, and the client reads `logs` on from its cursor; a connection that falls behind is sent `missed` for every subscribed project. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.",
+      "summary": "Send this connection each new record of the named projects' logs as `project_log_records_written` notifications.",
+      "description": "Subscribe the connection to the logs of the projects in `project_directories`, each an absolute path: from then on, each time the runtime writes new records to one's log, which it does at most every 100 ms, `project_log_records_written` carries them, at most 500 to a notification, naming its `project_directory` as the connection spelled it. Each notification's `after` is the previous one's `next_after`, starting at the log's end as the project is subscribed; a client that read the log with `logs` to another cursor reads `logs` from its cursor `until` the notification's `next_after` instead, and appends the notifications after that. Served only on a connection that stays open; refused for an empty `project_directories`, or one that is relative or names no folder on this machine. Answers every project the connection is subscribed to, by its directory as the connection spelled it.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -3461,7 +3461,7 @@
     },
     {
       "name": "project_log_records_written",
-      "summary": "A project the connection subscribed to has new log records, which `logs` reads on from its cursor, or `missed`.",
+      "summary": "The new records of a project's log the connection subscribed to, with the cursors they follow and end at.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -9635,6 +9635,13 @@
             ],
             "description": "Return the records after this opaque cursor, the previous result's `next_after`. Omit it for the oldest the project's log holds."
           },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Return no record at or past this opaque cursor, a `next_after` a result or a `project_log_records_written` notification answered: a page that reaches it answers it as `next_after`. Omit it to read to the log's end."
+          },
           "count": {
             "type": [
               "integer",
@@ -10392,31 +10399,32 @@
             "type": "string",
             "description": "The project, by its directory as the connection spelled it to\n`subscribe_project_log_records`; once for each spelling of one project subscribed."
           },
-          "change": {
-            "$ref": "#/components/schemas/ProjectLogRecordsChangeKindOnTheWire",
-            "description": "`written`, or `missed` when the connection fell behind; either way the client reads `logs`\non from its cursor."
+          "records": {
+            "type": "array",
+            "items": true,
+            "description": "The records written after `after`, oldest first, each as the project's JSONL log holds it."
+          },
+          "after": {
+            "type": "string",
+            "description": "The cursor these records follow: the previous notification's `next_after`, or the log's\nend when the connection subscribed. A client whose own cursor is another reads `logs` from\nits cursor `until` `next_after` instead of appending these."
+          },
+          "next_after": {
+            "type": "string",
+            "description": "The cursor just past these records, which the next notification for the project follows."
+          },
+          "records_no_longer_held": {
+            "type": "boolean",
+            "description": "Whether retention deleted records between `after` and these."
           }
         },
         "required": [
           "project_directory",
-          "change"
+          "records",
+          "after",
+          "next_after",
+          "records_no_longer_held"
         ],
         "description": "`project_log_records_written`'s params."
-      },
-      "ProjectLogRecordsChangeKindOnTheWire": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "written",
-            "description": "The runtime wrote new records to the project's log."
-          },
-          {
-            "type": "string",
-            "const": "missed",
-            "description": "The connection fell behind and may have missed a write."
-          }
-        ],
-        "description": "What a `project_log_records_written` tells of a project's log."
       },
       "ListOperationGroupsRequest": {
         "type": "object",

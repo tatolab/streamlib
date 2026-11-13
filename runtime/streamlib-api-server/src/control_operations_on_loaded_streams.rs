@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     CloseViewerToolResult, LogsToolResult, OpenViewerToolResult, SetStreamClockScaleToolResult,
 };
 use streamlib_runtime_client_contract::project_log_records::{
-    ProjectLogRecordsPage, project_log_records_after,
+    ProjectLogRecordsPage, project_log_records_between,
 };
 
 use crate::control_operation_dispatcher::{
@@ -86,6 +86,7 @@ impl ControlOperationDispatcher {
             stream,
             action,
             after,
+            until,
             count,
         }: LogsRequest,
     ) -> Result<LogsToolResult, ControlOperationRefusal> {
@@ -99,11 +100,12 @@ impl ControlOperationDispatcher {
             next_after,
             records_no_longer_held,
         } = tokio::task::spawn_blocking(move || {
-            project_log_records_after(
+            project_log_records_between(
                 &read_project_directory,
                 stream.as_deref(),
                 action.as_deref(),
                 after.as_deref(),
+                until.as_deref(),
                 max_count,
             )
         })

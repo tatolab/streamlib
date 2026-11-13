@@ -88,6 +88,30 @@ pub fn project_log_records_after(
     after: Option<&str>,
     count: usize,
 ) -> Result<ProjectLogRecordsPage, ProjectLogRecordsNotRead> {
+    project_log_records_between(project_directory, stream, action, after, None, count)
+}
+
+/// [`project_log_records_after`], reading no record that starts at or past
+/// the cursor `until`: a page that reaches it answers `until` as its next
+/// cursor, and one whose `after` is already past it answers no records and
+/// `after`.
+pub fn project_log_records_between(
+    project_directory: &Path,
+    stream: Option<&str>,
+    action: Option<&str>,
+    after: Option<&str>,
+    until: Option<&str>,
+    count: usize,
+) -> Result<ProjectLogRecordsPage, ProjectLogRecordsNotRead> {
+    let until = until
+        .map(|cursor| {
+            ProjectLogCursor::parse(cursor).ok_or_else(|| {
+                ProjectLogRecordsNotRead::CursorMalformed {
+                    cursor: cursor.to_string(),
+                }
+            })
+        })
+        .transpose()?;
     let active_segment_path = project_log_path(project_directory);
     let mut reads_left = PROJECT_LOG_READS_BEFORE_A_ROTATION_IS_ANSWERED_AS_IT_WAS;
     loop {
@@ -99,6 +123,7 @@ pub fn project_log_records_after(
             stream,
             action,
             after,
+            until,
             count,
         )?;
         let the_log_rotated_under_the_read = page.a_segment_listed_was_gone
@@ -113,6 +138,62 @@ pub fn project_log_records_after(
             ));
         }
     }
+}
+
+/// The cursor just past the last whole line of the log of the project in
+/// `project_directory`: where a page of only the records written from now on
+/// starts.
+pub fn project_log_cursor_at_its_end(
+    project_directory: &Path,
+) -> Result<String, ProjectLogRecordsNotRead> {
+    let active_segment_path = project_log_path(project_directory);
+    let rotated_sequences = rotated_project_log_sequences(&active_segment_path)?;
+    let segment_sequence = rotated_sequences.last().map_or(1, |highest| highest + 1);
+    let byte_offset = match File::open(&active_segment_path) {
+        Ok(active_segment) => {
+            the_offset_past_the_last_whole_line_of(&active_segment).map_err(|source| {
+                ProjectLogRecordsNotRead::SegmentUnreadable {
+                    path: active_segment_path.clone(),
+                    source,
+                }
+            })?
+        }
+        Err(not_read) if not_read.kind() == io::ErrorKind::NotFound => 0,
+        Err(source) => {
+            return Err(ProjectLogRecordsNotRead::SegmentUnreadable {
+                path: active_segment_path,
+                source,
+            });
+        }
+    };
+    Ok(ProjectLogCursor {
+        segment_sequence,
+        byte_offset,
+    }
+    .spelled())
+}
+
+/// How many bytes are read at a time, back from a segment's end, looking for
+/// its last newline.
+const PROJECT_LOG_BYTES_READ_BACK_AT_A_TIME: u64 = 4096;
+
+/// The offset just past the last newline `segment` holds, or 0 when it holds
+/// none: a line still being written is left for the page that reads it whole.
+fn the_offset_past_the_last_whole_line_of(segment: &File) -> io::Result<u64> {
+    let mut segment = segment;
+    let mut read_back_to = segment.metadata()?.len();
+    let mut bytes_read_back = Vec::new();
+    while read_back_to > 0 {
+        let read_from = read_back_to.saturating_sub(PROJECT_LOG_BYTES_READ_BACK_AT_A_TIME);
+        bytes_read_back.resize((read_back_to - read_from) as usize, 0);
+        segment.seek(SeekFrom::Start(read_from))?;
+        segment.read_exact(&mut bytes_read_back)?;
+        if let Some(last_newline) = bytes_read_back.iter().rposition(|byte| *byte == b'\n') {
+            return Ok(read_from + last_newline as u64 + 1);
+        }
+        read_back_to = read_from;
+    }
+    Ok(0)
 }
 
 /// No records, and a cursor that names no offset a rotation could have moved:
@@ -169,6 +250,7 @@ fn project_log_records_after_one_listing(
     stream: Option<&str>,
     action: Option<&str>,
     after: Option<&str>,
+    until: Option<ProjectLogCursor>,
     count: usize,
 ) -> Result<ProjectLogRecordsPageOfOneListing, ProjectLogRecordsNotRead> {
     let active_segment_path = active_segment_path.to_path_buf();
@@ -211,6 +293,16 @@ fn project_log_records_after_one_listing(
 
     let mut records = Vec::new();
     let mut next_after = start;
+    if until.is_some_and(|until| start >= until) {
+        return Ok(ProjectLogRecordsPageOfOneListing {
+            page: ProjectLogRecordsPage {
+                records,
+                next_after: after.map_or_else(|| start.spelled(), str::to_string),
+                records_no_longer_held,
+            },
+            a_segment_listed_was_gone: false,
+        });
+    }
     for (segment_sequence, segment_path) in segments
         .into_iter()
         .filter(|(sequence, _)| *sequence >= start.segment_sequence)
@@ -257,6 +349,22 @@ fn project_log_records_after_one_listing(
         };
         let mut line = Vec::new();
         loop {
+            if let Some(until) = until.filter(|until| next_after >= *until) {
+                let next_after_in_the_segment_until_names =
+                    if next_after.segment_sequence == until.segment_sequence {
+                        next_after
+                    } else {
+                        until
+                    };
+                return Ok(ProjectLogRecordsPageOfOneListing {
+                    page: ProjectLogRecordsPage {
+                        records,
+                        next_after: next_after_in_the_segment_until_names.spelled(),
+                        records_no_longer_held,
+                    },
+                    a_segment_listed_was_gone: false,
+                });
+            }
             line.clear();
             let line_length = segment_lines
                 .read_until(b'\n', &mut line)
@@ -460,7 +568,8 @@ mod tests {
         std::fs::write(&active, a_record(None, "R-1", "in the active")).unwrap();
 
         let read_against_a_stale_listing =
-            project_log_records_after_one_listing(&active, &[1, 2], None, None, None, 10).unwrap();
+            project_log_records_after_one_listing(&active, &[1, 2], None, None, None, None, 10)
+                .unwrap();
 
         assert!(read_against_a_stale_listing.a_segment_listed_was_gone);
         assert_eq!(
@@ -506,5 +615,96 @@ mod tests {
         let refusal =
             project_log_records_after(project.path(), None, None, Some("seven"), 10).unwrap_err();
         assert!(refusal.to_string().contains("`seven`"), "{refusal}");
+    }
+
+    #[test]
+    fn a_read_until_a_cursor_stops_there_across_segments_and_reads_nothing_from_past_it() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project_log_directory(project.path())).unwrap();
+        let active = project_log_path(project.path());
+        std::fs::write(
+            rotated_runtime_log_segment_path(&active, 1),
+            [a_record(None, "R-1", "one"), a_record(None, "R-1", "two")].concat(),
+        )
+        .unwrap();
+        std::fs::write(
+            &active,
+            [
+                a_record(None, "R-1", "three"),
+                a_record(None, "R-1", "four"),
+            ]
+            .concat(),
+        )
+        .unwrap();
+        let after_one = project_log_records_after(project.path(), None, None, None, 1).unwrap();
+        let after_three =
+            project_log_records_after(project.path(), None, None, Some(&after_one.next_after), 2)
+                .unwrap();
+        assert_eq!(messages_of(&after_three), ["two", "three"]);
+
+        let between = project_log_records_between(
+            project.path(),
+            None,
+            None,
+            Some(&after_one.next_after),
+            Some(&after_three.next_after),
+            100,
+        )
+        .unwrap();
+        assert_eq!(messages_of(&between), ["two", "three"]);
+        assert_eq!(between.next_after, after_three.next_after);
+
+        let up_to_the_rotated_segments_end =
+            project_log_records_between(project.path(), None, None, None, Some("2:0"), 100)
+                .unwrap();
+        assert_eq!(messages_of(&up_to_the_rotated_segments_end), ["one", "two"]);
+        assert_eq!(up_to_the_rotated_segments_end.next_after, "2:0");
+
+        let from_past_until = project_log_records_between(
+            project.path(),
+            None,
+            None,
+            Some(&after_three.next_after),
+            Some(&after_one.next_after),
+            100,
+        )
+        .unwrap();
+        assert!(from_past_until.records.is_empty());
+        assert_eq!(from_past_until.next_after, after_three.next_after);
+    }
+
+    #[test]
+    fn the_cursor_at_a_logs_end_is_past_its_last_whole_line_and_reads_only_what_follows() {
+        let project = tempfile::tempdir().unwrap();
+        assert_eq!(
+            project_log_cursor_at_its_end(project.path()).unwrap(),
+            "1:0"
+        );
+
+        std::fs::create_dir_all(project_log_directory(project.path())).unwrap();
+        let active = project_log_path(project.path());
+        std::fs::write(
+            rotated_runtime_log_segment_path(&active, 1),
+            a_record(None, "R-1", "old"),
+        )
+        .unwrap();
+        let whole_lines = [
+            a_record(None, "R-1", "before"),
+            a_record(None, "R-1", "end"),
+        ]
+        .concat();
+        std::fs::write(&active, format!("{whole_lines}{{\"message\":\"half")).unwrap();
+
+        let end = project_log_cursor_at_its_end(project.path()).unwrap();
+        assert_eq!(end, format!("2:{}", whole_lines.len()));
+
+        std::fs::write(
+            &active,
+            [whole_lines.clone(), a_record(None, "R-1", "after")].concat(),
+        )
+        .unwrap();
+        let written_since =
+            project_log_records_after(project.path(), None, None, Some(&end), 10).unwrap();
+        assert_eq!(messages_of(&written_since), ["after"]);
     }
 }

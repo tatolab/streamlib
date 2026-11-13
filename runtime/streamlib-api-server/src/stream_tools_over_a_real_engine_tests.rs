@@ -33,6 +33,7 @@ use streamlib::sdk::runtime::{
     StreamListing, StreamLocation, StreamRecord, StreamRecordAsRead,
     StreamRecordsInTheStateDirectory,
 };
+use streamlib_control_contract::PROJECT_LOG_RECORDS_PER_NOTIFICATION;
 use streamlib_project_repository::{GRAPH_OUTPUT_NODE_TYPE, STREAM_FRAGMENT_NODE_TYPE};
 use uuid::Uuid;
 
@@ -712,15 +713,18 @@ async fn a_stream_run_over_an_mcp_stdio_connection_outlives_the_local_api_stoppi
 // logs
 // ============================================================================
 
-/// A subscriber to a project's log, through a symlink to it, is told `project_log_records_written`
-/// naming the project as it spelled it once a record it emits is written, and `logs` then reads
-/// that record; a project it did not subscribe to is never named.
+/// A subscriber to a project's log, through a symlink to it, is sent each record written after it
+/// subscribed in `project_log_records_written`, naming the project as it spelled it, each
+/// notification following the previous one's cursor, past 500 records as several; `logs` from the
+/// first's `after` `until` the last's `next_after` reads the same records, and a project it did
+/// not subscribe to is never named.
 ///
 /// Mental-revert: without the drain worker's announcement the wait below times out, without the
-/// connection's filter the other project's write is sent, and naming the project with symlinks
-/// resolved sends a directory the subscriber never named.
+/// connection's filter the other project's write is sent, naming the project with symlinks
+/// resolved sends a directory the subscriber never named, and a push of every record to one
+/// notification sends one past 500.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_project_log_subscriber_is_told_each_write_and_reads_the_new_record_with_logs() {
+async fn a_project_log_subscriber_is_sent_each_new_record_in_order_and_logs_reads_the_same() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let another_project_directory = tempfile::tempdir().expect("another project directory");
     let engine = Runner::new().expect("the engine builds");
@@ -766,45 +770,87 @@ async fn a_project_log_subscriber_is_told_each_write_and_reads_the_new_record_wi
     stream_of_another_project
         .log_route()
         .write_every_record_it_emitted_and_sync();
+    let records_written_in_one_burst = PROJECT_LOG_RECORDS_PER_NOTIFICATION + 20;
     stream.log_route().run_entered(|| {
-        tracing::info!("project-log-push-token");
+        for token_index in 0..records_written_in_one_burst {
+            tracing::info!("project-log-push-token-{token_index}");
+        }
     });
     stream.log_route().write_every_record_it_emitted_and_sync();
 
-    let mut project_log_writes_told = Vec::new();
+    let mut project_log_records_pushed = Vec::new();
     while let Ok(written) = tokio::time::timeout(
         Duration::from_secs(1),
         the_next_notification_under(&mut subscriber, "project_log_records_written"),
     )
     .await
     {
-        project_log_writes_told.push(written);
+        project_log_records_pushed.push(written);
     }
     assert!(
-        project_log_writes_told.contains(
-            &json!({ "project_directory": project_directory_as_subscribed, "change": "written" })
-        ),
-        "{project_log_writes_told:?}"
+        project_log_records_pushed.len() >= 2,
+        "a burst past 500 records arrives as several notifications: {}",
+        project_log_records_pushed.len()
+    );
+    for pushed in &project_log_records_pushed {
+        assert_eq!(
+            pushed["project_directory"],
+            project_directory_as_subscribed.as_str()
+        );
+        assert!(
+            pushed["records"].as_array().expect("a records array").len()
+                <= PROJECT_LOG_RECORDS_PER_NOTIFICATION
+        );
+    }
+    for (earlier, later) in project_log_records_pushed
+        .iter()
+        .zip(project_log_records_pushed.iter().skip(1))
+    {
+        assert_eq!(later["after"], earlier["next_after"]);
+    }
+    let messages_of = |records: &Value| -> Vec<String> {
+        records
+            .as_array()
+            .expect("a records array")
+            .iter()
+            .filter_map(|record| record["message"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let messages_pushed: Vec<String> = project_log_records_pushed
+        .iter()
+        .flat_map(|pushed| messages_of(&pushed["records"]))
+        .collect();
+    let tokens_pushed: Vec<&String> = messages_pushed
+        .iter()
+        .filter(|message| message.starts_with("project-log-push-token-"))
+        .collect();
+    assert_eq!(
+        tokens_pushed.len(),
+        records_written_in_one_burst,
+        "{tokens_pushed:?}"
     );
     assert!(
-        project_log_writes_told
+        tokens_pushed
             .iter()
-            .all(|written| written["project_directory"] == project_directory_as_subscribed.as_str()),
-        "{project_log_writes_told:?}"
+            .all(|message| !message.contains("of-another-project"))
     );
+
     let page = served
         .control_call(
             "logs",
-            json!({ "project_directory": project_directory_as_subscribed }),
+            json!({
+                "project_directory": project_directory_as_subscribed,
+                "after": project_log_records_pushed[0]["after"],
+                "until": project_log_records_pushed.last().expect("a notification")["next_after"],
+                "count": 4096,
+            }),
         )
         .await;
-    let messages: Vec<&str> = page["result"]["records"]
-        .as_array()
-        .expect("a records array")
-        .iter()
-        .filter_map(|record| record["message"].as_str())
-        .collect();
-    assert!(messages.contains(&"project-log-push-token"), "{page}");
+    assert_eq!(messages_of(&page["result"]["records"]), messages_pushed);
+    assert_eq!(
+        page["result"]["next_after"],
+        project_log_records_pushed.last().expect("a notification")["next_after"]
+    );
 }
 
 /// `logs` reads a project's log from disk: `stream` narrows it to one of the

@@ -177,7 +177,6 @@ export interface ControlSchemasOfTheContract {
     readonly StreamActionChangedNotificationParams: z.ZodType<ControlContract.StreamActionChangedNotificationParams>;
     readonly StreamActionChangeKindOnTheWire: z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>;
     readonly ProjectLogRecordsWrittenNotificationParams: z.ZodType<ControlContract.ProjectLogRecordsWrittenNotificationParams>;
-    readonly ProjectLogRecordsChangeKindOnTheWire: z.ZodType<ControlContract.ProjectLogRecordsChangeKindOnTheWire>;
     readonly ListOperationGroupsRequest: z.ZodType<ControlContract.ListOperationGroupsRequest>;
     readonly ListOperationGroupsResult: z.ZodType<ControlContract.ListOperationGroupsResult>;
     readonly AgentOperationGroup: z.ZodType<ControlContract.AgentOperationGroup>;

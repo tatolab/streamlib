@@ -1249,6 +1249,7 @@ const LogsRequest = z.strictObject({
   stream: z.string().nullable().optional(),
   action: z.string().nullable().optional(),
   after: z.string().nullable().optional(),
+  until: z.string().nullable().optional(),
   count: z.number().int().min(1).nullable().optional(),
 });
 
@@ -1405,13 +1406,13 @@ const StreamActionChangedNotificationParams = z.looseObject({
   action: z.string().nullable().optional(),
 });
 
-/** @type {z.ZodType<ControlContract.ProjectLogRecordsChangeKindOnTheWire>} */
-const ProjectLogRecordsChangeKindOnTheWire = z.union([z.literal("written"), z.literal("missed")]);
-
 /** @type {z.ZodType<ControlContract.ProjectLogRecordsWrittenNotificationParams>} */
 const ProjectLogRecordsWrittenNotificationParams = z.looseObject({
   project_directory: z.string(),
-  change: ProjectLogRecordsChangeKindOnTheWire,
+  records: z.array(z.unknown()),
+  after: z.string(),
+  next_after: z.string(),
+  records_no_longer_held: z.boolean(),
 });
 
 /** @type {z.ZodType<ControlContract.ListOperationGroupsRequest>} */
@@ -1644,7 +1645,6 @@ export const ControlSchemas = Object.freeze({
     StreamActionChangedNotificationParams,
     StreamActionChangeKindOnTheWire,
     ProjectLogRecordsWrittenNotificationParams,
-    ProjectLogRecordsChangeKindOnTheWire,
     ListOperationGroupsRequest,
     ListOperationGroupsResult,
     AgentOperationGroup,

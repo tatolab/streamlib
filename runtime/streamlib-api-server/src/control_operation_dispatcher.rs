@@ -50,12 +50,15 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
     UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
+use streamlib_runtime_client_contract::project_log_records::project_log_cursor_at_its_end;
 use uuid::Uuid;
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
 use crate::control_operations_on_loaded_streams::ViewersOneConnectionHoldsOpen;
 use crate::control_operations_on_project_assets::the_idempotency_key_a_caller_sent;
-use crate::control_subscriptions_of_one_connection::ControlSubscriptionsOfOneConnection;
+use crate::control_subscriptions_of_one_connection::{
+    ControlSubscriptionsOfOneConnection, ProjectLogAsSubscribedWithItsEnd,
+};
 use crate::mcp::{describe_stream_action_tool_result_of, stream_action_state_on_the_wire};
 use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
@@ -1372,24 +1375,37 @@ fn subscribe_to_project_log_records(
             ControlOperationRefusal::Failed(format!("subscribe_project_log_records failed: {why}"))
         })?;
     }
-    let project_directories_as_subscribed_and_with_symlinks_resolved = project_directories
+    let project_logs_as_subscribed_with_symlinks_resolved_and_their_end = project_directories
         .into_iter()
-        .map(
-            |project_directory| match std::fs::canonicalize(&project_directory) {
-                Ok(project_directory_with_symlinks_resolved) => {
-                    Ok((project_directory, project_directory_with_symlinks_resolved))
-                }
-                Err(not_resolved) => Err(ControlOperationRefusal::Failed(format!(
+        .map(|project_directory| {
+            let project_directory_with_symlinks_resolved = std::fs::canonicalize(
+                &project_directory,
+            )
+            .map_err(|not_resolved| {
+                ControlOperationRefusal::Failed(format!(
                     "subscribe_project_log_records failed: `{}` is not a folder on this machine: \
                      {not_resolved}",
                     project_directory.display()
-                ))),
-            },
-        )
-        .collect::<Result<Vec<_>, _>>()?;
+                ))
+            })?;
+            let cursor_at_the_logs_end = project_log_cursor_at_its_end(
+                &project_directory_with_symlinks_resolved,
+            )
+            .map_err(|not_read| {
+                ControlOperationRefusal::Failed(format!(
+                    "subscribe_project_log_records failed: {not_read}"
+                ))
+            })?;
+            Ok(ProjectLogAsSubscribedWithItsEnd {
+                project_directory_as_subscribed: project_directory,
+                project_directory_with_symlinks_resolved,
+                cursor_at_the_logs_end,
+            })
+        })
+        .collect::<Result<Vec<_>, ControlOperationRefusal>>()?;
     Ok(SubscribeProjectLogRecordsResult {
         project_directories: subscriptions.subscribe_to_the_project_logs(
-            project_directories_as_subscribed_and_with_symlinks_resolved,
+            project_logs_as_subscribed_with_symlinks_resolved_and_their_end,
         ),
     })
 }

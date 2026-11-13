@@ -30,8 +30,8 @@ pub use control_contract_document::{
 };
 pub use control_notification::{
     CONTROL_NOTIFICATIONS, ControlNotification, ControlNotificationDeclaration, NodeStateOnTheWire,
-    ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
-    ProjectLogRecordsChangeKindOnTheWire, ProjectLogRecordsWritten,
+    PROJECT_LOG_RECORDS_PER_NOTIFICATION, ProjectChangeKindOnTheWire, ProjectChanged,
+    ProjectChangedNotificationParams, ProjectLogRecordsWritten,
     ProjectLogRecordsWrittenNotificationParams, StreamActionChangeKindOnTheWire,
     StreamActionChanged, StreamActionChangedNotificationParams, StreamGraphChangeKindOnTheWire,
     StreamGraphChanged, StreamGraphChangedNotificationParams,
