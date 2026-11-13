@@ -13,6 +13,7 @@ use streamlib::sdk::iceoryx2::{
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
+use super::conversion_node_config_defaults::one_channel_named_value;
 use super::conversion_node_config_refusals::refuse_channel_names_naming_none_or_one_twice;
 use super::port_family_messages_read_by_a_conversion::channels_block_read_by_a_conversion;
 
@@ -21,12 +22,21 @@ const RECORDS_OUTPUT_PORT: &str = "records";
 
 /// Configuration for [`ChannelsToRecords`].
 #[streamlib::sdk::processor_config]
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct ChannelsToRecordsConfig {
+    #[serde(default = "one_channel_named_value")]
     #[description = "The key each channel's value is written under, in the block's channel order."]
     pub channel_names: Vec<String>,
+}
+
+impl Default for ChannelsToRecordsConfig {
+    fn default() -> Self {
+        Self {
+            channel_names: one_channel_named_value(),
+        }
+    }
 }
 
 #[streamlib::sdk::processor(

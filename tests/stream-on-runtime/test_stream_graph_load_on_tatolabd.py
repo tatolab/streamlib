@@ -69,13 +69,6 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
     and exported is not BuiltInNode
 ]
 
-# The keys a built-in's config cannot leave out; every other built-in loads with none.
-CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT: "dict[type[BuiltInNode[Any]], dict[str, Any]]" = {
-    _built_in_nodes.ArrayToChannels: {"channel_names": ["left", "right"], "sample_rate": 48_000},
-    _built_in_nodes.ChannelsToRecords: {"channel_names": ["level"]},
-    _built_in_nodes.RecordsToChannels: {"channel_names": ["level"], "sample_rate": 48_000},
-}
-
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
 # Imported by nothing in this process: `tatolabd` describes it in a processor interpreter.
@@ -143,7 +136,7 @@ def loaded_with(run_outcome: StreamRunWithNoVulkanDriverOutcome) -> int:
 # ---- built-in types ---------------------------------------------------------
 
 
-def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
+def test_a_graph_naming_every_compiled_built_in_by_its_type_with_no_config_loads(
     run_stream_on_tatolabd_with_no_vulkan_driver: RunStreamOnTatolabdWithNoVulkanDriver,
 ):
     run_outcome = run_stream_on_tatolabd_with_no_vulkan_driver(
@@ -153,7 +146,7 @@ def test_a_graph_naming_every_compiled_built_in_by_its_type_loads(
                 {
                     "name": built_in_node_class.__name__,
                     "type": built_in_node_class.type,
-                    "config": CONFIG_A_BUILT_IN_CANNOT_LEAVE_OUT.get(built_in_node_class, {}),
+                    "config": {},
                 }
                 for built_in_node_class in EVERY_BUILT_IN_NODE_CLASS
             ],

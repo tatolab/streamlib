@@ -16,6 +16,9 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
 use super::channels_to_array::CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME;
+use super::conversion_node_config_defaults::{
+    forty_eight_thousand_samples_per_second, one_channel_named_value,
+};
 use super::conversion_node_config_refusals::refuse_a_channels_output_config;
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
 
@@ -28,8 +31,10 @@ const CHANNELS_OUTPUT_PORT: &str = "channels";
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
 pub struct ArrayToChannelsConfig {
+    #[serde(default = "one_channel_named_value")]
     #[description = "The names of the channels `channels` carries, one per row of the attribute."]
     pub channel_names: Vec<String>,
+    #[serde(default = "forty_eight_thousand_samples_per_second")]
     #[description = "The sample rate `channels` states, in samples per second per channel."]
     pub sample_rate: u32,
     #[serde(default = "default_samples_attribute_name")]
@@ -41,12 +46,11 @@ fn default_samples_attribute_name() -> String {
     CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME.to_string()
 }
 
-/// A node given no config names no channels, and is refused at setup.
 impl Default for ArrayToChannelsConfig {
     fn default() -> Self {
         Self {
-            channel_names: Vec::new(),
-            sample_rate: 0,
+            channel_names: one_channel_named_value(),
+            sample_rate: forty_eight_thousand_samples_per_second(),
             attribute: default_samples_attribute_name(),
         }
     }
