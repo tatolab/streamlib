@@ -190,21 +190,6 @@ impl OutputPortViewerReader {
                     )));
                 }
             };
-        let subscriber =
-            create_the_reserved_slot_subscriber_of(&channel_service, OUTPUT_PORT_VIEWER_RING_DEPTH)
-                .map_err(|refusal| match refusal {
-                    ChannelReservedSlotSubscribeError::ReservedSlotOccupied => {
-                        OutputPortViewerSubscribeRefusal::ReservedSlotOccupied(
-                            channel_service_name.to_string(),
-                        )
-                    }
-                    ChannelReservedSlotSubscribeError::Transport(detail) => {
-                        OutputPortViewerSubscribeRefusal::Transport(format!(
-                            "a viewer could not subscribe to the reserved slot of channel \
-                             `{channel_service_name}`: {detail}"
-                        ))
-                    }
-                })?;
         let wake_service_name_for_iceoryx2 =
             ServiceName::new(wake_service_name).map_err(|refusal| {
                 OutputPortViewerSubscribeRefusal::Transport(format!(
@@ -230,6 +215,21 @@ impl OutputPortViewerReader {
                  `{channel_service_name}`: {failure:?}"
                 ))
             })?;
+        let subscriber =
+            create_the_reserved_slot_subscriber_of(&channel_service, OUTPUT_PORT_VIEWER_RING_DEPTH)
+                .map_err(|refusal| match refusal {
+                    ChannelReservedSlotSubscribeError::ReservedSlotOccupied => {
+                        OutputPortViewerSubscribeRefusal::ReservedSlotOccupied(
+                            channel_service_name.to_string(),
+                        )
+                    }
+                    ChannelReservedSlotSubscribeError::Transport(detail) => {
+                        OutputPortViewerSubscribeRefusal::Transport(format!(
+                            "a viewer could not subscribe to the reserved slot of channel \
+                             `{channel_service_name}`: {detail}"
+                        ))
+                    }
+                })?;
         Ok(Self {
             subscriber,
             wake: OutputPortViewerWake {
