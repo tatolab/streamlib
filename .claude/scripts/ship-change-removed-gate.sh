@@ -30,8 +30,8 @@ trap 'rm -f "$hits"' EXIT
 
 # Excluded from the content sweep only — each is a surface that names a removed
 # artifact by policy or by design, so a hit there is not residue the engine can act on:
-#   CHANGELOG.md      release-please generates it from merged commit subjects; the
-#                     entry announcing a removal is unscrubbable.
+#   CHANGELOG.md      the release history up to 0.68.82, kept as written; an entry
+#                     announcing a removal is unscrubbable.
 #   docs/decisions/** decision records keep their text as written
 #                     (.claude/rules/docs-policy.md), so an ADR keeps naming what it retired.
 #   docs/learnings/** empirical-only (same rule): a learning records driver or library

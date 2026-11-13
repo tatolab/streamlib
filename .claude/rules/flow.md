@@ -27,12 +27,12 @@ paths:
   agents run `sonnet`; nothing pins `fable`.
 - Labels are display output only — nothing reads a label as control flow. Every work item is
   classified fresh from its content and from current code, never from its labels.
-- PR titles are conventional-commit typed (`type(scope): summary`). The repo squash-merges, so the
-  title becomes the commit release-please parses — a mistitled PR silently skips the version bump.
-  No CI job checks it: run `scripts/check-conventional-pr-title.sh "<title>"` before opening the PR.
-- Pre-1.0, `feat`, `fix` and `perf` bump the patch version; `!` or a `BREAKING CHANGE:` footer bumps
-  the minor (`release-please-config.json`). `refactor` / `chore` / `docs` / `test` / `ci` don't
-  bump — title an ABI- or behavior-affecting change that must move the version as `feat` (or
-  breaking), never `refactor`.
-- Never hand-edit the version. `[workspace.package].version`, `.release-please-manifest.json`, and
-  any `Release-As:` footer belong to release-please alone; a manual bump desyncs its baseline.
+- PR titles are conventional-commit typed (`type(scope): summary`), written for a reader; nothing
+  reads a title to decide a version. Run `scripts/check-conventional-pr-title.sh "<title>"` before
+  opening the PR.
+- Every merge to `main` is a release (`release.yml`). The patch moves on every merge; the minor
+  moves when the control contract's `x-contract-version` changed since the last release, or on a
+  release dispatched with `bump: minor`; the major only on a dispatch with `bump: major`. The owner
+  dispatches a minor or major; a session never does.
+- Never hand-edit the version. `[workspace.package].version` and the manifests
+  `release-version-files.json` lists are written by the release, on the commit it tags.
