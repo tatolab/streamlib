@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The parts of a stream's live graph that change without a graph event — each node's drop and
-//! refusal counts and the raise its `process()` keeps, and each link's state — sampled per
-//! followed stream so a control connection is sent `drops_raises_or_link_states_changed`.
+//! refusal counts, the raise its `process()` keeps and why it is not ready, and each link's
+//! state — sampled per followed stream so a control connection is sent
+//! `drops_raises_or_link_states_changed`.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -29,6 +30,7 @@ pub(crate) fn the_drops_raises_and_link_states_of_a_stream_graph(stream_graph: &
                 components["metrics"]["dropped_bags_by_link"],
                 components["metrics"]["refused_bags_by_output_port"],
                 components["process_raising_because"],
+                components["not_ready_because"],
             ]),
         );
     }
@@ -125,8 +127,8 @@ mod tests {
         BTreeMap::from([("s-main-1".to_owned(), None)])
     }
 
-    /// A new drop count, a new raise and a new link state each change the sample; a written
-    /// count, which grows with every bag, does not.
+    /// A new drop count, a new raise, a node reporting itself not ready and a new link state each
+    /// change the sample; a written count, which grows with every bag, does not.
     ///
     /// Mental-revert: sampling `written_bags_by_output_port` sends a change on every sample of a
     /// running stream; leaving out any of the three leaves that value stale on a pushed client.
@@ -142,7 +144,10 @@ mod tests {
             the_drops_raises_and_link_states_of_a_stream_graph(&written_more),
             unchanged
         );
+        let mut not_ready = running.clone();
+        not_ready["nodes"][0]["components"]["not_ready_because"] = json!("`riv_path` is not set");
         for changed in [
+            not_ready,
             stream_graph(4, Value::Null, "wired"),
             stream_graph(0, json!("ValueError: every must be odd"), "wired"),
             stream_graph(0, Value::Null, "error"),

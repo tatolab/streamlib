@@ -1348,8 +1348,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   false`, and refuses a non-empty map naming the key that had nowhere to go. Every
   in-tree config type derives the schema — the built-ins' configs and their enums — and a
   field's `#[description = …]` under `#[processor_config]`, a literal or a `const`, is its
-  `description`, a serde default its `default`, a field with neither `required`; a doc comment
-  never reaches the document. Every catalog document, from either language,
+  `description`, a serde default its `default`; a doc comment never reaches the document.
+  `#[processor_config]` puts container-level `#[serde(default)]` on the struct, so a key a
+  config leaves out is filled from the struct's `Default` and no key is `required`, and a
+  struct without `Default` fails to compile on `ProcessorConfigFilledFromItsDefault`, whose
+  note names the fix. `Default` is a config the node runs with — the rule the Python half
+  states for its config classes — and a test holds each in-tree `#[processor_config]` type's
+  `Default` to its node's setup checks (owner, 2026-11-13). Every catalog document, from either language,
   is JSON Schema draft 2020-12
   with no `$schema` key: schemars 0.8 emits draft-07, so the Rust seam writes its
   definitions under `$defs` with references pointing there and a tuple's positional
@@ -1387,8 +1392,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   placed with no config takes it and runs: `@node.process` and `@node.function` refuse one
   whose document carries `required`, naming each key and the fix — a dataclass field's
   default, or a `total=False` TypedDict read with a fallback — and a key with nothing
-  sensible to default to is left unset, `None` or an empty string, and fails the node,
-  naming the key, until it is set (owner, 2026-11-13). The helper constructs
+  sensible to default to is left unset, `None` or an empty string, and the node names the
+  key until it is set — reporting itself not ready where it is a media source (`RiveSource`,
+  `ImageFile`), failing elsewhere (owner, 2026-11-13). The helper constructs
   `processor_class(config=config_class(**configuration))` and whatever the config class
   raises is what the author sees; a class declaring no config takes an empty
   configuration and refuses a non-empty one by name; reconfiguration calls
@@ -4524,6 +4530,23 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `components.failed_because`; readiness waits through `Restarting`, so its error names the
   crash loop and the last death's reason. The MCP instructions name `Restarting` and the
   restart record. [helper-process-restart — SHIPPED #3111]
+- **DECIDED** — A node that cannot do its work yet — a setting with nothing sensible to
+  default to left unset, a file it names missing or unreadable — reports itself not ready in
+  place of failing, and the stream keeps running, the way Unreal, TouchDesigner, Nuke and
+  Houdini keep a graph running and put the problem on the node. `ctx.report_not_ready(reason)`
+  and `ctx.report_ready()`, on either context in Python and Rust, are the whole surface; a
+  node writes nothing frame-related for it, and reports from any hook or any thread of its own.
+  A not-ready node renders its reason, in its own words, as `components.not_ready_because`,
+  `null` while it is ready, held from setup until the node stops or fails, and a change of it is a `drops_raises_or_link_states_changed`. While a node its
+  helper process hosts is not ready, the helper sends a transparent frame — every channel zero,
+  never a colour that could reach a stage screen — on each of its Image outputs, at the size
+  the report names or 1920×1080, before each `process()` call or 30 times a second for a
+  manual node, and nothing on its Array, Channels or Records outputs; `process()` is still
+  called, so the node can report ready from it, and a manual node reports ready from
+  `configure` or a thread of its own. A `setup()` or `start()` that raises still fails the node. An in-process Rust
+  node's report renders the same, and it keeps its own outputs flowing. Studio badges the
+  node and shows the reason; an editor-only checker over its Image output never reaches the
+  stream (owner, 2026-11-13).
 - **DECIDED** — The api-server is engine-side infrastructure in the `runtime/` tree: it is
   hosted — statically linked, never dlopen'd — by `tatolabd` (and by the `streamlib` crate
   for Rust apps), and no wheel hosts it. [control-plane-one-surface; package-split-and-lend —

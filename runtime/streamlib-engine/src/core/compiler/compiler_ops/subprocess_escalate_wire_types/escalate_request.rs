@@ -106,6 +106,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "set_process_raising_because")]
     SetProcessRaisingBecause(EscalateRequestSetProcessRaisingBecause),
 
+    #[serde(rename = "set_not_ready_because")]
+    SetNotReadyBecause(EscalateRequestSetNotReadyBecause),
+
     #[serde(rename = "set_output_port_stream_facts")]
     SetOutputPortStreamFacts(EscalateRequestSetOutputPortStreamFacts),
 
@@ -170,6 +173,19 @@ pub(crate) struct EscalateRequestFailTheNode {
 pub(crate) struct EscalateRequestSetProcessRaisingBecause {
     /// What `process()` raised, as the graph shows it; `null` for a clean run.
     pub(crate) raising_because: Option<String>,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+}
+
+/// Why the helper's node, running, is not ready, or `null` once it is: the
+/// graph shows it beside the node's state while the helper keeps the node's
+/// outputs flowing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestSetNotReadyBecause {
+    /// Why the node is not ready, in its own words; `null` once it is.
+    pub(crate) not_ready_because: Option<String>,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,

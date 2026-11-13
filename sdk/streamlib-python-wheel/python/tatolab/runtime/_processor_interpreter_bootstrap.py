@@ -30,6 +30,7 @@ import json
 import os
 import platform
 import queue
+import select
 import signal
 import socket
 import stat
@@ -161,6 +162,7 @@ from tatolab.runtime._engine import (
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
     limited_access_view_of_runtime_context_for_helper_process,
+    not_ready_report_on_runtime_context,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,
@@ -189,6 +191,10 @@ from tatolab.runtime._node_type_import_folder import (
     NodeTypeModuleImportedFromTwoPlaces,
     import_folder_and_class_import_path,
     import_the_module_of_a_node_type,
+)
+from tatolab.runtime._not_ready_placeholder_frames import (
+    PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
+    TransparentFramesOnTheImageOutputsOfANodeNotReady,
 )
 from tatolab.runtime._processor_hosting import (
     apply_configuration,
@@ -1409,11 +1415,15 @@ class HelperProcessLifecycle:
         self._config_its_node_was_last_handed: "dict[str, Any]" = {}
         self._exposed_config_values_last_refused: "dict[str, Any]" = {}
         self._whether_the_parent_last_took_process_as_raising: "Optional[bool]" = False
+        self._not_ready_reason_the_parent_last_took: "Optional[str]" = None
+        self._the_parent_holds_the_last_not_ready_report = True
+        self._transparent_frames_while_not_ready: "Optional[TransparentFramesOnTheImageOutputsOfANodeNotReady]" = None
+        self._not_ready_warnings_already_logged: "set[str]" = set()
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
             try:
-                command = self._bridge.next_lifecycle_command()
+                command = self._next_lifecycle_command_feeding_a_not_ready_manual_node()
                 if command is None:
                     log.info("the parent closed the channel; shutting down")
                     self._tear_down_after_the_parent_went_away()
@@ -1430,6 +1440,85 @@ class HelperProcessLifecycle:
                     "the engine's shutdown ladder interrupted this processor; "
                     "the bag in flight is lost"
                 )
+
+    def _next_lifecycle_command_feeding_a_not_ready_manual_node(
+        self,
+    ) -> "Optional[dict[str, Any]]":
+        """The next lifecycle command. While a manual node runs, the wait ticks
+        on a steady beat: each tick tells the parent whether the node is ready,
+        since a node's own thread may report either, and while it is not ready
+        and not paused sends a transparent frame on each of its Image outputs."""
+        tick_seconds = 1.0 / PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE
+        while self._a_manual_node_runs():
+            self._bridge.clear_lifecycle_command_arrivals()
+            was_waiting, command = self._bridge.next_lifecycle_command_if_waiting()
+            if was_waiting:
+                return command
+            self._tell_the_parent_whether_the_node_is_ready()
+            if not self._paused:
+                self._send_transparent_frames_while_the_node_is_not_ready()
+            select.select([self._bridge.lifecycle_command_arrival_fd()], [], [], tick_seconds)
+        return self._bridge.next_lifecycle_command()
+
+    def _a_manual_node_runs(self) -> bool:
+        return self._running and not self._scheduling_loop_runs and self._hosted is not None
+
+    def _tell_the_parent_whether_the_node_is_ready(self) -> None:
+        """Send the parent why the node is not ready when that changes, and
+        `None` once it is ready again. After a report the parent refused or did
+        not answer, what it holds is unknown, so the next call sends it again."""
+        if self._hosted is None:
+            return
+        not_ready_report = not_ready_report_on_runtime_context(self._hosted.full_access_context)
+        not_ready_because = None if not_ready_report is None else not_ready_report[0]
+        if (
+            self._the_parent_holds_the_last_not_ready_report
+            and not_ready_because == self._not_ready_reason_the_parent_last_took
+        ):
+            return
+        try:
+            self._bridge.request_from_parent(
+                {"op": "set_not_ready_because", "not_ready_because": not_ready_because}
+            )
+        except EscalateRequestError as refusal:
+            log.error(
+                "the parent did not take whether this node is ready; the next hook tells it "
+                "again",
+                error=str(refusal),
+            )
+            self._the_parent_holds_the_last_not_ready_report = False
+            return
+        if not_ready_because is not None and not_ready_because != self._not_ready_reason_the_parent_last_took:
+            log.warn("this node is not ready", reason=not_ready_because)
+        self._not_ready_reason_the_parent_last_took = not_ready_because
+        self._the_parent_holds_the_last_not_ready_report = True
+
+    def _send_transparent_frames_while_the_node_is_not_ready(self) -> None:
+        """Send a transparent frame on each of the node's Image outputs, while
+        it reports itself not ready."""
+        if self._hosted is None:
+            return
+        not_ready_report = not_ready_report_on_runtime_context(self._hosted.full_access_context)
+        if not_ready_report is None:
+            return
+        _, image_width, image_height = not_ready_report
+        if self._transparent_frames_while_not_ready is None:
+            self._transparent_frames_while_not_ready = (
+                TransparentFramesOnTheImageOutputsOfANodeNotReady(
+                    list(getattr(self._processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [])),
+                    self._warn_once_while_not_ready,
+                )
+            )
+        self._transparent_frames_while_not_ready.send_one_transparent_frame_on_each_image_output(
+            self._hosted.limited_access_context, image_width, image_height
+        )
+
+    def _warn_once_while_not_ready(self, message: str, fields: "dict[str, Any]") -> None:
+        key = f"{message}:{fields.get('port')}"
+        if key in self._not_ready_warnings_already_logged:
+            return
+        self._not_ready_warnings_already_logged.add(key)
+        log.warn(message, **fields)
 
     def _tear_down_after_the_parent_went_away(self) -> None:
         """Run the `stop` and `teardown()` a parent that is gone can no longer
@@ -1587,6 +1676,7 @@ class HelperProcessLifecycle:
             )
             return
         self._set_up_succeeded = True
+        self._tell_the_parent_whether_the_node_is_ready()
         ready: "dict[str, Any]" = {"rpc": "ready"}
         function_nodes_ran_compiled = (
             ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(
@@ -1635,6 +1725,7 @@ class HelperProcessLifecycle:
             self._hosted.call_hook_letting_failure_propagate(
                 "start", self._hosted.full_access_context
             )
+            self._tell_the_parent_whether_the_node_is_ready()
         except KeyboardInterrupt:
             log.warn(
                 "start() was interrupted by the engine's shutdown ladder",
@@ -1697,9 +1788,12 @@ class HelperProcessLifecycle:
             return
         if hook_name == "process" and self._config_fields_its_node_exposes_as_inputs:
             self._take_each_new_value_a_link_gives_an_exposed_config_field()
+        if hook_name == "process":
+            self._send_transparent_frames_while_the_node_is_not_ready()
         raised = self._hosted.call_hook(hook_name, self._hosted.limited_access_context)
         if hook_name == "process":
             self._tell_the_parent_when_process_starts_or_stops_raising(raised)
+            self._tell_the_parent_whether_the_node_is_ready()
 
     def _tell_the_parent_when_process_starts_or_stops_raising(
         self, raised: "Optional[Exception]"
@@ -2027,6 +2121,7 @@ class HelperProcessLifecycle:
         self._config_as_last_applied = dict(command.get("config") or {})
         self._config_its_node_was_last_handed = dict(command.get("config") or {})
         self._bridge.send({"rpc": "ok"})
+        self._tell_the_parent_whether_the_node_is_ready()
 
 
 # =============================================================================

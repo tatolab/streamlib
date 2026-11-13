@@ -113,6 +113,11 @@ impl ProcessorInstance {
         self.0.why_process_is_raising_as_its_helper_reports()
     }
 
+    /// Why this processor's node is not ready as its helper process last reported.
+    pub fn why_the_node_is_not_ready_as_its_helper_reports(&self) -> Option<String> {
+        self.0.why_the_node_is_not_ready_as_its_helper_reports()
+    }
+
     /// Why this processor's helper process died on its own, once noticed.
     pub fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         self.0.why_the_out_of_process_helper_died_on_its_own()

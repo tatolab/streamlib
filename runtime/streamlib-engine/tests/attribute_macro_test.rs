@@ -188,17 +188,33 @@ fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
             .is_none(),
         "a doc comment never reaches the document"
     );
-    assert_eq!(
-        config_schema["required"],
-        serde_json::json!(["path"]),
-        "a field serde declares no default for is the only required one"
+    assert!(
+        config_schema.get("required").is_none(),
+        "every key a config leaves out is filled from the struct's `Default`"
     );
+    assert_eq!(config_schema["properties"]["path"]["default"], "");
     // The retired id grammar named the type; the document describes it.
     assert!(config_schema.get("$schema").is_none());
     assert_ne!(
         config_schema,
         serde_json::json!("ConfiguredProbeProcessorConfig")
     );
+}
+
+#[test]
+fn a_key_a_config_leaves_out_is_filled_from_the_structs_default() {
+    let config: ConfiguredProbeProcessorConfig =
+        serde_json::from_value(serde_json::json!({"width": 640})).expect("deserializes");
+    assert_eq!(
+        config,
+        ConfiguredProbeProcessorConfig {
+            width: 640,
+            ..ConfiguredProbeProcessorConfig::default()
+        }
+    );
+    let empty: ConfiguredProbeProcessorConfig =
+        serde_json::from_value(serde_json::json!({})).expect("deserializes");
+    assert_eq!(empty, ConfiguredProbeProcessorConfig::default());
 }
 
 #[test]

@@ -1020,6 +1020,125 @@ def test_a_manual_processor_whose_start_raised_fails_its_node(
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_reports_it_ready(
+    stand_in_parent,
+):
+    """A `start()` that reports the node not ready sends the parent the reason
+    in place of failing the node, and the node keeps running; a config update
+    that reports it ready sends `null`.
+
+    Fail-without-fix: no `set_not_ready_because` arrives and the graph shows
+    nothing on the node.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:NotReadyInStartProbe")
+    )
+
+    def the_next_frame_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert the_next_frame_other_than_a_log() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "manual", "interval_ms": 0})
+
+    not_ready = the_next_frame_other_than_a_log()
+    assert not_ready["rpc"] == "escalate_request"
+    assert not_ready["op"] == "set_not_ready_because"
+    assert not_ready["not_ready_because"] == "`riv_path` is not set"
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": not_ready["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "update_config", "config": {"gain": 2}})
+    assert the_next_frame_other_than_a_log() == {"rpc": "ok"}
+    ready = the_next_frame_other_than_a_log()
+    assert ready["op"] == "set_not_ready_because"
+    assert ready["not_ready_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ready["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_frame_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_it_reports_ready(
+    stand_in_parent,
+):
+    """The first `process()` reporting the node not ready sends the reason once,
+    later ones send nothing, `process()` keeps being called, and the first
+    call reporting it ready sends `null`.
+
+    Fail-without-fix: no `set_not_ready_because` arrives, or `process()` stops
+    being called and the node can never report itself ready.
+    """
+    from helper_process_probes import (
+        NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY,
+        PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE,
+    )
+
+    NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY[0] = True
+    PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0] = 0
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:NotReadyUntilToldOtherwiseProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 20})
+
+    def the_next_escalate_request_other_than_a_log() -> dict:
+        while True:
+            frame = stand_in_parent.receive()
+            assert frame is not None, "the helper sent the parent nothing"
+            if frame.get("op") != "log":
+                return frame
+
+    not_ready = the_next_escalate_request_other_than_a_log()
+    assert not_ready["op"] == "set_not_ready_because"
+    assert not_ready["not_ready_because"] == "the image asset `poster.png` is missing"
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": not_ready["request_id"], "result": "ok"}
+    )
+
+    calls_when_reported = PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0]
+    deadline = time.monotonic() + 0.3
+    while time.monotonic() < deadline:
+        frame = stand_in_parent.receive(timeout_seconds=max(0.0, deadline - time.monotonic()))
+        assert frame is None or frame.get("op") == "log", (
+            f"a not-ready report after the first sent {frame}"
+        )
+    assert PROCESS_CALLS_OF_THE_NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE[0] > calls_when_reported, (
+        "process() is still called while the node is not ready"
+    )
+
+    NOT_READY_UNTIL_TOLD_OTHERWISE_PROBE_IS_NOT_READY[0] = False
+    ready = the_next_escalate_request_other_than_a_log()
+    assert ready["op"] == "set_not_ready_because"
+    assert ready["not_ready_because"] is None
+    stand_in_parent.send(
+        {"rpc": "escalate_response", "request_id": ready["request_id"], "result": "ok"}
+    )
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    answers = [the_next_escalate_request_other_than_a_log()["rpc"] for _ in range(2)]
+    assert answers == ["stopped", "done"]
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_cleanly(
     stand_in_parent,
 ):

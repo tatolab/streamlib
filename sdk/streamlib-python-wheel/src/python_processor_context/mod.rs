@@ -50,7 +50,7 @@ pub(crate) use kernels::{
 pub(crate) use link_data_access::{PythonLinkInputDataReader, PythonLinkOutputDataWriter};
 pub(crate) use runtime_context::{
     PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
-    limited_access_view_of_runtime_context_for_helper_process,
+    limited_access_view_of_runtime_context_for_helper_process, not_ready_report_on_runtime_context,
     note_execution_mode_from_parent_on_runtime_context,
     note_pause_state_from_parent_on_runtime_context,
     note_stop_request_from_parent_on_runtime_context,

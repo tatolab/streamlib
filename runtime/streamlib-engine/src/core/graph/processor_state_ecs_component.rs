@@ -41,6 +41,15 @@ impl ProcessorState {
     pub fn is_before_setup_completed(self) -> bool {
         matches!(self, Self::Pending | Self::Idle)
     }
+
+    /// Whether the processor is setting up or runs, paused or not — the states
+    /// in which a node's report of itself not ready is held.
+    pub fn holds_a_not_ready_report(self) -> bool {
+        matches!(
+            self,
+            Self::Pending | Self::Idle | Self::Running | Self::Paused
+        )
+    }
 }
 
 impl std::fmt::Display for ProcessorState {

@@ -36,6 +36,7 @@ __all__ = [
     "feed_an_input_port_from_a_function_node_island",
     "hand_an_unread_message_on",
     "limited_access_view_of_runtime_context_for_helper_process",
+    "not_ready_report_on_runtime_context",
     "note_execution_mode_from_parent_on_runtime_context",
     "note_pause_state_from_parent_on_runtime_context",
     "note_stop_request_from_parent_on_runtime_context",
@@ -190,6 +191,12 @@ def note_execution_mode_from_parent_on_runtime_context(
 ) -> None:
     """Record on a helper's context the execution mode its parent runs the node
     in, refusing one that drives `process()` from inputs lent to native code."""
+
+def not_ready_report_on_runtime_context(
+    full_access_context: _stream_protocols.RuntimeContextFullAccess,
+) -> tuple[str, int, int] | None:
+    """What the node last reported on its context: `(reason, placeholder image
+    width, placeholder image height)` while it is not ready, `None` while it is."""
 
 def note_stop_request_from_parent_on_runtime_context(
     full_access_context: _stream_protocols.RuntimeContextFullAccess, stop_requested: bool

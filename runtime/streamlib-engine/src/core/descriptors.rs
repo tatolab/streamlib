@@ -9,8 +9,8 @@
 //! unchanged.
 
 pub use streamlib_processor_schema::config_schema_document::{
-    ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy, ProcessorConfigKeyDescription,
-    schema_carrying_the_declared_description,
+    ProcessorConfigFilledFromItsDefault, ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy,
+    ProcessorConfigKeyDescription, schema_carrying_the_declared_description,
 };
 pub use streamlib_processor_schema::description_lint::{
     DescribedDeclaration, DescriptionLintFinding, DescriptionLintProblem,

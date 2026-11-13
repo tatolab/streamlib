@@ -10302,7 +10302,7 @@
           {
             "type": "string",
             "const": "drops_raises_or_link_states_changed",
-            "description": "A node's dropped or refused bag counts, the raise its `process()` keeps, or a link's state\nchanged; sent at most once every 500 ms per stream, and the client reads the graph again."
+            "description": "A node's dropped or refused bag counts, the raise its `process()` keeps, why it is not\nready, or a link's state changed; sent at most once every 500 ms per stream, and the\nclient reads the graph again."
           },
           {
             "type": "string",

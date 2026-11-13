@@ -152,7 +152,21 @@ pub mod sdk {
     pub use streamlib_engine::processor;
 
     /// `#[streamlib::sdk::processor_config]` attribute macro — each config
-    /// key's `#[description = …]` is the description its schema serves.
+    /// key's `#[description = …]` is the description its schema serves, and a
+    /// key a config leaves out is filled from the struct's `Default`.
+    ///
+    /// A struct without `Default` is refused at compile time:
+    ///
+    /// ```compile_fail
+    /// use streamlib::sdk::schemars::JsonSchema;
+    ///
+    /// #[streamlib::sdk::processor_config]
+    /// #[derive(serde::Deserialize, JsonSchema)]
+    /// #[schemars(crate = "streamlib::sdk::schemars")]
+    /// pub struct ConfigWithoutADefault {
+    ///     pub width: u32,
+    /// }
+    /// ```
     pub use streamlib_engine::processor_config;
 
     // ---- Permission helpers ----

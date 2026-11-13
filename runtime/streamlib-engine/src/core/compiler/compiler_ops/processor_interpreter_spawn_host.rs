@@ -1738,6 +1738,9 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         self.what_the_node_reaches
             .process_raising_the_node_reports
             .record(None);
+        self.what_the_node_reaches
+            .node_not_ready_reports
+            .record(None);
         self.child_is_gone = false;
         self.shutdown_was_already_asked_of_this_helper = false;
         self.child_standard_error_tail = None;
@@ -1778,6 +1781,12 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
         self.what_the_node_reaches
             .process_raising_the_node_reports
             .raising_because()
+    }
+
+    fn why_the_node_is_not_ready_as_its_helper_reports(&self) -> Option<String> {
+        self.what_the_node_reaches
+            .node_not_ready_reports
+            .not_ready_because()
     }
 
     fn has_failed_unrecoverably(&self) -> bool {
@@ -1920,6 +1929,7 @@ pub(crate) fn spawn_host_for_processor_node(
             shared_native_service_leases: Default::default(),
             failure_the_node_reported_of_itself: Default::default(),
             process_raising_the_node_reports: Default::default(),
+            node_not_ready_reports: Default::default(),
             output_frames_kept_by_its_output_links: link_wiring
                 .output_frames_kept_by_its_output_links(),
             store_of_the_node: None,

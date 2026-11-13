@@ -116,6 +116,9 @@ pub struct RuntimeContext {
     node_uuid: Option<uuid::Uuid>,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
+    /// The processor's state, which a node reports itself not ready on (None
+    /// for the shared/global context).
+    processor_state: Option<Arc<crate::core::graph::ObservableProcessorState>>,
     /// Runtime operations interface for graph mutations.
     runtime_ops: Arc<dyn RuntimeOperations>,
     /// Shared tokio runtime handle for async operations.
@@ -172,6 +175,7 @@ impl RuntimeContext {
             processor_display_name: None,
             node_uuid: None,
             pause_gate: None,
+            processor_state: None,
             runtime_ops,
             tokio_handle,
             iceoryx2_node,
@@ -379,6 +383,7 @@ impl RuntimeContext {
             processor_display_name: self.processor_display_name.clone(),
             node_uuid: self.node_uuid,
             pause_gate: self.pause_gate.clone(),
+            processor_state: self.processor_state.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
@@ -406,6 +411,7 @@ impl RuntimeContext {
             processor_display_name: self.processor_display_name.clone(),
             node_uuid: self.node_uuid,
             pause_gate: Some(pause_gate),
+            processor_state: self.processor_state.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
@@ -428,6 +434,26 @@ impl RuntimeContext {
         Self {
             processor_display_name: Some(processor_display_name),
             ..self.clone()
+        }
+    }
+
+    /// Create a processor-specific context carrying the processor's state, which
+    /// the node reports itself not ready on.
+    pub(crate) fn with_processor_state(
+        &self,
+        processor_state: Arc<crate::core::graph::ObservableProcessorState>,
+    ) -> Self {
+        Self {
+            processor_state: Some(processor_state),
+            ..self.clone()
+        }
+    }
+
+    /// Report the node running but not ready, for `reason`, or ready again for
+    /// `None`; a context serving no processor reports nothing.
+    pub(crate) fn report_why_the_node_is_not_ready(&self, not_ready_because: Option<String>) {
+        if let Some(processor_state) = &self.processor_state {
+            processor_state.note_why_the_node_is_not_ready(not_ready_because);
         }
     }
 
@@ -628,6 +654,22 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().should_process()
     }
 
+    /// Report the node running but not ready, in `reason`'s words — a setting
+    /// left unset, a file that is missing — in place of failing it: the stream
+    /// keeps running and the graph shows `reason` on the node until
+    /// [`Self::report_ready`]. An in-process node keeps its own outputs
+    /// flowing meanwhile; the runtime sends transparent frames only for a node
+    /// its helper process hosts.
+    pub fn report_not_ready(&self, reason: impl Into<String>) {
+        self.host_base()
+            .report_why_the_node_is_not_ready(Some(reason.into()));
+    }
+
+    /// Report the node ready again after [`Self::report_not_ready`].
+    pub fn report_ready(&self) {
+        self.host_base().report_why_the_node_is_not_ready(None);
+    }
+
     /// Host-owned audio clock. Borrow-scoped to the ctx; cannot outlive
     /// the lifecycle call.
     pub fn audio_clock(&self) -> &SharedAudioClock {
@@ -747,6 +789,17 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
 
     pub fn should_process(&self) -> bool {
         self.host_base().should_process()
+    }
+
+    /// See [`RuntimeContextFullAccess::report_not_ready`].
+    pub fn report_not_ready(&self, reason: impl Into<String>) {
+        self.host_base()
+            .report_why_the_node_is_not_ready(Some(reason.into()));
+    }
+
+    /// See [`RuntimeContextFullAccess::report_ready`].
+    pub fn report_ready(&self) {
+        self.host_base().report_why_the_node_is_not_ready(None);
     }
 
     /// Host-owned audio clock. See

@@ -33,6 +33,9 @@ pub struct ObservableProcessorState {
     /// What the processor's `process()` raised or returned as an error the
     /// last time it ran, while it has not run cleanly since.
     process_raising_because: Mutex<Option<String>>,
+    /// Why the node, running, is not ready, in its own words, while it says
+    /// so; the runtime keeps its outputs flowing meanwhile.
+    not_ready_because: Mutex<Option<String>>,
     state_changes_published_as: Mutex<Option<ProcessorStateChangesPublishedOnItsStreamsTopic>>,
 }
 
@@ -63,6 +66,7 @@ impl ObservableProcessorState {
             capture_device_access_never_asked_for: Mutex::new(None),
             helper_process_restarts: Mutex::new(HelperProcessRestartRecord::default()),
             process_raising_because: Mutex::new(None),
+            not_ready_because: Mutex::new(None),
             state_changes_published_as: Mutex::new(None),
         }
     }
@@ -89,6 +93,9 @@ impl ObservableProcessorState {
         new_state: ProcessorState,
     ) {
         let old_state = std::mem::replace(current, new_state);
+        if !new_state.holds_a_not_ready_report() {
+            *self.not_ready_because.lock() = None;
+        }
         self.changed.notify_all();
         if old_state == new_state {
             return;
@@ -200,6 +207,24 @@ impl ObservableProcessorState {
     /// What `process()` raised, while it has not run cleanly since.
     pub fn why_process_is_raising(&self) -> Option<String> {
         self.process_raising_because.lock().clone()
+    }
+
+    /// Note whether the node, running, is ready: `Some` with why it is not, or
+    /// `None` once it is. Kept only while the processor sets up, runs or is
+    /// paused.
+    pub fn note_why_the_node_is_not_ready(&self, not_ready_because: Option<String>) {
+        let current = self.current.lock();
+        let mut held = self.not_ready_because.lock();
+        *held = if current.holds_a_not_ready_report() {
+            not_ready_because
+        } else {
+            None
+        };
+    }
+
+    /// Why the node, running, is not ready, while it says so.
+    pub fn why_the_node_is_not_ready(&self) -> Option<String> {
+        self.not_ready_because.lock().clone()
     }
 
     /// Move the processor to `state`, unless it has already failed.
@@ -356,6 +381,20 @@ impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
     }
 }
 
+/// Why a running node is not ready, rendered beside its state as
+/// `not_ready_because`: the node's own words while it says so, or `null`.
+pub struct NodeNotReadyBecauseComponent(pub Arc<ObservableProcessorState>);
+
+impl JsonSerializableComponent for NodeNotReadyBecauseComponent {
+    fn json_key(&self) -> &'static str {
+        "not_ready_because"
+    }
+
+    fn to_json(&self) -> JsonValue {
+        serde_json::json!(self.0.why_the_node_is_not_ready())
+    }
+}
+
 impl JsonSerializableComponent for StateComponent {
     fn json_key(&self) -> &'static str {
         "state"
@@ -452,6 +491,50 @@ mod tests {
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
             ProcessorState::Error,
             "a failure with a reason ends the wait like one without"
+        );
+    }
+
+    /// A node's not-ready reason renders from `setup()` on until it reports
+    /// ready, and a processor that stops forgets it.
+    #[test]
+    fn a_not_ready_reason_is_held_while_the_node_runs_and_forgotten_once_it_stops() {
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
+        let rendered = NodeNotReadyBecauseComponent(Arc::clone(&state));
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
+        state.transition_to(ProcessorState::Running);
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("`riv_path` is not set"),
+            "a report made from `setup()` survives into the run"
+        );
+        state.note_why_the_node_is_not_ready(None);
+
+        state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("`riv_path` is not set")
+        );
+
+        state.transition_to(ProcessorState::Paused);
+        assert_eq!(
+            rendered.to_json(),
+            serde_json::json!("`riv_path` is not set")
+        );
+
+        state.note_why_the_node_is_not_ready(None);
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
+        state.transition_to(ProcessorState::Stopped);
+        assert_eq!(rendered.to_json(), JsonValue::Null);
+
+        state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
+        assert_eq!(
+            rendered.to_json(),
+            JsonValue::Null,
+            "a processor that does not run holds no not-ready reason"
         );
     }
 

@@ -16,11 +16,16 @@ pub(crate) fn forty_eight_thousand_samples_per_second() -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::array_to_image::image_format_of_the_config;
     use super::super::conversion_node_config_refusals::{
         refuse_a_channels_output_config, refuse_channel_names_naming_none_or_one_twice,
     };
-    use super::super::{ArrayToChannelsConfig, ChannelsToRecordsConfig, RecordsToChannelsConfig};
+    use super::super::{
+        ArrayToChannelsConfig, ArrayToImageConfig, ChannelsToRecordsConfig, RecordsToChannelsConfig,
+    };
 
+    /// Each conversion node's `#[processor_config]` `Default` is a config its
+    /// node's setup accepts.
     #[test]
     fn each_conversion_node_given_no_config_takes_defaults_its_setup_accepts() {
         let array_to_channels: ArrayToChannelsConfig =
@@ -50,5 +55,11 @@ mod tests {
             &channels_to_records.channel_names,
         )
         .expect("ChannelsToRecords's defaults are accepted at setup");
+
+        let array_to_image: ArrayToImageConfig =
+            serde_json::from_str("{}").expect("an empty config takes the defaults");
+        assert_eq!(array_to_image, ArrayToImageConfig::default());
+        image_format_of_the_config(&array_to_image)
+            .expect("ArrayToImage's defaults are accepted at setup");
     }
 }

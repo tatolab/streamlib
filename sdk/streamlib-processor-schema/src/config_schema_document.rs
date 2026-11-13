@@ -62,6 +62,17 @@ impl<T: schemars::JsonSchema> ProcessorConfigJsonSchema for T {
     }
 }
 
+/// Marks a `#[processor_config]` type whose `Default` fills each key a config
+/// leaves out, and which a node placed with no config runs with.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is a `#[processor_config]` type but does not implement `Default`",
+    note = "derive `Default` on `{Self}`, or implement it, so every key a config leaves out is filled from it",
+    note = "`Default` must be a config the node runs with: a key with nothing sensible to default to is left unset, and the node reports itself not ready, naming the key, until it is set"
+)]
+pub trait ProcessorConfigFilledFromItsDefault: Default {}
+
+impl<T: Default> ProcessorConfigFilledFromItsDefault for T {}
+
 /// Where a schema carries the description a `#[description = …]` attribute
 /// declared until the document is rendered, apart from the `description` a
 /// doc comment fills.

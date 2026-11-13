@@ -30,6 +30,7 @@ mod helper_log_record;
 mod hex_encoded_wire_bytes;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
+pub(crate) mod node_not_ready_reports;
 mod node_store;
 mod port_stream_facts;
 pub(crate) mod process_raising_the_node_reports;
@@ -100,6 +101,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::WriteNodeStoreKey(p) => Some(&p.request_id),
         EscalateRequest::RemoveNodeStoreKey(p) => Some(&p.request_id),
         EscalateRequest::SetProcessRaisingBecause(p) => Some(&p.request_id),
+        EscalateRequest::SetNotReadyBecause(p) => Some(&p.request_id),
         EscalateRequest::Log(_) => None,
     }
 }
@@ -189,6 +191,9 @@ pub(crate) fn handle_escalate_op(
                 rid,
                 req,
             ),
+        ),
+        EscalateRequest::SetNotReadyBecause(req) => Some(
+            node_not_ready_reports::handle_set_not_ready_because(what_the_node_reaches, rid, req),
         ),
         EscalateRequest::AcquireSharedNativeServiceLease(req) => Some(
             shared_native_service_lease::handle_acquire_shared_native_service_lease(
