@@ -1327,39 +1327,44 @@ impl StreamGraphTransactionExecutor<'_> {
                         title: group.fields.title.clone(),
                     });
                 }
-                StreamGraphOperation::Connect { link } => {
-                    let graph_render = graph_render_of_each_stream
-                        .entry(stream_id.clone())
-                        .or_insert_with(|| {
-                            let stream_operations = stream_operations_of(&stream_id)?;
-                            match self
-                                .async_runtime
-                                .block_on(stream_operations.to_json_async())
-                            {
-                                Ok(graph_render) => Some(graph_render),
-                                Err(unreadable) => {
-                                    tracing::warn!(
-                                        stream = %stream_id,
-                                        "a link was connected and its stream's graph could not \
-                                         be read to say what state it is in: {unreadable}"
-                                    );
-                                    None
-                                }
-                            }
-                        });
-                    let (state, error_reason) = graph_render
-                        .as_ref()
-                        .map(|graph_render| how_the_graph_reads_the_link(graph_render, link))
-                        .unwrap_or_default();
-                    connected_links.push(GraphTransactionConnectedLink {
-                        stream: stream_id.clone(),
-                        source: link_end_on_the_wire(&link.source),
-                        target: link_end_on_the_wire(&link.target),
-                        state,
-                        error_reason,
-                    });
-                }
                 _ => {}
+            }
+            let links_the_operation_connects = match &applied {
+                StreamGraphOperation::Connect { link } => std::slice::from_ref(link),
+                StreamGraphOperation::AddNode { links, .. } => links.as_slice(),
+                _ => &[],
+            };
+            for link in links_the_operation_connects {
+                let graph_render = graph_render_of_each_stream
+                    .entry(stream_id.clone())
+                    .or_insert_with(|| {
+                        let stream_operations = stream_operations_of(&stream_id)?;
+                        match self
+                            .async_runtime
+                            .block_on(stream_operations.to_json_async())
+                        {
+                            Ok(graph_render) => Some(graph_render),
+                            Err(unreadable) => {
+                                tracing::warn!(
+                                    stream = %stream_id,
+                                    "a link was connected and its stream's graph could not \
+                                     be read to say what state it is in: {unreadable}"
+                                );
+                                None
+                            }
+                        }
+                    });
+                let (state, error_reason) = graph_render
+                    .as_ref()
+                    .map(|graph_render| how_the_graph_reads_the_link(graph_render, link))
+                    .unwrap_or_default();
+                connected_links.push(GraphTransactionConnectedLink {
+                    stream: stream_id.clone(),
+                    source: link_end_on_the_wire(&link.source),
+                    target: link_end_on_the_wire(&link.target),
+                    state,
+                    error_reason,
+                });
             }
             let mut operation = serde_json::to_value(&applied).unwrap_or_default();
             if let Value::Object(operation) = &mut operation {
