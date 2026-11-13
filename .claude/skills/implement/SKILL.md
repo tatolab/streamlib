@@ -39,8 +39,7 @@ cost real rework before; use judgment about how much of each a given ticket need
 10. **Review**: `review-pr` and `rust-craftsmanship-reviewer` are the usual lenses. If
     you and a reviewer still disagree after a few rounds, bring the disagreement to the
     owner rather than looping.
-11. **PR**: push, `gh pr create` — title `type(scope): summary` (the repo squash-merges;
-    the title is the commit release-please parses); body `## Summary`, `## Closes` (one
+11. **PR**: push, `gh pr create` — title `type(scope): summary`; body `## Summary`, `## Closes` (one
     `Closes #N` per line), `## Exit criteria`, `## Test plan`, `## Notes for owner` (the
     batched findings).
 12. If step 7 pruned comments, say so on the ticket: unnecessary comments were removed
