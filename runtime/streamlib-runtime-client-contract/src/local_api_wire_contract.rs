@@ -1327,6 +1327,20 @@ pub struct NodeTypeSourceReadWithoutRunningIt {
     pub unreadable_modules: Vec<NodeModuleNotReadable>,
 }
 
+/// One node type a project offers and the source its code comes from, as a change on the
+/// project's feed names it: the source's fields beside the node type's, as
+/// `list_project_node_types` lists each.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct NodeTypeOfOneProjectSource {
+    /// Where its code comes from.
+    #[serde(flatten)]
+    pub origin: NodeTypeSourceOrigin,
+    /// The node type as its declaration states it.
+    #[serde(flatten)]
+    pub node_type: NodeTypeReadFromSource,
+}
+
 /// One node type as its declaration states it in source.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]

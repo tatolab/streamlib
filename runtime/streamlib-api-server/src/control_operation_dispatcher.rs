@@ -5,7 +5,7 @@
 //! and answers its result or its refusal, holding no adapter's wire shape.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -60,6 +60,7 @@ use crate::mcp::{describe_stream_action_tool_result_of, stream_action_state_on_t
 use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
 };
+use crate::project_node_types_followed_for_changes::ProjectNodeTypesLastListed;
 use crate::stream_graph_transaction_executor::{
     GraphTransactionRefusal, StreamGraphTransactionExecutor,
 };
@@ -210,9 +211,47 @@ pub(crate) struct ControlOperationDispatcher {
     pub(crate) project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
     pub(crate) project_actions_refused: Arc<ProjectActionsRefusedSinceTheRuntimeStarted>,
     pub(crate) asset_media_facts_reads: Arc<AssetMediaFactsReadsInThisRuntime>,
+    pub(crate) project_node_types_last_listed: Arc<ProjectNodeTypesLastListed>,
+}
+
+/// A dispatcher's services held without keeping any of them alive, for a task that outlives no
+/// handler.
+#[derive(Clone)]
+pub(crate) struct ControlOperationDispatcherHeldWeakly {
+    operations_on_the_loaded_streams: Weak<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
+    project_repositories: Weak<ProjectRepositoriesOpenInThisRuntime>,
+    project_actions_refused: Weak<ProjectActionsRefusedSinceTheRuntimeStarted>,
+    asset_media_facts_reads: Weak<AssetMediaFactsReadsInThisRuntime>,
+    project_node_types_last_listed: Weak<ProjectNodeTypesLastListed>,
+}
+
+impl ControlOperationDispatcherHeldWeakly {
+    /// The dispatcher again, while every one of its services is still alive.
+    pub(crate) fn upgrade(&self) -> Option<ControlOperationDispatcher> {
+        Some(ControlOperationDispatcher {
+            operations_on_the_loaded_streams: self.operations_on_the_loaded_streams.upgrade()?,
+            project_repositories: self.project_repositories.upgrade()?,
+            project_actions_refused: self.project_actions_refused.upgrade()?,
+            asset_media_facts_reads: self.asset_media_facts_reads.upgrade()?,
+            project_node_types_last_listed: self.project_node_types_last_listed.upgrade()?,
+        })
+    }
 }
 
 impl ControlOperationDispatcher {
+    /// This dispatcher, held without keeping its services alive.
+    pub(crate) fn held_weakly(&self) -> ControlOperationDispatcherHeldWeakly {
+        ControlOperationDispatcherHeldWeakly {
+            operations_on_the_loaded_streams: Arc::downgrade(
+                &self.operations_on_the_loaded_streams,
+            ),
+            project_repositories: Arc::downgrade(&self.project_repositories),
+            project_actions_refused: Arc::downgrade(&self.project_actions_refused),
+            asset_media_facts_reads: Arc::downgrade(&self.asset_media_facts_reads),
+            project_node_types_last_listed: Arc::downgrade(&self.project_node_types_last_listed),
+        }
+    }
+
     /// Run `call` for a request from `request_origin`.
     pub(crate) async fn dispatch(
         &self,

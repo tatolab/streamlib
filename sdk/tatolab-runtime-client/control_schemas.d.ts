@@ -170,6 +170,7 @@ export interface ControlSchemasOfTheContract {
     readonly UndoOrRedoRequest: z.ZodType<ControlContract.UndoOrRedoRequest>;
     readonly ProjectChangedNotificationParams: z.ZodType<ControlContract.ProjectChangedNotificationParams>;
     readonly ProjectChangeKindOnTheWire: z.ZodType<ControlContract.ProjectChangeKindOnTheWire>;
+    readonly NodeTypeOfOneProjectSource: z.ZodType<ControlContract.NodeTypeOfOneProjectSource>;
     readonly StreamGraphChangedNotificationParams: z.ZodType<ControlContract.StreamGraphChangedNotificationParams>;
     readonly StreamGraphChangeKindOnTheWire: z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>;
     readonly NodeStateOnTheWire: z.ZodType<ControlContract.NodeStateOnTheWire>;
