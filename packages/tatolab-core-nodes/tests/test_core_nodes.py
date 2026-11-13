@@ -62,7 +62,7 @@ DECLARED_NODES = every_declared_node()
 
 
 def test_the_project_declares_every_node_it_is_meant_to():
-    assert len(DECLARED_NODES) == 75
+    assert len(DECLARED_NODES) == 74
 
 
 @pytest.mark.parametrize("node_type", sorted(DECLARED_NODES))

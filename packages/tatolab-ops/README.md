@@ -25,7 +25,7 @@ helper's read, with no process of its own; a body that does not compile, such as
   one decoded or captured frame can feed a stream that keeps running, until `refresh`
   takes a newer one. Its state holds the frame, so it runs as Python in its reader
   rather than compiled.
-- `Feedback`, the one node a loop of function nodes closes through.
+- `Feedback`, which hands its input on. The runtime closes any loop of function nodes itself.
 - `ImageFile`, a class node rather than a function node, publishes the PNG or JPEG
   project asset its `asset` config names by UUID as an Image: once at start,
   again on each config change, and again to any reader that connects later.

@@ -1646,10 +1646,10 @@ def add_a_step(x: float, step: float = 1.0) -> float:
 
 
 def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation():
-    """`Feedback -> add_a_step -> Feedback`, the loop a `Feedback` node closes: the
-    feedback node comes first and reads what `add_a_step` gave last time, so each
-    read counts one further."""
-    feedback_path = f"{__name__}:pass_the_value_on"
+    """`pass_the_value_on -> add_a_step -> pass_the_value_on`, a loop whose link back the
+    island lists first: that node reads what `add_a_step` gave last time, so each read
+    counts one further."""
+    pass_on_path = f"{__name__}:pass_the_value_on"
     add_path = f"{__name__}:add_a_step"
     island = {
         "input_port": "count",
@@ -1657,9 +1657,9 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
         "output": {"node": "add-1", "port": "result"},
         "nodes": [
             {
-                "node": "feedback-1",
+                "node": "pass-on-1",
                 "breadcrumb_number": 0,
-                "import_path": feedback_path,
+                "import_path": pass_on_path,
                 "config": None,
                 "links_into": [{"port": "value", "from": {"node": "add-1", "port": "result"}}],
             },
@@ -1668,7 +1668,7 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
                 "breadcrumb_number": 1,
                 "import_path": add_path,
                 "config": None,
-                "links_into": [{"port": "x", "from": {"node": "feedback-1", "port": "result"}}],
+                "links_into": [{"port": "x", "from": {"node": "pass-on-1", "port": "result"}}],
             },
         ],
     }
@@ -1677,7 +1677,33 @@ def test_a_node_reading_a_later_node_takes_its_output_from_the_last_evaluation()
     feed_each_input_port_from_its_function_node_island(
         data_plane,
         [island],
-        {feedback_path: pass_the_value_on, add_path: add_a_step}.__getitem__,
+        {pass_on_path: pass_the_value_on, add_path: add_a_step}.__getitem__,
+    )
+    assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
+
+
+def test_a_node_linked_into_itself_reads_its_own_output_from_the_last_evaluation():
+    add_path = f"{__name__}:add_a_step"
+    island = {
+        "input_port": "count",
+        "link_id": "L-count",
+        "output": {"node": "add-1", "port": "result"},
+        "nodes": [
+            {
+                "node": "add-1",
+                "breadcrumb_number": 0,
+                "import_path": add_path,
+                "config": None,
+                "links_into": [{"port": "x", "from": {"node": "add-1", "port": "result"}}],
+            },
+        ],
+    }
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["count"], [])
+    feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [island],
+        {add_path: add_a_step}.__getitem__,
     )
     assert [the_value_read_from(data_plane, "count") for _ in range(3)] == [1.0, 2.0, 3.0]
 

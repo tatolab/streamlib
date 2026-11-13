@@ -10,7 +10,7 @@
 //! that changes an island hands its reader the island again. Neither kind of
 //! link opens a channel, and no function node is prepared or spawned.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::Value as JsonValue;
 
@@ -22,6 +22,7 @@ use crate::core::graph::{
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
     FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
     GraphWeight, HowItsHelpersRanAFunctionNode, InputLinkPortRef, Link,
+    LinkReadFromTheLastEvaluationComponent,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
     LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
     the_outputs_a_link_carries_on,
@@ -86,18 +87,114 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     })
 }
 
-/// The type of the one function node a cycle of function nodes closes
-/// through: it hands out its input as it was at the last evaluation.
-pub(crate) const FEEDBACK_FUNCTION_NODE_TYPE: &str = "tatolab.ops:Feedback";
-
-/// Whether `node_id` is a `Feedback` node, whose input the island reads from
-/// the last evaluation.
-fn is_a_feedback_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
-    graph
+/// The links between function nodes that close a loop of them, each read as it
+/// was at the last evaluation: the links a depth-first walk down the links,
+/// from each function node no other feeds, finds pointing back at a node it is
+/// still walking below. Nodes are walked in the order of the ids their stream
+/// graph file gives them and a node's links in the order of what they feed, so
+/// one graph names the same links at every compile. What is left without them
+/// has no cycle.
+pub(crate) fn the_links_read_from_the_last_evaluation(graph: &Graph) -> HashSet<LinkUniqueId> {
+    let mut function_nodes_in_walk_order: Vec<(uuid::Uuid, ProcessorUniqueId)> = graph
         .traversal()
-        .v(node_id)
-        .first()
-        .is_some_and(|node| node.processor_type.to_string() == FEEDBACK_FUNCTION_NODE_TYPE)
+        .v(())
+        .iter()
+        .filter(|node| runs_inside_the_read_of_each_node_it_feeds(graph, &node.id))
+        .map(|node| (node.node_uuid, node.id.clone()))
+        .collect();
+    function_nodes_in_walk_order.sort();
+    let walk_position_of_each_function_node: HashMap<&ProcessorUniqueId, usize> =
+        function_nodes_in_walk_order
+            .iter()
+            .enumerate()
+            .map(|(walk_position, (_, node_id))| (node_id, walk_position))
+            .collect();
+
+    let mut links_out_of_each_function_node: Vec<Vec<(usize, &Link)>> =
+        vec![Vec::new(); function_nodes_in_walk_order.len()];
+    let mut is_fed_by_another_function_node = vec![false; function_nodes_in_walk_order.len()];
+    for link in graph.traversal().e(()).iter() {
+        let (Some(&source_position), Some(&fed_position)) = (
+            walk_position_of_each_function_node.get(link.source().processor_id()),
+            walk_position_of_each_function_node.get(link.to_port().processor_id()),
+        ) else {
+            continue;
+        };
+        links_out_of_each_function_node[source_position].push((fed_position, link));
+        is_fed_by_another_function_node[fed_position] |= fed_position != source_position;
+    }
+    for links_out in &mut links_out_of_each_function_node {
+        links_out.sort_by(|(fed, link), (other_fed, other_link)| {
+            (fed, link.to_port().port_name(), link.source().port_name()).cmp(&(
+                other_fed,
+                other_link.to_port().port_name(),
+                other_link.source().port_name(),
+            ))
+        });
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Walked {
+        NotYet,
+        StillBelowIt,
+        Done,
+    }
+    let mut walked = vec![Walked::NotYet; function_nodes_in_walk_order.len()];
+    let mut links_read_from_the_last_evaluation = HashSet::new();
+    let fed_by_no_other_then_every_node = (0..walked.len())
+        .filter(|&position| !is_fed_by_another_function_node[position])
+        .chain(0..walked.len());
+    for walk_start in fed_by_no_other_then_every_node {
+        if walked[walk_start] != Walked::NotYet {
+            continue;
+        }
+        walked[walk_start] = Walked::StillBelowIt;
+        let mut path_with_the_next_link_of_each: Vec<(usize, usize)> = vec![(walk_start, 0)];
+        while let Some((position, next_link)) = path_with_the_next_link_of_each.last_mut() {
+            let Some(&(fed_position, link)) =
+                links_out_of_each_function_node[*position].get(*next_link)
+            else {
+                walked[*position] = Walked::Done;
+                path_with_the_next_link_of_each.pop();
+                continue;
+            };
+            *next_link += 1;
+            match walked[fed_position] {
+                Walked::StillBelowIt => {
+                    links_read_from_the_last_evaluation.insert(link.id.clone());
+                }
+                Walked::NotYet => {
+                    walked[fed_position] = Walked::StillBelowIt;
+                    path_with_the_next_link_of_each.push((fed_position, 0));
+                }
+                Walked::Done => {}
+            }
+        }
+    }
+    links_read_from_the_last_evaluation
+}
+
+/// Mark each link the island walk reads from the last evaluation, and unmark
+/// each it no longer does, so `graph` shows which link of a loop is the one
+/// read a step late.
+pub(crate) fn note_which_links_read_the_last_evaluation(graph: &mut Graph) {
+    let links_read_from_the_last_evaluation = the_links_read_from_the_last_evaluation(graph);
+    for link_id in graph.traversal().e(()).ids() {
+        let Some(link) = graph.traversal_mut().e(&link_id).first_mut() else {
+            continue;
+        };
+        let is_marked = link.has::<LinkReadFromTheLastEvaluationComponent>();
+        match (
+            links_read_from_the_last_evaluation.contains(&link_id),
+            is_marked,
+        ) {
+            (true, false) => link.insert(LinkReadFromTheLastEvaluationComponent),
+            (false, true) => {
+                link.remove::<LinkReadFromTheLastEvaluationComponent>();
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Whether `node_id` is a function node, inside its readers' islands or
@@ -728,18 +825,19 @@ pub(crate) fn the_island_feeding_a_link(
 ) -> Result<JsonValue> {
     let link = link_in(graph, link_id)?;
     let island_output_node_id = link.source().processor_id().clone();
+    let links_read_from_the_last_evaluation = the_links_read_from_the_last_evaluation(graph);
     let mut nodes_each_after_what_it_reads = Vec::new();
     let mut placed = HashSet::new();
-    let mut read_at_the_last_evaluation_by_a_feedback_node = vec![island_output_node_id.clone()];
-    while let Some(node_id) = read_at_the_last_evaluation_by_a_feedback_node.pop() {
+    let mut still_to_place = vec![island_output_node_id.clone()];
+    while let Some(node_id) = still_to_place.pop() {
         place_a_function_node_after_what_it_reads(
             graph,
             link_id,
             &node_id,
+            &links_read_from_the_last_evaluation,
             &mut placed,
-            &mut Vec::new(),
             &mut nodes_each_after_what_it_reads,
-            &mut read_at_the_last_evaluation_by_a_feedback_node,
+            &mut still_to_place,
         )?;
     }
     Ok(serde_json::json!({
@@ -753,33 +851,20 @@ pub(crate) fn the_island_feeding_a_link(
     }))
 }
 
+/// Place `node_id` in the island after every node it reads at this
+/// evaluation. A node it reads only from the last evaluation is left on
+/// `still_to_place`, to come after it.
 fn place_a_function_node_after_what_it_reads(
     graph: &Graph,
     island_link_id: &LinkUniqueId,
     node_id: &ProcessorUniqueId,
+    links_read_from_the_last_evaluation: &HashSet<LinkUniqueId>,
     placed: &mut HashSet<ProcessorUniqueId>,
-    on_the_path_from_the_output: &mut Vec<ProcessorUniqueId>,
     nodes_each_after_what_it_reads: &mut Vec<JsonValue>,
-    read_at_the_last_evaluation_by_a_feedback_node: &mut Vec<ProcessorUniqueId>,
+    still_to_place: &mut Vec<ProcessorUniqueId>,
 ) -> Result<()> {
     if placed.contains(node_id) {
         return Ok(());
-    }
-    if let Some(cycle_start) = on_the_path_from_the_output
-        .iter()
-        .position(|on_the_path| on_the_path == node_id)
-    {
-        let cycle: Vec<String> = on_the_path_from_the_output[cycle_start..]
-            .iter()
-            .chain(std::iter::once(node_id))
-            .map(ToString::to_string)
-            .collect();
-        return Err(Error::InvalidGraph(format!(
-            "function nodes {} read each other in a cycle; an island evaluates each node after \
-             what it reads, so a cycle closes only through a `Feedback` node, which hands out \
-             its input as it was at the last evaluation",
-            cycle.join(" → ")
-        )));
     }
     let node = graph
         .traversal()
@@ -791,7 +876,6 @@ fn place_a_function_node_after_what_it_reads(
     let config = node.config.clone().unwrap_or(JsonValue::Null);
     let pins = JsonValue::Object(node.pins.clone());
 
-    on_the_path_from_the_output.push(node_id.clone());
     let links_into_this_node: Vec<&Link> = graph
         .traversal()
         .e(())
@@ -814,17 +898,17 @@ fn place_a_function_node_after_what_it_reads(
             }));
             continue;
         }
-        if is_a_feedback_node(graph, node_id) {
-            read_at_the_last_evaluation_by_a_feedback_node.push(upstream_id.clone());
+        if links_read_from_the_last_evaluation.contains(&link_into.id) {
+            still_to_place.push(upstream_id.clone());
         } else {
             place_a_function_node_after_what_it_reads(
                 graph,
                 island_link_id,
                 upstream_id,
+                links_read_from_the_last_evaluation,
                 placed,
-                on_the_path_from_the_output,
                 nodes_each_after_what_it_reads,
-                read_at_the_last_evaluation_by_a_feedback_node,
+                still_to_place,
             )?;
         }
         links_into.push(serde_json::json!({
@@ -835,8 +919,6 @@ fn place_a_function_node_after_what_it_reads(
             },
         }));
     }
-    on_the_path_from_the_output.pop();
-
     placed.insert(node_id.clone());
     let mut island_node = serde_json::json!({
         "node": node_id.to_string(),
@@ -892,7 +974,6 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
         let link = link_in(graph, link_id)?;
         refuse_a_second_link_into_a_port_an_island_feeds(graph, link)?;
         refuse_an_island_into_a_port_declaring_an_audio_window(graph, link)?;
-        refuse_a_link_closing_a_cycle_of_function_nodes(graph, link)?;
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
@@ -925,59 +1006,6 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
                  the island, and a live config update is not carried to an island, so it is \
                  refused. To fix: stop the stream and start it with the new config"
             )));
-        }
-    }
-    Ok(())
-}
-
-/// Refuse `link`, between two function nodes, when what it feeds already
-/// reaches what it reads through other function nodes, naming the cycle: an
-/// island evaluates each node after what it reads.
-fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -> Result<()> {
-    let source_id = link.source().processor_id();
-    let destination_id = link.to_port().processor_id();
-    if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
-        || !runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
-        || is_a_feedback_node(graph, destination_id)
-    {
-        return Ok(());
-    }
-    let mut paths_to_follow = vec![vec![destination_id.clone()]];
-    let mut function_nodes_followed = HashSet::new();
-    while let Some(path) = paths_to_follow.pop() {
-        let Some(following_id) = path.last() else {
-            continue;
-        };
-        if following_id == source_id {
-            let cycle: Vec<String> = std::iter::once(source_id.to_string())
-                .chain(path.iter().map(ToString::to_string))
-                .collect();
-            return Err(Error::InvalidGraph(format!(
-                "linking `{}` closes a cycle of function nodes, {}; an island evaluates each \
-                 node after what it reads, so a cycle closes only through a `Feedback` node, \
-                 which hands out its input as it was at the last evaluation. To fix: link the \
-                 loop's way back through a `Feedback` node",
-                link.id,
-                cycle.join(" → ")
-            )));
-        }
-        if !function_nodes_followed.insert(following_id.clone()) {
-            continue;
-        }
-        for downstream_link in graph.traversal().e(()).iter() {
-            if downstream_link.id == link.id
-                || downstream_link.source().processor_id() != following_id
-            {
-                continue;
-            }
-            let downstream_id = downstream_link.to_port().processor_id();
-            if runs_inside_the_read_of_each_node_it_feeds(graph, downstream_id)
-                && !is_a_feedback_node(graph, downstream_id)
-            {
-                let mut longer_path = path.clone();
-                longer_path.push(downstream_id.clone());
-                paths_to_follow.push(longer_path);
-            }
         }
     }
     Ok(())
@@ -1380,21 +1408,6 @@ pub(crate) mod tests {
         assert!(position(&low) < position(&mix) && position(&high) < position(&mix));
         assert_eq!(island["nodes"][0]["config"]["rate_hz"], 2.0);
         assert_eq!(island["nodes"][0]["import_path"], "test_ops:lfo");
-    }
-
-    #[test]
-    fn a_cycle_of_function_nodes_is_refused_naming_it() {
-        let mut graph = a_graph_resolving_three_function_node_types();
-        let first = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
-        let second = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
-        let reader = a_helper_reader_before_its_setup(&mut graph);
-        link(&mut graph, (&first, "result"), (&second, "a"));
-        link(&mut graph, (&second, "result"), (&first, "x"));
-        let into_the_reader = link(&mut graph, (&second, "result"), (&reader, "in1"));
-        let refusal = the_island_feeding_a_link(&graph, &into_the_reader)
-            .unwrap_err()
-            .to_string();
-        assert!(refusal.contains("in a cycle"), "{refusal}");
     }
 
     #[test]
@@ -1801,53 +1814,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_link_closing_a_cycle_of_function_nodes_is_refused_naming_the_cycle() {
+    fn a_link_closing_a_loop_of_function_nodes_is_taken_live() {
         let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
         let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
         link(&mut graph, (&lfo, "result"), (&mix, "a"));
         link(&mut graph, (&mix, "result"), (&remap, "x"));
-        let closing_the_cycle = link(&mut graph, (&remap, "result"), (&mix, "b"));
-
-        let refusal = the_refusal_of_a_commit(
-            &graph,
-            &[],
-            &[],
-            std::slice::from_ref(&closing_the_cycle),
-            &[],
-            &[],
-        )
-        .expect("refused");
-        assert!(
-            refusal.contains("closes a cycle of function nodes"),
-            "{refusal}"
-        );
-        assert!(
-            refusal.contains(&format!("{remap} → {mix} → {remap}")),
-            "{refusal}"
-        );
-        assert!(refusal.contains("`Feedback` node"), "{refusal}");
-    }
-
-    fn a_graph_resolving_the_test_function_node_types_and_feedback() -> Graph {
-        a_graph_resolving_these_function_node_types([
-            a_function_node_type("test_ops:lfo", &[], &["result"]),
-            a_function_node_type("test_ops:remap", &["x"], &["result"]),
-            a_function_node_type("test_ops:mix", &["a", "b"], &["result"]),
-            a_function_node_type(FEEDBACK_FUNCTION_NODE_TYPE, &["value"], &["result"]),
-        ])
-    }
-
-    #[test]
-    fn a_link_closing_a_loop_through_feedback_is_taken_live() {
-        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
-        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
-        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
-        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
-        link(&mut graph, (&lfo, "result"), (&mix, "a"));
-        link(&mut graph, (&feedback, "result"), (&mix, "b"));
-        let closing_the_loop = link(&mut graph, (&mix, "result"), (&feedback, "value"));
+        let closing_the_loop = link(&mut graph, (&remap, "result"), (&mix, "b"));
 
         assert_eq!(
             the_refusal_of_a_commit(
@@ -1863,15 +1837,54 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_island_closing_a_loop_through_feedback_evaluates_feedback_before_what_it_reads() {
-        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
+    fn the_link_of_a_loop_pointing_back_toward_what_feeds_it_reads_the_last_evaluation() {
+        let mut graph = a_graph_resolving_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
-        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+        let reader = a_helper_reader_before_its_setup(&mut graph);
+        let into_the_loop = link(&mut graph, (&lfo, "result"), (&mix, "a"));
+        let around = link(&mut graph, (&mix, "result"), (&remap, "x"));
+        let back = link(&mut graph, (&remap, "result"), (&mix, "b"));
+        let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
+
+        assert_eq!(
+            the_links_read_from_the_last_evaluation(&graph),
+            HashSet::from([back.clone()])
+        );
+
+        note_which_links_read_the_last_evaluation(&mut graph);
+        let is_marked = |graph: &Graph, link_id: &LinkUniqueId| {
+            link_in(graph, link_id)
+                .unwrap()
+                .serialize_components()
+                .get("reads_the_last_evaluation")
+                .cloned()
+        };
+        assert_eq!(is_marked(&graph, &back), Some(JsonValue::Bool(true)));
+        for read_at_this_evaluation in [&into_the_loop, &around, &into_the_reader] {
+            assert_eq!(is_marked(&graph, read_at_this_evaluation), None);
+        }
+
+        graph.traversal_mut().e(&around).drop();
+        note_which_links_read_the_last_evaluation(&mut graph);
+        assert_eq!(
+            is_marked(&graph, &back),
+            None,
+            "a link that closes no loop any more is unmarked"
+        );
+    }
+
+    #[test]
+    fn an_island_closing_a_loop_evaluates_what_the_link_back_feeds_before_what_it_reads() {
+        let mut graph = a_graph_resolving_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
         link(&mut graph, (&lfo, "result"), (&mix, "a"));
-        link(&mut graph, (&feedback, "result"), (&mix, "b"));
-        link(&mut graph, (&mix, "result"), (&feedback, "value"));
+        link(&mut graph, (&mix, "result"), (&remap, "x"));
+        link(&mut graph, (&remap, "result"), (&mix, "b"));
         let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
 
         let island = the_island_feeding_a_link(&graph, &into_the_reader).unwrap();
@@ -1884,33 +1897,73 @@ pub(crate) mod tests {
                 .unwrap()
         };
         assert_eq!(order.len(), 3, "each node once: {order:?}");
-        assert!(position_of(&feedback) < position_of(&mix), "{order:?}");
         assert!(position_of(&lfo) < position_of(&mix), "{order:?}");
-        let feedback_node = &island["nodes"][position_of(&feedback)];
-        assert_eq!(
-            feedback_node["links_into"],
-            serde_json::json!([{ "port": "value", "from": { "node": mix.to_string(), "port": "result" } }]),
-            "`Feedback` still names what it reads, which the reader takes from the last evaluation"
+        assert!(position_of(&mix) < position_of(&remap), "{order:?}");
+        let links_into_mix = island["nodes"][position_of(&mix)]["links_into"]
+            .as_array()
+            .unwrap();
+        assert!(
+            links_into_mix.contains(&serde_json::json!(
+                { "port": "b", "from": { "node": remap.to_string(), "port": "result" } }
+            )),
+            "the node still names what it reads, which the reader takes from the last evaluation"
         );
     }
 
     #[test]
-    fn a_loop_whose_way_back_skips_feedback_is_still_refused() {
-        let mut graph = a_graph_resolving_the_test_function_node_types_and_feedback();
+    fn a_function_node_linked_into_itself_reads_its_own_last_evaluation() {
+        let mut graph = a_graph_resolving_three_function_node_types();
         let mix = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
-        let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
-        let feedback = add_a_node(&mut graph, FEEDBACK_FUNCTION_NODE_TYPE, JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
-        link(&mut graph, (&feedback, "result"), (&mix, "a"));
-        link(&mut graph, (&mix, "result"), (&remap, "x"));
-        link(&mut graph, (&remap, "result"), (&mix, "b"));
+        let into_itself = link(&mut graph, (&mix, "result"), (&mix, "a"));
         let into_the_reader = link(&mut graph, (&mix, "result"), (&reader, "in1"));
 
-        let refusal = the_island_feeding_a_link(&graph, &into_the_reader)
-            .unwrap_err()
-            .to_string();
-        assert!(refusal.contains("in a cycle"), "{refusal}");
-        assert!(refusal.contains("`Feedback` node"), "{refusal}");
+        assert_eq!(
+            the_links_read_from_the_last_evaluation(&graph),
+            HashSet::from([into_itself])
+        );
+        let island = the_island_feeding_a_link(&graph, &into_the_reader).unwrap();
+        assert_eq!(the_node_ids_of_an_island(&island), [mix.to_string()]);
+    }
+
+    #[test]
+    fn one_graph_names_the_same_link_of_a_loop_however_its_links_were_added() {
+        let the_link_back_when_links_are_added = |in_this_order: [usize; 3]| {
+            let mut graph = a_graph_resolving_three_function_node_types();
+            let node_uuids = [1_u128, 2, 3].map(uuid::Uuid::from_u128);
+            let nodes = node_uuids.map(|node_uuid| {
+                let node_id = add_a_node(&mut graph, "test_ops:mix", JsonValue::Null);
+                graph
+                    .traversal_mut()
+                    .v(&node_id)
+                    .first_mut()
+                    .unwrap()
+                    .node_uuid = node_uuid;
+                node_id
+            });
+            let mut link_back = None;
+            for source in in_this_order {
+                let fed = (source + 1) % 3;
+                let link_id = link(&mut graph, (&nodes[source], "result"), (&nodes[fed], "a"));
+                if source == 2 {
+                    link_back = Some(link_id);
+                }
+            }
+            (
+                the_links_read_from_the_last_evaluation(&graph),
+                link_back.unwrap(),
+            )
+        };
+
+        for in_this_order in [[0, 1, 2], [2, 1, 0], [1, 2, 0]] {
+            let (read_from_the_last_evaluation, link_back) =
+                the_link_back_when_links_are_added(in_this_order);
+            assert_eq!(
+                read_from_the_last_evaluation,
+                HashSet::from([link_back]),
+                "a loop no node feeds is walked from its lowest node id: {in_this_order:?}"
+            );
+        }
     }
 
     #[test]

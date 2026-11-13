@@ -30,7 +30,7 @@ tatolab dev
 | Composite | `composite.py` | Mix, Over, Blend Add, Blend Multiply, Blend Screen, Blend Difference, Mask, Wipe |
 | Math | `math_nodes.py` | Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Absolute, Modulo, Lerp, Clamp, Remap, Smoothstep, Step, Constant, Random, Perlin Noise |
 | Animation | `animation.py` | Lfo, Timer, Lag, Ramp, Pulse, Speed, Envelope |
-| Logic | `logic.py` | Compare, Switch, Select, Gate, Trigger, Counter, Sample And Hold, Feedback, Hold Frame |
+| Logic | `logic.py` | Compare, Switch, Select, Gate, Trigger, Counter, Sample And Hold, Hold Frame |
 | Audio | `oscillator.py` | Oscillator |
 
 Every Color, Filters, Transform and Composite node, and every generator but Solid Color, is a
@@ -57,11 +57,11 @@ number node can drive.
   frame and stretch on any other shape.
 - **A shader is not handed the time.** Wire a Timer, Ramp or Speed into the input that moves it.
 
-## What a number node cannot do yet
+## Loops
 
-- **Feedback here closes no loop.** The runtime closes a loop only through
-  `tatolab.ops:Feedback`, so a loop through this project's Feedback is refused. The runtime takes
-  this project's name for it in the change that carries the project into every new project.
+Wire a number node's output back into a node that feeds it and the loop closes: the runtime reads
+that one wire as it was at the last evaluation, starting at 0, and the stream graph marks it
+`reads_the_last_evaluation`. Add wired into itself counts up.
 
 ## Check it
 

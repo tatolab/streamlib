@@ -11,15 +11,6 @@ from typing import Annotated
 from tatolab.stream import Image, State, Stateful, UnreadMessage, node
 
 
-@node.function(
-    description="A number as it was one frame ago. The one node a loop of number nodes may pass through.",
-    category="Logic",
-)
-def Feedback(value: float = 0.0) -> float:  # noqa: N802
-    """`value` as it was at the last evaluation, starting at 0: the one node a loop of function nodes closes through."""
-    return value
-
-
 @dataclass(frozen=True)
 class Comparison:
     """How `a` compares with `b`, within a tolerance."""

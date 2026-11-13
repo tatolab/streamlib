@@ -107,7 +107,7 @@ def Clamp(x: float, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
 
 @node.function
 def Feedback(value: float = 0.0) -> float:  # noqa: N802
-    """`value` as it was at the last evaluation, starting at 0: the one node a loop of function nodes closes through."""
+    """`value`, handed on."""
     return value
 
 

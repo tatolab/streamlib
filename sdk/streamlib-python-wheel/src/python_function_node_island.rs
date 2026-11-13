@@ -384,11 +384,14 @@ enum WhereAFunctionNodeInputTakesItsValue {
         output_index: usize,
     },
     /// An output of a node evaluated later in the island, as it was at the
-    /// last evaluation: how a `Feedback` node reads the loop it closes.
+    /// last evaluation: how a link closing a loop of function nodes is read.
     ALaterNodesOutputAtTheLastEvaluation {
         node_index: usize,
         output_index: usize,
     },
+    /// An output of the node itself, as it was at the last evaluation: how a
+    /// link from a node into itself is read.
+    ItsOwnOutputAtTheLastEvaluation { output_index: usize },
     /// The pin's value, as nothing is linked to it.
     ItsPin(FunctionNodeValue),
     /// A link from a node outside the island, whose channel the reader reads at
@@ -458,6 +461,7 @@ struct FunctionNodeInAnIsland {
     breadcrumb_number: u32,
     how_it_is_called: HowAFunctionNodeIsCalled,
     where_each_input_takes_its_value: Vec<WhereAFunctionNodeInputTakesItsValue>,
+    reads_its_own_output_at_the_last_evaluation: bool,
     /// The inputs a call may leave with no value, handing the body `None`; at
     /// any other input with no value the node hands out nothing, uncalled.
     inputs_that_take_none: Vec<usize>,
@@ -568,11 +572,24 @@ impl FunctionNodeIslandEvaluation {
             let Some((function_node, evaluated_later)) = from_this_node_on.split_first_mut() else {
                 break;
             };
+            let its_own_outputs_at_the_last_evaluation: Vec<FunctionNodeValue> =
+                if function_node.reads_its_own_output_at_the_last_evaluation {
+                    function_node
+                        .output_values
+                        .iter()
+                        .map(FunctionNodeValue::duplicated)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             let input_values: Vec<&FunctionNodeValue> = function_node
                 .where_each_input_takes_its_value
                 .iter()
                 .map(|where_it_takes_its_value| {
                     match where_it_takes_its_value {
+                    WhereAFunctionNodeInputTakesItsValue::ItsOwnOutputAtTheLastEvaluation {
+                        output_index,
+                    } => &its_own_outputs_at_the_last_evaluation[*output_index],
                     WhereAFunctionNodeInputTakesItsValue::AnEarlierNodesOutput {
                         node_index,
                         output_index,
@@ -1152,6 +1169,13 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                     None => WhereAFunctionNodeInputTakesItsValue::ItsPin(
                         FunctionNodeValue::Number(pin_value),
                     ),
+                    Some((source_node_index, output_index))
+                        if source_node_index == node_index && output_index < output_count =>
+                    {
+                        WhereAFunctionNodeInputTakesItsValue::ItsOwnOutputAtTheLastEvaluation {
+                            output_index,
+                        }
+                    }
                     Some((source_node_index, output_index)) if source_node_index > node_index => {
                         WhereAFunctionNodeInputTakesItsValue::ALaterNodesOutputAtTheLastEvaluation {
                             node_index: source_node_index,
@@ -1233,6 +1257,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
                 node_id,
                 breadcrumb_number,
                 how_it_is_called,
+                reads_its_own_output_at_the_last_evaluation: where_each_input_takes_its_value_read
+                    .iter()
+                    .any(|where_it_takes_its_value| {
+                        matches!(
+                            where_it_takes_its_value,
+                            WhereAFunctionNodeInputTakesItsValue::ItsOwnOutputAtTheLastEvaluation { .. }
+                        )
+                    }),
                 where_each_input_takes_its_value: where_each_input_takes_its_value_read,
                 inputs_that_take_none: how_it_carries_its_values.inputs_that_take_none.clone(),
                 output_values: (0..output_count)
@@ -1385,6 +1417,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
                 breadcrumb_number,
                 how_it_is_called,
                 where_each_input_takes_its_value: Vec::new(),
+                reads_its_own_output_at_the_last_evaluation: false,
                 inputs_that_take_none: Vec::new(),
                 output_values: (0..output_count)
                     .map(|_| FunctionNodeValue::Number(0.0))

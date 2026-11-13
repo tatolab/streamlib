@@ -10,7 +10,7 @@
 **The direction, in four sentences:**
 1. The runtime unit carries the Core Nodes project, as it carries its first-party wheels and its
    samples, at its own version.
-2. Every project the runtime loads has Core Nodes as an import, so its 75 nodes are in Add node
+2. Every project the runtime loads has Core Nodes as an import, so its 74 nodes are in Add node
    and its Program view is in the view list of every project, new or old, with nothing written
    by the person.
 3. `tatolab-ops` is deleted: its wheel, its package, its PyPI and index names, and the one name of
@@ -44,14 +44,14 @@ project, not wheel, the runtime unit gives to every project.
 - **The unit carries sample projects** as directories beside the lend
   (`SampleProjectTheRuntimeUnitCarries`, `new_project_scaffold.rs:63-80`), so a project
   directory in the unit is an existing shape.
-- **Core Nodes** (`packages/tatolab-core-nodes`, #3663) holds 75 nodes in ten groups, each with
+- **Core Nodes** (`packages/tatolab-core-nodes`, #3663) holds 74 nodes in ten groups, each with
   `category=` and `description=`, two streams and the Program view. Its `core_nodes/` holds its own
   copy of `tatolab-ops`'s 29 function nodes and `ImageFile`. It requires `tatolab-stream`,
   `numba`, `numpy` and `pillow`, the same third-party set `tatolab-ops` requires, which the unit
   already carries as wheels (offline-new-projects).
-- **The engine knows one `tatolab-ops` name**, `FEEDBACK_FUNCTION_NODE_TYPE = "tatolab.ops:Feedback"`
-  (`core/compiler/compiler_ops/function_node_island.rs:91`), by which a loop through a Feedback
-  node is let close. Core Nodes' own `Feedback` has another type name, so it closes no loop.
+- **The engine knew one `tatolab-ops` name**, `tatolab.ops:Feedback`, by which the compiler let
+  a loop of function nodes close. The evaluator never read the name: it reads any input whose
+  source is ordered after it from the last evaluation.
 - **The catalog already serves `category` and `description`** per node type
   (`list_project_node_types`, `streamlib-control-contract/src/control_operations.rs:1239`).
 - **`tatolab-ops` is named in** the unit's stage list, `release-version-files.json`, three
@@ -128,19 +128,29 @@ project, not wheel, the runtime unit gives to every project.
   unit and an import of every project, built exactly the way a third party builds a project, so
   the runtime still ships no node of its own. The node list in the entry becomes Core Nodes'
   groups.
-- **The one name the engine knows.** **[NEEDS DECISION 2]** `FEEDBACK_FUNCTION_NODE_TYPE` is
-  `tatolab.ops:Feedback`, which this change deletes, and Core Nodes' own `Feedback` matches no
-  name the engine holds. The owner ruled out a mark on the decorator and any name or rule for a
-  core node (project thread, 2026-11-13: "Every type of node we build or any operation we do
-  should be accessible to other builders and 3rd party modules"); the plan already rejects a
-  `delay=True` flag, any stateful node closing a loop, and the engine inserting the delay
-  (`ARCHITECTURE.md:2099-2100`). The evaluator already reads any input from the last evaluation
-  when its source is ordered after it (`sdk/streamlib-python-wheel/src/python_function_node_island.rs:1155-1160`);
-  only the compiler's three checks look for the name (`function_node_island.rs:817`, `:941`,
-  `:975`). Options put to the owner, each removing the `Feedback` node: (a) the delay is a
-  property of a link, set by whoever wires it, and a cycle is legal when one of its links holds
-  it (recommended); (b) a `GetVariable` upstream of its own `SetVariable` reads the last
-  evaluation. `tatolab-ops` is not deleted until this is settled.
+- **A loop of function nodes** (`ARCHITECTURE.md:2087-2088`, `:2069-2070`, `:2099-2100`). "A
+  cycle is refused by name unless it closes through `Feedback`" becomes: the compiler closes any
+  loop of function nodes itself. It walks the function nodes depth first down their links, from
+  each node no other function node feeds, in the order of the node ids the stream graph file
+  holds, and a link pointing back at a node the walk is still below is read as it was at the
+  last evaluation, 0 at the first. A node linked into itself reads its own last output. `graph`
+  renders that link with `"reads_the_last_evaluation": true`, so the one link of a loop read a
+  step late is always shown. The engine knows no node type by name, and `Feedback` leaves Core
+  Nodes: the walk treats a third party's node as it treats ours. Owner, 2026-11-13, project
+  thread: "any node that gets linked up we can do more to help out … These are things it can
+  understand from the graph and they shouldn't be special or hardcoded for particular nodes",
+  and of the 2026-11-08 rejection, "that discussion involved invisible insertions … What I
+  wanted to prevent was hidden abstractions".
+  Rejected: a mark on `@node.function` naming a node that closes a loop — a decorator attribute
+  is one more thing a person or an agent must know to write a node (owner, 2026-11-13).
+  Rejected: the engine knowing a core node by name or by rule — every node and operation is one a
+  third party can build (owner, 2026-11-13).
+  The rejection at `ARCHITECTURE.md:2099-2100` narrows to: a `delay=True` flag on
+  `@node.function`, or the engine adding a node or a delay the stream graph does not show.
+  Assumed (session, 2026-11-13): no node is inserted, since the marked link shows the delay; a
+  loop's first evaluation reads the number 0 whatever the link carries; when a loop is entered
+  at two nodes, the link read late is the one the walk order gives, and adding a link into the
+  loop from a third node can move it.
 - **The function node compile entry** (`ARCHITECTURE.md:2053`, `:2059`): "`tatolab-ops`' included"
   reads "Core Nodes' included".
 - **The import entry's first-party clause** (`ARCHITECTURE.md:2250-2256`): the unit carries its
@@ -196,12 +206,12 @@ served to the app wherever the import is named.
 
 ## Tickets
 
-Decision 1 is the owner's and decision 2 is open; 3 and 4 were put to the owner in the project
-thread as assumptions and are built as recommended. The cut, each a tracer bullet:
+Decisions 1 and 2 are the owner's; 3 and 4 were put to the owner in the project thread as
+assumptions and are built as recommended. The cut, each a tracer bullet:
 
 1. The unit carries the core project, and a project loads with it as an import: node types
    listed, a node placed and run, Program listed and served. `tatolab-ops` still ships.
-2. A loop of function nodes closes as decision 2 settles.
+2. The compiler closes a loop of function nodes by its walk, and `Feedback` leaves Core Nodes.
 3. `tatolab-ops` is deleted everywhere the REMOVED list names, and the plan entries are rewritten.
 
 ## Consumers
