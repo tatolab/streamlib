@@ -68,24 +68,19 @@ project, not wheel, the runtime unit gives to every project.
   `tatolab-project.json`, `pyproject.toml`, `nodes/`, `views/` and `streams/`, and nothing its
   tests or a run of it wrote. `cargo xtask build-runtime` stages it; a unit without it fails
   the build.
-- **Core Nodes is an import of every project.** **[NEEDS DECISION 1]** how it reaches a project:
-  - **A. Linked from the unit, never copied (recommended).** At each load the runtime links the
-    unit's copy at `.tatolab/core-imports/core-nodes` and treats it as an import of the project
-    under the reserved folder `core-nodes`, after the imports the project file lists. The project
-    file does not list it and history does not record it, as with the first-party wheels today.
-    Every project, a year-old one included, gets each release's nodes and fixes with no step and
-    no transaction, and one copy serves every project on the machine. A project folder zipped to
-    a machine with another runtime version opens with that runtime's Core Nodes.
-  - **B. Copied into `imports/core-nodes/` at create.** The project is self-contained to the
-    letter: the copy is in history and travels in a zip. Each release then replaces the folder in
-    every project at its next load, as one transaction by the runtime, the way a first-party
-    package below the runtime's version is moved today
-    (`project_first_party_packages_moved_to_the_runtime_version.rs`), and a project keeps about
-    forty files it did not write in its history.
-  A is the rule the plan already holds for what the runtime owns ("the runtime unit carries its
-  first-party modules … never copied into a project", `ARCHITECTURE.md:2250`); B is the rule it
-  holds for what a person imports. The rest of this change is written for A.
-- **How a Core Nodes node is named.** **[NEEDS DECISION 4]** A stream document stores a node's
+- **Core Nodes is an import of every project, linked from the unit and never copied** (owner,
+  2026-11-13, on the decision card "Choose how Core Nodes gets into every project": "Linked from
+  the runtime"). At each load the runtime links the unit's copy at
+  `.tatolab/core-imports/core-nodes` and treats it as an import of the project under the reserved
+  folder `core-nodes`, after the imports the project file lists. The project file does not list
+  it and history does not record it, as with the first-party wheels today. Every project, a
+  year-old one included, gets each release's nodes and fixes with no step and no transaction, and
+  one copy serves every project on the machine. A project folder zipped to a machine with
+  another runtime version opens with that runtime's Core Nodes.
+  Rejected: copying Core Nodes into `imports/core-nodes/` at create and replacing the folder at
+  each release — a release would reach a project only through a transaction per project, and
+  each project's history would hold files its person did not write (owner, 2026-11-13).
+- **How a Core Nodes node is named.** **[NEEDS DECISION 4, built as (a) until the owner says otherwise (session, 2026-11-13)]** A stream document stores a node's
   type as a string, for good.
   - **(a) The import spelling, unchanged (recommended):** `imports/core-nodes/nodes.color:Tint`,
     led by the reserved folder as any import's type is. No new naming rule and no second
@@ -118,7 +113,7 @@ project, not wheel, the runtime unit gives to every project.
   groups.
 - **The one name the engine knows.** `FEEDBACK_FUNCTION_NODE_TYPE` becomes
   `imports/core-nodes/nodes.logic:Feedback` under a project that imports Core Nodes.
-  **[NEEDS DECISION 2]** Core Nodes opened on its own names the node `nodes.logic:Feedback`, which
+  **[NEEDS DECISION 2, built as (a) until the owner says otherwise (session, 2026-11-13)]** Core Nodes opened on its own names the node `nodes.logic:Feedback`, which
   that constant does not match. Options: (a) the engine knows Feedback by a mark its declaration
   carries, `@node.function(closes_a_loop=True)`, read from source as `category` is, so any
   project's node may close a loop and no type name is known to the engine (recommended); (b) the
@@ -131,7 +126,7 @@ project, not wheel, the runtime unit gives to every project.
   `packages/tatolab-ops`; a second stage step copies the core project.
 - **`HoldFrame`.** Core Nodes carries it as copied from `tatolab-ops`. It stays, in the Logic
   group, with the behaviour the DECIDED entry states.
-- **The starter stream.** **[NEEDS DECISION 3]** A new project's one stream is `TestPatternSource`
+- **The starter stream.** **[NEEDS DECISION 3, built as (a) until the owner says otherwise (session, 2026-11-13)]** A new project's one stream is `TestPatternSource`
   alone (first-party-package-index). Options: (a) leave it (recommended for this change: the
   starter is a separate question from what Add node offers); (b) the starter becomes `SolidColor` into `Noise`,
   moved by a `Timer`, into Program, so a new project opens on something moving in a view;
@@ -176,7 +171,8 @@ served to the app wherever the import is named.
 
 ## Tickets
 
-Not derived until the four decisions above are settled. The expected cut, each a tracer bullet:
+Decision 1 is the owner's; 2, 3 and 4 were put to the owner in the project thread as assumptions
+and are built as recommended. The cut, each a tracer bullet:
 
 1. The unit carries the core project, and a project loads with it as an import: node types
    listed, a node placed and run, Program listed and served. `tatolab-ops` still ships.
