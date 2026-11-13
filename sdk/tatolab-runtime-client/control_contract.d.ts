@@ -3576,6 +3576,11 @@ export interface OpenViewerToolResult {
    */
   channel: string;
   /**
+   * The iceoryx2 notify service the port's node notifies on each write, whose one listener the
+   * viewer takes, so it waits for a message rather than reading on a timer.
+   */
+  wake_service: string;
+  /**
    * Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
    * Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
    * named no `viewer_process_id`, since the service admits only a named process.
@@ -4747,7 +4752,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root` and the `channel` whose reserved subscriber slot the viewer takes from its own process. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */

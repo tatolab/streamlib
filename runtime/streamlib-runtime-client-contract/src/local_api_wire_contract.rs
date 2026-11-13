@@ -539,6 +539,9 @@ pub struct OpenViewerToolResult {
     pub iceoryx2_domain_root: String,
     /// The port's channel: the iceoryx2 service whose reserved subscriber slot the viewer takes.
     pub channel: String,
+    /// The iceoryx2 notify service the port's node notifies on each write, whose one listener the
+    /// viewer takes, so it waits for a message rather than reading on a timer.
+    pub wake_service: String,
     /// Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
     /// Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
     /// named no `viewer_process_id`, since the service admits only a named process.
