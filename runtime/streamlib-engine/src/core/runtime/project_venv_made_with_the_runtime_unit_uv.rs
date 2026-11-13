@@ -690,6 +690,7 @@ fn the_escaped_distribution_name_of_the_module_wheel(module_wheel: &Path) -> Opt
 
 /// Write into the project's `.venv` what it is synced from now, so a load
 /// finding the same runs no uv.
+#[cfg(test)]
 pub(crate) fn record_the_venv_synced_with_what_the_project_holds_now(
     project_directory: &Path,
     packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
@@ -830,8 +831,9 @@ fn the_file_url_of(directory: &Path) -> String {
 }
 
 /// `uv sync` in `project_directory`, then the stamp naming what it was made
-/// from, taken after the sync since it may write `uv.lock`, and left unwritten
-/// when a file uv reads changed while it synced, so the next load syncs again;
+/// from, taken after the sync since it may write `uv.lock` and before the files
+/// uv reads are compared with what they held as it began, and left unwritten
+/// when one changed, so the next load syncs again;
 /// refused in uv's own words. When the unit carries a Python it is installed first, and when it carries wheels
 /// the sync runs offline first and reaches an index only when that fails.
 fn sync_the_venv_with_the_runtime_unit_uv(
@@ -940,6 +942,9 @@ fn sync_the_venv_with_the_runtime_unit_uv(
         });
     }
     tracing::info!("`uv sync` made {}", venv.display());
+    let stamp = venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME);
+    let sync_stamp_after_the_sync =
+        the_venv_sync_stamp_of(project_directory, packages_the_runtime_unit_carries);
     let what_uv_reads_now = the_venv_sync_stamp_with_the_lock_file(
         project_directory,
         packages_the_runtime_unit_carries,
@@ -951,7 +956,6 @@ fn sync_the_venv_with_the_runtime_unit_uv(
             "a file uv syncs the venv from changed while it synced, so the venv is left \
              unstamped and its next load syncs it again"
         );
-        let stamp = venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME);
         if let Err(not_removed) = std::fs::remove_file(&stamp)
             && not_removed.kind() != std::io::ErrorKind::NotFound
         {
@@ -963,10 +967,9 @@ fn sync_the_venv_with_the_runtime_unit_uv(
         }
         return Ok(());
     }
-    if let Err(not_written) = record_the_venv_synced_with_what_the_project_holds_now(
-        project_directory,
-        packages_the_runtime_unit_carries,
-    ) {
+    if let Some(sync_stamp_after_the_sync) = sync_stamp_after_the_sync
+        && let Err(not_written) = std::fs::write(&stamp, sync_stamp_after_the_sync)
+    {
         tracing::warn!(
             venv = %venv.display(),
             %not_written,
