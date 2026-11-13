@@ -123,10 +123,14 @@ project, not wheel, the runtime unit gives to every project.
   `pyproject.toml` names Core Nodes at its own `imports/core-nodes`, as the runtime that last
   opened that project wrote it, so each time the runtime makes, syncs or locks a `.venv` it
   also links Core Nodes into each import and each import nested in one; every link stands at
-  the one directory, and uv resolves them as one project. Assumed (session, 2026-11-13), built
-  after the owner asked what a project zipped by hand does: without it uv refuses the
+  the one directory, and uv resolves them as one project. Without it uv refuses the
   importing project's environment, "Distribution not found" when the zip kept the link and
-  "conflicting URLs" when it followed it.
+  "conflicting URLs" when it followed it. (owner, 2026-11-13)
+- **A recorded import that declares the distribution `tatolab-core-nodes` is refused.** A fork
+  or a copy of Core Nodes imported under another folder is a second project of the one
+  distribution, and the runtime answers `ImportsDeclareOneDistribution`, as for any two imports
+  of one distribution. (owner, 2026-11-13: refused for now; a project forking specific nodes of
+  Core Nodes for itself is a later change the owner may take up.)
 - **Opening Core Nodes itself.** `packages/tatolab-core-nodes` opened as a project is the listed
   project, so the runtime adds no import of Core Nodes to it, and its node types are its own
   (`core_nodes.color:Tint`).
