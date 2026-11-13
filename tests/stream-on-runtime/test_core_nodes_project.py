@@ -53,7 +53,7 @@ LINKS_OUT_OF_ONE_CANVAS = 16
 def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
     """Each shader node type of the project with the inputs of its signature, in order."""
     signature_inputs_by_node_type: "dict[str, list[dict[str, Any]]]" = {}
-    for module_path in sorted((CORE_NODES_PROJECT_DIRECTORY / "nodes").glob("*.py")):
+    for module_path in sorted((CORE_NODES_PROJECT_DIRECTORY / "core_nodes").glob("*.py")):
         if "@node.shader" not in module_path.read_text(encoding="utf-8"):
             continue
         spec = importlib.util.spec_from_file_location(
@@ -65,7 +65,7 @@ def shader_nodes_the_project_declares() -> "dict[str, list[dict[str, Any]]]":
         for name, member in vars(module).items():
             signature = getattr(member, "__tatolab_node_shader_signature__", None)
             if signature is not None and member.__module__ == module.__name__:
-                signature_inputs_by_node_type[f"nodes.{module_path.stem}:{name}"] = signature[
+                signature_inputs_by_node_type[f"core_nodes.{module_path.stem}:{name}"] = signature[
                     "inputs"
                 ]
     return signature_inputs_by_node_type
@@ -89,7 +89,7 @@ def a_stream_of_canvases_into_one_of_each_shader_node() -> "dict[str, Any]":
                 {
                     "id": canvas_id,
                     "name": f"canvas_before_{node_type.rsplit(':', 1)[1].lower()}",
-                    "type": "nodes.solid_color:SolidColor",
+                    "type": "core_nodes.solid_color:SolidColor",
                     "config": {"width": 64, "height": 36},
                 }
             )

@@ -48,13 +48,13 @@ PROGRAM_VIEW_TYPE = "Core Nodes:program"
 def every_declared_node() -> dict[str, Any]:
     declared: dict[str, Any] = {}
     for module_name in NODE_MODULES:
-        module = importlib.import_module(f"nodes.{module_name}")
+        module = importlib.import_module(f"core_nodes.{module_name}")
         for name, member in vars(module).items():
             if (
                 getattr(member, "__tatolab_node_declared__", False)
                 and member.__module__ == module.__name__
             ):
-                declared[f"nodes.{module_name}:{name}"] = member
+                declared[f"core_nodes.{module_name}:{name}"] = member
     return declared
 
 

@@ -18,7 +18,7 @@ tatolab dev
 
 ## What it holds
 
-`nodes/` is one module per group the Add node search lists.
+`core_nodes/` is one module per group the Add node search lists. The package is not named `nodes`, since one interpreter holds one module per top-level name and every project that uses these nodes may hold a `nodes/` of its own.
 
 | Group | Module | Nodes |
 | --- | --- | --- |
