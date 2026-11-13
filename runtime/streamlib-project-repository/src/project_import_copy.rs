@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::core_project_import::is_at_or_inside_a_core_project_import_folder;
 use crate::project_asset::{DIRECTORIES_A_PROJECT_SCAN_SKIPS, PROJECT_IMPORTS_DIRECTORY};
 use crate::project_file::{PROJECT_FILE_NAME, TatolabProjectFile};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
@@ -57,7 +58,8 @@ pub(crate) fn version_of_the_copied_files(
 /// `project_directory`: `source` is a project folder or a `.zip` of one, a GitHub archive's
 /// one top folder included, by absolute path. What is copied is every file its history would
 /// record and every asset file it holds, its own `imports/` included, never a hidden folder such
-/// as its `.tatolab/`, a cache, a Python virtual environment or a symbolic link. Refused, nothing
+/// as its `.tatolab/`, a cache, a Python virtual environment, a symbolic link or anything at
+/// `imports/core-nodes`, which the runtime that opens the copy links itself. Refused, nothing
 /// left behind, when the source holds no `tatolab-project.json` naming a project UUID.
 pub(crate) fn stage_a_copy_of_the_project_source(
     project_directory: &Path,
@@ -185,7 +187,8 @@ pub(crate) fn sha256_of_each_file_under(
 }
 
 /// Every file under `directory` an import carries, relative and sorted: each regular file
-/// outside a hidden folder, a folder a project scan skips and a Python virtual environment.
+/// outside a hidden folder, a folder a project scan skips, a Python virtual environment and
+/// the folder the runtime links the core project at.
 pub(crate) fn files_an_import_carries(
     directory: &Path,
 ) -> Result<Vec<String>, ProjectRepositoryRefusal> {
@@ -203,6 +206,7 @@ pub(crate) fn files_an_import_carries(
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
                 if is_a_folder_an_import_carries(&name)
+                    && !is_at_or_inside_a_core_project_import_folder(&relative)
                     && !entry.path().join(PYVENV_CONFIG_FILE_NAME).exists()
                 {
                     directories_to_read.push((entry.path(), relative));
@@ -377,7 +381,14 @@ fn extract_the_project_archive(
             .any(|environment| entry_path.starts_with(environment));
         let is_finder_metadata =
             !is_a_file_an_import_carries(&inside_the_project.to_string_lossy());
-        if in_a_folder_no_import_carries || in_a_virtual_environment || is_finder_metadata {
+        let in_the_core_project_folder = is_at_or_inside_a_core_project_import_folder(
+            &inside_the_project.to_string_lossy().replace('\\', "/"),
+        );
+        if in_a_folder_no_import_carries
+            || in_a_virtual_environment
+            || is_finder_metadata
+            || in_the_core_project_folder
+        {
             continue;
         }
         let destination = staging_directory.join(inside_the_project);

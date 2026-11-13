@@ -338,3 +338,25 @@ fn a_relative_project_directory_or_source_is_refused() {
         ProjectRepositoryRefusal::ImportSourceNotAnAbsolutePath { .. }
     ));
 }
+
+#[test]
+fn a_zip_that_followed_the_link_to_core_nodes_unpacks_without_the_copy() {
+    let zipped = ZippedProject::zipped_under(None);
+    let zipped_project_directory = zipped.root.path().join("robot-cell");
+    let core_nodes_copy = zipped_project_directory.join("imports/core-nodes");
+    std::fs::create_dir_all(core_nodes_copy.join("core_nodes")).unwrap();
+    std::fs::write(core_nodes_copy.join("tatolab-project.json"), b"{}").unwrap();
+    std::fs::write(core_nodes_copy.join("core_nodes/color.py"), b"").unwrap();
+    zip_the_folder(&zipped_project_directory, &zipped.archive(), None);
+    let project_directory = zipped.a_new_project_directory("cell");
+
+    ProjectRepository::import_from_a_project_archive(
+        &project_directory,
+        &zipped.source(),
+        &a_person(),
+    )
+    .unwrap();
+
+    assert!(project_directory.join("streams/main.graph.json").is_file());
+    assert!(!project_directory.join("imports").exists());
+}

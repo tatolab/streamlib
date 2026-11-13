@@ -1200,3 +1200,96 @@ fn a_project_the_runtime_opens_is_handed_its_lock() {
         "{refusal}"
     );
 }
+
+#[test]
+fn a_copy_of_core_nodes_inside_the_source_is_never_copied_from_a_folder_or_a_zip() {
+    for from_a_zip in [false, true] {
+        let mut imports = CellImportingArm::new();
+        let core_nodes_in_the_arm = imports.arm.directory().join("imports/core-nodes");
+        std::fs::create_dir_all(core_nodes_in_the_arm.join("core_nodes")).unwrap();
+        std::fs::write(core_nodes_in_the_arm.join("pyproject.toml"), b"[project]\n").unwrap();
+        std::fs::write(core_nodes_in_the_arm.join("core_nodes/color.py"), b"").unwrap();
+        let source = if from_a_zip {
+            let archive = imports.root.path().join("robot-arm.zip");
+            zip_the_folder(&imports.arm.directory(), &archive, None);
+            archive
+        } else {
+            imports.arm.directory()
+        };
+
+        imports
+            .cell
+            .repository
+            .add_dependency(&a_person(), None, &source.display().to_string(), None)
+            .unwrap()
+            .into_applied_transaction();
+
+        let import_folder = imports.cell.directory().join("imports/robot-arm");
+        assert!(import_folder.join("streams/main.graph.json").is_file());
+        assert!(
+            !import_folder.join("imports").exists(),
+            "from_a_zip: {from_a_zip}"
+        );
+        let import = imports
+            .cell
+            .repository
+            .import(imports.arm.project())
+            .unwrap();
+        assert!(
+            import
+                .copied_files
+                .keys()
+                .all(|path| !path.starts_with("imports/")),
+            "from_a_zip: {from_a_zip}"
+        );
+    }
+}
+
+#[test]
+fn the_link_to_core_nodes_the_runtime_makes_in_an_import_is_no_edit_of_it() {
+    let mut imports = CellImportingArm::new();
+    imports.import_the_arm();
+    let core_nodes_the_runtime_carries = imports.root.path().join("unit/core-nodes");
+    std::fs::create_dir_all(&core_nodes_the_runtime_carries).unwrap();
+    std::fs::write(
+        core_nodes_the_runtime_carries.join("tatolab-project.json"),
+        std::fs::read(imports.arm.directory().join("tatolab-project.json")).unwrap(),
+    )
+    .unwrap();
+    let core_nodes_project = Uuid::new_v4();
+    let mut core_nodes_project_file: Value = serde_json::from_slice(
+        &std::fs::read(core_nodes_the_runtime_carries.join("tatolab-project.json")).unwrap(),
+    )
+    .unwrap();
+    core_nodes_project_file["project"] = json!(core_nodes_project);
+    std::fs::write(
+        core_nodes_the_runtime_carries.join("tatolab-project.json"),
+        core_nodes_project_file.to_string(),
+    )
+    .unwrap();
+
+    streamlib_project_repository::link_the_core_project_into_each_import_of(
+        &imports.cell.directory(),
+        &core_nodes_the_runtime_carries,
+    )
+    .unwrap();
+
+    let import_folder = imports.cell.directory().join("imports/robot-arm");
+    assert_eq!(
+        std::fs::read_link(import_folder.join("imports/core-nodes")).unwrap(),
+        core_nodes_the_runtime_carries
+    );
+    let import = imports
+        .cell
+        .repository
+        .import(imports.arm.project())
+        .unwrap();
+    assert!(
+        imports
+            .cell
+            .repository
+            .files_edited_in_the_import(&import)
+            .unwrap()
+            .is_empty()
+    );
+}

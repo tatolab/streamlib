@@ -13,9 +13,11 @@ shader compiles, binds and dispatches with no stream kept in the project for it.
 
 import importlib.util
 import json
+import os
 import shutil
 import time
 import uuid
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -375,3 +377,147 @@ def test_a_project_with_no_node_of_its_own_places_core_nodes_from_the_runtimes_c
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     assert "shader node wrote no frame" not in stderr_text, stderr_text
+
+
+#: What a person leaves out of a zip of a project: what a run of it writes.
+NOT_ZIPPED_WITH_A_PROJECT = {".venv", ".tatolab", "__pycache__"}
+
+
+def write_a_project_placing_core_nodes(
+    project_directory: Path, project_name: str
+) -> None:
+    (project_directory / "streams").mkdir(parents=True)
+    write_the_project_file_unless_there(project_directory, project_name)
+    (project_directory / "pyproject.toml").write_text(
+        PYPROJECT_OF_A_PROJECT_WITH_NO_NODE_OF_ITS_OWN.replace(
+            'name = "a-show"', f'name = "{project_name}"'
+        ),
+        encoding="utf-8",
+    )
+    (project_directory / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (project_directory / "streams" / "main.graph.json").write_text(
+        json.dumps(a_stream_of_core_nodes_placed_from_the_runtimes_copy(), indent=2)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def a_zip_of_the_project_that_followed_its_links(
+    project_directory: Path, zip_path: Path
+) -> Path:
+    """`project_directory` zipped under its own name, each link in it written as the files it
+    leads to: what `zip -r` and a file manager's compress make."""
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
+        for folder, folder_names, file_names in os.walk(
+            project_directory, followlinks=True
+        ):
+            folder_names[:] = [
+                name for name in folder_names if name not in NOT_ZIPPED_WITH_A_PROJECT
+            ]
+            for file_name in file_names:
+                file_path = Path(folder) / file_name
+                archive.write(
+                    file_path, file_path.relative_to(project_directory.parent)
+                )
+    return zip_path
+
+
+def streams_of_the_project(
+    tatolabd: TatolabdUnderTest, project_directory: Path
+) -> "list[dict[str, Any]]":
+    return [
+        listed
+        for listed in tatolabd.local_api_client().list_streams()
+        if listed["location"]["project_directory"] == str(project_directory)
+    ]
+
+
+def test_a_zip_of_an_opened_project_is_imported_and_unpacked_without_its_core_nodes(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+    tmp_path: Path,
+):
+    opened_project_directory = tmp_path / "a-show"
+    write_a_project_placing_core_nodes(opened_project_directory, "a-show")
+    tatolabd = start_tatolabd_running_stream(
+        TatolabRunOfAProject(working_directory=opened_project_directory)
+    )
+    ended_load = tatolabd.stream_runs[-1].action_once_ended(
+        timeout=PROJECT_LOAD_TIMEOUT_SECONDS
+    )
+    assert ended_load["state"] == "done", ended_load
+    assert (opened_project_directory / CORE_NODES_IMPORT_FOLDER).is_symlink()
+    zip_path = a_zip_of_the_project_that_followed_its_links(
+        opened_project_directory, tmp_path / "a-show.zip"
+    )
+    with zipfile.ZipFile(zip_path) as archive:
+        assert (
+            f"a-show/{CORE_NODES_IMPORT_FOLDER}/tatolab-project.json"
+            in archive.namelist()
+        ), "the zip carries a copy of Core Nodes"
+
+    importing_project_directory = tmp_path / "a-rig"
+    write_a_project_placing_core_nodes(importing_project_directory, "a-rig")
+    tatolabd.run_stream(
+        TatolabRunOfAProject(working_directory=importing_project_directory)
+    )
+    ended_load = tatolabd.stream_runs[-1].action_once_ended(
+        timeout=PROJECT_LOAD_TIMEOUT_SECONDS
+    )
+    assert ended_load["state"] == "done", ended_load
+
+    local_api = tatolabd.local_api_client()
+    local_api.call_tool(
+        "add_dependency",
+        {
+            "project_directory": str(importing_project_directory),
+            "source": str(zip_path),
+        },
+    )
+    core_nodes_in_the_import = (
+        importing_project_directory / "imports" / "a-show" / CORE_NODES_IMPORT_FOLDER
+    )
+    assert core_nodes_in_the_import.is_symlink(), (
+        "the import's Core Nodes is the runtime's link, never the zip's copy"
+    )
+    assert (
+        core_nodes_in_the_import.resolve()
+        == (importing_project_directory / CORE_NODES_IMPORT_FOLDER).resolve()
+    )
+    node_types_listed = json.dumps(
+        local_api.call_tool(
+            "list_project_node_types",
+            {"project_directory": str(importing_project_directory)},
+        )
+    )
+    assert (
+        node_types_listed.count(f'"{CORE_NODES_IMPORT_FOLDER}/core_nodes.color:Tint"')
+        == 1
+    ), node_types_listed
+    [importing_stream] = streams_of_the_project(tatolabd, importing_project_directory)
+    assert importing_stream["failed_because"] is None, importing_stream
+
+    unpacked_project_directory = tmp_path / "unpacked-show"
+    local_api.call_tool(
+        "import_project",
+        {"source": str(zip_path), "project_directory": str(unpacked_project_directory)},
+    )
+    assert not (unpacked_project_directory / CORE_NODES_IMPORT_FOLDER).exists()
+    tatolabd.run_stream(
+        TatolabRunOfAProject(working_directory=unpacked_project_directory)
+    )
+    ended_load = tatolabd.stream_runs[-1].action_once_ended(
+        timeout=PROJECT_LOAD_TIMEOUT_SECONDS
+    )
+    assert ended_load["state"] == "done", ended_load
+    assert (unpacked_project_directory / CORE_NODES_IMPORT_FOLDER).is_symlink()
+    [unpacked_stream] = streams_of_the_project(tatolabd, unpacked_project_directory)
+    assert unpacked_stream["failed_because"] is None, unpacked_stream
+    await_evaluations_of(
+        tatolabd,
+        unpacked_stream["stream"],
+        {"tint"},
+        at_least=EVALUATIONS_SHOWING_A_STREAM_KEEPS_RUNNING,
+    )
+
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
