@@ -13,7 +13,7 @@ from tatolab.stream import Output, Records, RuntimeContextLimitedAccess, node
 class LowerThirdTitleTickerConfig:
     """What a `LowerThirdTitleTicker` is configured with."""
 
-    property_path: Annotated[str, "The view-model string property each title is assigned to."]
+    property_path: Annotated[str, "The view-model string property each title is assigned to."] = "title"
     entrance_trigger_paths: Annotated[
         "list[str]", "View-model triggers fired, in order, with the first title, to bring the card in."
     ] = dataclasses.field(default_factory=list)

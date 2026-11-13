@@ -3,17 +3,18 @@
 
 """The Image reader `test_graph_variables.py` reads a variable with, twice."""
 
+import dataclasses
 import json
 import os
-from typing import TypedDict
 
 from tatolab.stream import Image, Input, log, node
 
 READ_MARKER_PREFIX = "MARKER:GRAPH_VARIABLE_READ_"
 
 
-class ImageVariableReaderConfig(TypedDict):
-    reader: str
+@dataclasses.dataclass
+class ImageVariableReaderConfig:
+    reader: str = "reader"
 
 
 @node.process
@@ -23,7 +24,7 @@ class ImageVariableReader:
     image_from_the_variable = Input(Image, delivery="ordered")
 
     def __init__(self, config: ImageVariableReaderConfig) -> None:
-        self.reader = config["reader"]
+        self.reader = config.reader
         self.reported = False
 
     def process(self, ctx) -> None:

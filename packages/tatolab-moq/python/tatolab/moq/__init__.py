@@ -14,7 +14,7 @@ other over iceoryx2 shared memory, and only the gateway touches the network.
 from __future__ import annotations
 
 import dataclasses
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypeVar
 
 from tatolab.stream import (
     Array,
@@ -63,10 +63,19 @@ GATEWAY_CATALOG_TRACK_NAMES = ("catalog.json", "catalog.json.z")
 MoqGatewayRelayKind = Literal["moq-relay", "cloudflare", "moqpro"]
 MoqTrackReceiveFamily = Literal["packets", "records"]
 
+_ConfigValue = TypeVar("_ConfigValue")
+
 
 def _refuse_a_value_that_is_not_a_str(node_type: str, key: str, value: object) -> None:
     if value is not None and (not isinstance(value, str) or not value):
         raise ValueError(f"{node_type}: `{key}` is {value!r}; it takes a non-empty str")
+
+
+def _set_or_refused(node_type: str, key: str, value: "_ConfigValue | None", what_it_takes: str) -> "_ConfigValue":
+    """`value`, or a refusal naming `key` when a node placed with its defaults left it unset."""
+    if value is None:
+        raise ValueError(f"{node_type}: `{key}` is not set; it takes {what_it_takes}")
+    return value
 
 
 @dataclasses.dataclass
@@ -180,9 +189,14 @@ class MoqTrackConfig:
     """Which gateway's broadcast a `MoqTrack` is a track of, and its name there."""
 
     gateway: Annotated[
-        "NodeReferenceToNodeType[MoqGateway]", "The gateway whose broadcast carries the track."
-    ]
-    track: Annotated["str", "The track's name in the broadcast, cast to URL-safe characters."]
+        "NodeReferenceToNodeType[MoqGateway] | None",
+        "The gateway whose broadcast carries the track; the node fails, naming `gateway`, until it is set.",
+    ] = None
+    track: Annotated[
+        "str | None",
+        "The track's name in the broadcast, cast to URL-safe characters; the node fails, "
+        "naming `track`, until it is set.",
+    ] = None
     catalog: Annotated[
         "dict[str, Any] | None",
         "The track's catalog entry, `{\"section\": ..., \"entry\": {...}}` in hang's layout, "
@@ -191,9 +205,9 @@ class MoqTrackConfig:
     ] = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.track, str) or not self.track:
-            raise ValueError(f"MoqTrack: `track` is {self.track!r}; it takes a non-empty str")
-        self.track = cast_exposed_name_to_url_safe(self.track)
+        _refuse_a_value_that_is_not_a_str("MoqTrack", "track", self.track)
+        if self.track is not None:
+            self.track = cast_exposed_name_to_url_safe(self.track)
         if self.track in GATEWAY_CATALOG_TRACK_NAMES:
             raise ValueError(
                 f"MoqTrack: `track` is {self.track!r}, a name the gateway writes its catalog on"
@@ -233,8 +247,8 @@ class MoqTrack:
             runtime_id=ctx.runtime_id,
             stream_id=ctx.stream_id,
             track_node=ctx.node_name,
-            gateway_node=self._config.gateway.name,
-            track=self._config.track,
+            gateway_node=_set_or_refused("MoqTrack", "gateway", self._config.gateway, "a `MoqGateway`").name,
+            track=_set_or_refused("MoqTrack", "track", self._config.track, "the track's name"),
             catalog_entry=self._config.catalog,
         )
 
@@ -258,9 +272,9 @@ class MoqTrackSendConfig:
     """Which track a `MoqTrackSend` writes to."""
 
     track: Annotated[
-        "SoleReferrerNodeReferenceToNodeType[MoqTrack]",
-        "The track to write to; no other send names it.",
-    ]
+        "SoleReferrerNodeReferenceToNodeType[MoqTrack] | None",
+        "The track to write to; no other send names it, and the node fails, naming `track`, until it is set.",
+    ] = None
 
 
 @node.process(
@@ -297,7 +311,7 @@ class MoqTrackSend:
             ctx.open_module_host_table(),
             runtime_id=ctx.runtime_id,
             stream_id=ctx.stream_id,
-            track_node=self._config.track.name,
+            track_node=_set_or_refused("MoqTrackSend", "track", self._config.track, "a `MoqTrack`").name,
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -328,18 +342,23 @@ class MoqTrackReceiveConfig:
     """Which track a `MoqTrackReceive` reads, and what family it writes it as."""
 
     gateway: Annotated[
-        "NodeReferenceToNodeType[MoqGateway]", "The gateway whose connection reads the track."
-    ]
+        "NodeReferenceToNodeType[MoqGateway] | None",
+        "The gateway whose connection reads the track; the node fails, naming `gateway`, until it is set.",
+    ] = None
     broadcast: Annotated[
-        "str",
+        "str | None",
         "The broadcast's path at the relay, exactly as its publisher wrote it; a "
-        "`MoqGateway`'s is `<broadcast>.hang`.",
-    ]
-    track: Annotated["str", "The track of `broadcast`, exactly as its publisher named it."]
+        "`MoqGateway`'s is `<broadcast>.hang`. The node fails, naming `broadcast`, until it is set.",
+    ] = None
+    track: Annotated[
+        "str | None",
+        "The track of `broadcast`, exactly as its publisher named it; the node fails, naming `track`, "
+        "until it is set.",
+    ] = None
     family: Annotated[
         "MoqTrackReceiveFamily",
         "The family `content` carries: `packets` for encoded media, `records` for records.",
-    ]
+    ] = "records"
     codec: Annotated[
         "str | None",
         "`packets`: the codec the track's media frames are encoded with, e.g. `h264`.",
@@ -410,9 +429,9 @@ class MoqTrackReceive:
             runtime_id=ctx.runtime_id,
             stream_id=ctx.stream_id,
             receive_node=ctx.node_name,
-            gateway_node=self._config.gateway.name,
-            broadcast=self._config.broadcast,
-            track=self._config.track,
+            gateway_node=_set_or_refused("MoqTrackReceive", "gateway", self._config.gateway, "a `MoqGateway`").name,
+            broadcast=_set_or_refused("MoqTrackReceive", "broadcast", self._config.broadcast, "the broadcast's path at the relay"),
+            track=_set_or_refused("MoqTrackReceive", "track", self._config.track, "the track's name"),
             max_age_milliseconds=self._config.max_age,
             family=self._config.family,
             codec=self._config.codec,

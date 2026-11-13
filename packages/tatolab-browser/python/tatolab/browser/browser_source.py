@@ -56,7 +56,7 @@ class BrowserSourceConfig:
 
     url: Annotated[
         str, "The page to render: an http(s), file or data URL, or a file path inside the project."
-    ]
+    ] = "about:blank"
     width: Annotated[int, "The page's width in pixels, and each frame's."] = 1920
     height: Annotated[int, "The page's height in pixels, and each frame's."] = 1080
     frame_rate: Annotated[

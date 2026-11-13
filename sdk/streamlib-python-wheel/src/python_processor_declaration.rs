@@ -180,7 +180,7 @@ import dataclasses
 
 @dataclasses.dataclass
 class AudioConsumerConfig:
-    gain: float
+    gain: float = 1.0
     label: str = 'unlabelled'
 
 
@@ -200,7 +200,8 @@ class AudioConsumer:
         assert_eq!(document["properties"]["gain"]["type"], "number");
         assert_eq!(document["properties"]["label"]["type"], "string");
         assert_eq!(document["properties"]["label"]["default"], "unlabelled");
-        assert_eq!(document["required"], serde_json::json!(["gain"]));
+        assert_eq!(document["properties"]["gain"]["default"], 1.0);
+        assert!(document.get("required").is_none(), "{document}");
         assert_eq!(document["additionalProperties"], false);
     }
 
@@ -220,7 +221,7 @@ import typing
 
 @dataclasses.dataclass
 class AudioConsumerConfig:
-    gain: float
+    gain: float = 1.0
     label: str = 'unlabelled'
     fallback: typing.Optional[str] = None
 
@@ -247,8 +248,12 @@ class AudioConsumer:
             "unlabelled"
         );
         assert_eq!(
-            served["config_schema"]["required"],
-            serde_json::json!(["gain"])
+            served["config_schema"]["properties"]["gain"]["default"],
+            1.0
+        );
+        assert!(
+            served["config_schema"].get("required").is_none(),
+            "{served}"
         );
 
         // The null leg of the hop the document takes into Rust: a dropped key

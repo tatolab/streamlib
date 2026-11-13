@@ -101,7 +101,7 @@ def _workgroups_covering(pixels: int) -> int:
 class ShaderEffectConfig:
     """The look: a Slang `float4 effect(float4 source, int2 at)` function."""
 
-    effect_slang: str
+    effect_slang: str = "float4 effect(float4 source, int2 at) { return source; }"
 
 
 @node.process(description="Runs the Slang effect function its config carries over every frame")

@@ -132,8 +132,8 @@ smoke test is skipped where no GL context can be created.
 
 ## The physical-AI story: this graph is a data-collection rig
 
-Add the recorder (see Knobs) with `dataset_root` set to an absolute directory
-and the same graph records imitation-learning episodes while it runs.
+Add the recorder (see Knobs), with `dataset_root` set to a directory or left at
+`lerobot_dataset` in the project, and the same graph records imitation-learning episodes while it runs.
 
 One more node, `LeRobotRecorder`, in one more child process, reads three ports
 that all descend from the same camera frame — the raw view, the composited

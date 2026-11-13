@@ -235,6 +235,15 @@ def config_that_is_not_a_dataclass(x: float, config: dict) -> float:
     return x
 
 
+@dataclass(frozen=True)
+class ConfigWithoutADefault:
+    gain: float
+
+
+def config_without_a_default(x: float, config: ConfigWithoutADefault) -> float:
+    return x * config.gain
+
+
 def string_default(x: float, label: float = "loud") -> float:  # pyright: ignore[reportArgumentType]
     return x
 
@@ -260,6 +269,7 @@ def none_default_on_a_pin_that_is_not_optional(x: float = None) -> float:  # pyr
         (unsupported_input_type, "names no port family"),
         (state_without_defaults, "gives no default for value"),
         (config_that_is_not_a_dataclass, "one dataclass"),
+        (config_without_a_default, "config class ConfigWithoutADefault gives `gain` no default"),
         (string_default, "only a number or a bool pin takes a default"),
         (none_default_on_a_pin_that_is_not_optional, "defaults to `None` but is not typed optional"),
     ],

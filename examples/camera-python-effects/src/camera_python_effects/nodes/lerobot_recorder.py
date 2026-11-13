@@ -52,7 +52,7 @@ EPISODE_RECORD_NAMES = ("episode", "frames_recorded", "seconds_encoding")
 class LeRobotRecorderConfig:
     """LeRobotRecorder's settings, as its node's config in the graph document spells them."""
 
-    dataset_root: str
+    dataset_root: str = "lerobot_dataset"
     repo_id: str = "tatolab/camera-python-effects-poses"
     fps: int = 30
     episode_seconds: float = 10.0

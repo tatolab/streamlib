@@ -29,7 +29,7 @@ DATA_INPUT_PORT = "data"
 class RiveSourceConfig:
     """What a `RiveSource` is configured with."""
 
-    riv_path: Annotated[str, "The `.riv` file to play."]
+    riv_path: Annotated["str | None", "The `.riv` file to play; the node fails, naming `riv_path`, until it is set."] = None
     artboard: Annotated["str | None", "The artboard to play; the file's default when absent."] = None
     state_machine: Annotated[
         "str | None", "The artboard's state machine to play; its default when absent."
@@ -78,6 +78,8 @@ class RiveSource:
         The device and the renderer are built on that thread, so their start-up
         never spends the helper's start-up budget; it logs what it plays.
         """
+        if self._config.riv_path is None:
+            raise ValueError("RiveSource: `riv_path` is not set; it takes the `.riv` file to play")
         module_host_table = ctx.open_module_host_table(
             output_ports=[VIDEO_OUTPUT_PORT], input_ports=[DATA_INPUT_PORT]
         )

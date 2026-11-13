@@ -16,6 +16,7 @@ import pydantic
 import pytest
 
 from tatolab.stream import Description, NumberRange, node
+from tatolab.stream._node_config_schema import derive_config_class_json_schema
 
 # ---------------------------------------------------------------------------
 # The config classes the cases below are declared against
@@ -85,11 +86,11 @@ class RightConfig:
 
 def test_an_annotated_config_parameter_names_the_config_class():
     @node.process(execution="manual")
-    class Blur:
-        def __init__(self, config: BlurConfigDataclass) -> None:
+    class Tree:
+        def __init__(self, config: TreeConfig) -> None:
             self.config = config
 
-    assert Blur.__tatolab_node_config_class__ is BlurConfigDataclass
+    assert Tree.__tatolab_node_config_class__ is TreeConfig
 
 
 def test_an_init_taking_nothing_beyond_self_declares_no_config():
@@ -196,7 +197,9 @@ def test_an_unresolvable_annotation_is_refused_where_the_author_can_see_it():
 
 
 def schema_of(config_class: "Optional[type]") -> "dict[str, Any]":
-    """The document a node taking `config_class` publishes."""
+    """The document derived from `config_class`, as the catalog publishes a node's: a node
+    declaring no config is declared, and any other class is derived directly, because a
+    node refuses one that gives a key no default."""
     if config_class is None:
 
         @node.process(execution="manual")
@@ -206,12 +209,25 @@ def schema_of(config_class: "Optional[type]") -> "dict[str, Any]":
 
         return SubjectDeclaringNoConfig.__tatolab_node_config_schema__
 
+    return derive_config_class_json_schema(config_class)
+
+
+def test_a_node_whose_config_gives_a_key_no_default_is_refused_naming_each_key():
+    with pytest.raises(TypeError, match=r"@node.process on Blur: config class BlurConfigTypedDict gives `width`, `label` no default"):
+
+        @node.process(execution="manual")
+        class Blur:
+            def __init__(self, config: BlurConfigTypedDict) -> None:
+                self.config = config
+
+
+def test_a_node_whose_config_gives_every_key_a_default_publishes_its_document():
     @node.process(execution="manual")
-    class SubjectTakingAConfigClass:
-        def __init__(self, config: config_class) -> None:  # type: ignore[valid-type]
+    class Tree:
+        def __init__(self, config: TreeConfig) -> None:
             self.config = config
 
-    return SubjectTakingAConfigClass.__tatolab_node_config_schema__
+    assert Tree.__tatolab_node_config_schema__ == derive_config_class_json_schema(TreeConfig)
 
 
 def test_a_typed_dict_yields_its_annotations_and_its_required_keys():
@@ -582,7 +598,6 @@ def test_a_fixed_length_tuple_states_its_length_not_only_its_positions():
 def test_a_key_holding_a_sole_referrer_reference_says_one_node_at_most_names_the_node() -> None:
     from stream_graph_builder_nodes import FrameInverter
     from tatolab.stream import SoleReferrerNodeReferenceToNodeType
-    from tatolab.stream._node_config_schema import derive_config_class_json_schema
 
     class SendConfig(TypedDict):
         track: SoleReferrerNodeReferenceToNodeType[FrameInverter]
@@ -597,7 +612,6 @@ def test_a_key_holding_a_sole_referrer_reference_says_one_node_at_most_names_the
 def test_a_key_holding_a_typed_node_reference_carries_the_type_it_names() -> None:
     from stream_graph_builder_nodes import FrameInverter
     from tatolab.stream import NodeReference, NodeReferenceToNodeType
-    from tatolab.stream._node_config_schema import derive_config_class_json_schema
 
     class TrackConfig(TypedDict):
         gateway: NodeReferenceToNodeType[FrameInverter]
@@ -650,7 +664,6 @@ def test_a_key_holding_a_project_asset_uuid_names_the_media_it_takes() -> None:
 
 def test_a_project_asset_uuid_on_a_key_holding_no_string_is_refused() -> None:
     from tatolab.stream import ProjectAssetUuid
-    from tatolab.stream._node_config_schema import derive_config_class_json_schema
 
     class CountConfig(TypedDict):
         count: Annotated[int, ProjectAssetUuid()]
