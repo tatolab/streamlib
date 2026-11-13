@@ -45,7 +45,7 @@ project, not wheel, the runtime unit gives to every project.
   (`SampleProjectTheRuntimeUnitCarries`, `new_project_scaffold.rs:63-80`), so a project
   directory in the unit is an existing shape.
 - **Core Nodes** (`packages/tatolab-core-nodes`, #3663) holds 75 nodes in ten groups, each with
-  `category=` and `description=`, two streams and the Program view. Its `nodes/` holds its own
+  `category=` and `description=`, two streams and the Program view. Its `core_nodes/` holds its own
   copy of `tatolab-ops`'s 29 function nodes and `ImageFile`. It requires `tatolab-stream`,
   `numba`, `numpy` and `pillow`, the same third-party set `tatolab-ops` requires, which the unit
   already carries as wheels (offline-new-projects).
@@ -65,14 +65,14 @@ project, not wheel, the runtime unit gives to every project.
 - **The core project the runtime unit carries.** The unit carries the Core Nodes project as a
   directory beside the lend, `lib/tatolab/core-projects/tatolab-core-nodes/` in the Linux tarball
   and `Contents/Resources/core-projects/tatolab-core-nodes/` in the macOS helper bundle: its
-  `tatolab-project.json`, `pyproject.toml`, `nodes/`, `views/` and `streams/`, and nothing its
+  `tatolab-project.json`, `pyproject.toml`, `core_nodes/`, `views/` and `streams/`, and nothing its
   tests or a run of it wrote. `cargo xtask build-runtime` stages it; a unit without it fails
   the build.
 - **Core Nodes is an import of every project, linked from the unit and never copied** (owner,
   2026-11-13, on the decision card "Choose how Core Nodes gets into every project": "Linked from
   the runtime"). At each load the runtime links the unit's copy at
-  `.tatolab/core-imports/core-nodes` and treats it as an import of the project under the reserved
-  folder `core-nodes`, after the imports the project file lists. The project file does not list
+  `imports/core-nodes`, a symbolic link, and treats it as an import of the project under the
+  reserved folder `core-nodes`, after the imports the project file lists. The project file does not list
   it and history does not record it, as with the first-party wheels today. Every project, a
   year-old one included, gets each release's nodes and fixes with no step and no transaction, and
   one copy serves every project on the machine. A project folder zipped to a machine with
@@ -80,9 +80,20 @@ project, not wheel, the runtime unit gives to every project.
   Rejected: copying Core Nodes into `imports/core-nodes/` at create and replacing the folder at
   each release — a release would reach a project only through a transaction per project, and
   each project's history would hold files its person did not write (owner, 2026-11-13).
+- **Where the link sits, and why.** A node type's import folder is a path under the project
+  that an interpreter puts first on `sys.path`
+  (`sdk/streamlib-python-wheel/python/tatolab/runtime/_node_type_import_folder.py`), so the link
+  is at `imports/core-nodes` and every reader of an import's folder finds Core Nodes with no
+  second resolver. History records no symbolic link, so it stays out of history. A folder or
+  file a person put at that path is refused at load by name and left as it is.
+  `read_project_file` passes through this one link, so a view's files are served, and refuses a
+  link below it as it refuses any other.
+- **Core Nodes' Python package is `core_nodes`.** One interpreter holds one module per top-level
+  name and refuses a second folder's (`NodeTypeModuleImportedFromTwoPlaces`), so a package named
+  `nodes` could not be imported beside the `nodes/` of the project that uses it.
 - **How a Core Nodes node is named.** **[NEEDS DECISION 4, built as (a) until the owner says otherwise (session, 2026-11-13)]** A stream document stores a node's
   type as a string, for good.
-  - **(a) The import spelling, unchanged (recommended):** `imports/core-nodes/nodes.color:Tint`,
+  - **(a) The import spelling, unchanged (recommended):** `imports/core-nodes/core_nodes.color:Tint`,
     led by the reserved folder as any import's type is. No new naming rule and no second
     resolver; moving a node between Core Nodes' files breaks stored documents, as it does for any
     import. A person never reads this string: Add node shows the group and the node's name.
@@ -93,7 +104,7 @@ project, not wheel, the runtime unit gives to every project.
 - **Its requirements are declared, never installed behind the project's back.** Each time the
   runtime makes, syncs or locks a `.venv` it writes Core Nodes in the project's `pyproject.toml`
   as a requirement and a uv path source through the link, `tatolab-core-nodes = { path =
-  ".tatolab/core-imports/core-nodes", package = false }`, as an import's folder is written. So
+  "imports/core-nodes", package = false }`, as an import's folder is written. So
   any `uv sync`, the runtime's or a person's, keeps `numba`, `numpy` and `pillow`, the rule the
   plan holds for the first-party wheels (`ARCHITECTURE.md:2259-2261`, where a sync uninstalled
   what the manifest did not name). They resolve from the wheels the unit carries, so a new
@@ -107,7 +118,7 @@ project, not wheel, the runtime unit gives to every project.
   usable as fragments, never in the project's stream list.
 - **Opening Core Nodes itself.** `packages/tatolab-core-nodes` opened as a project is the listed
   project, so the runtime adds no import of Core Nodes to it, and its node types are its own
-  (`nodes.color:Tint`).
+  (`core_nodes.color:Tint`).
 
 ## MODIFIED
 
@@ -118,8 +129,8 @@ project, not wheel, the runtime unit gives to every project.
   the runtime still ships no node of its own. The node list in the entry becomes Core Nodes'
   groups.
 - **The one name the engine knows.** `FEEDBACK_FUNCTION_NODE_TYPE` becomes
-  `imports/core-nodes/nodes.logic:Feedback` under a project that imports Core Nodes.
-  **[NEEDS DECISION 2, built as (a) until the owner says otherwise (session, 2026-11-13)]** Core Nodes opened on its own names the node `nodes.logic:Feedback`, which
+  `imports/core-nodes/core_nodes.logic:Feedback` under a project that imports Core Nodes.
+  **[NEEDS DECISION 2, built as (a) until the owner says otherwise (session, 2026-11-13)]** Core Nodes opened on its own names the node `core_nodes.logic:Feedback`, which
   that constant does not match. Options: (a) the engine knows Feedback by a mark its declaration
   carries, `@node.function(closes_a_loop=True)`, read from source as `category` is, so any
   project's node may close a loop and no type name is known to the engine (recommended); (b) the
