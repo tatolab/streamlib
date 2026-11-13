@@ -40,7 +40,8 @@ mod tatolab_view_manifest;
 pub use canonical_project_json::canonical_project_json_bytes;
 pub use core_project_import::{
     CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
-    the_core_project_link_in, the_core_project_linked_into,
+    link_the_core_project_into_each_import_of, the_core_project_link_in,
+    the_core_project_linked_into,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,

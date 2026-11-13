@@ -116,6 +116,17 @@ project, not wheel, the runtime unit gives to every project.
 - **Its streams are reachable, not listed.** Core Nodes' `main` and `spotlight` are demo streams
   of the project opened on its own. Under a project that imports it they are an import's streams:
   usable as fragments, never in the project's stream list.
+- **A project copied, zipped or imported never carries Core Nodes.** `add_dependency`, from a
+  folder or a zip, and a zip unpacked as a new project copy nothing at `imports/core-nodes`, in
+  the source or in an import nested in it, whether a link stands there or the files a zip tool
+  that followed the link wrote. The runtime that opens the copy links its own. An import's
+  `pyproject.toml` names Core Nodes at its own `imports/core-nodes`, as the runtime that last
+  opened that project wrote it, so each time the runtime makes, syncs or locks a `.venv` it
+  also links Core Nodes into each import and each import nested in one; every link stands at
+  the one directory, and uv resolves them as one project. Assumed (session, 2026-11-13), built
+  after the owner asked what a project zipped by hand does: without it uv refuses the
+  importing project's environment, "Distribution not found" when the zip kept the link and
+  "conflicting URLs" when it followed it.
 - **Opening Core Nodes itself.** `packages/tatolab-core-nodes` opened as a project is the listed
   project, so the runtime adds no import of Core Nodes to it, and its node types are its own
   (`core_nodes.color:Tint`).

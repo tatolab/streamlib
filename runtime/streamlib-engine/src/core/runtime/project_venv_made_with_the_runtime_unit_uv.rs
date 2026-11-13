@@ -40,6 +40,7 @@ use streamlib_project_repository::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, ProjectRepositoryRefusal, TatolabProjectFile,
     every_import_a_project_resolves, link_the_core_project_into,
+    link_the_core_project_into_each_import_of,
     pyproject_with_each_first_party_module_as_a_uv_path_source,
     pyproject_with_each_import_as_a_uv_path_source,
     pyproject_with_the_carried_wheels_as_a_uv_find_links_source,
@@ -381,6 +382,8 @@ fn declare_the_core_nodes_project_in_the_project(
         Err(refusal) => return Err(not_declared_because(refusal.to_string())),
     };
     link_the_core_project_into(project_directory, core_nodes_project_directory)
+        .map_err(|refusal| not_declared_because(refusal.to_string()))?;
+    link_the_core_project_into_each_import_of(project_directory, core_nodes_project_directory)
         .map_err(|refusal| not_declared_because(refusal.to_string()))?;
     let pyproject_as_it_was = match std::fs::read_to_string(&pyproject_path) {
         Ok(pyproject_as_it_was) => pyproject_as_it_was,
