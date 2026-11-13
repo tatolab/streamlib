@@ -17,10 +17,9 @@ use crate::build_runtime::{
 /// The first-party packages the runtime unit carries, as the workspace-relative packages their
 /// wheels are built from: `tatolab-stream`, at the runtime's own commit, and the core modules.
 /// Each is pure Python; every other module is a project a project imports.
-pub const FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE: [&str; 4] = [
+pub const FIRST_PARTY_PACKAGES_THE_RUNTIME_UNIT_CARRIES_RELATIVE_TO_WORKSPACE: [&str; 3] = [
     "sdk/tatolab-stream",
     "packages/tatolab-compositor",
-    "packages/tatolab-ops",
     "packages/tatolab-testpattern",
 ];
 

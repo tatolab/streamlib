@@ -172,11 +172,3 @@ def test_a_local_named_like_a_refused_module_is_not_mistaken_for_it():
     assert find_side_effects_in_a_function_node_body(counts_with_its_own_state) == []
 
 
-def test_every_tatolab_ops_node_passes_the_check():
-    tatolab_ops = pytest.importorskip("tatolab.ops")
-    for node_name in tatolab_ops.__all__:
-        function_node = getattr(tatolab_ops, node_name)
-        wrapped = getattr(function_node, "__wrapped__", None)
-        if wrapped is None:
-            continue
-        assert find_side_effects_in_a_function_node_body(wrapped) == [], node_name

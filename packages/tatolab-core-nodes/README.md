@@ -3,8 +3,7 @@
 The nodes every Tato Studio project is meant to start with, as a project you open in Tato
 Studio: add its nodes to a graph, play its streams, and use its views.
 
-It will replace `tatolab-ops`. Until the runtime carries this project into every new project,
-`tatolab-ops` still ships and this project holds its own copy of those nodes.
+The runtime carries it and links it into every project as the import `imports/core-nodes`.
 
 ## Open it
 

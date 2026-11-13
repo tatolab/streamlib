@@ -237,11 +237,11 @@ mod tests {
     #[test]
     fn what_a_runtime_wrote_into_the_pyproject_is_left_out_of_the_units_copy() {
         let rewritten_by_a_runtime = "[project]\nname = \"tatolab-core-nodes\"\ndependencies = [\
-             \"tatolab-stream>=0.54.3\", \"numba>=0.61\", \"tatolab-ops\", \"tatolab-stream\"]\n\n\
+             \"tatolab-stream>=0.54.3\", \"numba>=0.61\", \"tatolab-testpattern\", \"tatolab-stream\"]\n\n\
              [tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n\n\
              [tool.uv]\nfind-links = [\".tatolab/carried-wheels\"]\n\n\
              [tool.uv.sources]\n\
-             tatolab-ops = { path = \".tatolab/first-party-imports/tatolab_ops-0.68.87-py3-none-any.whl\" }\n\
+             tatolab-testpattern = { path = \".tatolab/first-party-imports/tatolab_testpattern-0.68.87-py3-none-any.whl\" }\n\
              tatolab-stream = { path = \".tatolab/first-party-imports/tatolab_stream-0.68.87-py3-none-any.whl\" }\n";
 
         let staged: toml::Table =

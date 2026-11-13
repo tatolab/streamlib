@@ -2055,7 +2055,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   that, or a body that does not compile, keeps the node in Python, which runs inside its Python
   reader, or in the stream's one function node pool when no Python class reads it. `graph`
   shows whether each function node ran compiled. A compiled node runs inside any reader's read,
-  a module's native half included. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  a module's native half included. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: Core Nodes' function nodes in place of `tatolab-ops`']
   Rejected: per-platform `tatolab-ops` wheels pre-compiled with Numba's `pycc` — deprecated, and
   no third party could use it (owner, 2026-11-08).
 - **DECIDED** — `tatolab-ops` is a first-party module of `@node.function` functions, bundled with
@@ -2067,7 +2067,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `ImageFile`, a `@node.process` that loads a project image asset by UUID and resends its slot
   to a reader that connects late. `Gate` passes or blocks a message of any family, so a reactive
   node behind a closed gate does not run; it is the graph's if/else. `tatolab.ops:Feedback` is
-  the one `tatolab-ops` name the engine knows. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  the one `tatolab-ops` name the engine knows. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: Core Nodes, a first-party project the unit carries and every project imports, replaces `tatolab-ops`, and the engine knows no node by name]
   Rejected: rewriting `tatolab-ops` in Rust — it stops showing how a user writes a function node
   (owner, 2026-11-08).
 - **DECIDED** — Evaluation islands. The compiler groups each connected run of shader and
@@ -2092,7 +2092,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the family linked into it and can only be handed on or not. A control value on a wire is
   Channels at an irregular control rate. Links inside an island stay off the step ledger and
   cannot drop; edge links count and take loss slots as any link. Owner, 2026-11-07 and
-  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421]
+  2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: the compiler closes a loop of function nodes by its walk and `graph` marks the link read from the last evaluation; no `Feedback` node]
   Rejected: waiting for matching timestamps before an evaluation (owner, 2026-11-07).
   Rejected: once per pull, as Blueprint does — a per-pull `Random` read twice disagrees (owner,
   2026-11-07).
@@ -2255,7 +2255,9 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   records the runtime version that created it, a record a load under another version logs and
   never a lock. Owner, 2026-11-09 and 2026-11-10. [self-contained-project-imports — SHIPPED #3402, #3405; amended by
   first-party-package-index: the unit carries each core module as a wheel, linked as
-  `.tatolab/first-party-imports/<wheel file name>`]
+  `.tatolab/first-party-imports/<wheel file name>`; amended by core-nodes-in-every-project: the unit
+  carries the Core Nodes project, linked into every project as `imports/core-nodes`, and
+  `tatolab-ops` leaves]
   Rejected: installing first-party modules into `.venv` behind the project's back, its
   `pyproject.toml` and `uv.lock` never naming them — any `uv sync` uninstalls them and their
   requirements and breaks the project's ops (owner, 2026-11-10).

@@ -54,7 +54,7 @@ from helper_placement_streams import (
     only_labelled_source_into_sink,
     raw_message_payload_source_into_sink,
     reaped_labelled_source_into_sink,
-    rust_function_nodes_in_islands_beside_tatolab_ops,
+    rust_function_nodes_in_islands_beside_python_ones,
     stateful_counter_into_python_sink_that_dies_once,
     stateful_counter_read_by_two_python_sinks,
     two_lfos_each_read_by_its_own_python_sink_on_a_stepped_clock,
@@ -414,7 +414,7 @@ def a_gated_count_batch_read_wholly_after_a_live_edit(
 def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_while_closed(
     start_tatolabd_running_stream: StartTatolabdRunningStream, gated_stream: Callable[..., None]
 ):
-    """`<Python class> -> Gate -> <Python class>`, with `tatolab.ops`' Python
+    """`<Python class> -> Gate -> <Python class>`, with a Python
     `Gate` and with a Rust one: the sink's helper reads the source's channel and
     evaluates the gate inside each read, with no process for it. While open the
     sink reads each count once, in order; closed live, it reads nothing, not the
@@ -639,7 +639,7 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
         ]
         return link["id"]
 
-    (remap,) = edit_live("add_node", {"type": "tatolab.ops:Remap", "name": "remap"})[
+    (remap,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Remap", "name": "remap"})[
         "added_nodes"
     ]
     edit_live(
@@ -1051,10 +1051,10 @@ def test_a_stateful_function_node_two_readers_read_runs_once_in_a_process_of_its
     assert counter["components"]["ran_compiled"] is True, counter["components"]
 
 
-def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_tatolab_ops(
+def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_python_ones(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A fixture module's Rust function nodes join islands beside `tatolab-ops`'
+    """A fixture module's Rust function nodes join islands beside Python ones
     and are evaluated inside each reader's read, with no process of their own.
 
     `Lfo -> ScaleAndOffset (Rust) -> Clamp` maps the LFO's -1..1 onto 0..1, and
@@ -1062,7 +1062,7 @@ def test_rust_function_nodes_run_inside_the_read_of_the_class_they_feed_beside_t
     as `(count + 1) / 2`. Only the two Python classes get a helper, and the
     catalog and `graph` show each Rust node as `function` / `rust`.
     """
-    tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_tatolab_ops)
+    tatolabd = start_tatolabd_running_stream(rust_function_nodes_in_islands_beside_python_ones)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     values_read = tatolabd.await_marker("FUNCTION_NODE_VALUES_READ")
     counts_read = tatolabd.await_marker("COUNTS_READ_IN_ORDER")
@@ -1449,7 +1449,7 @@ def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_
         ]
         return clamp_node
 
-    (clamp,) = edit_live("add_node", {"type": "tatolab.ops:Clamp", "name": "clamp"})[
+    (clamp,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Clamp", "name": "clamp"})[
         "added_nodes"
     ]
     edit_live(
@@ -1539,7 +1539,7 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
         f"an exposed field no link drives reads the config, and the class read {exposed_unlinked}"
     )
 
-    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
     edit_live(
         "connect",
         {
@@ -1614,7 +1614,7 @@ def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_
         f"an exposed field no link drives reads the config, and a class read {exposed_unlinked}"
     )
 
-    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
     edit_live(
         "connect",
         {
@@ -1678,7 +1678,7 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
         "set_exposed_config_fields",
         {"node": configured_node["id"], "exposed_config_fields": ["level"]},
     )
-    (lfo,) = edit_live("add_node", {"type": "tatolab.ops:Lfo", "name": "lfo"})["added_nodes"]
+    (lfo,) = edit_live("add_node", {"type": "helper_placement_function_nodes:Lfo", "name": "lfo"})["added_nodes"]
     lfo_into_the_level = {
         "source": {"node": lfo["node"], "port": "result"},
         "target": {"node": configured_node["id"], "port": "level"},

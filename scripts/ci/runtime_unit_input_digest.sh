@@ -44,7 +44,7 @@ sha256_of_standard_input() {
   # notices, and the unit carries the stream package and its core modules as
   # wheels and the Core Nodes project as a folder; each sits under an exclusion
   # above.
-  git ls-files -s -- 'sdk/tatolab-stream/**' ':(exclude)sdk/tatolab-stream/tests/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-ops/**' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**' 'packages/tatolab-core-nodes/**' ':(exclude)packages/tatolab-core-nodes/tests/**'
+  git ls-files -s -- 'sdk/tatolab-stream/**' ':(exclude)sdk/tatolab-stream/tests/**' 'THIRD-PARTY-NOTICES.md' 'sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md' 'packages/tatolab-testpattern/**' 'packages/tatolab-compositor/**' 'packages/tatolab-core-nodes/**' ':(exclude)packages/tatolab-core-nodes/tests/**'
   rustc -Vv
   printf '%s\n' "$@"
 } | sha256_of_standard_input | cut -d ' ' -f 1

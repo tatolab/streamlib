@@ -625,14 +625,6 @@ jobs:
           .venv/bin/python -m mypy.stubtest tatolab.runtime._engine --allowlist "$RUNNER_TEMP/engine-stubtest-allowlist.txt"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-      # Each `tatolab-ops` node as Python, then compiled by the unit's own wheel
-      # and held to that Python.
-      - name: tatolab-ops suite
-        working-directory: packages/tatolab-ops
-        run: |
-          VIRTUAL_ENV="$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv" uv pip install --no-deps . pillow
-          "$GITHUB_WORKSPACE/sdk/streamlib-python-wheel/.venv/bin/python" -m pytest tests -v
-
       # The Core Nodes project: each node's group, description and Slang
       # signature, and each of its streams against the nodes it brings.
       - name: tatolab-core-nodes suite
@@ -698,15 +690,14 @@ jobs:
 
       # A scaffolded stream's one node imports with no runtime installed, in
       # what a user's `.venv` holds: `tatolab-stream` from its `uv sync`, and
-      # the test-pattern and ops wheels the unit carries.
+      # the test-pattern wheel the unit carries.
       - name: Scaffolded stream's node types import (Python 3.12)
         run: |
           cp -R sdk/tatolab-stream/scaffold_template "$RUNNER_TEMP/scaffold"
           uv venv --python 3.12 "$RUNNER_TEMP/scaffold-venv"
           VIRTUAL_ENV="$RUNNER_TEMP/scaffold-venv" uv pip install \
             "$RUNNER_TEMP"/tatolab-stream-dist/*.whl \
-            "$GITHUB_WORKSPACE"/target/tatolab-runtime/lib/tatolab/imports/tatolab_testpattern-*.whl \
-            "$GITHUB_WORKSPACE"/target/tatolab-runtime/lib/tatolab/imports/tatolab_ops-*.whl
+            "$GITHUB_WORKSPACE"/target/tatolab-runtime/lib/tatolab/imports/tatolab_testpattern-*.whl
           cd "$RUNNER_TEMP/scaffold"
           "$RUNNER_TEMP/scaffold-venv/bin/python" - <<'EOF'
           import importlib

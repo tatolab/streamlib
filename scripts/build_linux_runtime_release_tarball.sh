@@ -95,7 +95,7 @@ for browser_host_file in tatolab-browser-host tatolab-browser-subprocess libcef.
 		exit 1
 	}
 done
-for first_party_module in tatolab_ops tatolab_testpattern tatolab_compositor; do
+for first_party_module in tatolab_testpattern tatolab_compositor; do
 	compgen -G "$runtime_unit_root/lib/tatolab/imports/$first_party_module-*.whl" >/dev/null || {
 		echo "the runtime unit has no lib/tatolab/imports/$first_party_module-*.whl: a release ships every first-party module" >&2
 		exit 1

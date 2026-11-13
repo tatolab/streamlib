@@ -341,9 +341,9 @@ mod tests {
         let uv_lock = a_uv_lock_of(&[
             a_locked_package("tatolab-stream-project", "0.1.0", "{ editable = \".\" }"),
             a_locked_package(
-                "tatolab-ops",
+                "tatolab-compositor",
                 "0.68.27",
-                "{ directory = \".tatolab/first-party-imports/tatolab-ops\" }",
+                "{ directory = \".tatolab/first-party-imports/tatolab-compositor\" }",
             ),
             a_locked_package("tatolab-desk", "0.1.0", "{ virtual = \"imports/desk\" }"),
         ]);

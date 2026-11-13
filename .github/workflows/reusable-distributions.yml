@@ -126,36 +126,6 @@ jobs:
           path: packages/tatolab-compositor/dist/*.whl
           if-no-files-found: error
 
-  # Pure Python, so one wheel serves every platform. Each node's body compiles
-  # with Numba in the helper that reads it, so the wheel carries no native code.
-  build-tatolab-ops-distribution:
-    name: tatolab-ops wheel
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.tag_name }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          version: ${{ env.PINNED_UV_VERSION }}
-
-      - name: Build the tatolab-ops wheel
-        run: uv build --wheel --out-dir packages/tatolab-ops/dist packages/tatolab-ops
-
-      - name: Keep the wheel for the upload
-        uses: actions/upload-artifact@v6
-        with:
-          name: release-distribution-tatolab-ops
-          path: packages/tatolab-ops/dist/*.whl
-          if-no-files-found: error
-
   # Pure Python, so one wheel serves every platform, and it ships as a namespace
   # portion of `tatolab` beside the stream package. A wheel only, as for every
   # extension: an sdist would archive LICENSE as the symlink it is here.
@@ -226,7 +196,6 @@ jobs:
       - build-tatolab-stream-distribution
       - build-tatolab-testpattern-distribution
       - build-tatolab-compositor-distribution
-      - build-tatolab-ops-distribution
       - build-linux-runtime-tarball
       - check-the-linux-runtime-can-be-published
     runs-on: ubuntu-latest
@@ -298,7 +267,6 @@ jobs:
       - build-tatolab-stream-distribution
       - build-tatolab-testpattern-distribution
       - build-tatolab-compositor-distribution
-      - build-tatolab-ops-distribution
       - build-linux-runtime-tarball
       - check-the-linux-runtime-can-be-published
     concurrency:

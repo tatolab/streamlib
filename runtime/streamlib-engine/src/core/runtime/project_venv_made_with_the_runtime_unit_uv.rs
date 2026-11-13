@@ -1750,30 +1750,30 @@ mod tests {
     #[test]
     fn each_first_party_module_is_linked_and_declared_so_one_uv_sync_installs_it() {
         let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
 
         project
-            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&compositor))
             .expect("the venv is made");
 
         assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
         assert_eq!(
             std::fs::read_link(
-                project
-                    .project_directory
-                    .join(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl")
+                project.project_directory.join(
+                    ".tatolab/first-party-imports/tatolab_compositor-0.68.51-py3-none-any.whl"
+                )
             )
             .unwrap(),
-            ops
+            compositor
         );
         let pyproject = the_projects_pyproject(&project);
         assert_eq!(
             pyproject["project"]["dependencies"],
-            toml::Value::try_from(["tatolab-ops"]).unwrap()
+            toml::Value::try_from(["tatolab-compositor"]).unwrap()
         );
         assert_eq!(
-            pyproject["tool"]["uv"]["sources"]["tatolab-ops"]["path"].as_str(),
-            Some(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl"),
+            pyproject["tool"]["uv"]["sources"]["tatolab-compositor"]["path"].as_str(),
+            Some(".tatolab/first-party-imports/tatolab_compositor-0.68.51-py3-none-any.whl"),
             "a path source through the project's own link keeps uv.lock free of the runtime's path"
         );
     }
@@ -1782,26 +1782,26 @@ mod tests {
     fn a_link_to_another_runtimes_module_is_relinked_and_a_module_the_runtime_dropped_is_taken_out()
     {
         let project = ProjectAndAStubUv::whose_uv_runs(MAKES_A_VENV_WHOSE_INTERPRETER_RUNS);
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
         let dropped = a_first_party_module_beside(&project, "tatolab-dropped");
         project
-            .make_the_venv_with_the_first_party_modules(&[dropped.clone(), ops.clone()])
+            .make_the_venv_with_the_first_party_modules(&[dropped.clone(), compositor.clone()])
             .expect("the venv is made");
-        let ops_link = project
+        let compositor_link = project
             .project_directory
-            .join(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl");
-        std::fs::remove_file(&ops_link).unwrap();
+            .join(".tatolab/first-party-imports/tatolab_compositor-0.68.51-py3-none-any.whl");
+        std::fs::remove_file(&compositor_link).unwrap();
         std::os::unix::fs::symlink(
-            "/an/older/runtime/imports/tatolab_ops-0.68.51-py3-none-any.whl",
-            &ops_link,
+            "/an/older/runtime/imports/tatolab_compositor-0.68.51-py3-none-any.whl",
+            &compositor_link,
         )
         .unwrap();
 
         project
-            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&compositor))
             .expect("the venv is synced again");
 
-        assert_eq!(std::fs::read_link(&ops_link).unwrap(), ops);
+        assert_eq!(std::fs::read_link(&compositor_link).unwrap(), compositor);
         assert!(
             !project
                 .project_directory
@@ -1811,7 +1811,7 @@ mod tests {
         let pyproject = the_projects_pyproject(&project);
         assert_eq!(
             pyproject["project"]["dependencies"],
-            toml::Value::try_from(["tatolab-ops"]).unwrap()
+            toml::Value::try_from(["tatolab-compositor"]).unwrap()
         );
         assert_eq!(
             pyproject["tool"]["uv"]["sources"]
@@ -1819,7 +1819,7 @@ mod tests {
                 .unwrap()
                 .keys()
                 .collect::<Vec<_>>(),
-            ["tatolab-ops"]
+            ["tatolab-compositor"]
         );
         assert_eq!(project.uv_runs().len(), 2, "{:?}", project.uv_runs());
     }
@@ -2009,10 +2009,10 @@ mod tests {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         project.given_a_venv_interpreter_running("exit 0");
         project.given_the_venv_synced_with_what_the_project_holds_now();
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
 
         project
-            .make_the_venv_with_the_first_party_modules(&[ops])
+            .make_the_venv_with_the_first_party_modules(&[compositor])
             .expect("the venv is synced again");
 
         assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
@@ -2023,32 +2023,33 @@ mod tests {
      {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         project.given_a_venv_interpreter_running("exit 0");
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
         let site_packages = project.venv().join("lib/python3.12/site-packages");
-        std::fs::create_dir_all(site_packages.join("tatolab_ops-0.68.41.dist-info")).unwrap();
+        std::fs::create_dir_all(site_packages.join("tatolab_compositor-0.68.41.dist-info"))
+            .unwrap();
         declare_each_first_party_module_in_the_project(
             &project.project_directory,
-            std::slice::from_ref(&ops),
+            std::slice::from_ref(&compositor),
         )
         .unwrap();
         std::fs::write(
             project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME),
             the_venv_sync_stamp_of(
                 &project.project_directory,
-                &first_party_modules_only(std::slice::from_ref(&ops)),
+                &first_party_modules_only(std::slice::from_ref(&compositor)),
             )
             .unwrap(),
         )
         .unwrap();
 
         project
-            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&ops))
+            .make_the_venv_with_the_first_party_modules(std::slice::from_ref(&compositor))
             .expect("the venv is current");
         assert!(project.uv_runs().is_empty(), "{:?}", project.uv_runs());
 
-        std::fs::remove_dir(site_packages.join("tatolab_ops-0.68.41.dist-info")).unwrap();
+        std::fs::remove_dir(site_packages.join("tatolab_compositor-0.68.41.dist-info")).unwrap();
         project
-            .make_the_venv_with_the_first_party_modules(&[ops])
+            .make_the_venv_with_the_first_party_modules(&[compositor])
             .expect("the venv is synced again");
         assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
     }
@@ -2057,7 +2058,7 @@ mod tests {
     fn the_first_party_modules_are_each_wheel_in_name_order() {
         let modules = tempfile::tempdir().unwrap();
         for file_name in [
-            "tatolab_ops-0.68.51-py3-none-any.whl",
+            "tatolab_compositor-0.68.51-py3-none-any.whl",
             "tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl",
             "README.md",
         ] {
@@ -2070,8 +2071,10 @@ mod tests {
             [
                 modules
                     .path()
-                    .join("tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl"),
-                modules.path().join("tatolab_ops-0.68.51-py3-none-any.whl")
+                    .join("tatolab_compositor-0.68.51-py3-none-any.whl"),
+                modules
+                    .path()
+                    .join("tatolab_h264-0.68.51-cp312-abi3-manylinux_2_28_x86_64.whl")
             ]
         );
         assert!(every_first_party_module_wheel_in(&modules.path().join("missing")).is_empty());
@@ -2094,16 +2097,16 @@ mod tests {
     #[test]
     fn a_running_venv_is_synced_again_once_a_first_party_wheel_is_rebuilt() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
         let stamp_before = the_venv_sync_stamp_of(
             &project.project_directory,
-            &first_party_modules_only(std::slice::from_ref(&ops)),
+            &first_party_modules_only(std::slice::from_ref(&compositor)),
         );
-        std::fs::write(&ops, "a rebuilt wheel of another size").unwrap();
+        std::fs::write(&compositor, "a rebuilt wheel of another size").unwrap();
         assert_ne!(
             the_venv_sync_stamp_of(
                 &project.project_directory,
-                &first_party_modules_only(std::slice::from_ref(&ops))
+                &first_party_modules_only(std::slice::from_ref(&compositor))
             ),
             stamp_before
         );
@@ -2388,19 +2391,19 @@ mod tests {
     #[test]
     fn a_lock_declares_each_first_party_module_before_uv_locks() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
-        let ops = a_first_party_module_beside(&project, "tatolab-ops");
+        let compositor = a_first_party_module_beside(&project, "tatolab-compositor");
 
         lock_the_projects_python_requirements_with_the_runtime_unit_uv(
             &project.project_directory,
             &project.stub_uv,
-            &first_party_modules_only(&[ops]),
+            &first_party_modules_only(&[compositor]),
         )
         .unwrap();
 
         assert_eq!(
-            the_projects_pyproject(&project)["tool"]["uv"]["sources"]["tatolab-ops"]["path"]
+            the_projects_pyproject(&project)["tool"]["uv"]["sources"]["tatolab-compositor"]["path"]
                 .as_str(),
-            Some(".tatolab/first-party-imports/tatolab_ops-0.68.51-py3-none-any.whl")
+            Some(".tatolab/first-party-imports/tatolab_compositor-0.68.51-py3-none-any.whl")
         );
         assert_eq!(project.uv_runs().len(), 1, "{:?}", project.uv_runs());
     }

@@ -175,8 +175,8 @@ project, not wheel, the runtime unit gives to every project.
 ## REMOVED
 
 - REMOVED: `packages/tatolab-ops`
-- REMOVED: `tatolab-ops` (outside `docs/plan/changes/archive/`, `docs/decisions/`, `CHANGELOG.md`
-  and this file)
+- REMOVED: `tatolab-ops` (outside `docs/plan/changes/archive/`, `docs/plan/changes/first-party-package-index.md`,
+  `docs/decisions/`, `docs/research/`, `CHANGELOG.md`, `docs/plan/ROADMAP.md`'s shipped ticket list and this file)
 - REMOVED: `tatolab.ops:` (the same exceptions)
 - REMOVED: `tatolab_ops`
 - REMOVED: the "It will replace `tatolab-ops`" paragraph of `packages/tatolab-core-nodes/README.md`
@@ -217,7 +217,8 @@ assumptions and are built as recommended. The cut, each a tracer bullet:
 ## Consumers
 
 - `examples/` and `packages/` hold no stream that names a `tatolab.ops:` type outside
-  `tests/stream-on-runtime/` (helper placement), which moves to Core Nodes' names in ticket 3.
+  `tests/stream-on-runtime/` (helper placement), which wires the suite's own `Lfo`, `Remap`, `Clamp`
+  and `Gate` (`helper_placement_function_nodes.py`): an engine test reads no consumer's nodes.
 - tatolab-app reads node types and views from the local API only, so it needs no change to show
   Core Nodes' nodes; its recorded fixtures that name `tatolab.ops:` are refreshed from a runtime
   once ticket 3 lands.
