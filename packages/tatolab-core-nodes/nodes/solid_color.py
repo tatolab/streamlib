@@ -17,6 +17,10 @@ SOLID_COLOR_TEXTURE_FORMAT = "rgba8_unorm"
 #: still holding the one before it.
 SOLID_COLOR_OUTPUT_RING_DEPTH = 2
 
+#: How often a `SolidColor` sends its picture: about 60 times a second. A shader node runs once
+#: per picture it is sent, so this is the frame rate of every picture node downstream.
+SOLID_COLOR_INTERVAL_BETWEEN_PICTURES_MS = 16
+
 #: The colour space the config's channels are read in: sRGB, full range.
 SOLID_COLOR_COLOUR = ColorInfo(primaries="bt709", transfer="srgb", matrix="identity", range="full")
 
@@ -43,15 +47,13 @@ def rgba_bytes_of_the_solid_color(config: SolidColorConfig) -> tuple[int, int, i
 
 @node.process(
     execution="continuous",
-    interval_ms=100,
-    description="A flat colour at the size you set. Also the blank canvas a generator such as Noise or Gradient takes its size from.",
+    interval_ms=SOLID_COLOR_INTERVAL_BETWEEN_PICTURES_MS,
+    description="A flat colour at the size you set, sent about 60 times a second. Also the blank canvas a generator such as Noise or Gradient takes its size and its frame rate from.",
     category="Generators",
 )
 class SolidColor:
-    """Publishes one picture of its config's colour and size, once at start and again on each config change.
-
-    A reader that connects after a publish is sent the same picture again.
-    """
+    """Sends the picture of its config's colour and size at each interval, filled once at start
+    and again on each config change."""
 
     image = Output(Image, formats=(SOLID_COLOR_TEXTURE_FORMAT,))
 
@@ -60,20 +62,17 @@ class SolidColor:
         self._output_texture_ring = NodeOutputTextureRing(
             SOLID_COLOR_TEXTURE_FORMAT, ["texture_binding"], depth=SOLID_COLOR_OUTPUT_RING_DEPTH
         )
-        self._publish_on_the_next_process = True
-        self._frame_of_the_last_publish: Any = None
+        self._fill_on_the_next_process = True
+        self._frame_filled_last: Any = None
 
     def configure(self, config: SolidColorConfig) -> None:
-        """Publish `config`'s colour and size on the next process."""
+        """Fill the picture with `config`'s colour and size on the next process."""
         self._config = config
-        self._publish_on_the_next_process = True
+        self._fill_on_the_next_process = True
 
     def process(self, ctx) -> None:
-        if not self._publish_on_the_next_process:
-            if self._frame_of_the_last_publish is not None and ctx.outputs.has_a_reader_the_last_write_missed(
-                self.image
-            ):
-                ctx.outputs.write(self.image, self._frame_of_the_last_publish)
+        if not self._fill_on_the_next_process:
+            ctx.outputs.write(self.image, self._frame_filled_last)
             return
         width, height = self._config.width, self._config.height
         if width < 1 or height < 1:
@@ -90,5 +89,5 @@ class SolidColor:
             slot.unlock()
         frame = ImageFrameToWrite.of_texture(slot, SOLID_COLOR_COLOUR)
         ctx.outputs.write(self.image, frame)
-        self._frame_of_the_last_publish = frame
-        self._publish_on_the_next_process = False
+        self._frame_filled_last = frame
+        self._fill_on_the_next_process = False

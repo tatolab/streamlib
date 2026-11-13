@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The Core Nodes project on `tatolabd`: its streams start, and each picture node writes frames.
+"""The Core Nodes project on `tatolabd`: its streams start, and each picture node keeps running.
 
 The project is loaded from a copy, since the runtime writes a project's
 `pyproject.toml` and `.venv`. Beside the streams it brings, the copy is given
@@ -42,6 +42,9 @@ PROJECT_LOAD_TIMEOUT_SECONDS = 900.0
 FRAMES_WRITTEN_TIMEOUT_SECONDS = 120.0
 
 GRAPH_POLL_INTERVAL_SECONDS = 0.5
+
+#: More than a start alone makes: a picture node that keeps running, not one still frame.
+EVALUATIONS_SHOWING_A_STREAM_KEEPS_RUNNING = 30
 
 #: A channel carries at most 32 destinations; each canvas feeds fewer.
 LINKS_OUT_OF_ONE_CANVAS = 16
@@ -85,14 +88,19 @@ def a_stream_of_canvases_into_one_of_each_shader_node() -> "dict[str, Any]":
             nodes.append(
                 {
                     "id": canvas_id,
-                    "name": f"canvas_before_{node_type.rsplit(':', 1)[1]}",
+                    "name": f"canvas_before_{node_type.rsplit(':', 1)[1].lower()}",
                     "type": "nodes.solid_color:SolidColor",
                     "config": {"width": 64, "height": 36},
                 }
             )
         node_id = str(uuid.uuid4())
         nodes.append(
-            {"id": node_id, "name": node_type.rsplit(":", 1)[1], "type": node_type, "config": {}}
+            {
+                "id": node_id,
+                "name": node_type.rsplit(":", 1)[1].lower(),
+                "type": node_type,
+                "config": {},
+            }
         )
         links.extend(
             {
@@ -133,35 +141,46 @@ def names_of_the_nodes_feeding_the_program_view(stream_document: "dict[str, Any]
     }
 
 
-def await_frames_written_by(
-    tatolabd: TatolabdUnderTest, stream_id: str, node_names: "set[str]"
+def evaluations_of_each_node(graph: "dict[str, Any]") -> "dict[str, int]":
+    """By node name: how many times a shader node's island was submitted, and for any other
+    node the most it wrote on one output. A shader node nothing reads writes no counted
+    message, so its submissions stand for it."""
+    evaluations: "dict[str, int]" = {}
+    for node in graph["nodes"]:
+        components = node.get("components", {})
+        fused_group = components.get("fused_group")
+        if isinstance(fused_group, dict):
+            evaluations[node["name"]] = fused_group.get("submissions", 0)
+        else:
+            written = components.get("metrics", {}).get("written_bags_by_output_port", {})
+            evaluations[node["name"]] = max(written.values(), default=0)
+    return evaluations
+
+
+def await_evaluations_of(
+    tatolabd: TatolabdUnderTest, stream_id: str, node_names: "set[str]", at_least: int
 ) -> None:
-    """Poll the live graph until each of `node_names` has written on one of its outputs."""
+    """Poll the live graph until each of `node_names` has evaluated `at_least` times."""
     local_api = tatolabd.local_api_client()
     deadline = time.monotonic() + FRAMES_WRITTEN_TIMEOUT_SECONDS
     while True:
-        written_by_node_name = {
-            node["name"]: node.get("components", {})
-            .get("metrics", {})
-            .get("written_bags_by_output_port", {})
-            for node in local_api.graph(stream=stream_id)["nodes"]
+        evaluations = evaluations_of_each_node(local_api.graph(stream=stream_id))
+        short_of_it = {
+            node_name: evaluations.get(node_name)
+            for node_name in sorted(node_names)
+            if (evaluations.get(node_name) or 0) < at_least
         }
-        yet_to_write = sorted(
-            node_name
-            for node_name in node_names
-            if not any(written > 0 for written in written_by_node_name.get(node_name, {}).values())
-        )
-        if not yet_to_write:
+        if not short_of_it:
             return
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"{yet_to_write} wrote nothing within {FRAMES_WRITTEN_TIMEOUT_SECONDS}s:\n"
-                f"{tatolabd.recent_stderr()}"
+                f"these evaluated fewer than {at_least} times within "
+                f"{FRAMES_WRITTEN_TIMEOUT_SECONDS}s: {short_of_it}\n{tatolabd.recent_stderr()}"
             )
         time.sleep(GRAPH_POLL_INTERVAL_SECONDS)
 
 
-def test_each_stream_of_the_core_nodes_project_starts_and_each_shader_node_writes_frames(
+def test_each_stream_of_the_core_nodes_project_and_each_shader_node_keeps_running(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
     tmp_path: Path,
 ):
@@ -198,10 +217,11 @@ def test_each_stream_of_the_core_nodes_project_starts_and_each_shader_node_write
             else names_of_the_nodes_feeding_the_program_view(stream_document)
         )
         assert node_names_awaited, stream_name
-        await_frames_written_by(
+        await_evaluations_of(
             tatolabd,
             listed_by_display_name[stream_document["display_name"]]["stream"],
             node_names_awaited,
+            at_least=EVALUATIONS_SHOWING_A_STREAM_KEEPS_RUNNING,
         )
 
     stderr_text = tatolabd.stderr_text

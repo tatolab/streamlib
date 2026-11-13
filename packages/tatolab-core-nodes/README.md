@@ -51,6 +51,8 @@ number node can drive.
 - **A generator takes its size from a picture.** A `@node.shader` takes at least one Image, so
   Gradient, Noise and the rest read the size of what is wired into `size_from` and none of its
   pixels. Wire a Solid Color into it.
+- **A shader runs once per picture it is sent.** A number changing does not run it, so the
+  picture source sets the frame rate: Solid Color sends its picture about 60 times a second.
 - **A shader is not told the picture's size.** Circles, rotations and blur radii assume a 16:9
   frame and stretch on any other shape.
 - **A shader is not handed the time.** Wire a Timer, Ramp or Speed into the input that moves it.
