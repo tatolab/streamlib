@@ -1,15 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#[cfg(feature = "history")]
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, Value};
 
-#[cfg(feature = "history")]
 use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
-#[cfg(feature = "history")]
 use crate::project_file::ProjectImport;
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 
@@ -23,8 +20,7 @@ pub const PYPROJECT_FILE_NAME: &str = "pyproject.toml";
 /// requirements and never builds the module, so no import's code reaches the project's shared
 /// import path. A manifest with no `[project]` table has no requirements to name an import in,
 /// so it is left as it is.
-#[cfg(feature = "history")]
-pub(crate) fn pyproject_with_each_import_as_a_uv_path_source(
+pub fn pyproject_with_each_import_as_a_uv_path_source(
     pyproject_text: &str,
     project_directory: &Path,
     imports: &[ProjectImport],
@@ -367,7 +363,6 @@ fn is_a_source_into_the_first_party_module_links_folder(source: &Item) -> bool {
 
 /// The distribution name `folder`'s own `pyproject.toml` declares, normalized; `None` when the
 /// folder holds no `pyproject.toml` or it names no `[project].name`.
-#[cfg(feature = "history")]
 fn the_distribution_name_the_folder_declares(
     folder: &Path,
 ) -> Result<Option<String>, ProjectRepositoryRefusal> {
@@ -390,7 +385,6 @@ fn the_distribution_name_the_folder_declares(
         .map(normalized_distribution_name))
 }
 
-#[cfg(feature = "history")]
 fn is_a_source_into_the_imports_folder(source: &Item) -> bool {
     source
         .get("path")

@@ -530,3 +530,44 @@ fn a_file_another_verb_changes_or_history_does_not_record_is_never_written() {
     );
     assert_eq!(project.on_disk("media/intro.mp4").unwrap(), b"take");
 }
+
+#[test]
+fn a_read_passes_through_the_link_to_the_core_project_and_no_link_below_it() {
+    let project = AProjectWithNodeCode::new();
+    let core_project_directory = project.root.path().join("unit/tatolab-core-nodes");
+    std::fs::create_dir_all(core_project_directory.join("views/program")).unwrap();
+    let outside = project.root.path().join("outside.txt");
+    std::fs::write(&outside, b"not the project's").unwrap();
+    std::fs::write(
+        core_project_directory.join("tatolab-project.json"),
+        streamlib_project_repository::TatolabProjectFile::of_a_new_project("Core Nodes")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        core_project_directory.join("views/program/index.html"),
+        b"<p>program</p>",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&outside, core_project_directory.join("views/leak.txt")).unwrap();
+    streamlib_project_repository::link_the_core_project_into(
+        &project.project_directory,
+        &core_project_directory,
+    )
+    .unwrap();
+
+    assert_eq!(
+        project
+            .repository
+            .read_project_file("imports/core-nodes/views/program/index.html")
+            .unwrap(),
+        b"<p>program</p>"
+    );
+    assert!(matches!(
+        project
+            .repository
+            .read_project_file("imports/core-nodes/views/leak.txt"),
+        Err(ProjectRepositoryRefusal::ProjectFilePathRefused { .. })
+    ));
+}

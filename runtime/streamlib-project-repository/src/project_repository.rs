@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::PROJECT_RUNTIME_DIRECTORY;
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, DIRECTORIES_A_PROJECT_SCAN_SKIPS, GRAPH_DOCUMENT_FILE_SUFFIX,
     PROJECT_IMPORTS_DIRECTORY, ProjectAsset, ProjectAssetKind, ProjectAssetSidecar,
@@ -1100,6 +1101,12 @@ impl ProjectRepository {
         ))
     }
 
+    /// Every import the project resolves: each one its project file records, then the core
+    /// project the runtime links in.
+    pub fn every_import_the_project_resolves(&self) -> Vec<ProjectImport> {
+        every_import_a_project_resolves(&self.project_directory, &self.project_file)
+    }
+
     /// Every import the project file records, each with the files edited since its copy and,
     /// when `check_for_newer`, the version its source holds now or why it could not be read.
     pub fn import_listing(&self, check_for_newer: bool) -> Vec<ProjectImportListed> {
@@ -1235,7 +1242,7 @@ impl ProjectRepository {
         let pyproject = pyproject_with_each_import_as_a_uv_path_source(
             &pyproject_as_it_was,
             &self.project_directory,
-            &self.project_file.dependencies,
+            &self.every_import_the_project_resolves(),
         )?;
         if pyproject == pyproject_as_it_was {
             return Ok(None);
@@ -1710,7 +1717,7 @@ impl ProjectRepository {
     /// The bytes of the project's file at `path`, as they are on disk now.
     pub fn read_project_file(&self, path: &str) -> Result<Vec<u8>, ProjectRepositoryRefusal> {
         let path = ProjectRelativeFilePath::parse(path)?;
-        path.refuse_a_symbolic_link_on_the_way_under(&self.project_directory)?;
+        path.refuse_a_symbolic_link_on_the_way_to_a_read_under(&self.project_directory)?;
         let on_disk = path.on_disk_under(&self.project_directory);
         if !on_disk.is_file() {
             return Err(ProjectRepositoryRefusal::NoSuchProjectFile(

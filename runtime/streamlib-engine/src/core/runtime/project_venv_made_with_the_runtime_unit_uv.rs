@@ -33,12 +33,15 @@ use crate::core::runtime::project_stream_action_queue::StreamActionVenvSyncRepor
 use crate::core::runtime::what_interrupted_a_load;
 use streamlib_consumer_rhi::runtime_unit_layout::{
     carried_python_downloads_directory_beside_the_lend, carried_python_downloads_metadata_file_in,
-    carried_wheels_directory_beside_the_lend, first_party_modules_directory_beside_the_lend,
+    carried_wheels_directory_beside_the_lend, core_nodes_project_directory_beside_the_lend,
+    first_party_modules_directory_beside_the_lend,
 };
 use streamlib_project_repository::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
-    PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY,
+    PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, ProjectRepositoryRefusal, TatolabProjectFile,
+    every_import_a_project_resolves, link_the_core_project_into,
     pyproject_with_each_first_party_module_as_a_uv_path_source,
+    pyproject_with_each_import_as_a_uv_path_source,
     pyproject_with_the_carried_wheels_as_a_uv_find_links_source,
 };
 
@@ -51,6 +54,8 @@ pub(crate) struct PackagesTheRuntimeUnitCarries {
     pub(crate) carried_wheels_directory: Option<PathBuf>,
     /// The uv Python mirror holding the CPython build the unit carries, when it carries one.
     pub(crate) carried_python_downloads_directory: Option<PathBuf>,
+    /// The Core Nodes project every project resolves as an import, when the unit carries it.
+    pub(crate) core_nodes_project_directory: Option<PathBuf>,
 }
 
 impl PackagesTheRuntimeUnitCarries {
@@ -69,6 +74,9 @@ impl PackagesTheRuntimeUnitCarries {
             ),
             carried_python_downloads_directory: a_directory_that_is_there(
                 carried_python_downloads_directory_beside_the_lend(lend_directory),
+            ),
+            core_nodes_project_directory: a_directory_that_is_there(
+                core_nodes_project_directory_beside_the_lend(lend_directory),
             ),
         }
     }
@@ -169,6 +177,12 @@ pub(crate) fn make_the_projects_venv_current_with_the_runtime_unit_uv(
         )))
     };
     declare_each_first_party_module_in_the_project(project_directory, first_party_module_wheels)?;
+    declare_the_core_nodes_project_in_the_project(
+        project_directory,
+        packages_the_runtime_unit_carries
+            .core_nodes_project_directory
+            .as_deref(),
+    )?;
     declare_the_carried_wheels_in_the_project(
         project_directory,
         packages_the_runtime_unit_carries
@@ -338,6 +352,59 @@ fn declare_each_first_party_module_in_the_project(
     }
     for import_folder in each_import_folder_below(project_directory) {
         link_each_first_party_module_the_import_names(&import_folder, first_party_module_wheels)?;
+    }
+    Ok(())
+}
+
+/// Link the Core Nodes project the runtime unit carries into the project as its import, and
+/// declare it in the project's `pyproject.toml` as a uv path source through that link, so any
+/// `uv sync` keeps its requirements. Nothing is linked when the unit carries no Core Nodes
+/// project, and the Core Nodes project opened as a project itself takes no link.
+fn declare_the_core_nodes_project_in_the_project(
+    project_directory: &Path,
+    core_nodes_project_directory: Option<&Path>,
+) -> Result<(), ProjectVenvNotMade> {
+    let Some(core_nodes_project_directory) = core_nodes_project_directory else {
+        return Ok(());
+    };
+    let pyproject_path = project_directory.join("pyproject.toml");
+    let not_declared_because = |why: String| ProjectVenvNotMade::Failed {
+        failed_because: format!(
+            "the Core Nodes project the runtime carries at {} could not be declared in {}: {why}",
+            core_nodes_project_directory.display(),
+            project_directory.display()
+        ),
+    };
+    let project_file = match TatolabProjectFile::read_from_project_directory(project_directory) {
+        Ok(project_file) => project_file,
+        Err(ProjectRepositoryRefusal::NotAProject { .. }) => return Ok(()),
+        Err(refusal) => return Err(not_declared_because(refusal.to_string())),
+    };
+    link_the_core_project_into(project_directory, core_nodes_project_directory)
+        .map_err(|refusal| not_declared_because(refusal.to_string()))?;
+    let pyproject_as_it_was = match std::fs::read_to_string(&pyproject_path) {
+        Ok(pyproject_as_it_was) => pyproject_as_it_was,
+        Err(not_read) if not_read.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(not_read) => {
+            return Err(not_declared_because(format!(
+                "{} was not read: {not_read}",
+                pyproject_path.display()
+            )));
+        }
+    };
+    let pyproject = pyproject_with_each_import_as_a_uv_path_source(
+        &pyproject_as_it_was,
+        project_directory,
+        &every_import_a_project_resolves(project_directory, &project_file),
+    )
+    .map_err(|refusal| not_declared_because(refusal.to_string()))?;
+    if pyproject != pyproject_as_it_was {
+        std::fs::write(&pyproject_path, pyproject).map_err(|not_written| {
+            not_declared_because(format!(
+                "{} was not written: {not_written}",
+                pyproject_path.display()
+            ))
+        })?;
     }
     Ok(())
 }
@@ -990,6 +1057,13 @@ pub(crate) fn lock_the_projects_python_requirements_with_the_runtime_unit_uv(
     declare_each_first_party_module_in_the_project(
         project_directory,
         &packages_the_runtime_unit_carries.first_party_module_wheels,
+    )
+    .map_err(|not_declared| Error::from(not_declared).to_string())?;
+    declare_the_core_nodes_project_in_the_project(
+        project_directory,
+        packages_the_runtime_unit_carries
+            .core_nodes_project_directory
+            .as_deref(),
     )
     .map_err(|not_declared| Error::from(not_declared).to_string())?;
     declare_the_carried_wheels_in_the_project(
@@ -1871,6 +1945,66 @@ mod tests {
     }
 
     #[test]
+    fn the_core_nodes_project_is_linked_as_an_import_and_declared_as_a_uv_path_source() {
+        let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
+        let project_file = TatolabProjectFile::of_a_new_project("show");
+        std::fs::write(
+            project.project_directory.join("tatolab-project.json"),
+            project_file.canonical_bytes().unwrap(),
+        )
+        .unwrap();
+        let core_nodes_project_directory = project
+            .project_directory
+            .parent()
+            .unwrap()
+            .join("core-projects/tatolab-core-nodes");
+        std::fs::create_dir_all(&core_nodes_project_directory).unwrap();
+        std::fs::write(
+            core_nodes_project_directory.join("tatolab-project.json"),
+            TatolabProjectFile::of_a_new_project("Core Nodes")
+                .canonical_bytes()
+                .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            core_nodes_project_directory.join("pyproject.toml"),
+            "[project]\nname = \"tatolab-core-nodes\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+
+        for _each_load in 0..2 {
+            declare_the_core_nodes_project_in_the_project(
+                &project.project_directory,
+                Some(&core_nodes_project_directory),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            std::fs::read_link(project.project_directory.join("imports/core-nodes")).unwrap(),
+            core_nodes_project_directory
+        );
+        let pyproject: toml::Value = toml::from_str(
+            &std::fs::read_to_string(project.project_directory.join("pyproject.toml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            pyproject["project"]["dependencies"].as_array().unwrap(),
+            &[toml::Value::from("tatolab-core-nodes")]
+        );
+        assert_eq!(
+            pyproject["tool"]["uv"]["sources"]["tatolab-core-nodes"],
+            toml::from_str::<toml::Value>("path = \"imports/core-nodes\"\npackage = false")
+                .unwrap()
+        );
+        assert_eq!(
+            TatolabProjectFile::read_from_project_directory(&project.project_directory).unwrap(),
+            project_file,
+            "the project file never records the core project"
+        );
+    }
+
+    #[test]
     fn a_running_venv_is_synced_again_once_a_first_party_module_changes() {
         let project = ProjectAndAStubUv::whose_uv_runs("exit 0");
         project.given_a_venv_interpreter_running("exit 0");
@@ -1996,6 +2130,7 @@ mod tests {
             first_party_module_wheels: Vec::new(),
             carried_wheels_directory: Some(carried_wheels_directory),
             carried_python_downloads_directory: Some(carried_python_downloads_directory),
+            core_nodes_project_directory: None,
         }
     }
 

@@ -4,6 +4,7 @@
 //! A project as a versioned repository of assets, which the runtime alone writes.
 
 mod canonical_project_json;
+mod core_project_import;
 mod project_asset;
 #[cfg(feature = "history")]
 mod project_asset_file_bytes;
@@ -37,6 +38,10 @@ mod stream_graph_studio_contract;
 mod tatolab_view_manifest;
 
 pub use canonical_project_json::canonical_project_json_bytes;
+pub use core_project_import::{
+    CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
+    the_core_project_link_in, the_core_project_linked_into,
+};
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
     ProjectAssetKind, ProjectAssetSidecar, ProjectRelativeAssetPath,
@@ -63,6 +68,7 @@ pub use project_pyproject_import_sources::{
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,
     first_party_module_links_a_pyproject_names,
     pyproject_with_each_first_party_module_as_a_uv_path_source,
+    pyproject_with_each_import_as_a_uv_path_source,
     pyproject_with_the_carried_wheels_as_a_uv_find_links_source,
 };
 #[cfg(feature = "history")]

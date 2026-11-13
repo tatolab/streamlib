@@ -264,6 +264,11 @@ pub(crate) fn refuse_an_import_folder_name(folder: &str) -> Result<(), ProjectRe
     if folder.starts_with('.') {
         return Err(refuse("it starts with `.`"));
     }
+    if folder == crate::core_project_import::CORE_PROJECT_IMPORT_FOLDER {
+        return Err(refuse(
+            "the runtime holds the Core Nodes project it carries there",
+        ));
+    }
     if DIRECTORIES_A_PROJECT_SCAN_SKIPS.contains(&folder) {
         return Err(refuse("a project's scan never enters it"));
     }

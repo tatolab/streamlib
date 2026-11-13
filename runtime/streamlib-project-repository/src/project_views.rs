@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::core_project_import::every_import_a_project_resolves;
 use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
 use crate::project_file::TatolabProjectFile;
 use crate::project_import_folders::is_one_folder_name;
@@ -68,8 +69,7 @@ pub fn every_view_a_project_and_its_imports_bring(
             import_folder: None,
         },
     )?;
-    for import in project_file
-        .dependencies
+    for import in every_import_a_project_resolves(project_directory, &project_file)
         .iter()
         .filter(|import| is_one_folder_name(&import.folder))
     {

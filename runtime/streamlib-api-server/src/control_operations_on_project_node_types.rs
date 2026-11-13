@@ -53,7 +53,7 @@ impl ControlOperationDispatcher {
                 |project_repository| {
                     let mut import_sources = Vec::new();
                     let mut unread_files_of_each_import = BTreeMap::new();
-                    for import in &project_repository.project_file().dependencies {
+                    for import in &project_repository.every_import_the_project_resolves() {
                         let import_folder = project_repository
                             .project_directory()
                             .join(PROJECT_IMPORTS_DIRECTORY)
