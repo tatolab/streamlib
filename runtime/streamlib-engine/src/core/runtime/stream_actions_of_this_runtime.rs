@@ -4198,7 +4198,8 @@ fn another_copy_of_the_project_holds(
 
 /// Refuse a load of `stream_location` under `stream_id` when the id is held by
 /// another stream — loaded, or recorded — or by the same stream of another copy of its
-/// project, naming both.
+/// project, naming both. A record an earlier runtime wrote from the same project
+/// directory holds nothing: the load writes its own record over it.
 fn refuse_an_id_another_location_holds(
     stream_id: &str,
     stream_location: &StreamLocation,
@@ -4229,6 +4230,16 @@ fn refuse_an_id_another_location_holds(
                 the_state_a_refusal_names_a_record_by(record),
                 record.location
             ))
+        }
+        Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(earlier))
+            if earlier
+                .project_directory
+                .as_deref()
+                .is_some_and(|recorded_directory| {
+                    the_same_directory(recorded_directory, &stream_location.project_directory)
+                }) =>
+        {
+            Ok(())
         }
         Some(StreamRecordAsRead::RecordedByAnEarlierRuntime(earlier)) => refuse(format!(
             "a record an earlier runtime wrote{}",
