@@ -509,7 +509,19 @@ const PROJECT_VENV_SYNC_STAMP_FILE_NAME: &str = "tatolab-runtime-sync";
 
 /// The files of a project whose change makes its `.venv` sync again.
 const PROJECT_FILES_A_VENV_IS_SYNCED_FROM: [&str; 3] =
-    ["pyproject.toml", "uv.lock", ".python-version"];
+    ["pyproject.toml", PROJECT_LOCK_FILE_NAME, ".python-version"];
+
+/// The project's lock file, which `uv sync` may write as it syncs.
+const PROJECT_LOCK_FILE_NAME: &str = "uv.lock";
+
+/// Whether a venv sync stamp is taken over the project's `uv.lock` too.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProjectLockFileInTheVenvSyncStamp {
+    /// The stamp a venv is recorded as synced with.
+    TakenIn,
+    /// Only what uv reads and never writes, compared across one sync.
+    LeftOut,
+}
 
 /// What a project's `.venv` would be synced from now: the SHA-256 over its
 /// `pyproject.toml`, `uv.lock` and `.python-version`, each import's
@@ -521,6 +533,20 @@ fn the_venv_sync_stamp_of(
     project_directory: &Path,
     packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
 ) -> Option<String> {
+    the_venv_sync_stamp_with_the_lock_file(
+        project_directory,
+        packages_the_runtime_unit_carries,
+        ProjectLockFileInTheVenvSyncStamp::TakenIn,
+    )
+}
+
+/// The venv sync stamp of the project in `project_directory`, its `uv.lock`
+/// taken in or left out as `lock_file_in_the_stamp` says.
+fn the_venv_sync_stamp_with_the_lock_file(
+    project_directory: &Path,
+    packages_the_runtime_unit_carries: &PackagesTheRuntimeUnitCarries,
+    lock_file_in_the_stamp: ProjectLockFileInTheVenvSyncStamp,
+) -> Option<String> {
     use sha2::{Digest, Sha256};
     if !project_directory.join("pyproject.toml").is_file() {
         return None;
@@ -528,6 +554,11 @@ fn the_venv_sync_stamp_of(
     let mut stamp = Sha256::new();
     stamp.update(env!("CARGO_PKG_VERSION").as_bytes());
     for file_name in PROJECT_FILES_A_VENV_IS_SYNCED_FROM {
+        if file_name == PROJECT_LOCK_FILE_NAME
+            && lock_file_in_the_stamp == ProjectLockFileInTheVenvSyncStamp::LeftOut
+        {
+            continue;
+        }
         stamp.update(file_name.as_bytes());
         stamp.update(std::fs::read(project_directory.join(file_name)).unwrap_or_default());
     }
@@ -799,8 +830,9 @@ fn the_file_url_of(directory: &Path) -> String {
 }
 
 /// `uv sync` in `project_directory`, then the stamp naming what it was made
-/// from, taken after the sync since it may write `uv.lock`; refused in uv's
-/// own words. When the unit carries a Python it is installed first, and when it carries wheels
+/// from, taken after the sync since it may write `uv.lock`, and left unwritten
+/// when a file uv reads changed while it synced, so the next load syncs again;
+/// refused in uv's own words. When the unit carries a Python it is installed first, and when it carries wheels
 /// the sync runs offline first and reaches an index only when that fails.
 fn sync_the_venv_with_the_runtime_unit_uv(
     project_directory: &Path,
@@ -812,6 +844,11 @@ fn sync_the_venv_with_the_runtime_unit_uv(
 ) -> Result<(), ProjectVenvNotMade> {
     let project = project_directory.display();
     let venv = project_directory.join(".venv");
+    let what_uv_reads_before_the_sync = the_venv_sync_stamp_with_the_lock_file(
+        project_directory,
+        packages_the_runtime_unit_carries,
+        ProjectLockFileInTheVenvSyncStamp::LeftOut,
+    );
     let leave_what_a_failed_sync_leaves = || match what_a_failed_sync_leaves {
         WhatAFailedSyncLeaves::NoVenv => remove_what_stands_at(&venv),
         WhatAFailedSyncLeaves::TheVenvAsItWas => Ok(()),
@@ -903,6 +940,29 @@ fn sync_the_venv_with_the_runtime_unit_uv(
         });
     }
     tracing::info!("`uv sync` made {}", venv.display());
+    let what_uv_reads_now = the_venv_sync_stamp_with_the_lock_file(
+        project_directory,
+        packages_the_runtime_unit_carries,
+        ProjectLockFileInTheVenvSyncStamp::LeftOut,
+    );
+    if what_uv_reads_now != what_uv_reads_before_the_sync {
+        tracing::info!(
+            venv = %venv.display(),
+            "a file uv syncs the venv from changed while it synced, so the venv is left \
+             unstamped and its next load syncs it again"
+        );
+        let stamp = venv.join(PROJECT_VENV_SYNC_STAMP_FILE_NAME);
+        if let Err(not_removed) = std::fs::remove_file(&stamp)
+            && not_removed.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                stamp = %stamp.display(),
+                %not_removed,
+                "the venv's earlier sync stamp was not removed, so its next load may not sync it"
+            );
+        }
+        return Ok(());
+    }
     if let Err(not_written) = record_the_venv_synced_with_what_the_project_holds_now(
         project_directory,
         packages_the_runtime_unit_carries,
@@ -1513,6 +1573,37 @@ mod tests {
         project.make_the_venv().expect("the venv is synced again");
 
         assert_eq!(project.uv_runs().len(), 2, "{:?}", project.uv_runs());
+    }
+
+    #[test]
+    fn a_venv_whose_pyproject_changed_while_uv_synced_it_is_left_unstamped_and_synced_again() {
+        let project = ProjectAndAStubUv::whose_uv_runs(
+            "printf '[project]\\nname = \"p\"\\ndependencies = [\"pyserial\"]\\n' > pyproject.toml",
+        );
+        project.given_a_venv_interpreter_running("exit 0");
+        let stamp = project.venv().join(PROJECT_VENV_SYNC_STAMP_FILE_NAME);
+        std::fs::write(&stamp, "stale").unwrap();
+
+        project.make_the_venv().expect("the venv is synced");
+        assert!(
+            !stamp.exists(),
+            "the venv was stamped with what uv never read"
+        );
+
+        project.make_the_venv().expect("the venv is synced again");
+        assert_eq!(project.uv_runs().len(), 2, "{:?}", project.uv_runs());
+        assert!(stamp.is_file());
+    }
+
+    #[test]
+    fn a_venv_whose_uv_lock_uv_wrote_as_it_synced_is_stamped_and_runs_no_uv_on_its_next_load() {
+        let project = ProjectAndAStubUv::whose_uv_runs("echo 'version = 1' > uv.lock");
+        project.given_a_venv_interpreter_running("exit 0");
+
+        project.make_the_venv().expect("the venv is synced");
+        project.make_the_venv().expect("the venv is current");
+
+        assert_eq!(project.uv_runs(), project.one_sync_in_the_project());
     }
 
     #[test]

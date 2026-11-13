@@ -4143,6 +4143,9 @@ impl Runner {
             .stream_action_queue_of_each_project
             .actions_under_way()
         {
+            if !action.kind.works_on_its_projects_streams() {
+                continue;
+            }
             let working_on_it = StreamActionWorkingOnAStream {
                 action_id: action.action_id.clone(),
                 step: action.step,
@@ -7784,6 +7787,56 @@ mod tests {
         assert_eq!(stub_uv.runs(), ["sync"]);
         assert!(project.interpreter().is_file());
         assert!(runner.list_streams().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn a_projects_streams_keep_their_listed_state_while_its_venv_is_made_current() {
+        let state_directory = tempfile::tempdir().unwrap();
+        let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+        let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+        let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+        stub_uv.handed_to(&runner);
+        std::fs::write(&gate, "").unwrap();
+        let opened = runner
+            .open_project(project_open_or_reload_request_of(project.path()))
+            .unwrap();
+        the_stream_action_once_finished(&runner, &opened.action_id);
+        let the_listed_states = |runner: &Runner| {
+            runner
+                .list_streams()
+                .into_iter()
+                .map(|listing| {
+                    (
+                        listing.stream_id,
+                        listing.state,
+                        listing.failed_because,
+                        listing.stream_action_under_way,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let listed_before_the_sync = the_listed_states(&runner);
+        assert!(!listed_before_the_sync.is_empty());
+        std::fs::remove_file(&gate).unwrap();
+        std::fs::write(
+            project.path().join("pyproject.toml"),
+            "[project]\nname = \"camera\"\ndependencies = [\"pyserial\"]\n",
+        )
+        .unwrap();
+
+        let queued = runner
+            .make_the_projects_venv_current(project.path())
+            .unwrap();
+        the_stream_action_once(&runner, &queued.action_id, |action| {
+            action.step == Some(StreamActionStep::MakingTheVenv)
+        });
+
+        assert_eq!(the_listed_states(&runner), listed_before_the_sync);
+        std::fs::write(&gate, "").unwrap();
+        let done = the_stream_action_once_finished(&runner, &queued.action_id);
+        assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+        assert_eq!(stub_uv.runs().len(), 2, "{:?}", stub_uv.runs());
     }
 
     #[test]

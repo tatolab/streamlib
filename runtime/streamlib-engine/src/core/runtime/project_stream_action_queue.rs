@@ -71,6 +71,12 @@ impl StreamActionKind {
     pub fn unloads_its_streams(self) -> bool {
         matches!(self, Self::Stop | Self::Close | Self::Remove | Self::Delete)
     }
+
+    /// Whether the action works on its project's streams, so a listing shows
+    /// them under it while it is under way.
+    pub fn works_on_its_projects_streams(self) -> bool {
+        !matches!(self, Self::MakeTheVenvCurrent)
+    }
 }
 
 /// Where a stream action is in its life.
