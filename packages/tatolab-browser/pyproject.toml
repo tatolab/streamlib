@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-browser"
-version = "0.68.82"
+version = "0.68.95"
 description = "A web page as a stream source: the machine's shared Chromium (CEF) browser host renders it offscreen as a tab, and its frames, audio and events are published through the module host table."
 readme = "README.md"
 requires-python = ">=3.12"
