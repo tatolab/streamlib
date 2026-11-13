@@ -422,11 +422,13 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           set -euo pipefail
-          curl -fsSL "$GET_TATOLAB_COM_URL/catalog/v1.json" | python3 -c "
-          import hashlib, json, sys, urllib.request
-          for entry in json.load(sys.stdin)['entries']:
-              served = hashlib.sha256(urllib.request.urlopen(entry['download_url']).read()).hexdigest()
-              if served != entry['download_sha256']:
-                  print('::error::' + entry['download_url'] + ' is served with sha256 ' + served + ', not the ' + entry['download_sha256'] + ' the catalog lists')
-                  sys.exit(1)
-          "
+          # curl, not urllib: get.tatolab.com's bot protection answers urllib's User-Agent with a 403.
+          curl -fsSL "$GET_TATOLAB_COM_URL/catalog/v1.json" \
+            | python3 -c "import json, sys; [print(entry['download_url'], entry['download_sha256']) for entry in json.load(sys.stdin)['entries']]" \
+            | while read -r download_url catalog_sha256; do
+                served_sha256="$(curl -fsSL "$download_url" | sha256sum | cut -d ' ' -f 1)"
+                if [ "$served_sha256" != "$catalog_sha256" ]; then
+                  echo "::error::$download_url is served with sha256 $served_sha256, not the $catalog_sha256 the catalog lists"
+                  exit 1
+                fi
+              done
