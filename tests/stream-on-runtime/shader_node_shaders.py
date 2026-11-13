@@ -51,3 +51,14 @@ float4 horizontal_blur(ImageInput image)
 """
 )
 def horizontal_blur(image: ImageFrame) -> ImageFrame: ...
+
+
+@node.shader(
+    """
+float4 red_ramp_of_the_extent_of(ImageInput extent_from)
+{
+    return float4(extent_from.uv.x, 0.0, 0.0, 1.0);
+}
+"""
+)
+def red_ramp_of_the_extent_of(extent_from: ImageFrame) -> ImageFrame: ...

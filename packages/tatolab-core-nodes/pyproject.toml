@@ -6,8 +6,5 @@ requires-python = ">=3.12"
 # NumPy and Pillow decode an `ImageFile`'s asset.
 dependencies = ["tatolab-stream>=0.54.3", "numba>=0.61", "numpy>=2.1", "pillow>=10.0"]
 
-[dependency-groups]
-test = ["pytest>=7.0"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]

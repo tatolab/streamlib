@@ -8,9 +8,19 @@ from tatolab.stream import StreamBuilder, graph_generator
 from shader_node_probes import (
     FrameDiscardingSink,
     KnownPixelsVideoSource,
+    QuarterAmount,
     ShadedFramePixelReadingSink,
 )
-from shader_node_shaders import horizontal_blur, invert, swap_red_and_blue, tint
+from shader_node_shaders import (
+    horizontal_blur,
+    invert,
+    red_ramp_of_the_extent_of,
+    swap_red_and_blue,
+    tint,
+)
+
+#: Frames enough that the source outlasts the start of the stream's function node pool.
+FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL = 2000
 
 
 def _source_into_tint_into_sink(stream_builder: StreamBuilder, texture_format: str) -> None:
@@ -76,3 +86,49 @@ def chain_with_a_blur_in_the_middle(stream_builder: StreamBuilder) -> None:
     _source_into_shader_chain_into_sink(
         stream_builder, CHAIN_WITH_A_BLUR_IN_THE_MIDDLE, every_intermediate_read_twice=False
     )
+
+
+def _function_node_into_the_amount_of_tint(
+    stream_builder: StreamBuilder, *, tint_fused_into_invert: bool
+) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        config={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    quarter_amount = stream_builder.add(QuarterAmount)
+    tinted = stream_builder.add(tint, name="tint")
+    sink = stream_builder.add(ShadedFramePixelReadingSink)
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    stream_builder.connect(quarter_amount.output("result"), tinted.input("amount"))
+    shaded = tinted.output("result")
+    if tint_fused_into_invert:
+        inverted = stream_builder.add(invert, name="invert")
+        stream_builder.connect(shaded, inverted.input("image"))
+        shaded = inverted.output("result")
+    stream_builder.connect(shaded, sink.input("shaded"))
+
+
+@graph_generator
+def function_node_into_the_amount_of_a_tint(stream_builder: StreamBuilder) -> None:
+    _function_node_into_the_amount_of_tint(stream_builder, tint_fused_into_invert=False)
+
+
+@graph_generator
+def function_node_into_the_amount_of_a_tint_fused_into_invert(
+    stream_builder: StreamBuilder,
+) -> None:
+    _function_node_into_the_amount_of_tint(stream_builder, tint_fused_into_invert=True)
+
+
+@graph_generator
+def source_into_a_shader_reading_only_the_extent_of_its_image(
+    stream_builder: StreamBuilder,
+) -> None:
+    source = stream_builder.add(KnownPixelsVideoSource, config={"texture_format": "rgba8_unorm"})
+    ramp = stream_builder.add(red_ramp_of_the_extent_of)
+    sink = stream_builder.add(ShadedFramePixelReadingSink)
+    stream_builder.connect(source.output("video"), ramp.input("extent_from"))
+    stream_builder.connect(ramp.output("result"), sink.input("shaded"))

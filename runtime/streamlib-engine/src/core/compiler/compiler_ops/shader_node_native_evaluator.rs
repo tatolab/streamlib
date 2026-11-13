@@ -434,8 +434,15 @@ impl ShaderNodeNativeEvaluatorProcessor {
             })
             .collect();
         let (output_width, output_height) = output_extent_of_each_member[kernel.output_member()];
+        let compiled_kernel = self.kernel_for(gpu, kernel_index, kernel, &backings)?;
+        bindings.retain(|binding| {
+            compiled_kernel
+                .bindings()
+                .iter()
+                .any(|kept| kept.binding == binding.binding)
+        });
         Ok(BatchedComputeKernelDispatch {
-            kernel: self.kernel_for(gpu, kernel_index, kernel, &backings)?,
+            kernel: compiled_kernel,
             bindings,
             push_constants: kernel.push_constants(
                 (output_width, output_height),
@@ -483,7 +490,10 @@ impl ShaderNodeNativeEvaluatorProcessor {
         let (_, compiled) = gpu.create_or_reuse_compute_kernel(
             &spirv,
             kernel.push_constant_byte_len() as u32,
-            &ShaderNodeIslandKernel::declared_bindings(image_argument_backings),
+            &ShaderNodeIslandKernel::declared_bindings_the_compiled_kernel_kept(
+                image_argument_backings,
+                &crate::core::rhi::derive_bindings_from_spirv(&spirv)?.0,
+            ),
             &entry_point,
         )?;
         self.kernels_by_slang_source

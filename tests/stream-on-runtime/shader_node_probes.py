@@ -49,9 +49,20 @@ def _report(probe_name: str, observation_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"probe": probe_name, "pid": os.getpid(), **observation}))
 
 
+#: What `QuarterAmount` hands out: an amount no shader node of these scenarios has as its default.
+QUARTER_AMOUNT = 0.25
+
+
+@node.function
+def QuarterAmount() -> float:  # noqa: N802
+    """A quarter, whatever the time: a function node with a value to link into a shader node."""
+    return QUARTER_AMOUNT
+
+
 @dataclasses.dataclass
 class KnownPixelsVideoSourceConfig:
     texture_format: str = "rgba8_unorm"
+    frames_to_publish: int = FRAMES_TO_PUBLISH
 
 
 @node.process(execution="continuous", interval_ms=30)
@@ -62,13 +73,14 @@ class KnownPixelsVideoSource:
 
     def __init__(self, config: KnownPixelsVideoSourceConfig) -> None:
         self._texture_format = config.texture_format
+        self._frames_to_publish = config.frames_to_publish
         self._output_texture_ring = NodeOutputTextureRing(
             config.texture_format, ["texture_binding"], depth=4
         )
         self._frames_published = 0
 
     def process(self, ctx) -> None:
-        if self._frames_published >= FRAMES_TO_PUBLISH:
+        if self._frames_published >= self._frames_to_publish:
             return
         texture = self._output_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, FRAME_WIDTH, FRAME_HEIGHT

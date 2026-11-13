@@ -37,12 +37,11 @@ Every Color, Filters, Transform and Composite node, and every generator but Soli
 `@node.shader`: Slang the runtime compiles and runs on the GPU, each setting a number input a
 number node can drive.
 
-`streams/` holds three streams:
+`streams/` holds two streams:
 
 - `main`: drifting noise folded into a kaleidoscope that cycles through colours, with a tone,
   into Program.
 - `spotlight`: a circle swinging over a gradient.
-- `every-picture-node`: one of each picture node, wired so each one runs.
 
 `views/program/` is the Program view: a node with a `video` input, drawn full frame, and an
 `audio` input, drawn as one level meter per channel.
@@ -67,4 +66,5 @@ VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pillow -e ../../sdk/tatolab
 
 The suite checks each node's group, description and Slang signature, and each stream against
 the nodes and ports the project brings. It compiles no Slang and runs no stream: that takes a
-runtime.
+runtime, and `tests/stream-on-runtime/test_core_nodes_project.py` does it, starting each stream
+here and one of each shader node on `tatolabd`.

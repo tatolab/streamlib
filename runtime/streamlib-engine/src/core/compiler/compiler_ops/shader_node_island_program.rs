@@ -12,7 +12,7 @@ use super::shader_node_program::{
     SHADER_NODE_PUSH_CONSTANT_BYTES_AT_MOST, ShaderNodeImageInputBacking,
     ShaderNodeImageInputExtent, ShaderNodeInputValueType, ShaderNodeProgram,
 };
-use crate::core::rhi::{ComputeBindingDeclaration, ComputeBindingKind};
+use crate::core::rhi::{ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec};
 
 /// Where one input of an island member takes its value from.
 #[derive(Debug, Clone, PartialEq)]
@@ -379,6 +379,25 @@ impl ShaderNodeIslandKernel {
                 ),
         )
         .collect()
+    }
+
+    /// The bindings among [`Self::declared_bindings`] the compiled kernel kept,
+    /// and the output binding whether or not it did: the Slang compiler leaves
+    /// out the binding of an Image argument whose pixels no member reads, as a
+    /// generator taking only its extent from an Image does.
+    pub(crate) fn declared_bindings_the_compiled_kernel_kept(
+        image_argument_backings: &[ShaderNodeImageInputBacking],
+        bindings_reflected_from_the_compiled_kernel: &[ComputeBindingSpec],
+    ) -> Vec<ComputeBindingDeclaration> {
+        Self::declared_bindings(image_argument_backings)
+            .into_iter()
+            .filter(|declaration| {
+                declaration.name == SHADER_NODE_OUTPUT_BINDING_NAME
+                    || bindings_reflected_from_the_compiled_kernel
+                        .iter()
+                        .any(|reflected| reflected.name.as_deref() == Some(&declaration.name))
+            })
+            .collect()
     }
 
     /// The Slang compute kernel that evaluates each fused member once per
@@ -781,6 +800,48 @@ pub(crate) mod tests {
             [ShaderNodeKernelImageArgument::ReadAt("source_image".into())]
         );
         assert_eq!(kernels[0].float_arguments().len(), 2);
+    }
+
+    #[test]
+    fn a_kernel_whose_member_reads_no_pixel_of_its_image_declares_no_binding_for_it() {
+        let stripes_sized_from_an_image = shader_program(
+            "stripes",
+            "return float4(frac(image.uv.x * count), 0.0, 0.0, 1.0);",
+            &["image"],
+            &["count"],
+        );
+        let island = chain_of(vec![("stripes", stripes_sized_from_an_image)]);
+        let kernels = kernels_at_one_extent(&island);
+        let backings = [ShaderNodeImageInputBacking::Rgba8PixelBuffer];
+        let entry_point = ShaderNodeIslandKernel::entry_point(0);
+        let spirv = crate::core::rhi::SlangShaderSourceCompiler::new()
+            .compile_or_reuse(
+                &kernels[0].compute_kernel_slang_source(&island, 0, &backings),
+                crate::core::rhi::ShaderCompilationTargetStage::Compute,
+                &entry_point,
+                &entry_point,
+            )
+            .expect("the kernel compiles");
+        let (reflected, push_constant_byte_len) =
+            crate::core::rhi::derive_bindings_from_spirv(&spirv).expect("the kernel reflects");
+
+        let declared = ShaderNodeIslandKernel::declared_bindings_the_compiled_kernel_kept(
+            &backings, &reflected,
+        );
+
+        assert_eq!(
+            declared
+                .iter()
+                .map(|declaration| declaration.name.as_str())
+                .collect::<Vec<_>>(),
+            [SHADER_NODE_OUTPUT_BINDING_NAME]
+        );
+        crate::core::rhi::reconcile_compute_binding_declarations(&declared, &reflected)
+            .expect("what the kernel declares is what the shader kept");
+        assert_eq!(
+            push_constant_byte_len as usize,
+            kernels[0].push_constant_byte_len()
+        );
     }
 
     #[test]

@@ -145,9 +145,3 @@ def test_each_stream_names_only_nodes_and_ports_the_project_brings(stream_docume
         assert target["port"] in ports(type_by_node_id[target["node"]], "input")
         assert (target["node"], target["port"]) not in inputs_linked
         inputs_linked.add((target["node"], target["port"]))
-
-
-def test_every_picture_node_is_in_the_stream_that_shows_them_all():
-    graph = json.loads((PROJECT_DIRECTORY / "streams/every-picture-node.graph.json").read_text())
-    placed = {node["type"] for node in graph["nodes"]}
-    assert set(SHADER_NODES) <= placed
