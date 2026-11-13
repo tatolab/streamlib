@@ -403,6 +403,14 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                     "start_playback",
                 ))
             }
+            fn make_the_projects_venv_current(
+                &self,
+                _project_directory: &::std::path::Path,
+            ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::StreamActionQueued> {
+                Err($crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(
+                    "make_the_projects_venv_current",
+                ))
+            }
             fn reload_project(
                 &self,
                 _request: ::streamlib::sdk::runtime::ProjectOpenOrReloadRequest,

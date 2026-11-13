@@ -616,6 +616,12 @@ fn the_notification_of_an_announcement(
             transaction: None,
             files: Some(files),
         },
+        ProjectChangeOnTheFeed::VenvMadeCurrent => ProjectChangedNotificationParams {
+            project,
+            change: ProjectChangeKindOnTheWire::VenvMadeCurrent,
+            transaction: None,
+            files: None,
+        },
         ProjectChangeOnTheFeed::FilesChangedUnnamed => ProjectChangedNotificationParams {
             project,
             change: ProjectChangeKindOnTheWire::Missed,

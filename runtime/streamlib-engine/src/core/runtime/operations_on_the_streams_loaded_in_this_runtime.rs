@@ -106,6 +106,12 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::start_playback`].
     fn start_playback(&self, project_directory: &Path) -> Result<StreamActionQueued>;
 
+    /// [`Runner::make_the_projects_venv_current`].
+    fn make_the_projects_venv_current(
+        &self,
+        project_directory: &Path,
+    ) -> Result<StreamActionQueued>;
+
     /// [`Runner::create_project`].
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued>;
 
@@ -282,6 +288,13 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
 
     fn start_playback(&self, project_directory: &Path) -> Result<StreamActionQueued> {
         Runner::start_playback(self, project_directory)
+    }
+
+    fn make_the_projects_venv_current(
+        &self,
+        project_directory: &Path,
+    ) -> Result<StreamActionQueued> {
+        Runner::make_the_projects_venv_current(self, project_directory)
     }
 
     fn create_project(&self, request: CreateProjectRequest) -> Result<ProjectCreationQueued> {

@@ -567,7 +567,7 @@ const OneStreamActionRequest = z.strictObject({
 });
 
 /** @type {z.ZodType<ControlContract.StreamActionKindOnTheWire>} */
-const StreamActionKindOnTheWire = z.union([z.literal("open"), z.literal("load"), z.literal("start_playback"), z.literal("stop"), z.literal("close"), z.literal("remove"), z.literal("delete"), z.literal("reload_at_start")]);
+const StreamActionKindOnTheWire = z.union([z.literal("open"), z.literal("load"), z.literal("start_playback"), z.literal("stop"), z.literal("close"), z.literal("remove"), z.literal("delete"), z.literal("reload_at_start"), z.literal("make_venv_current")]);
 
 /** @type {z.ZodType<ControlContract.StreamActionStateOnTheWire>} */
 const StreamActionStateOnTheWire = z.union([z.literal("queued"), z.literal("in_progress"), z.literal("done"), z.literal("failed"), z.literal("cancelled")]);
@@ -1348,7 +1348,7 @@ const UndoOrRedoRequest = z.strictObject({
 });
 
 /** @type {z.ZodType<ControlContract.ProjectChangeKindOnTheWire>} */
-const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("files_changed"), z.literal("missed")]);
+const ProjectChangeKindOnTheWire = z.union([z.literal("applied"), z.literal("refused"), z.literal("media_facts_read"), z.literal("venv_made_current"), z.literal("files_changed"), z.literal("missed")]);
 
 /** @type {z.ZodType<ControlContract.ProjectChangedNotificationParams>} */
 const ProjectChangedNotificationParams = z.looseObject({

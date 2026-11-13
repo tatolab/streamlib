@@ -44,6 +44,9 @@ pub enum ProjectChangeOnTheFeed {
     /// Files in the project's folder changed that the OS did not name, so a client lists the
     /// project again.
     FilesChangedUnnamed,
+    /// The runtime made the project's venv current with what it holds, so the node types its
+    /// installed distributions declare are listed anew; no history records it.
+    VenvMadeCurrent,
 }
 
 /// A hold on the watch of one project's folder, watched while any hold lives and the project is
@@ -145,6 +148,14 @@ impl ProjectRepositoriesOpenInThisRuntime {
         self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
             project,
             change: ProjectChangeOnTheFeed::MediaFactsRead,
+        });
+    }
+
+    /// Announce that the runtime made the venv of `project` current with what it holds.
+    pub fn announce_the_venv_made_current(&self, project: Uuid) {
+        self.announce_on_the_change_feed(ProjectChangeFeedAnnouncement {
+            project,
+            change: ProjectChangeOnTheFeed::VenvMadeCurrent,
         });
     }
 

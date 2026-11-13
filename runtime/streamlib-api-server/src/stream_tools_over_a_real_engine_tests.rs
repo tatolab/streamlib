@@ -475,6 +475,15 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
             project_directory,
         )
     }
+    fn make_the_projects_venv_current(
+        &self,
+        project_directory: &Path,
+    ) -> Result<StreamActionQueued> {
+        OperationsOnTheStreamsLoadedInThisRuntime::make_the_projects_venv_current(
+            self.engine.as_ref(),
+            project_directory,
+        )
+    }
     fn create_project(
         &self,
         request: streamlib::sdk::runtime::CreateProjectRequest,
@@ -2626,6 +2635,81 @@ async fn a_control_stream_subscriber_is_sent_a_transact_another_client_made_and_
         graph_over_control["result"]["nodes"],
         graph_over_mcp["nodes"]
     );
+}
+
+/// An import added to a project with a `pyproject.toml` has its venv synced on the project's
+/// stream action queue, off the answer, and the subscriber of its change feed is sent
+/// `venv_made_current` once that is done.
+///
+/// Mental-revert: without `add_dependency` queueing the venv's making current, uv never runs and
+/// no `venv_made_current` arrives; without the announcement, the wait times out.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_added_import_has_the_venv_synced_and_its_subscriber_is_sent_venv_made_current() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let uv_directory = tempfile::tempdir().expect("a directory for the runtime unit's uv");
+    let uv_runs = uv_directory.path().join("runs");
+    let uv_making_the_venv = uv_directory.path().join("uv");
+    write_an_executable_script_from_a_child_process(
+        &uv_making_the_venv,
+        &format!(
+            "#!/bin/sh\necho \"$*\" >> '{runs}'\nmkdir -p .venv/bin && printf '#!/bin/sh\\nexit 0\\n' > .venv/bin/python && chmod 755 .venv/bin/python\n",
+            runs = uv_runs.display()
+        ),
+    );
+    engine
+        .engine
+        .set_runtime_unit_uv_executable(uv_making_the_venv)
+        .expect("the runtime is handed its uv");
+    let arm = a_project_whose_main_stream_holds_one_source();
+    let cell = ProjectWithGraphDocuments::with_no_venv();
+    cell.write_the_graph_document(the_graph_of_a_stream_named("main"));
+    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+        engine.operations_on_the_loaded_streams(),
+    )
+    .await;
+    let mut subscriber = served.control_websocket().await;
+    subscriber
+        .send(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "subscribe_project_changes",
+                      "params": { "projects": [cell.project] } }),
+        )
+        .await;
+    assert_eq!(
+        subscriber.next_message().await["result"]["projects"],
+        json!([cell.project])
+    );
+
+    tool_answer(
+        &served
+            .mcp_tool_result(
+                "add_dependency",
+                json!({ "project_directory": cell.path(), "source": arm.path().display().to_string(),
+                        "author": an_agent_named("alice") }),
+            )
+            .await,
+    )
+    .expect("the arm is imported");
+
+    let venv_made_current = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let notification = subscriber.next_message().await;
+            if notification["params"]["change"] == "venv_made_current" {
+                return notification;
+            }
+        }
+    })
+    .await
+    .expect("the venv's making current is sent as venv_made_current");
+    assert_eq!(venv_made_current["method"], "project_changed");
+    assert_eq!(venv_made_current["params"]["project"], json!(cell.project));
+    assert_eq!(
+        std::fs::read_to_string(&uv_runs)
+            .unwrap_or_default()
+            .lines()
+            .collect::<Vec<_>>(),
+        ["lock", "sync"]
+    );
+    assert!(cell.interpreter().is_file());
 }
 
 #[tokio::test(flavor = "multi_thread")]
