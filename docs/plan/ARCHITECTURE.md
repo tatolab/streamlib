@@ -1077,7 +1077,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   path an example later adopts, so in-stream example surgery stays the exception.
   [consumer-tree-disposition — SHIPPED]
 
-## Processor model & scheduling — IN-FLIGHT (→ playback-controls, kept-node-values, core-nodes-in-every-project; OPEN: resources across streams)
+## Processor model & scheduling — IN-FLIGHT (→ playback-controls, kept-node-values, core-nodes-in-every-project, edit-attribution; OPEN: resources across streams)
 
 - **DECIDED** — A link joins an output port to an input port of the same family (below) and
   carries a message: the envelope, the payload descriptor and the payload. The engine keeps no
@@ -4420,7 +4420,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   runtime-lives-with-tato-studio — SHIPPED #3192]
   Rejected: registering the runtime as a background service the app installs — a launch agent, a systemd user unit or a login item — so it runs with the app closed (owner, 2026-11-05).
 
-## Control plane & observability — IN-FLIGHT (→ control-api-contract, playback-controls, control-client-sdk-and-push)
+## Control plane & observability — IN-FLIGHT (→ control-api-contract, playback-controls, control-client-sdk-and-push, edit-attribution)
 
 - **DECIDED** — The control plane carries no optional capability's routes, and no package
   adds one: nothing a package carries runs in the runtime process (§Packages & extension
