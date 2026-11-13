@@ -78,7 +78,8 @@ pub use project_repositories_open_in_this_runtime::{
 };
 #[cfg(feature = "history")]
 pub use project_repository::{
-    ProjectImportListed, ProjectPythonRequirementsLock, ProjectRepository,
+    CoreProjectDirectoryTheRuntimeCarries, ProjectImportListed, ProjectPythonRequirementsLock,
+    ProjectRepository,
 };
 pub use project_repository_refusal::ProjectRepositoryRefusal;
 #[cfg(feature = "store")]

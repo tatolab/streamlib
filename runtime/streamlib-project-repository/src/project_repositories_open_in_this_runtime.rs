@@ -13,7 +13,9 @@ use crate::project_file::PROJECT_FILE_NAME;
 use crate::project_files_changed_outside_the_runtime_watch::{
     ProjectFilesChangedOutsideTheRuntimeWatch, ProjectFilesToldChanged,
 };
-use crate::project_repository::{ProjectPythonRequirementsLock, ProjectRepository};
+use crate::project_repository::{
+    CoreProjectDirectoryTheRuntimeCarries, ProjectPythonRequirementsLock, ProjectRepository,
+};
 use crate::project_repository_refusal::ProjectRepositoryRefusal;
 use crate::project_transaction::{AppliedProjectTransaction, ProjectActionApplyOutcome};
 
@@ -79,6 +81,7 @@ pub struct ProjectRepositoriesOpenInThisRuntime {
     project_files_watch_wanted_by_project: Mutex<BTreeMap<Uuid, Weak<ProjectFilesWatchWanted>>>,
     project_change_feed: broadcast::Sender<ProjectChangeFeedAnnouncement>,
     python_requirements_lock: Option<ProjectPythonRequirementsLock>,
+    core_project_directory_the_runtime_carries: Option<CoreProjectDirectoryTheRuntimeCarries>,
 }
 
 impl Default for ProjectRepositoriesOpenInThisRuntime {
@@ -88,6 +91,7 @@ impl Default for ProjectRepositoriesOpenInThisRuntime {
             project_files_watch_wanted_by_project: Mutex::default(),
             project_change_feed: broadcast::channel(PROJECT_CHANGE_FEED_CAPACITY).0,
             python_requirements_lock: None,
+            core_project_directory_the_runtime_carries: None,
         }
     }
 }
@@ -102,6 +106,18 @@ impl ProjectRepositoriesOpenInThisRuntime {
             python_requirements_lock: Some(python_requirements_lock),
             ..Self::default()
         }
+    }
+
+    /// These projects, each one opened from now on reading through its link to the core
+    /// project while it points at the directory `core_project_directory_the_runtime_carries`
+    /// answers.
+    pub fn reading_the_core_project_the_runtime_carries_at(
+        mut self,
+        core_project_directory_the_runtime_carries: CoreProjectDirectoryTheRuntimeCarries,
+    ) -> Self {
+        self.core_project_directory_the_runtime_carries =
+            Some(core_project_directory_the_runtime_carries);
+        self
     }
 
     /// The open project whose `tatolab-project.json` names `project`, if this runtime has opened it.
@@ -332,6 +348,13 @@ impl ProjectRepositoriesOpenInThisRuntime {
         let mut opened = ProjectRepository::open(&resolved_project_directory)?;
         if let Some(python_requirements_lock) = &self.python_requirements_lock {
             opened.lock_the_python_requirements_with(Arc::clone(python_requirements_lock));
+        }
+        if let Some(core_project_directory_the_runtime_carries) =
+            &self.core_project_directory_the_runtime_carries
+        {
+            opened.read_the_core_project_the_runtime_carries_at(Arc::clone(
+                core_project_directory_the_runtime_carries,
+            ));
         }
         let project = opened.project_file().project;
         let opened = Arc::new(Mutex::new(opened));

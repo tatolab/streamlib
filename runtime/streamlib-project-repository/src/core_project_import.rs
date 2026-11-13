@@ -52,11 +52,13 @@ pub fn every_import_a_project_resolves(
 /// Link the core project at `core_project_directory` into the project at `project_directory`,
 /// answering whether a link stands there now. The core project opened as a project itself takes
 /// no link, and a link standing at another directory is pointed at this one. A folder or file a
-/// person put at the link's path is refused by name and left as it is.
+/// person put at the link's path is refused by name and left as it is. The link names the core
+/// project by its absolute path, since a relative one would resolve from `imports/`.
 pub fn link_the_core_project_into(
     project_directory: &Path,
     core_project_directory: &Path,
 ) -> Result<bool, ProjectRepositoryRefusal> {
+    let core_project_directory = &std::path::absolute(core_project_directory)?;
     let core_project = TatolabProjectFile::read_from_project_directory(core_project_directory)?;
     let project_file = TatolabProjectFile::read_from_project_directory(project_directory)?;
     let link = the_core_project_link_in(project_directory);
@@ -73,7 +75,7 @@ pub fn link_the_core_project_into(
         }
         return Ok(false);
     }
-    if std::fs::read_link(&link).is_ok_and(|target| target == core_project_directory) {
+    if std::fs::read_link(&link).is_ok_and(|target| &target == core_project_directory) {
         return Ok(true);
     }
     if a_link_stands_there {
