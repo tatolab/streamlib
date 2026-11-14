@@ -3060,7 +3060,7 @@ export type NodeTypeSourceReadWithoutRunningIt = {
   unreadable_modules: Array<NodeModuleNotReadable>;
 } & ({
   source: "project";
-} | {
+} | ({
   /**
    * The imported project's UUID.
    */
@@ -3073,8 +3073,13 @@ export type NodeTypeSourceReadWithoutRunningIt = {
    * The version its copy carried.
    */
   version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
   source: "dependency";
-} | {
+}) | {
   /**
    * The distribution's name.
    */
@@ -3833,7 +3838,7 @@ export type NodeTypeOfOneProjectSource = {
   line?: number | null;
 } & ({
   source: "project";
-} | {
+} | ({
   /**
    * The imported project's UUID.
    */
@@ -3846,8 +3851,13 @@ export type NodeTypeOfOneProjectSource = {
    * The version its copy carried.
    */
   version: string;
+  /**
+   * The imported project's name as the project file in its folder holds it; `null` when
+   * that file does not read.
+   */
+  project_name?: string | null;
   source: "dependency";
-} | {
+}) | {
   /**
    * The distribution's name.
    */

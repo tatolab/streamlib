@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use streamlib::sdk::runtime::{
     ImportedProjectPythonSources, list_a_projects_node_types_and_graph_generators_from_source,
 };
-use streamlib_project_repository::PROJECT_IMPORTS_DIRECTORY;
+use streamlib_project_repository::{PROJECT_IMPORTS_DIRECTORY, TatolabProjectFile};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListProjectNodeTypesToolResult, NodeModuleNotReadable, NodeTypeSourceOrigin,
     NodeTypeSourceReadWithoutRunningIt,
@@ -32,7 +32,44 @@ struct ProjectReadForItsNodeTypeListing {
     project: Uuid,
     project_name: String,
     import_sources: Vec<ImportedProjectPythonSources>,
-    unread_files_of_each_import: BTreeMap<String, Vec<NodeModuleNotReadable>>,
+    what_the_runtime_read_of_each_import: BTreeMap<String, OneImportReadForItsNodeTypeListing>,
+}
+
+/// What the runtime itself reads of one import, beside the sources its interpreter lists.
+struct OneImportReadForItsNodeTypeListing {
+    /// The import's name as the project file in its folder holds it; `None` when that file
+    /// does not read.
+    project_name: Option<String>,
+    unread_files: Vec<NodeModuleNotReadable>,
+}
+
+/// The sources the project's interpreter lists for the project in `project_directory`, read off
+/// the async runtime.
+async fn the_node_type_sources_the_projects_interpreter_lists(
+    project_directory: PathBuf,
+    import_sources: Vec<ImportedProjectPythonSources>,
+) -> Result<Vec<NodeTypeSourceReadWithoutRunningIt>, String> {
+    tokio::task::spawn_blocking(move || {
+        list_a_projects_node_types_and_graph_generators_from_source(
+            &project_directory,
+            &import_sources,
+        )
+    })
+    .await
+    .map_err(|join_failure| {
+        format!("list_project_node_types failed: the listing did not finish: {join_failure}")
+    })?
+    .map_err(|refusal| format!("list_project_node_types failed: {refusal}"))?
+    .into_iter()
+    .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|not_a_source| {
+        format!(
+            "list_project_node_types failed: the project's interpreter listed a source this \
+             runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
+             the runtime's"
+        )
+    })
 }
 
 /// The Python import name of the module at `path`, relative to its source's root.
@@ -57,7 +94,7 @@ impl ControlOperationDispatcher {
                 project_directory,
                 |project_repository| {
                     let mut import_sources = Vec::new();
-                    let mut unread_files_of_each_import = BTreeMap::new();
+                    let mut what_the_runtime_read_of_each_import = BTreeMap::new();
                     for import in &project_repository.every_import_the_project_resolves() {
                         let import_folder = project_repository
                             .project_directory()
@@ -87,10 +124,20 @@ impl ControlOperationDispatcher {
                                 }),
                             }
                         }
-                        unread_files_of_each_import
-                            .insert(import.project.to_string(), unread_files);
+                        let import_project = import.project.to_string();
+                        what_the_runtime_read_of_each_import.insert(
+                            import_project.clone(),
+                            OneImportReadForItsNodeTypeListing {
+                                project_name: TatolabProjectFile::read_from_project_directory(
+                                    &import_folder,
+                                )
+                                .ok()
+                                .map(|import_project_file| import_project_file.name),
+                                unread_files,
+                            },
+                        );
                         import_sources.push(ImportedProjectPythonSources {
-                            project: import.project.to_string(),
+                            project: import_project,
                             folder: import.folder.clone(),
                             version: import.version.clone(),
                             files,
@@ -101,40 +148,31 @@ impl ControlOperationDispatcher {
                         project: project_repository.project_file().project,
                         project_name: project_repository.project_file().name.clone(),
                         import_sources,
-                        unread_files_of_each_import,
+                        what_the_runtime_read_of_each_import,
                     })
                 },
             )
             .await?;
-        let listing_project_directory = project_read.project_directory.clone();
-        let import_sources = project_read.import_sources;
-        let mut unread_files_of_each_import = project_read.unread_files_of_each_import;
-        let mut sources = tokio::task::spawn_blocking(move || {
-            list_a_projects_node_types_and_graph_generators_from_source(
-                &listing_project_directory,
-                &import_sources,
-            )
-        })
-        .await
-        .map_err(|join_failure| {
-            format!("list_project_node_types failed: the listing did not finish: {join_failure}")
-        })?
-        .map_err(|refusal| format!("list_project_node_types failed: {refusal}"))?
-        .into_iter()
-        .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|not_a_source| {
-            format!(
-                "list_project_node_types failed: the project's interpreter listed a source this \
-                 runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
-                 the runtime's"
-            )
-        })?;
+        let mut sources = the_node_type_sources_the_projects_interpreter_lists(
+            project_read.project_directory.clone(),
+            project_read.import_sources,
+        )
+        .await?;
+        let mut what_the_runtime_read_of_each_import =
+            project_read.what_the_runtime_read_of_each_import;
         for source in &mut sources {
-            if let NodeTypeSourceOrigin::Dependency { project, .. } = &source.origin
-                && let Some(unread_files) = unread_files_of_each_import.remove(project)
+            if let NodeTypeSourceOrigin::Dependency {
+                project,
+                project_name,
+                ..
+            } = &mut source.origin
+                && let Some(read_of_the_import) =
+                    what_the_runtime_read_of_each_import.remove(project)
             {
-                source.unreadable_modules.extend(unread_files);
+                *project_name = read_of_the_import.project_name;
+                source
+                    .unreadable_modules
+                    .extend(read_of_the_import.unread_files);
             }
         }
         let listing = ListProjectNodeTypesToolResult {

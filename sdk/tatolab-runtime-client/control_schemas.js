@@ -1144,6 +1144,7 @@ const NodeTypeSourceReadWithoutRunningIt = z.intersection(z.looseObject({
   project: z.string(),
   folder: z.string(),
   version: z.string(),
+  project_name: z.string().nullable().optional(),
   source: z.literal("dependency"),
 }), z.looseObject({
   distribution: z.string(),
@@ -1371,6 +1372,7 @@ const NodeTypeOfOneProjectSource = z.intersection(z.looseObject({
   project: z.string(),
   folder: z.string(),
   version: z.string(),
+  project_name: z.string().nullable().optional(),
   source: z.literal("dependency"),
 }), z.looseObject({
   distribution: z.string(),

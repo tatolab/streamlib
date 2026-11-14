@@ -5146,7 +5146,8 @@ const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/
 
 /// Project `cell` imports project `arm`: the listing is sent the Python files of `arm`'s folder
 /// under `imports/` as they are on disk and nothing else of it, and answers each source as the
-/// project's interpreter read it, under the project's UUID and name.
+/// project's interpreter read it, under the project's UUID and name, the import's source named
+/// as the project file in its folder names it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_its_folder() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -5187,7 +5188,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     .expect("the arm is imported");
     let folder = added["dependency"]["folder"].clone();
     let version = added["dependency"]["version"].clone();
-    let dependency_source = json!({
+    let mut dependency_source = json!({
         "source": "dependency", "project": arm.project, "folder": folder, "version": version,
         "node_types": [], "graph_generators": [], "unreadable_modules": [],
     });
@@ -5206,6 +5207,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
 
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    dependency_source["project_name"] = json!(TEST_PROJECT_NAME);
     assert_eq!(
         listed["sources"],
         json!([project_source, dependency_source]),

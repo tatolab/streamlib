@@ -8983,6 +8983,13 @@
                 "type": "string",
                 "description": "The version its copy carried."
               },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
+              },
               "source": {
                 "type": "string",
                 "const": "dependency"
@@ -10166,6 +10173,13 @@
               "version": {
                 "type": "string",
                 "description": "The version its copy carried."
+              },
+              "project_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The imported project's name as the project file in its folder holds it; `null` when\nthat file does not read."
               },
               "source": {
                 "type": "string",
