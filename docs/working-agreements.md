@@ -1,7 +1,7 @@
 # Working agreements
 
 Owner rulings on how sessions work, and practical lessons from the repo, the rig and CI, that help
-agents across many issues and no other file records. `CLAUDE.md`, `.claude/rules/` and `docs/plan/`
+agents across many issues and no other file records. `CLAUDE.md`, the `streamlib-*` rule skills in dev-plugin and `docs/plan/`
 outrank this file. If an entry contradicts one of them, or the tree shows it is stale, fix or delete
 the entry in the same PR.
 

@@ -103,7 +103,7 @@ owner decision 2026-08-02). Two markers with different powers:
 
 When every issue of a change's Linear project is Done, `/ship-change` folds the delta into ARCHITECTURE.md,
 flips section statuses, and archives the file, after checking that **anything marked
-REMOVED no longer greps in the tree** (`.claude/scripts/ship-change-removed-gate.sh`).
+REMOVED no longer greps in the tree** (dev-plugin's `scripts/ship-change-removed-gate.sh`).
 Residue it finds is unfinished work, finished before the archive claims the removal. This
 is what prevents another half-broken old-module-system.
 
@@ -194,12 +194,12 @@ ends with a say-back loop, and none of them commits work:
 
 - **Kept unchanged:** the nine live-ops CLI skills (`list-running-streams` …
   `stop-running-stream`) — already perfectly shaped (one skill = one focused live-ops task);
-  `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
+  `gh-stack`; `streamlib-local-ci-runner`; `rust-craftsmanship-reviewer`; the three domain experts —
   `gpu-vulkan-expert`, `linux-media-expert`, and `polyglot-ipc-expert`, re-scoped to
   helper-process IPC.
 - **Consolidated:** `pr-review-gate` + `change-verifier` overlap heavily (both check test
   lock-in, scope, boundaries, naming) and each PR currently runs up to four review
-  lenses. Owner review is the bottleneck — one merged `review-pr` lens (plus
+  lenses. Owner review is the bottleneck — one merged `streamlib-review-pr` lens (plus
   `rust-craftsmanship-reviewer` as the quality lens) replaces them.
 - **Reconciled:** `verify-live` self-runs the pipeline as its primary mode, with the
   owner-terminal handshake as fallback, and `evidence-verifier`'s charter matches.
@@ -215,9 +215,10 @@ ends with a say-back loop, and none of them commits work:
 ## Layer 3 — Guardrails
 
 Nothing here reintroduces the retired automation loop — loop references in this document
-are historical evidence only. The system lives entirely in-repo under `.claude/` (no
-user-level skills, no external repos), so **every agent that opens this repo reads the
-same guidance**, regardless of who launched it or how — a single session or an
+are historical evidence only. The system lives in one plugin, `dev-plugin` in
+[tatolab/tato-plugins-official](https://github.com/tatolab/tato-plugins-official), which
+this repo's `.claude/settings.json` enables, plus this repo's `CLAUDE.md`, so **every agent
+that opens this repo reads the same guidance**, regardless of who launched it or how — a single session or an
 orchestrator running many.
 
 ### Guidance, not gates
@@ -240,7 +241,7 @@ model instead:
    (`plan-gate.sh`) — it prompted on every engine edit and taught sessions to click
    through (owner, 2026-08-15). Rejected: any hook that blocks, prompts on, or stops
    an agent's tool call, `rig-brake` included (owner, 2026-10-31).
-4. **CI and review backstop**: `review-pr` flags any new public trait / module /
+4. **CI and review backstop**: `streamlib-review-pr` flags any new public trait / module /
    cross-crate boundary the change proposal doesn't name.
 
 ### The plan is reviewed, not locked against agents
@@ -254,7 +255,7 @@ model instead:
 
 ### Rules have a lifecycle
 
-Rules under `.claude/rules/` stay **invariants** (licensing, naming, RHI boundary,
+The `streamlib-*` rule skills in dev-plugin stay **invariants** (licensing, naming, RHI boundary,
 comments, placement). Process belongs in skills, written as reasoning; a rule a skill or
 CI check now covers gets deleted via `/propose-rule`. New rules come through
 `/propose-rule` — evidence, draft, owner agreement, dedicated PR — rather than accreting
@@ -262,8 +263,8 @@ mid-session because something annoyed an agent once.
 
 ### Mechanical checks
 
-- The REMOVED-grep check in `/ship-change` — a script under `.claude/scripts/`, not prose.
-- `review-pr` checks that any new public trait, module, or cross-crate boundary in the
+- The REMOVED-grep check in `/ship-change` — a script in dev-plugin's `scripts/`, not prose.
+- `streamlib-review-pr` checks that any new public trait, module, or cross-crate boundary in the
   diff is named by the change proposal, making "no inline architecture" reviewable.
 - The existing xtask gate suite, unchanged.
 - `flow.md`: operating-model changes ship as their own PR.

@@ -4,7 +4,7 @@ In-flight delta proposals against `../ARCHITECTURE.md` — written by `/propose-
 laid out in Linear by `/plan-project`, folded in and archived by `/ship-change`.
 
 Format: sections typed `ADDED:` / `MODIFIED:` / `REMOVED:`. Every `- REMOVED: <pattern>`
-bullet is a pattern `.claude/scripts/ship-change-removed-gate.sh` verifies is gone from
+bullet is a pattern dev-plugin's `scripts/ship-change-removed-gate.sh` verifies is gone from
 the tree before the change may archive — searched in file contents *and* checked as a
 path, since `git grep` never matches a filename.
 

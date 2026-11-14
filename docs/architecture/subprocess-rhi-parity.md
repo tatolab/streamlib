@@ -1,7 +1,7 @@
 # Subprocess RHI parity
 
 > Current shipped state only, per
-> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
+> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
 
 ## Decision
 
@@ -117,7 +117,7 @@ Every surface adapter rides the same shape:
   reading.
 
 The single-pattern principle is the engine-model rule
-([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md))
+([`streamlib-engine-doctrine`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-engine-doctrine/SKILL.md))
 applied to the surface-adapter layer: there is ONE way to expose a
 host-allocated GPU resource to a subprocess customer, and every
 subprocess-wired adapter uses it. RHI bug fixes (e.g. import-side
@@ -249,7 +249,7 @@ Revisit when:
   `VulkanGraphicsKernel`.
 - [ray-tracing-kernel.md](ray-tracing-kernel.md) — host's
   `VulkanRayTracingKernel`.
-- [`.claude/rules/rhi.md`](../../.claude/rules/rhi.md) —
+- [`streamlib-rhi-boundary`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-rhi-boundary/SKILL.md) —
   the RHI + import-side carve-out rule.
 - [`docs/learnings/`](../learnings/) — bug evidence motivating one host
   VkDevice.

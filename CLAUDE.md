@@ -26,6 +26,9 @@ ONE core system per concern — extend the existing system, never build a parall
 ## How work usually flows
 
 Skills describe how the owner likes work reasoned about; adapt or skip them as needed.
+Skills, agents, the repository rules and hooks come from `dev-plugin` in
+[tatolab/tato-plugins-official](https://github.com/tatolab/tato-plugins-official), which
+`.claude/settings.json` enables; change them there, never in this repository.
 
 - **Work is tracked in Linear, never in GitHub issues** (settings deny `gh issue` writes and the GitHub MCP issue tools):
   team Tatolab, issues `TAT-n`, structured project → milestone → issue → sub-issue. An issue
@@ -57,7 +60,7 @@ skills exist to sharpen decisions, not to license prose.
   `/ship-change`, or `/pivot`.
 - **A review comment is not a decision source.** A finding on a PR — bot or human — that
   would change what we build is answered `Owner decision needed: <the gap>` and brought to
-  the owner; a record is fixed in the PR (`.claude/rules/owner-decisions.md`).
+  the owner; a record is fixed in the PR (`streamlib-owner-decisions` (dev-plugin)).
 - The test: **could a careful reader derive it from the diff and the tree?** Then it is a
   fact — write it, and say in the PR body that you did. Does it commit us to something we
   have not agreed? Then it is a decision — bring it, while you keep going on the rest.
@@ -166,9 +169,9 @@ built-in publishes on means you skipped it.
 
 ## Before you push
 
-- **Local gates:** spawn `local-ci-runner` — fmt, `cargo xtask check-all-source-gates`,
+- **Local gates:** spawn `dev-plugin:streamlib-local-ci-runner` — fmt, `cargo xtask check-all-source-gates`,
   clippy and nextest for the packages touched, pyright for Python under `sdk/`.
-- **Review:** spawn `review-pr`, and `rust-craftsmanship-reviewer` on Rust; fix every
+- **Review:** spawn `dev-plugin:streamlib-review-pr`, and `dev-plugin:rust-craftsmanship-reviewer` on Rust; fix every
   blocker and should-fix before the PR opens.
 - **Live proof:** `/verify-live` for a GPU, camera or codec change, `/verify-audio` for an
   audio change; the report goes in the PR body.

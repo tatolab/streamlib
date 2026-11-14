@@ -34,5 +34,16 @@
       "mcp__github__update_issue_comment",
       "mcp__github__sub_issue_write"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "tato-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "tatolab/tato-plugins-official"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "dev-plugin@tato-plugins-official": true
   }
 }

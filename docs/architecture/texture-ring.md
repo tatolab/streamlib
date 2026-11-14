@@ -1,7 +1,7 @@
 # Texture rings — single canonical abstraction
 
 > Current shipped state only, per
-> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
+> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
 
 ## What this is
 
@@ -20,7 +20,7 @@ escalation — the queue submit goes through the shared
 mutex-protected command queue.
 
 This is engine-model territory
-([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md)).
+([`streamlib-engine-doctrine`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-engine-doctrine/SKILL.md)).
 The shape
 exists once; every decode-output / CPU-upload-style hot path uses
 it. Hand-rolling a parallel ring inside a consumer is the
@@ -269,7 +269,7 @@ contract).
 Engine-model rule: the RHI is the single gateway for GPU work;
 core systems live once and grow via extension, never via parallel
 implementations
-([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md)
+([`streamlib-engine-doctrine`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-engine-doctrine/SKILL.md)
 — "search first, extend never parallel").
 Decode-output texture rings were the *unspoken* shape across
 H.264 / H.265 / `bgra_file_source` / camera —

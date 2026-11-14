@@ -1,7 +1,7 @@
 # Authoring a new surface adapter
 
 > Current shipped state only, per
-> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
+> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
 
 This doc is the implementation contract for writing a new
 `SurfaceAdapter`. It codifies the patterns the in-tree adapters
@@ -22,7 +22,7 @@ deviation but don't.
 
 Every surface adapter rides the same shape. The shape is a
 deliberate engine-model invariant
-([`.claude/rules/rhi.md`](../../.claude/rules/rhi.md)) — the RHI is
+([`streamlib-rhi-boundary`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-rhi-boundary/SKILL.md)) — the RHI is
 the single gateway to the GPU, and surface adapters are the
 single gateway from a host-allocated GPU resource to a customer's
 framework-native handle.
@@ -742,5 +742,5 @@ Read these, in this order, when authoring:
   `VulkanComputeKernel`, the dispatch primitive any adapter that
   needs compute reaches through (via escalate IPC from
   subprocess).
-- [`.claude/rules/rhi.md`](../../.claude/rules/rhi.md)
+- [`streamlib-rhi-boundary`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-rhi-boundary/SKILL.md)
   — the RHI + import-side carve-out rule adapter work rides.
