@@ -7,6 +7,5 @@
 .infisical.json
 .infisical.yaml
 .claude/settings.local.json
-.claude/machine-brake.local.json
 *.local.md
 *.local.sh
