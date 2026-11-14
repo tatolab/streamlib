@@ -1099,8 +1099,7 @@ mod abandoned_shader_node_restart_tests {
 
         release_kaleidoscope.send(()).unwrap();
         while abandoned_processor_threads.lock().iter().any(|thread| {
-            thread.processor.processor_id == ProcessorUniqueId::from("Pkaleidoscope")
-                && !thread.join_handle.is_finished()
+            thread.processor.processor_id == "Pkaleidoscope" && !thread.join_handle.is_finished()
         }) {
             std::thread::yield_now();
         }
