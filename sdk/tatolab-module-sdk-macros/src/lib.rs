@@ -7,18 +7,19 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote};
+use quote::{ToTokens, quote, quote_spanned};
 use syn::ext::IdentExt;
+use syn::parse::ParseStream;
 use syn::spanned::Spanned;
 use syn::{
-    Attribute, Data, DeriveInput, Expr, Fields, FnArg, GenericArgument, Ident, ItemFn, Pat,
-    PathArguments, ReturnType, Type, parse_macro_input,
+    Attribute, Data, DeriveInput, Expr, Fields, FnArg, GenericArgument, Ident, ItemFn, LitStr, Pat,
+    Path, PathArguments, ReturnType, Token, Type, parse_macro_input,
 };
 
 const PIN_DEFAULT_ATTRIBUTE: &str = "pin_default";
 
 /// The helper attribute a function node's category and description are declared in.
-const NODE_META_ATTRIBUTE: &str = "meta";
+const NODE_META_ATTRIBUTE_NAME: &str = "meta";
 
 /// What a category path's levels are separated by, as `Effects/Stylize`.
 const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
@@ -32,7 +33,7 @@ pub fn function_node(attribute: TokenStream, item: TokenStream) -> TokenStream {
         return refusal.to_compile_error().into();
     }
     let mut function = parse_macro_input!(item as ItemFn);
-    let node_meta = match FunctionNodeMetaDeclared::take_from_attributes(&mut function.attrs) {
+    let node_meta = match DeclaredNodeMeta::take_from_attributes(&mut function.attrs) {
         Ok(node_meta) => node_meta,
         Err(refusal) => return refusal.to_compile_error().into(),
     };
@@ -75,71 +76,77 @@ fn refuse_an_argument_to_function_node(attribute: TokenStream2) -> syn::Result<(
         attribute.span(),
         "#[function_node] takes no argument: the node's name is its function's, in \
          UpperCamelCase, and what describes it goes in the `#[meta(...)]` under it, \
-         `#[meta(category = \"Math\", description = \"…\")]`",
+         `#[meta(category = \"Effects/Stylize\", description = \"…\")]`",
     ))
 }
 
-/// What the `#[meta(...)]` attributes under `#[function_node]` declare. The
-/// function's doc comment is never its description.
+/// What the `#[meta(...)]` attributes under `#[function_node]` declare; the
+/// twin of `streamlib-macros`' `grammar::DeclaredNodeMeta`, which reads the
+/// same grammar under `#[processor]`. The function's doc comment is never its
+/// description.
 #[derive(Default)]
-struct FunctionNodeMetaDeclared {
+struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group
     /// inside one, exactly as written.
-    category: Option<syn::LitStr>,
+    category: Option<String>,
     /// A `&'static str` expression: a string literal or the path of a `const`.
     description: Option<TokenStream2>,
 }
 
-impl FunctionNodeMetaDeclared {
-    /// Take every `#[meta(...)]` off `attributes`, since rustc knows no such
-    /// attribute, and read what they declare.
+impl DeclaredNodeMeta {
+    /// Take every `#[meta(...)]` off `attributes`, since rustc knows no such attribute, and read what they declare.
     fn take_from_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Self> {
-        let mut declared = FunctionNodeMetaDeclared::default();
-        let mut kept_attributes = Vec::with_capacity(attributes.len());
-        for attribute in attributes.drain(..) {
-            if attribute.path().is_ident(NODE_META_ATTRIBUTE) {
-                attribute.parse_args_with(|input: syn::parse::ParseStream<'_>| {
-                    declared.read_meta_keys(input)
-                })?;
-            } else {
-                kept_attributes.push(attribute);
+        let mut declared = DeclaredNodeMeta::default();
+        let mut refusal: Option<syn::Error> = None;
+        attributes.retain(|attribute| {
+            if !attribute.path().is_ident(NODE_META_ATTRIBUTE_NAME) {
+                return true;
             }
+            if let Err(refused) =
+                attribute.parse_args_with(|input: ParseStream<'_>| declared.read_meta_keys(input))
+            {
+                match &mut refusal {
+                    Some(earlier) => earlier.combine(refused),
+                    None => refusal = Some(refused),
+                }
+            }
+            false
+        });
+        match refusal {
+            Some(refusal) => Err(refusal),
+            None => Ok(declared),
         }
-        *attributes = kept_attributes;
-        Ok(declared)
     }
 
-    fn read_meta_keys(&mut self, input: syn::parse::ParseStream<'_>) -> syn::Result<()> {
+    fn read_meta_keys(&mut self, input: ParseStream<'_>) -> syn::Result<()> {
         if input.is_empty() {
             return Err(syn::Error::new(
                 input.span(),
                 "`#[meta()]` declares nothing — it takes `category`, `description` or both, \
-                 `#[meta(category = \"Math\", description = \"…\")]`",
+                 `#[meta(category = \"Effects/Stylize\", description = \"…\")]`",
             ));
         }
-        let declared_keys = input.parse_terminated(
-            <syn::MetaNameValue as syn::parse::Parse>::parse,
-            syn::Token![,],
-        )?;
-        for declared_key in declared_keys {
-            let key = declared_key.path.require_ident()?.clone();
-            let declared_more_than_once = || {
-                syn::Error::new(
-                    key.span(),
-                    format!("`{key}` is declared more than once in this node's `#[meta(...)]`"),
-                )
-            };
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
             match key.to_string().as_str() {
                 "category" => {
-                    let category = category_path_declared(&declared_key.value)?;
-                    if self.category.replace(category).is_some() {
-                        return Err(declared_more_than_once());
+                    let category: LitStr = input.parse().map_err(|not_a_literal| {
+                        syn::Error::new(
+                            not_a_literal.span(),
+                            "`category` takes a string literal — `category = \"Effects\"`, or a \
+                             path into a group inside one, `category = \"Effects/Stylize\"`",
+                        )
+                    })?;
+                    refuse_a_category_with_a_level_that_has_no_name(&category)?;
+                    if self.category.replace(category.value()).is_some() {
+                        return Err(declared_more_than_once(&key));
                     }
                 }
                 "description" => {
-                    let description = description_str_expression_declared(&declared_key.value)?;
+                    let description = parse_a_declared_description_str_expression(input)?;
                     if self.description.replace(description).is_some() {
-                        return Err(declared_more_than_once());
+                        return Err(declared_more_than_once(&key));
                     }
                 }
                 other => {
@@ -152,23 +159,22 @@ impl FunctionNodeMetaDeclared {
                     ));
                 }
             }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
         }
         Ok(())
     }
 }
 
-fn category_path_declared(declared: &Expr) -> syn::Result<syn::LitStr> {
-    let Expr::Lit(syn::ExprLit {
-        lit: syn::Lit::Str(category),
-        ..
-    }) = declared
-    else {
-        return Err(syn::Error::new(
-            declared.span(),
-            "`category` takes a string literal — `category = \"Math\"`, or a path into a \
-             group inside one, `category = \"Math/Trigonometry\"`",
-        ));
-    };
+fn declared_more_than_once(key: &Ident) -> syn::Error {
+    syn::Error::new(
+        key.span(),
+        format!("`{key}` is declared more than once in this node's `#[meta(...)]`"),
+    )
+}
+
+fn refuse_a_category_with_a_level_that_has_no_name(category: &LitStr) -> syn::Result<()> {
     if category
         .value()
         .split(NODE_CATEGORY_PATH_SEPARATOR)
@@ -176,36 +182,43 @@ fn category_path_declared(declared: &Expr) -> syn::Result<syn::LitStr> {
     {
         return Err(syn::Error::new(
             category.span(),
-            "this category names a group with no name — a category is `\"Math\"`, or a path \
-             whose every level is named, `\"Math/Trigonometry\"`",
+            "this category names a group with no name — a category is `\"Effects\"`, or a path \
+             whose every level is named, `\"Effects/Stylize\"`",
         ));
     }
-    Ok(category.clone())
+    Ok(())
 }
 
-fn description_str_expression_declared(declared: &Expr) -> syn::Result<TokenStream2> {
-    match declared {
-        Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(literal),
-            ..
-        }) => Ok(quote! { #literal }),
-        Expr::Path(constant) => Ok(quote! {
+/// The `&'static str` expression of a `description = …` value. A constant is
+/// bound to a `const` first, so a `static` or a non-`&str` is refused where it
+/// is named.
+fn parse_a_declared_description_str_expression(
+    input: ParseStream<'_>,
+) -> syn::Result<TokenStream2> {
+    if input.peek(LitStr) {
+        let literal: LitStr = input.parse()?;
+        return Ok(quote! { #literal });
+    }
+    let fork = input.fork();
+    if fork.parse::<Path>().is_ok() && (fork.is_empty() || fork.peek(Token![,])) {
+        let constant: Path = input.parse()?;
+        return Ok(quote_spanned! { constant.span() =>
             {
                 const DECLARED_DESCRIPTION: &str = #constant;
                 DECLARED_DESCRIPTION
             }
-        }),
-        other => Err(syn::Error::new(
-            other.span(),
-            "`description` takes a string literal or the path of a `const` — \
-             `description = \"…\"` or `description = SOME_CONST`",
-        )),
+        });
     }
+    Err(syn::Error::new(
+        input.span(),
+        "`description` takes a string literal or the path of a `const` holding one — \
+         `description = \"…\"` or `description = MY_NODE_DESCRIPTION`",
+    ))
 }
 
 fn expand_function_node(
     mut function: ItemFn,
-    node_meta: FunctionNodeMetaDeclared,
+    node_meta: DeclaredNodeMeta,
 ) -> syn::Result<TokenStream2> {
     refuse_a_signature_that_is_not_a_plain_function(&function)?;
     let description = node_meta.description.unwrap_or_else(|| quote! { "" });
@@ -764,7 +777,7 @@ mod tests {
 
     fn node_meta_refusal(attributes: TokenStream2) -> String {
         let mut function = function_with(attributes);
-        match FunctionNodeMetaDeclared::take_from_attributes(&mut function.attrs) {
+        match DeclaredNodeMeta::take_from_attributes(&mut function.attrs) {
             Ok(_) => panic!("the node's meta should be refused"),
             Err(refusal) => refusal.to_string(),
         }
@@ -778,12 +791,9 @@ mod tests {
             #[inline]
             #[meta(description = "Half of `x`.")]
         });
-        let declared = FunctionNodeMetaDeclared::take_from_attributes(&mut function.attrs)
+        let declared = DeclaredNodeMeta::take_from_attributes(&mut function.attrs)
             .expect("the node's meta should read");
-        assert_eq!(
-            declared.category.map(|category| category.value()),
-            Some("Math".to_owned())
-        );
+        assert_eq!(declared.category.as_deref(), Some("Math"));
         assert!(declared.description.is_some());
         let left_on_the_function: Vec<String> = function
             .attrs
@@ -796,7 +806,7 @@ mod tests {
     #[test]
     fn a_function_with_no_meta_declares_no_category_and_no_description() {
         let mut function = function_with(quote! {});
-        let declared = FunctionNodeMetaDeclared::take_from_attributes(&mut function.attrs)
+        let declared = DeclaredNodeMeta::take_from_attributes(&mut function.attrs)
             .expect("no meta reads as nothing declared");
         assert!(declared.category.is_none());
         assert!(declared.description.is_none());
@@ -878,5 +888,22 @@ mod tests {
             refusal.contains("string literal or the path of a `const`"),
             "got: {refusal}"
         );
+    }
+
+    #[test]
+    fn every_meta_that_is_refused_is_reported_and_none_is_left_on_the_function() {
+        let mut function = function_with(quote! {
+            #[meta(tags = "math")]
+            #[inline]
+            #[meta(category = "")]
+        });
+        let refusals: Vec<String> = DeclaredNodeMeta::take_from_attributes(&mut function.attrs)
+            .err()
+            .expect("both metas are refused")
+            .into_iter()
+            .map(|refusal| refusal.to_string())
+            .collect();
+        assert_eq!(refusals.len(), 2, "got: {refusals:?}");
+        assert_eq!(function.attrs.len(), 1);
     }
 }

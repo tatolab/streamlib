@@ -44,7 +44,7 @@ DESCRIBED_NODES_SOURCE = '''
 from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
 
 
-@node.meta(description="Relays each audio window as a frame.")
+@node.meta(category="Audio/Relays", description="Relays each audio window as a frame.")
 @node.process(scheduling="high")
 class WindowedRelay:
     audio_from_upstream = Input(
@@ -205,7 +205,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                         "family": {"family": "packets"},
                     }
                 ],
-                "category": "described_nodes",
+                "category": "Audio/Relays",
             }
         ],
         "refused_node_types": [],
@@ -220,6 +220,7 @@ def test_a_continuous_node_carries_its_interval_and_no_priority(project_director
     assert ticker["execution"] == {"mode": "continuous", "interval_ms": 20}
     assert ticker["scheduling_priority"] is None
     assert ticker["description"] == "ticks on its own"
+    assert ticker["category"] is None
     assert ticker["input_ports"] == []
     assert ticker["paced_by_real_time"] is False
 

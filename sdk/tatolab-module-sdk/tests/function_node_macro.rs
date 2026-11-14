@@ -695,7 +695,7 @@ fn a_category_is_declared_exactly_as_written_beside_a_description_in_its_own_met
 
 #[cfg(feature = "pyo3")]
 #[test]
-fn only_a_declared_category_reaches_python_and_an_undeclared_one_is_left_out() {
+fn a_declared_category_reaches_python_and_an_undeclared_one_reaches_it_as_none() {
     use pyo3::prelude::*;
 
     Python::attach(|python| {
@@ -705,7 +705,9 @@ fn only_a_declared_category_reaches_python_and_an_undeclared_one_is_left_out() {
                 .expect("the declaration converts")
                 .get_item("category")
                 .expect("a dict lookup")
-                .map(|category| category.extract::<String>().unwrap())
+                .expect("the declaration carries `category`")
+                .extract::<Option<String>>()
+                .unwrap()
         };
         assert_eq!(
             category_reaching_python(floor_to_a_whole_number_function_node_declaration()),

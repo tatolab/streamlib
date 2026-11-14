@@ -14,6 +14,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from tatolab.stream._node_type_source_reader import (
+    read_node_types_and_graph_generators_from_module_sources,
+)
 from tatolab.stream._project_node_type_listing_entry import (
     list_the_node_types_and_graph_generators_of_a_project,
 )
@@ -283,6 +288,42 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         }
     ]
     assert project["unreadable_modules"] == []
+
+
+NODE_META_AS_WRITTEN = '@node.meta(category="Effects/Stylize", description="Tints a frame.")'
+KIND_DECORATOR_AND_DECLARATION_BY_KIND = {
+    "process": ('@node.process(execution="reactive")', "class Tint:\n    pass"),
+    "function": ("@node.function", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
+    "shader": (
+        '@node.shader("float4 Tint(ImageInput image) { return image.pixel; }")',
+        "def Tint(image: ImageFrame) -> ImageFrame: ...",
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(KIND_DECORATOR_AND_DECLARATION_BY_KIND))
+@pytest.mark.parametrize("meta_is_written", ["above_the_kind_decorator", "below_the_kind_decorator"])
+def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_kind(
+    kind: str, meta_is_written: str
+) -> None:
+    kind_decorator, declaration = KIND_DECORATOR_AND_DECLARATION_BY_KIND[kind]
+    decorators = [NODE_META_AS_WRITTEN, kind_decorator]
+    if meta_is_written == "below_the_kind_decorator":
+        decorators.reverse()
+    module_source = "\n".join(
+        ["from tatolab.stream import ImageFrame, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.tint", "nodes/tint.py", module_source)]
+    )
+
+    assert read["unreadable_modules"] == []
+    (node_type,) = read["node_types"]
+    assert node_type["type"] == "nodes.tint:Tint"
+    assert node_type["kind"] == kind
+    assert node_type["category"] == "Effects/Stylize"
+    assert node_type["description"] == "Tints a frame."
 
 
 def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: Path) -> None:

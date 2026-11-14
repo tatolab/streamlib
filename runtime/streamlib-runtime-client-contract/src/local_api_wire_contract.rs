@@ -1365,10 +1365,9 @@ pub struct NodeTypeReadFromSource {
     pub node_type: String,
     /// `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
     pub kind: Option<String>,
-    /// The description its `@node.meta` declares; empty when it declares none.
+    /// The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
     pub description: String,
-    /// The group its `@node.meta` files it under, or a path into a group inside
-    /// one, as `Effects/Stylize`; `None` when it declares none.
+    /// The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
     pub category: Option<String>,
     /// The input ports, `None` where only the node's native half states them.
     pub inputs: Option<Vec<NodeTypePortReadFromSource>>,

@@ -322,7 +322,7 @@ fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> To
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
-    declared_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
+    declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
@@ -402,7 +402,7 @@ fn generate_processor_impl_from_schema(
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
     let descriptor_impl =
-        generate_descriptor_from_schema(schema, declared_descriptions, config_type);
+        generate_descriptor_from_schema(schema, declared_meta_and_port_descriptions, config_type);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -574,7 +574,7 @@ fn generate_from_config_from_schema(
 /// beside the schema the descriptor is emitted from: the schema carries no
 /// category, and a `const` description has no text it could carry.
 struct ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
-    node: Option<&'parsed DeclaredDescription>,
+    node_description: Option<&'parsed DeclaredDescription>,
     category: Option<&'parsed str>,
     inputs: Vec<Option<&'parsed DeclaredDescription>>,
     outputs: Vec<Option<&'parsed DeclaredDescription>>,
@@ -586,7 +586,7 @@ impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
             ports.iter().map(|port| port.description.as_ref()).collect()
         };
         Self {
-            node: parsed.description.as_ref(),
+            node_description: parsed.description.as_ref(),
             category: parsed.category.as_deref(),
             inputs: of_ports(&parsed.inputs),
             outputs: of_ports(&parsed.outputs),
@@ -601,17 +601,18 @@ impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
 /// descriptor carries.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
-    declared_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
+    declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
     config_type: &TokenStream,
 ) -> TokenStream {
-    let description = declared_description_str_expression(declared_descriptions.node);
+    let description =
+        declared_description_str_expression(declared_meta_and_port_descriptions.node_description);
     let repository = "https://github.com/tatolab/streamlib";
 
     // iceoryx2-based input ports
     let ipc_input_ports: Vec<TokenStream> = schema
         .inputs
         .iter()
-        .zip(&declared_descriptions.inputs)
+        .zip(&declared_meta_and_port_descriptions.inputs)
         .map(|(p, declared_description)| {
             let port_name = &p.name;
             let port_desc = declared_description_str_expression(*declared_description);
@@ -645,7 +646,7 @@ fn generate_descriptor_from_schema(
     let ipc_output_ports: Vec<TokenStream> = schema
         .outputs
         .iter()
-        .zip(&declared_descriptions.outputs)
+        .zip(&declared_meta_and_port_descriptions.outputs)
         .map(|(p, declared_description)| {
             let port_name = &p.name;
             let port_desc = declared_description_str_expression(*declared_description);
@@ -691,7 +692,7 @@ fn generate_descriptor_from_schema(
         .paced_by_real_time
         .then(|| quote! { .paced_by_real_time() });
 
-    let category = declared_descriptions
+    let category = declared_meta_and_port_descriptions
         .category
         .map(|category| quote! { .with_category(#category) });
 
@@ -1601,9 +1602,10 @@ mod processor_struct_emit_tests {
         }
     }
 
-    fn no_declared_descriptions() -> ProcessorDeclaredMetaAndPortDescriptions<'static> {
+    fn no_declared_meta_or_port_descriptions() -> ProcessorDeclaredMetaAndPortDescriptions<'static>
+    {
         ProcessorDeclaredMetaAndPortDescriptions {
-            node: None,
+            node_description: None,
             category: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
@@ -1619,7 +1621,7 @@ mod processor_struct_emit_tests {
     fn rendered_descriptor_for_config_type(config_type: &TokenStream) -> String {
         render_token_stream_without_whitespace(generate_descriptor_from_schema(
             &minimal_schema(),
-            &no_declared_descriptions(),
+            &no_declared_meta_or_port_descriptions(),
             config_type,
         ))
     }
@@ -1632,7 +1634,7 @@ mod processor_struct_emit_tests {
                     paced_by_real_time,
                     ..minimal_schema()
                 },
-                &no_declared_descriptions(),
+                &no_declared_meta_or_port_descriptions(),
                 &quote! { __streamlib_sdk::processors::EmptyConfig },
             ))
         };
@@ -1647,7 +1649,7 @@ mod processor_struct_emit_tests {
                 &minimal_schema(),
                 &ProcessorDeclaredMetaAndPortDescriptions {
                     category,
-                    ..no_declared_descriptions()
+                    ..no_declared_meta_or_port_descriptions()
                 },
                 &quote! { __streamlib_sdk::processors::EmptyConfig },
             ))
@@ -1668,7 +1670,7 @@ mod processor_struct_emit_tests {
         let schema = minimal_schema();
         render_token_stream_without_whitespace(generate_processor_impl_from_schema(
             &schema,
-            &no_declared_descriptions(),
+            &no_declared_meta_or_port_descriptions(),
             &node_type_minted(built_in_node, &schema.name),
             &quote! { __streamlib_sdk::processors::EmptyConfig },
             &None,

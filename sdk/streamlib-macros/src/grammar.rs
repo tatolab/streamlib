@@ -145,25 +145,25 @@ pub fn declared_description_str_expression(
 }
 
 /// The helper attribute a node type's category and description are declared in.
-pub const NODE_META_ATTRIBUTE_NAME: &str = "meta";
+const NODE_META_ATTRIBUTE_NAME: &str = "meta";
 
 /// What a category path's levels are separated by, as `Effects/Stylize`.
 const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
 
-/// What the `#[meta(...)]` attributes under a node's main macro declare.
+/// What the `#[meta(...)]` attributes under `#[processor]` declare; the twin of
+/// `tatolab-module-sdk-macros`' `DeclaredNodeMeta`, which reads the same
+/// grammar under `#[function_node]`.
 #[derive(Default)]
 pub struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group
     /// inside one, exactly as written.
     pub category: Option<String>,
+    /// A string literal or the path of a `const`.
     pub description: Option<DeclaredDescription>,
 }
 
 impl DeclaredNodeMeta {
-    /// Take every `#[meta(...)]` off `attributes` and read what they declare.
-    ///
-    /// They are removed because `meta` is no attribute rustc knows: left on the
-    /// item the macro emits, it would not compile.
+    /// Take every `#[meta(...)]` off `attributes`, since rustc knows no such attribute, and read what they declare.
     pub fn take_from_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Self> {
         let mut declared = DeclaredNodeMeta::default();
         let mut refusal: Option<syn::Error> = None;
@@ -1372,6 +1372,23 @@ mod tests {
             msg.contains("`category` is declared more than once"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn every_node_meta_that_is_refused_is_reported_and_none_is_left_on_the_struct() {
+        let mut node_struct = node_struct_with(quote! {
+            #[meta(tags = "video")]
+            #[allow(dead_code)]
+            #[meta(category = "")]
+        });
+        let refusals: Vec<String> = DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+            .err()
+            .expect("both metas are refused")
+            .into_iter()
+            .map(|refusal| refusal.to_string())
+            .collect();
+        assert_eq!(refusals.len(), 2, "got: {refusals:?}");
+        assert_eq!(node_struct.attrs.len(), 1);
     }
 
     #[test]
