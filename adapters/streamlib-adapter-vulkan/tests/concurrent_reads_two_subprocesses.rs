@@ -7,7 +7,7 @@
 //! single-timeline adapter shape.
 //!
 //! **Deferred under the single-writer-per-edge lift** per
-//! `docs/architecture/adapter-timeline-single-writer.md` — the v1
+//! under the single-writer-per-edge timeline rule, the v1
 //! model declares one producer process + one consumer process per
 //! surface, fixed at registration time. Two subprocesses concurrently
 //! holding read access on the same surface is the
@@ -36,8 +36,7 @@ use streamlib::sdk::engine::HostTextureExt;
 /// re-reading the test suite; do not lift the `#[ignore]` without
 /// landing the N-`consume_done`-timelines extension first.
 #[test]
-#[ignore = "v1 single-writer-per-edge defers multi-process concurrent consumers — \
-            see docs/architecture/adapter-timeline-single-writer.md"]
+#[ignore = "v1 single-writer-per-edge defers multi-process concurrent consumers"]
 fn two_subprocesses_concurrently_read_same_surface() {
     let host = match common::HostFixture::try_new() {
         Some(h) => h,

@@ -243,7 +243,7 @@ impl SpawnedHelperProcess {
 /// and at exactly its own value, and both processes read the same counters.
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn engine_and_helper_order_hundreds_of_frames_on_the_shared_events() {
@@ -289,7 +289,7 @@ fn engine_and_helper_order_hundreds_of_frames_on_the_shared_events() {
 /// copy has not reached.
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn frames_order_host_side_when_the_timeline_export_fails() {
@@ -335,7 +335,7 @@ fn frames_order_host_side_when_the_timeline_export_fails() {
 /// would have lost it.
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_stalled_then_killed_helper_leaves_the_engine_producing_on_a_live_device() {

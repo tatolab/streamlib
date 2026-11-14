@@ -14,7 +14,7 @@
 //! reason `VulkanSurfaceAdapter<D>` is — works against either
 //! `HostVulkanDevice` (in-tree host) or `ConsumerVulkanDevice`
 //! (subprocess cdylib). The single-pattern shape from
-//! `docs/architecture/subprocess-rhi-parity.md` carries through.
+//! the subprocess RHI parity rule carries through.
 
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};

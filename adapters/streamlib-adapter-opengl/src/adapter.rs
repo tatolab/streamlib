@@ -74,7 +74,7 @@ impl OpenGlSurfaceAdapter {
     /// where the modifier is render-target-capable). For sampler-only
     /// inputs (camera ring textures whose modifier is `external_only=TRUE`
     /// on NVIDIA — see
-    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) use
+    /// NVIDIA EGL's sampler-only linear DMA-BUFs) use
     /// [`Self::register_external_oes_host_surface`] instead.
     ///
     /// `id` MUST be unique across the adapter's lifetime; double-

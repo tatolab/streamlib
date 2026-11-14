@@ -27,8 +27,7 @@ pub const LUMA_PSNR_WARN_FLOOR_DB: f64 = 30.0;
 /// Chroma-plane PSNR below which a round trip is a regression, in dB. One floor
 /// for both planes and every reference, and no warn band above it.
 ///
-/// Derived from six cold rig runs (three per codec, 108 samples) recorded in
-/// `docs/plan/ARCHITECTURE.md` §Media I/O: the lowest finite clean
+/// Derived from six cold rig runs (three per codec, 108 samples): the lowest finite clean
 /// chroma figure in the set was `complex_pattern` at 32.23 dB, reproducing to
 /// 0.02 dB run-to-run and 0.13 dB across codecs. That derivation predates #2100,
 /// which corrected the decode path's chroma siting and moved the same figure to

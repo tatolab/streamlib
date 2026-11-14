@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_opengl::tests::fbo_completeness_on_nvidia` —
 //! direct inverse of the failing probe in
-//! `docs/learnings/nvidia-egl-dmabuf-render-target.md`. Acquire WRITE
+//! NVIDIA EGL's sampler-only linear DMA-BUFs. Acquire WRITE
 //! on a surface, attach the resulting GL texture to an FBO, assert
 //! `glCheckFramebufferStatus == GL_FRAMEBUFFER_COMPLETE` and
 //! `glGetError == GL_NO_ERROR`. A green run on NVIDIA proves the
@@ -83,8 +83,7 @@ fn fbo_completeness_on_nvidia() {
             status,
             gl::FRAMEBUFFER_COMPLETE,
             "FBO not complete: 0x{:x} — likely an `external_only` modifier; \
-             host-side allocator should pick a render-target-capable tiled modifier \
-             (see docs/learnings/nvidia-egl-dmabuf-render-target.md)",
+             host-side allocator should pick a render-target-capable tiled modifier",
             status
         );
         assert_eq!(err, gl::NO_ERROR, "FBO attach raised GL error 0x{:x}", err);

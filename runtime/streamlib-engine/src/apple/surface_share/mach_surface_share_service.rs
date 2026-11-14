@@ -1618,7 +1618,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_helpers_host_side_reports_move_the_engines_own_pair() {

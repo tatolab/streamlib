@@ -190,8 +190,7 @@ pub enum HelperProcessShutdownCommand {
 impl HelperProcessShutdownCommand {
     /// Both commands, in the order the shutdown ladder sends them.
     ///
-    /// `docs/plan/ARCHITECTURE.md` §Processor model, the `[shutdown-ladder]`
-    /// entry: "`stop` and `teardown` are sent together".
+    /// `stop` and `teardown` are sent together.
     pub const BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM: [Self; 2] = [Self::Stop, Self::Teardown];
 
     /// What the parent writes as the frame's `cmd`.

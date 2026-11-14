@@ -423,7 +423,7 @@ impl PixelBufferPoolManager {
         // A slot is free only when nobody holds it in this address space and
         // nobody holds it out of one. The first is an Arc refcount, the second
         // a checkout lease — see
-        // `docs/decisions/surface-id-lifetime-contract.md` — and on macOS also
+        // the surface-id lifetime contract — and on macOS also
         // the kernel's own in-use answer for the slot's IOSurface.
         let check_out_leases = surface_store.and_then(SurfaceStore::check_out_lease_registry);
         if let Some(slot_index) = ring_pool.ring.hand_off_a_reusable_slot(
@@ -2596,7 +2596,7 @@ impl GpuContext {
     ///
     /// Errors when the EGL probe didn't find an RT-capable modifier for
     /// `format` — there is no silent fallback to LINEAR (sampler-only on
-    /// NVIDIA — see `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    /// NVIDIA).
     ///
     /// Picking the right acquire method:
     /// - **In-process texture for sampling/compute**: use
@@ -3115,7 +3115,7 @@ impl GpuContext {
             let surface_id = uuid::Uuid::new_v4().to_string();
             // Spec-correct initial layout for a freshly-allocated
             // VkImage that no one has touched yet (per
-            // docs/architecture/texture-registration.md Producer
+            // texture registration's producer
             // Rule 2). The per-frame
             // `TextureRing::copy_pixel_buffer_to_slot` runs the
             // amortized upload that transitions UNDEFINED →
@@ -5267,13 +5267,13 @@ impl GpuContextFullAccess {
     /// canonical engine helper for decode-output hot paths — replaces
     /// every per-frame `upload_pixel_buffer_as_texture` escalation
     /// with a one-shot setup-time allocation plus a sandbox-safe
-    /// rotation in `process()`. See `docs/architecture/texture-ring.md`
+    /// rotation in `process()`.
     /// for the recipe and CLAUDE.md → "Texture rings — single
     /// canonical abstraction" for the engine-model context.
     ///
     /// `count` is rejected if zero; sizing to
     /// `MAX_FRAMES_IN_FLIGHT = 2`
-    /// (`docs/learnings/vulkan-frames-in-flight.md`) is the standard
+    /// is the standard
     /// for hot-path decoders.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_ring(
@@ -6385,7 +6385,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a GPU device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a GPU device"
     )]
     #[test]
     fn an_owned_color_converter_shares_no_kernel_with_the_cached_one() {
@@ -6593,7 +6593,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn acquire_storage_buffer_via_limited_access() {
@@ -6644,7 +6644,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_nodes_tiers_count_one_offs_against_the_node_while_the_shared_tier_counts_none() {
@@ -6712,7 +6712,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dropping_a_nodes_output_texture_unregisters_its_id_and_hands_its_count_back() {
@@ -6768,7 +6768,7 @@ mod tests {
     // In-process, a held slot is an Arc above its baseline. These cover the
     // other holder the pool could not see until #1866: a helper child that
     // checked the surface out over the surface-share socket. See
-    // `docs/decisions/surface-id-lifetime-contract.md`.
+    // the surface-id lifetime contract.
     // =====================================================================
 
     #[cfg(target_os = "linux")]
@@ -8043,7 +8043,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_pixel_buffer_registers_as_opaque_fd_with_its_memory_type_index_where_dma_buf_is_absent() {
@@ -8102,7 +8102,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_pooled_pixel_buffer_reads_back_through_lookup_buffer_with_its_bytes_intact() {
@@ -8335,7 +8335,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn an_upload_publishes_the_terminal_layout_its_destinations_usage_allows() {
@@ -8416,7 +8416,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn seeding_a_non_sampled_destination_and_consuming_it_raises_no_validation_finding() {

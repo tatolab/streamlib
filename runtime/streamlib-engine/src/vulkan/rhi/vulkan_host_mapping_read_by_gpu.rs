@@ -296,7 +296,7 @@ mod tests {
     /// says so and a second fill reaches the GPU without a stage.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn a_host_mapping_read_by_the_gpu_takes_the_imported_tier_when_the_device_allows_it() {
@@ -337,7 +337,7 @@ mod tests {
     /// GPU through the one copy each stage makes.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn a_refused_import_for_reads_falls_back_to_staging_and_says_why() {
@@ -382,7 +382,7 @@ mod tests {
     /// keeps the caller's reason, and reaches the GPU through each stage.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn a_range_staged_without_an_import_reaches_the_gpu_through_each_stage() {

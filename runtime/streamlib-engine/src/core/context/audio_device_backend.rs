@@ -337,8 +337,8 @@ fn first_audio_device_backend_arm_that_opens() -> SharedAudioDeviceBackend {
 /// caused it.
 ///
 /// Separate from the platform arm list so the walk is exercised by arms that
-/// fail on purpose: the order this chain demotes in is the decided behaviour
-/// (`docs/plan/ARCHITECTURE.md` §Media I/O `[audio-subsystem]`), and asserting
+/// fail on purpose: the order this chain demotes in is the decided behaviour,
+/// and asserting
 /// it in prose proves nothing.
 fn first_audio_device_backend_arm_that_opens_among(
     arms: impl IntoIterator<Item = AudioDeviceBackendArm>,

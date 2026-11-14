@@ -265,7 +265,7 @@ pub struct HostVulkanDevice {
     /// NVIDIA's per-handle-type export state never sees "no live allocation
     /// of this handle type" once a swapchain exists — not even after the
     /// shared pools free every frame of that flavour. See
-    /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md`.
+    /// NVIDIA's OPAQUE_FD export cap after a swapchain.
     #[cfg(target_os = "linux")]
     export_pool_sentinels: Vec<ExportPoolSentinel>,
 }
@@ -598,7 +598,7 @@ impl HostVulkanDevice {
     /// the underlying [`vk::DeviceMemory`] block exists before any
     /// swapchain is created. NVIDIA's Linux driver caps fresh
     /// exportable allocations after a swapchain has been bound (see
-    /// [`docs/learnings/nvidia-dma-buf-after-swapchain.md`]
+    /// NVIDIA's DMA-BUF export cap after a swapchain
     /// and `nvidia-opaque-fd-after-swapchain.md`); pre-warming here
     /// removes that footgun for every consumer at the engine layer.
     pub fn new() -> Result<Arc<Self>> {
@@ -1213,7 +1213,7 @@ impl HostVulkanDevice {
         // missing) is non-fatal: the table stays empty and the tiled pool
         // is skipped, which makes render-target DMA-BUF allocations refuse
         // with an error rather than silently picking a sampler-only modifier.
-        // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`. The table
+        // NVIDIA EGL samples linear DMA-BUFs only. The table
         // is the EGL device's on this device's render node, and a device that
         // exports no DMA-BUF takes none.
         #[cfg(target_os = "linux")]
@@ -2648,7 +2648,7 @@ impl HostVulkanDevice {
     /// allocates from the default VMA pool. Use this for textures that never
     /// cross process boundaries — NVIDIA Linux caps DMA-BUF exportable
     /// allocations after swapchain creation, so minimizing exportable
-    /// allocations is important (see `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
+    /// allocations is important.
     pub fn create_texture_local(
         self: &Arc<Self>,
         desc: &TextureDescriptor,
@@ -2686,7 +2686,7 @@ impl HostVulkanDevice {
     /// (`external_only=FALSE` — render-target-capable). Errors when the
     /// format has no DRM FOURCC or the probe advertised no RT-capable
     /// modifier for it — there is no fallback to LINEAR (sampler-only on
-    /// NVIDIA, see `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    /// NVIDIA, whose EGL samples linear DMA-BUFs only).
     #[cfg(target_os = "linux")]
     pub fn create_texture_render_target_dma_buf(
         self: &Arc<Self>,
@@ -3173,7 +3173,7 @@ impl HostVulkanDevice {
     /// model as the per-call variant; only the resource churn is removed).
     ///
     /// Used by [`crate::core::context::TextureRing`]'s per-slot upload
-    /// path — see `docs/architecture/texture-ring.md`.
+    /// path.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub unsafe fn upload_buffer_to_image_amortized(
         &self,
@@ -4627,7 +4627,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_memory_type_refusal_before_the_import_closes_the_fd_it_was_handed() {
@@ -4713,7 +4713,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd() {
@@ -4824,7 +4824,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_device_creation() {
@@ -4839,7 +4839,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_queue_family_discovery() {
@@ -4863,7 +4863,7 @@ mod tests {
     /// NVIDIA hardware). Skips when no Vulkan device is available.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn supports_cross_device_dma_buf_probe_matches_vendor_blocklist() {
@@ -4908,7 +4908,7 @@ mod tests {
     /// Trait-method route must agree with the inherent method.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn supports_qfot_acquire_unmodified_consistent_across_inherent_and_trait() {
@@ -4938,7 +4938,7 @@ mod tests {
     /// `VK_LOADER_LAYERS_ENABLE=*validation*`.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn host_acquire_from_foreign_undefined_target_is_noop() {
@@ -4955,7 +4955,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_vma_allocator_created() {
@@ -4978,7 +4978,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn every_export_pool_the_device_created_keeps_a_tiny_sentinel_for_its_life() {
@@ -5077,7 +5077,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn an_export_pool_sentinel_dropped_before_the_device_frees_its_pool_allocation() {
@@ -5125,7 +5125,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_dma_buf_import_round_trip() {
@@ -5213,7 +5213,7 @@ mod tests {
     /// failure the test is for.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_device_comes_up_on_this_hosts_driver_and_names_itself() {
@@ -5233,7 +5233,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn ray_tracing_on_a_device_without_it_refuses_rather_than_panicking() {
@@ -5263,7 +5263,7 @@ mod tests {
     /// the budget never weighs — still allocates.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[allow(clippy::disallowed_macros)]
@@ -5343,7 +5343,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[allow(clippy::disallowed_macros)]
@@ -5554,7 +5554,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[allow(clippy::disallowed_macros)]
@@ -5864,7 +5864,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn with_lavapipe_listed_before_the_nvidia_driver_the_engine_builds_on_the_nvidia_device() {
@@ -5894,7 +5894,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn with_only_lavapipe_visible_the_engine_builds_on_a_software_device_that_exports_neither_dma_buf_nor_a_semaphore()

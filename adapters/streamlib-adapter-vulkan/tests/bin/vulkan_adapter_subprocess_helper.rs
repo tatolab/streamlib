@@ -6,7 +6,7 @@
 //! Receives DMA-BUF fds + two timeline-semaphore opaque-fds
 //! (`produce_done` first, then `consume_done` — per the
 //! single-writer-per-edge contract in
-//! `docs/architecture/adapter-timeline-single-writer.md`) via
+//! the single-writer-per-edge timeline rule) via
 //! SCM_RIGHTS over a socketpair the parent passed in
 //! `STREAMLIB_HELPER_SOCKET_FD`. Imports both into a fresh `VkDevice`
 //! (this process's own `ConsumerVulkanDevice` — the same carve-out the
@@ -158,7 +158,7 @@ fn run() -> ExitCode {
 
     // Wire layout: [...dma_buf_fds, produce_done_fd, consume_done_fd]
     // — the last two slots are the two single-writer timelines per
-    // `docs/architecture/adapter-timeline-single-writer.md`.
+    // the single-writer-per-edge timeline rule.
     if fds.len() < 3 {
         return die(
             Some(&socket),

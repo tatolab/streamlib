@@ -46,7 +46,7 @@ use crate::core::rhi::PixelBuffer;
 /// duplicates the FDs at register-time via SCM_RIGHTS, but the
 /// host-side `Arc<HostVulkanTimelineSemaphore>` must outlive the
 /// registration so the kernel objects backing the FDs aren't
-/// destroyed. See `docs/architecture/adapter-timeline-single-writer.md`.
+/// destroyed.
 pub(crate) enum RegisteredHandle {
     #[allow(dead_code)]
     PixelBuffer(PixelBuffer),

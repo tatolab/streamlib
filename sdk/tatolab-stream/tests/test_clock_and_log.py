@@ -35,11 +35,6 @@ def test_tatolab_stream_exports_exactly_one_name_for_the_monotonic_clock():
     confusion the one-clock rule exists to kill. Checked on both re-export
     surfaces, because a re-export is not the only way a second name can
     reappear; the runtime's own module is checked against the runtime.
-
-    Matched by suffix rather than named outright: `ship-change-removed-gate.sh`
-    content-greps `sdk/` for each `REMOVED:` pattern a change file declares, so
-    spelling the deleted export here would hold `one-monotonic-clock` red for
-    good.
     """
     for exporting_module in (tatolab.stream, clock):
         assert {

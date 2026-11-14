@@ -5,8 +5,7 @@
 //! worker → line-buffered pretty mirror + the batched JSONL log of the
 //! project whose stream or stream action emitted each record.
 //!
-//! See `docs/logging-schema.md` for the JSONL schema (the durable
-//! interface contract) and `CLAUDE.md` for the engine-model framing.
+//! The JSONL schema is `RuntimeLogEvent` in `streamlib-runtime-client-contract`.
 
 pub use config::{LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig};
 pub use helper_process_engine_log_capture::{

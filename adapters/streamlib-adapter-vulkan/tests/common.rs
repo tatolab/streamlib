@@ -81,7 +81,7 @@ impl HostFixture {
         // process. produce_done is signaled by the producer side
         // (end_write_access); consume_done is signaled by the consumer
         // side (end_read_access). See
-        // docs/architecture/adapter-timeline-single-writer.md.
+        // the single-writer-per-edge timeline rule.
         let produce_done = Arc::new(
             HostVulkanTimelineSemaphore::new_exportable(self.adapter.device().device(), 0)
                 .expect("exportable produce_done timeline"),
@@ -170,7 +170,7 @@ pub fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
 /// (produce_done first, then consume_done) via SCM_RIGHTS. The fds
 /// passed in are dup'd by the kernel; the caller retains ownership of
 /// their copies (close after send). Single-writer-per-edge per
-/// `docs/architecture/adapter-timeline-single-writer.md`: the helper
+/// the single-writer-per-edge timeline rule: the helper
 /// imports both timelines; whether it signals produce_done or
 /// consume_done depends on its role.
 #[cfg(target_os = "linux")]

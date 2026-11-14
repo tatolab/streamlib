@@ -85,8 +85,7 @@ impl From<tracing::Level> for LogLevel {
 /// One JSONL line. Every field is emitted on every line; `null` where not
 /// applicable.
 ///
-/// Field nullability and semantics are the load-bearing contract — see
-/// `docs/logging-schema.md`. Every reader, the native `tatolab logs` among
+/// Field nullability and semantics are the load-bearing contract. Every reader, the native `tatolab logs` among
 /// them, depends on this shape.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLogEvent {
@@ -256,9 +255,7 @@ mod tests {
         }
     }
 
-    /// Parses the exact example line documented in `docs/logging-schema.md`.
-    /// If this test fails, the published schema example and the
-    /// implementation have drifted — fix one or the other.
+    /// Parses one example JSONL line end to end.
     #[test]
     fn docs_example_line_parses() {
         let line = r#"{"schema_version":2,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","action":"Rabc123-4","source":"rust","level":"info","message":"processor started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","processor_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;

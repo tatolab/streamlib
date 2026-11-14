@@ -50,7 +50,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// after `vkCmdCopyImageToBuffer` / `vkCmdCopyBufferToImage`
     /// completes. Subprocess consumers import via OPAQUE_FD and wait
     /// on it before reading the staging buffer. Single-writer-per-edge
-    /// per `docs/architecture/adapter-timeline-single-writer.md`.
+    /// per the single-writer-per-edge timeline rule.
     pub produce_done: Arc<P::TimelineSemaphore>,
     /// `consume_done` timeline — signaled exclusively by the consumer
     /// process from `end_read_access` (CPU `signal_host`) after the
@@ -100,7 +100,7 @@ impl<P: DevicePrivilege> PlaneSlot<P> {
 ///
 /// [`reserve_next_signal_value`](Self::reserve_next_signal_value) hands
 /// back a guard rather than a `u64` because a distinct value is not on
-/// its own enough — see `docs/architecture/adapter-timeline-single-writer.md`
+/// its own enough
 /// §Thread model within the writer process.
 #[derive(Default)]
 pub(crate) struct SurfaceTimelineSignalSequence {

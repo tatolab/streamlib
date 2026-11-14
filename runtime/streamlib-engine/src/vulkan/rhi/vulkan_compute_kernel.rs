@@ -1646,7 +1646,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 "#;
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not() {
@@ -1839,7 +1839,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_matches_expected_blend_for_one_input() {
@@ -1848,7 +1848,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_matches_expected_blend_for_two_inputs() {
@@ -1857,7 +1857,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_matches_expected_blend_for_four_inputs() {
@@ -1866,7 +1866,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_matches_expected_blend_for_eight_inputs() {
@@ -1875,7 +1875,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn kernel_bindings_reflect_descriptor() {
@@ -1907,7 +1907,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn rejects_descriptor_with_mismatched_binding_kind() {
@@ -1937,7 +1937,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn rejects_descriptor_missing_a_binding_the_shader_declares() {
@@ -1969,7 +1969,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn rejects_descriptor_with_extra_binding_not_in_shader() {
@@ -2000,7 +2000,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn rejects_push_constant_size_mismatch() {
@@ -2026,7 +2026,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
@@ -2058,7 +2058,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_completes_within_reasonable_budget() {
@@ -2225,7 +2225,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
@@ -2270,7 +2270,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
@@ -2324,7 +2324,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
@@ -2366,7 +2366,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
@@ -2420,7 +2420,7 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn sampled_image_binding_dispatches_with_raw_view() {

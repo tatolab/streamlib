@@ -517,7 +517,7 @@ impl ProcessorInterpreterSpawnHostProcessor {
                 // A helper still importing when shutdown begins must not hold
                 // the app for the rest of a sixty-second budget. It goes on the
                 // ladder rather than taking a bare kill, because
-                // `docs/plan/ARCHITECTURE.md` §Processor model has any callback
+                // the engine has any callback
                 // interrupted at shutdown — `setup()` included — followed by
                 // `teardown()`.
                 self.stop_the_helper_process_on_the_shutdown_ladder();
@@ -580,8 +580,8 @@ impl ProcessorInterpreterSpawnHostProcessor {
     fn refuse_the_helper_process_that_died_while_setting_up(&mut self) -> Error {
         // The group first, so nothing the helper started is still holding the
         // standard-error pipe the tail below waits on — and so a refused start
-        // leaves no survivor, which `docs/plan/ARCHITECTURE.md` §Processor
-        // model owes at every helper exit and not only at the ones that reach
+        // leaves no survivor, which the engine
+        // owes at every helper exit and not only at the ones that reach
         // teardown.
         self.take_the_helper_process_group_down();
         let standard_error_tail = self
@@ -1544,7 +1544,7 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
     /// Notice a helper process that died on its own, and take its group with it.
     ///
     /// Asked of the process rather than of the escalate socket, which is what
-    /// `docs/plan/ARCHITECTURE.md` §Processor model means by "a crash the engine
+    /// the engine means by "a crash the engine
     /// detects by the process itself rather than by its socket": a descendant
     /// holding that socket keeps its EOF from ever arriving, so a helper whose
     /// pid is gone went on reading as alive and issuing its privileged

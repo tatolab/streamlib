@@ -33,7 +33,7 @@ use coreaudio_audio_tier::{
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests"
 )]
 fn a_real_input_device_stamps_its_blocks_with_the_devices_own_timing() {
     let Some(backend) =
@@ -50,7 +50,7 @@ fn a_real_input_device_stamps_its_blocks_with_the_devices_own_timing() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests"
 )]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     let Some(backend) =
@@ -67,7 +67,7 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an input device and microphone access allowed. Run with --features streamlib/hardware-tests"
 )]
 fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) =

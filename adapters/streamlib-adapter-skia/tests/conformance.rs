@@ -67,7 +67,7 @@ fn register_one(
         .expect("HostVulkanTexture::new_device_local");
     let texture = Arc::new(raw_tex);
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`.
+    // the single-writer-per-edge timeline rule.
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(inner.device().device(), 0)
             .expect("produce_done timeline"),

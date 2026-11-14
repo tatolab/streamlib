@@ -31,7 +31,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// process when a write completes (CPU `signal_host` from
     /// `end_write_access`). The consumer waits on this timeline before
     /// reading. Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    /// the single-writer-per-edge timeline rule.
     pub produce_done: Arc<P::TimelineSemaphore>,
     /// `consume_done` timeline — signaled exclusively by the consumer
     /// process when a read completes (CPU `signal_host` from

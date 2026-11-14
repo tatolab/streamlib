@@ -22,9 +22,6 @@
 //! views over the mapped bytes. On WRITE release, every plane's staging
 //! bytes are flushed back via per-plane `vkCmdCopyBufferToImage` before
 //! the timeline release-value is signaled.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture
-//! brief.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

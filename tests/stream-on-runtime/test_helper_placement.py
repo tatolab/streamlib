@@ -1246,7 +1246,7 @@ def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabd
 def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """The ladder `docs/plan/ARCHITECTURE.md` §Processor model decides, end to end.
+    """The shutdown ladder, end to end.
 
     Fail-without-fix: with the old pair of five-second reply deadlines the
     sleeping callback misses `stopped`, the helper is marked gone, and its

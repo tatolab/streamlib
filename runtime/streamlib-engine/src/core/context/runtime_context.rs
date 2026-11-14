@@ -920,7 +920,7 @@ mod one_off_acquisition_counting_tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial_test::serial]
@@ -978,7 +978,7 @@ mod one_off_acquisition_counting_tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial_test::serial]

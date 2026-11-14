@@ -5,7 +5,7 @@
 //! would inherit: `dup` and `pipe` outright, and `pipe2`, `epoll_create1`,
 //! `timerfd_create`, `eventfd` and `recvmsg` without their close-on-exec flag.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Processor model: nothing an app starts may hold
+//! Nothing an app starts may hold
 //! the app's output open or delay its exit. A descriptor created without
 //! close-on-exec reaches every child the process ever spawns — the stdio
 //! interceptor's `dup`s of the app's own stdout and stderr did, and a grandchild

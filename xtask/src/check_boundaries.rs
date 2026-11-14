@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Boundary-grep CI check — Layer 6 of the regression-prevention defense for
-//! the Vulkan RHI capability split (see `docs/architecture/subprocess-rhi-parity.md`).
+//! the Vulkan RHI capability split.
 //!
 //! Four checks, each over the workspace, allowlists driven by data:
 //!
@@ -98,7 +98,7 @@ pub fn run(project_root: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(anyhow::anyhow!(
-            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s) + {} engine-free client->engine chain(s)) across {} file(s) scanned — see docs/architecture/subprocess-rhi-parity.md",
+            "check-boundaries: {} violation(s) ({} grep + {} transitive trunk->engine chain(s) + {} engine-free client->engine chain(s)) across {} file(s) scanned",
             total_violations,
             report.violations.len(),
             engine_chains.len(),
@@ -582,7 +582,7 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
     // chained via push_next — that is the carve-out, not raw allocation.
     // The pattern can't be distinguished syntactically from raw allocation
     // without an AST walk; allowlist the crate and rely on code review +
-    // docs/architecture/subprocess-rhi-parity.md to keep it honest.
+    // the subprocess RHI parity rule to keep it honest.
     AllowEntry {
         path: "runtime/streamlib-consumer-rhi/",
         kind: AllowKind::PathPrefix,

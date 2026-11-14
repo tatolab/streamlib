@@ -8,8 +8,7 @@
 //! Without a messenger the layer prints through C stdio, which bypasses the
 //! test harness's output capture; registering one silences that stdout path
 //! entirely, so findings travel through `tracing` and the counter and
-//! nowhere else. See `docs/testing-hardware.md` for the env vars and the
-//! whole-sweep gate.
+//! nowhere else.
 
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::Arc;
@@ -557,7 +556,7 @@ mod hardware_tests {
     /// engine is clean.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_deliberately_invalid_vulkan_call_moves_the_validation_error_count() {
@@ -618,7 +617,7 @@ mod hardware_tests {
     /// the engine's own recorder raises nothing.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_clean_gpu_round_trip_leaves_the_validation_message_counts_unmoved() {

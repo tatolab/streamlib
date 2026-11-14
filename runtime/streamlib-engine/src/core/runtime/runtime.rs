@@ -581,7 +581,7 @@ impl Runner {
         // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
-        // See `docs/logging-schema.md` for the schema.
+        // The JSONL schema is `RuntimeLogEvent`.
         #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
         let process_logging_pathway_hold = crate::core::logging::hold_the_process_logging_pathway(
             crate::core::logging::StreamlibLoggingConfig {
@@ -3313,7 +3313,7 @@ mod tests {
     /// forced, the thread abandoned rather than waited out.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial]
@@ -3532,7 +3532,7 @@ mod tests {
     /// still committing on its own compiler.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial]
@@ -3662,7 +3662,7 @@ mod tests {
     /// let go of, retiring their frames; another stream's entries stay.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial]
@@ -4177,7 +4177,7 @@ mod tests {
     /// installed after them is refused.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     #[serial]

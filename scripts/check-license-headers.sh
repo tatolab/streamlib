@@ -69,8 +69,8 @@ failed_language_checks=()
 # zones silently exempts every zone nobody remembered to add to it.
 #
 # The vendored trees are verbatim third-party copies under their own licence
-# and deliberately carry NO GPL headers — the vulkanalia fork is Apache-2.0
-# (docs/architecture/vendored-vulkanalia.md). One exception, listed by path;
+# and deliberately carry NO GPL headers — the vulkanalia fork is Apache-2.0.
+# One exception, listed by path;
 # see CLAUDE.md's licensing section.
 #
 # Exact-dir exclusions, so a sibling one path segment away is still covered: a

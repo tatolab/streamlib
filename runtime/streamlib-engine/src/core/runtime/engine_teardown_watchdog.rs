@@ -4,8 +4,7 @@
 //! The watchdogs that bound a teardown hung anywhere the shutdown ladder does
 //! not reach: one per loaded stream's teardown, and one over the engine's own.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs and §Processor model, "Failure
-//! isolation": an engine-chosen watchdog of about fifteen seconds ends a
+//! An engine-chosen watchdog of about fifteen seconds ends a
 //! teardown hung anywhere else. A stream's watchdog, on expiry, kills that
 //! stream's helper process groups, abandons its threads and unloads it,
 //! leaving every other stream running; the engine's own ends the process with

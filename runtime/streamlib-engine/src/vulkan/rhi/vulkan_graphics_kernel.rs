@@ -2631,7 +2631,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_zero_descriptor_sets_in_flight() {
@@ -2662,7 +2662,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_descriptor_without_vertex_stage() {
@@ -2688,7 +2688,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_descriptor_without_fragment_stage() {
@@ -2714,7 +2714,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn constructs_offscreen_blit_kernel() {
@@ -2741,7 +2741,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn constructs_kernel_with_depth_stencil_enabled() {
@@ -2789,7 +2789,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn constructs_kernel_with_alpha_blending() {
@@ -2815,7 +2815,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn constructs_kernel_with_vertex_input_buffers() {
@@ -2864,7 +2864,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn frame_index_out_of_range_fails_loud() {
@@ -2908,7 +2908,7 @@ BlitVertexOutput main(uint vertex_index : SV_VulkanVertexID) {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {

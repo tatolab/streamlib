@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The engine's one lease-aware slot ring: which slot a producer publishes its
-//! next frame into, under the surface-id lifetime contract
-//! (`docs/decisions/surface-id-lifetime-contract.md`).
+//! next frame into, under the surface-id lifetime contract.
 //!
 //! A slot is rehanded only when no holder in this address space has its
 //! resource and no cross-process holder has it checked out. Each hand-off

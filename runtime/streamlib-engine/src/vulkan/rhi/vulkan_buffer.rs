@@ -1508,7 +1508,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_pool_buffer_creation_1920x1080_bgra32() {
@@ -1535,7 +1535,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_buffer_write_and_readback() {
@@ -1577,7 +1577,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_dma_buf_export() {
@@ -1606,7 +1606,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_host_cached_export_is_cached_or_the_device_has_no_cached_exportable_type() {
@@ -1671,7 +1671,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_consumer_import_binds_the_stated_memory_type_index_of_a_host_cached_export() {
@@ -1732,7 +1732,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_stated_memory_type_index_the_importer_cannot_bind_is_refused_by_name() {
@@ -1798,7 +1798,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn opaque_fd_export_round_trip_and_cross_flavor_rejection() {
@@ -1850,7 +1850,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn opaque_fd_device_local_export_round_trip() {
@@ -1888,7 +1888,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn export_external_handle_dispatches_on_allocation_flavor() {
@@ -1966,7 +1966,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn physical_device_uuid_is_populated() {
@@ -2004,7 +2004,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_multiple_buffers_coexist() {
@@ -2042,7 +2042,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_drop_frees_without_panic() {
@@ -2064,7 +2064,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_dma_buf_import_round_trip() {
@@ -2126,7 +2126,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_dma_buf_import_multi_plane_round_trip() {
@@ -2212,7 +2212,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn test_dma_buf_import_rejects_oversize_plane_vec() {
@@ -2248,7 +2248,7 @@ mod tests {
     /// through the persistent mapping.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn storage_buffer_host_visible_write_readback() {
@@ -2332,7 +2332,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_round_trip() {
@@ -2442,7 +2442,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn storage_buffer_from_dma_buf_fd_drops_on_failure() {

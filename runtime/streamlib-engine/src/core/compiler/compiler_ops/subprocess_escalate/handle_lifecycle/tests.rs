@@ -31,7 +31,7 @@ fn release_handle_flags_unknown_handle() {
 #[cfg(target_os = "macos")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown() {
@@ -173,7 +173,7 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
 #[cfg(target_os = "macos")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
@@ -402,7 +402,7 @@ fn next_processor_output_frame_over_the_escalate_op(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it() {
@@ -479,7 +479,7 @@ fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it()
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_resolved_texture_registration_holds_its_processor_output_slot_until_dropped() {
@@ -540,7 +540,7 @@ fn a_resolved_texture_registration_holds_its_processor_output_slot_until_dropped
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_claim_holds_its_node_output_frame_until_dropped_and_a_retired_frame_is_refused() {
@@ -599,7 +599,7 @@ fn a_claim_holds_its_node_output_frame_until_dropped_and_a_retired_frame_is_refu
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
@@ -727,7 +727,7 @@ fn acquire_tensor_storage_buffer_over_the_escalate_op(
 #[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release() {
@@ -807,7 +807,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
 #[cfg(target_os = "macos")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_table_on_release() {
@@ -900,7 +900,7 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
@@ -1377,7 +1377,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]
@@ -1440,7 +1440,7 @@ fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() {
@@ -1484,7 +1484,7 @@ fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() 
 #[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]
@@ -1559,7 +1559,7 @@ fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_re
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]
@@ -1709,7 +1709,7 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
 #[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exports_one() {
@@ -1827,7 +1827,7 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
 #[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() {
@@ -1908,7 +1908,7 @@ fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() 
 #[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 fn a_texture_no_opaque_fd_image_can_carry_is_refused_at_the_acquisition_where_dma_buf_is_absent() {

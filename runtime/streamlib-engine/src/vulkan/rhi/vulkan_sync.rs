@@ -264,7 +264,7 @@ impl HostVulkanTimelineSemaphore {
     /// and wants to release the surface to the next consumer.
     ///
     /// Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`: only
+    /// the single-writer-per-edge timeline rule: only
     /// one process ever signals a given timeline, so `value` is
     /// strictly greater than the current value by construction and
     /// VUID-VkSemaphoreSignalInfo-value-03258 holds without runtime
@@ -388,7 +388,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn timeline_semaphore_bounded_wait_reports_timeout_as_error() {
@@ -413,7 +413,7 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn timeline_semaphore_host_signal_advances_counter() {
@@ -444,7 +444,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_timeline_exports_as_an_opaque_fd_exactly_where_the_device_says_it_can() {
@@ -477,7 +477,7 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn timeline_semaphore_export_refuses_where_there_is_no_fd_handle_type() {
@@ -501,7 +501,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn timeline_semaphore_exports_its_metal_shared_event_as_a_mach_send_right() {
@@ -531,7 +531,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_timeline_not_created_exportable_refuses_the_metal_shared_event_export() {

@@ -165,7 +165,7 @@ pub unsafe fn record_pattern_upload_to_image(
 ///
 /// The consumer's `VkImage` tracker starts at UNDEFINED by Vulkan spec
 /// regardless of the host's post-upload layout (see
-/// `docs/learnings/cross-process-vkimage-layout.md`). The bridging
+/// per-device `VkImageLayout`). The bridging
 /// transition permits content discard by spec but DMA-BUF / OPAQUE_FD
 /// kernel-cache contents are preserved in practice on NVIDIA Linux. The
 /// full QFOT acquire path (with `VkExternalMemoryAcquireUnmodifiedEXT`)

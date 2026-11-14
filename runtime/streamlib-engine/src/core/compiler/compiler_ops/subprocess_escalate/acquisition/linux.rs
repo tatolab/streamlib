@@ -174,7 +174,7 @@ pub(in super::super) fn handle_acquire_image(
 ///
 /// On Linux, also allocates and registers a single-writer-per-edge
 /// timeline pair (`produce_done` + `consume_done` per
-/// `docs/architecture/adapter-timeline-single-writer.md`) where the device
+/// the single-writer-per-edge timeline rule) where the device
 /// exports a timeline semaphore; a device that exports none registers no
 /// edge. The timelines are returned so the caller can stash them in the
 /// [`EscalateHandleRegistry`]; the surface-share registration

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: GPL-3.0-only
 
-# Holds the bare `tatolab` name on PyPI (docs/decisions/tatolab-names.md). Not
+# Holds the bare `tatolab` name on PyPI. Not
 # part of the release: bump the version and `uv publish` it by hand whenever
 # the README's package list or install commands change.
 [build-system]

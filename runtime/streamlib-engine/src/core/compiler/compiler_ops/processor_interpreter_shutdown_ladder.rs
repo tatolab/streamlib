@@ -3,8 +3,7 @@
 
 //! The bounded ladder one helper process is stopped on.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Processor model, the `[shutdown-ladder]` entry:
-//! shutdown always ends, and a cooperative processor's `teardown()` always
+//! Shutdown always ends, and a cooperative processor's `teardown()` always
 //! runs. The rungs are `stop` and `teardown` sent together, a one-second
 //! interrupt for a callback that has not returned, five seconds for
 //! `teardown()`, the child's own window to leave, then its whole process group

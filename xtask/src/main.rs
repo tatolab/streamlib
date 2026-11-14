@@ -504,7 +504,7 @@ enum Commands {
     /// Boundary-grep CI gate for the Vulkan RHI capability split. Fails on
     /// `ash`, raw `vulkanalia` outside RHI/adapter crates, cdylibs depending
     /// on the full `streamlib` crate, or privileged Vulkan calls outside
-    /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
+    /// the RHI.
     CheckBoundaries,
 
     /// CI gate keeping the module host table data-plane only: every field of
@@ -575,7 +575,7 @@ enum Commands {
     /// timestamp share a unit and are different quantities, so subtracting
     /// across them is always a bug. There is no per-line pragma: widening the
     /// list is a plan change. See
-    /// `docs/decisions/one-monotonic-clock.md`.
+    /// the one-monotonic-clock rule.
     CheckClockUsage,
 
     /// CI gate keeping every apt install in CI behind
@@ -597,7 +597,7 @@ enum Commands {
     /// guard against accidental in-place edits (a workspace `cargo fmt --all`
     /// sweep is the classic cause). Deliberate re-vendors and recorded patches
     /// update the hashes in the same commit per
-    /// `docs/architecture/vendored-vulkanalia.md`.
+    /// `vendor/VULKANALIA-FORK.md`.
     CheckVendoredTrees,
 
     /// CI gate keeping every in-tree `{ path = "…", version = "…" }` requirement
@@ -697,8 +697,7 @@ enum Commands {
     /// lock, with the three bug-injection modes that keep either gate
     /// non-vacuous. Pure image math over PNGs the rig's ffmpeg decoded from a
     /// track `tatolab-read-track` read — GPU-free, so it is tested in CI while
-    /// the rig runs that feed it are not. See `docs/plan/ARCHITECTURE.md`
-    /// §Media I/O.
+    /// the rig runs that feed it are not.
     #[command(subcommand)]
     Psnr(psnr::PsnrCommand),
 

@@ -12,7 +12,7 @@
 //! sampler-only list (must be bound as `GL_TEXTURE_EXTERNAL_OES` and consumed
 //! through `samplerExternalOES`).
 //!
-//! See `docs/learnings/nvidia-egl-dmabuf-render-target.md` — linear DMA-BUFs
+//! On NVIDIA, linear DMA-BUFs
 //! are sampler-only on NVIDIA Linux; tiled modifiers from this probe are
 //! render-target-capable.
 //!
@@ -151,7 +151,7 @@ impl DrmModifierTable {
     /// in probe order. Imports against these must use
     /// `GL_TEXTURE_EXTERNAL_OES`; binding as `GL_TEXTURE_2D` produces a
     /// `GL_INVALID_OPERATION` (see
-    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+    /// NVIDIA EGL's sampler-only linear DMA-BUFs).
     pub fn sampler_only_modifiers(&self, fourcc: u32) -> &[u64] {
         self.sampler_only_modifiers
             .get(&fourcc)
@@ -517,7 +517,7 @@ fn probe_with_formats(
     }
     // A display is shared process-wide by EGL, so neither kind is ever
     // `eglTerminate`d — see
-    // `docs/learnings/egl-default-display-terminate-is-process-wide.md`.
+    // `eglTerminate` on the default display being process-wide.
     let InitializedEglDisplay {
         display,
         major,
@@ -740,7 +740,7 @@ mod tests {
     /// Live EGL probe — best-effort, skips when no EGL is available.
     /// On NVIDIA Linux this should report ≥12 RT-capable modifiers for
     /// `DRM_FORMAT_ABGR8888` (the tiled NVIDIA modifiers documented in
-    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`); on Mesa the
+    /// NVIDIA EGL's sampler-only linear DMA-BUFs); on Mesa the
     /// count is driver-dependent. We assert only that the probe ran and
     /// either returned a known error or a sane table.
     #[test]

@@ -2,10 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Surface-adapter contract shared by every adapter core.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture
-//! brief and `docs/architecture/adapter-authoring.md` for the adapter
-//! author guide.
 
 mod adapter;
 mod conformance;

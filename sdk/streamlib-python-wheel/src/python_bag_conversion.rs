@@ -91,7 +91,7 @@ thread_local! {
     /// What this is keyed on is what it guarantees: one OS thread, one read at
     /// a time. A processor's callbacks run on its own dedicated thread, so the
     /// window is exactly one `from_bytes` call deep. The green-thread execution
-    /// flavor the plan keeps OPEN (ARCHITECTURE.md §Processor model) would
+    /// flavor, if it is ever built, would
     /// break that — a switch inside `from_bytes` is not nested reentrancy, and a
     /// resumed read would see the wrong offer — so that flavor owes this a
     /// rework onto `contextvars`, which follows the switch.

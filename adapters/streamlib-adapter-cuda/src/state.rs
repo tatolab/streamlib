@@ -53,7 +53,7 @@ pub struct HostSurfaceRegistration<P: DevicePrivilege> {
     /// `submit_host_copy_image_to_buffer` or CPU signal from
     /// `end_write_access`). The consumer waits on this timeline before
     /// reading. Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    /// the single-writer-per-edge timeline rule.
     pub produce_done: Arc<P::TimelineSemaphore>,
     /// `consume_done` timeline — signaled exclusively by the consumer
     /// process when a read completes (`end_read_access`). The producer
@@ -87,9 +87,8 @@ pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
     pub consume_done: Arc<P::TimelineSemaphore>,
     /// Vulkan image layout the image is in at registration time. The
     /// cross-process release path (a `CudaContext.release_for_cross_process`
-    /// SDK shim that delegates to `VulkanSurfaceAdapter::release_to_foreign`,
-    /// per `docs/architecture/adapter-authoring.md` → "Cross-process
-    /// producer composition") reads this when running the producer-side
+    /// SDK shim that delegates to `VulkanSurfaceAdapter::release_to_foreign`)
+    /// reads this when running the producer-side
     /// QFOT release barrier. The cuda adapter itself does NOT issue any
     /// Vulkan-side barriers on the imported image — CUDA's sync runs
     /// pairwise via `cudaWaitExternalSemaphoresAsync` /

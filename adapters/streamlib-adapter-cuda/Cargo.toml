@@ -55,8 +55,7 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
 streamlib = { path = "../../sdk/streamlib-sdk" }
 tracing-subscriber.workspace = true
 # Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
-# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
-# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+# `VkInstance` creation on NVIDIA Linux trips a driver SIGSEGV.
 serial_test = "3.2"
 # The OPAQUE_FD round-trip tests drive the surface-share daemon directly
 # so they exercise the same wire format helper processes consume.

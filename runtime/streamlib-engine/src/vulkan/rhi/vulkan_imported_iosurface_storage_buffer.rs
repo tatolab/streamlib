@@ -686,7 +686,7 @@ mod tests {
     /// later; point `VK_DRIVER_FILES` at one to run it on an older system.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_corevideo_420v_surface_imported_as_a_storage_buffer_converts_like_a_copy_and_follows_cpu_writes()
@@ -757,7 +757,7 @@ mod tests {
     /// refusal is an error that names why — never a panic.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn moltenvk_before_1_4_1_refuses_the_iosurface_storage_buffer_import_as_an_error() {
@@ -805,7 +805,7 @@ mod tests {
     /// gone, and the last clone releases it.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_storage_buffer_clone_keeps_the_imported_surface_alive_until_it_drops() {
@@ -835,7 +835,7 @@ mod tests {
     /// refusal names the surface rather than panicking on a missing plane.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_non_planar_surface_has_no_nv12_layout_and_the_refusal_names_it() {

@@ -15,10 +15,6 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 
 </div>
 
-<!-- Demo GIF slot. Generate on the rig with `vhs docs/assets/demo.tape`, commit the
-     result, then replace this comment with:
-     <div align="center"><img src="docs/assets/demo.gif" alt="Inspecting a running stream" width="900"></div> -->
-
 ---
 
 - **A stream is a graph document.** `streams/<name>.graph.json` wires nodes together, and a Python
