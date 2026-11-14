@@ -4,7 +4,7 @@
 //! Bans building an iceoryx2 node anywhere but the body of the one node
 //! constructor in `streamlib-ipc-types`'s engine-owned domain module, building a
 //! publish-subscribe service anywhere but that module and the engine's
-//! `iceoryx2/node.rs`, and reading iceoryx2's global configuration anywhere at
+//! `iceoryx2/node/` module, and reading iceoryx2's global configuration anywhere at
 //! all, those files included.
 //!
 //! A node built any other way reads iceoryx2's ambient configuration and lands
@@ -24,8 +24,9 @@ const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters"];
 /// The one file holding the node constructor every engine-owned node is built by.
 const ALLOWED_FILE: &str = "runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs";
 
-/// The engine's channel wrapper, the other file that may build a publish-subscribe service.
-const ENGINE_CHANNEL_WRAPPER_FILE: &str = "runtime/streamlib-engine/src/iceoryx2/node.rs";
+/// The engine's channel wrapper module, the other place that may build a publish-subscribe
+/// service; its test files sit under it.
+const ENGINE_CHANNEL_WRAPPER_DIRECTORY: &str = "runtime/streamlib-engine/src/iceoryx2/node";
 
 /// The signature of the one function in [`ALLOWED_FILE`] whose body may build a node.
 const ALLOWED_CONSTRUCTOR_SIGNATURE: &str = "fn create_iceoryx2_node_in_domain(";
@@ -37,7 +38,7 @@ const NODE_BUILDER_CALL: &str = "NodeBuilder::new(";
 const GLOBAL_CONFIG_CALL: &str = "Config::global_config(";
 
 /// The builder method that opens a publish-subscribe service, allowed only in
-/// [`ALLOWED_FILE`] and [`ENGINE_CHANNEL_WRAPPER_FILE`].
+/// [`ALLOWED_FILE`] and under [`ENGINE_CHANNEL_WRAPPER_DIRECTORY`].
 ///
 /// Matched as a whole identifier rather than as `publish_subscribe::<`, because
 /// the identifier is the one token no spelling of the call can split: spacing
@@ -102,7 +103,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
                 RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper => {
                     format!(
                         "a publish-subscribe service built outside {ALLOWED_FILE} and \
-                         {ENGINE_CHANNEL_WRAPPER_FILE} lacks the \
+                         {ENGINE_CHANNEL_WRAPPER_DIRECTORY}/ lacks the \
                          sequence-number user header every channel data service carries. Open \
                          the channel through `Iceoryx2Node::open_or_create_service` and take its \
                          ports from the returned service."
@@ -128,7 +129,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     tracing::info!(
         "check-iceoryx2-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
          node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)`, no publish-subscribe service \
-         built outside {ALLOWED_FILE} and {ENGINE_CHANNEL_WRAPPER_FILE} and no global \
+         built outside {ALLOWED_FILE} and {ENGINE_CHANNEL_WRAPPER_DIRECTORY}/ and no global \
          configuration read",
         report.files_scanned,
     );
@@ -163,7 +164,7 @@ pub fn scan(workspace_root: &Path) -> Result<CheckReport> {
 fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<Violation>) {
     let is_the_allowed_file = relative_path == Path::new(ALLOWED_FILE);
     let may_build_a_publish_subscribe_service =
-        is_the_allowed_file || relative_path == Path::new(ENGINE_CHANNEL_WRAPPER_FILE);
+        is_the_allowed_file || relative_path.starts_with(ENGINE_CHANNEL_WRAPPER_DIRECTORY);
     let allowed_constructor_body_lines = if is_the_allowed_file {
         line_indices_of_the_allowed_constructor_body(content)
     } else {
@@ -379,13 +380,25 @@ mod tests {
      {
         let mut violations = Vec::new();
         collect_violations(
-            Path::new(ENGINE_CHANNEL_WRAPPER_FILE),
+            &Path::new(ENGINE_CHANNEL_WRAPPER_DIRECTORY).join("mod.rs"),
             "fn open() {\n    node.service_builder(&name).publish_subscribe::<[u8]>().open_or_create();\n    let node = NodeBuilder::new().create::<ipc::Service>();\n}\n",
             &mut violations,
         );
 
         assert_eq!(violations.len(), 1, "{violations:?}");
         assert_eq!(violations[0].line_no, 3);
+    }
+
+    #[test]
+    fn a_publish_subscribe_builder_in_a_sibling_of_the_engine_channel_wrapper_trips() {
+        let mut violations = Vec::new();
+        collect_violations(
+            Path::new("runtime/streamlib-engine/src/iceoryx2/node_helpers.rs"),
+            "fn open() {\n    node.service_builder(&name).publish_subscribe::<[u8]>().open_or_create();\n}\n",
+            &mut violations,
+        );
+
+        assert_eq!(violations.len(), 1, "{violations:?}");
     }
 
     #[test]

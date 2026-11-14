@@ -541,7 +541,7 @@ enum Commands {
 
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
     /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
-    /// `adapters/` outside `iceoryx2/node.rs`, and on any `Config::global_config()`
+    /// `adapters/` outside `iceoryx2/node/`, and on any `Config::global_config()`
     /// anywhere — tests and benches included, since a node in another domain hangs
     /// a test silently and a service without the user header counts no loss.
     CheckIceoryx2Construction,
