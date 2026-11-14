@@ -251,6 +251,35 @@ pub fn browser_host_executable_beside_the_lend(lend_directory: &Path) -> Option<
     Some(browser_host_directory.join(BROWSER_HOST_EXECUTABLE_FILE_NAME))
 }
 
+/// The browser host's app bundle, relative to the `Contents/` of the macOS app
+/// bundle that carries the runtime unit. Code signing admits no code under
+/// `Resources/`, where that bundle's lend sits, so the host is nested code in
+/// `Frameworks/` instead of beside the lend.
+pub const BROWSER_HOST_APP_BUNDLE_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS: &str =
+    "Frameworks/tatolab-browser-host.app";
+
+/// The browser host's executable for the lend at `lend_directory`: inside the
+/// macOS app bundle whose lend it is, in that bundle's
+/// [`BROWSER_HOST_APP_BUNDLE_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS`]; in a runtime
+/// unit, beside the lend. `None` for a lend at the filesystem root.
+pub fn browser_host_executable_for_the_lend(lend_directory: &Path) -> Option<PathBuf> {
+    if cfg!(target_os = "macos")
+        && let Some(app_bundle_contents_directory) = lend_directory.parent().and_then(Path::parent)
+        && app_bundle_contents_directory.file_name()? == APP_BUNDLE_CONTENTS_DIRECTORY_NAME
+        && lend_directory
+            == lend_directory_in_the_app_bundle_contents(app_bundle_contents_directory)
+    {
+        return Some(
+            app_bundle_contents_directory
+                .join(BROWSER_HOST_APP_BUNDLE_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS)
+                .join("Contents")
+                .join(APP_BUNDLE_EXECUTABLE_DIRECTORY_NAME)
+                .join(BROWSER_HOST_EXECUTABLE_FILE_NAME),
+        );
+    }
+    browser_host_executable_beside_the_lend(lend_directory)
+}
+
 /// The bundled Vulkan driver directory in the lend at `lend_directory`.
 pub fn bundled_vulkan_driver_directory_in_the_lend(lend_directory: &Path) -> PathBuf {
     lend_directory
@@ -360,6 +389,43 @@ mod tests {
             Some(PathBuf::from(
                 "/opt/tatolab/lib/tatolab/browser-host/tatolab-browser-host"
             ))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_lend_shaped_like_an_app_bundles_finds_the_browser_host_beside_it_on_linux() {
+        let lend_directory = lend_directory_in_the_app_bundle_contents(Path::new(
+            "/opt/Tatolab Runtime.app/Contents",
+        ));
+        assert_eq!(
+            browser_host_executable_for_the_lend(&lend_directory),
+            browser_host_executable_beside_the_lend(&lend_directory)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_app_bundles_lend_finds_the_browser_host_in_its_frameworks() {
+        assert_eq!(
+            browser_host_executable_for_the_lend(&lend_directory_in_the_app_bundle_contents(
+                Path::new(
+                    "/Applications/Tato Studio.app/Contents/Helpers/Tatolab Runtime.app/Contents"
+                )
+            )),
+            Some(PathBuf::from(
+                "/Applications/Tato Studio.app/Contents/Helpers/Tatolab Runtime.app/Contents/\
+                 Frameworks/tatolab-browser-host.app/Contents/MacOS/tatolab-browser-host"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_runtime_units_lend_finds_the_browser_host_beside_it() {
+        let lend_directory = lend_directory_in_the_runtime_unit(Path::new("/opt/tatolab"));
+        assert_eq!(
+            browser_host_executable_for_the_lend(&lend_directory),
+            browser_host_executable_beside_the_lend(&lend_directory)
         );
     }
 

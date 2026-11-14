@@ -33,14 +33,16 @@ Config: `url`, `width`, `height`, `frame_rate` (1 to 60), `transparent_backgroun
 file inside the project, relative to the project directory, and opens as its
 `file://` URL.
 
-Linux only for now. Frames cross the CPU once per paint; zero-copy is next.
+Linux and macOS. Frames cross the CPU once per paint; zero-copy is next.
 
 ## Build it
 
 The wheel itself carries no CEF. The browser host, its CEF subprocess and the
 CEF runtime ship in the runtime unit, under `lib/tatolab/browser-host/`: on
 Linux side by side, on macOS as `tatolab-browser-host.app`, with CEF's
-framework and the subprocess as the helper apps CEF launches inside it.
+framework and the subprocess as the helper apps CEF launches inside it. Tato
+Studio's app bundle carries that `tatolab-browser-host.app` in its runtime's
+`Contents/Frameworks/`, where code signing takes nested code.
 `python3 -I scripts/fetch_cef_binary_distribution.py <directory>` lays out the
 distribution for this machine, licence included, for `CEF_PATH`.
 Building them needs CEF's binary distribution, the one `cef-dll-sys` links
