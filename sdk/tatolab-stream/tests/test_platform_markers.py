@@ -1,10 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The platform markers are held to what the plan allows them to say.
+"""The platform markers are held to a closed list.
 
-`linux_only_capability` names only the closed list in `docs/plan/ARCHITECTURE.md`
-§Product, so a test red on macOS cannot
+`linux_only_capability` names only its closed list, so a test red on macOS cannot
 be quietly skipped. `rig_only_capability` names only what a CI runner cannot
 give, so a test red on the bundled software device cannot be quietly moved to
 the rig. `awaiting_macos_parity` names only a ticket an active

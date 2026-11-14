@@ -1316,7 +1316,7 @@ impl SurfaceStoreInner {
         // Optionally export the producer-side `produce_done` and
         // consumer-side `consume_done` timeline-semaphores as
         // OPAQUE_FDs (single-writer-per-edge model — see
-        // `docs/architecture/adapter-timeline-single-writer.md`).
+        // the single-writer-per-edge timeline rule).
         let produce_done_fd = produce_done
             .map(|edge| exported_timeline_edge_opaque_fd("register_texture", "produce_done", edge))
             .transpose()?;
@@ -1397,7 +1397,7 @@ impl SurfaceStoreInner {
 
         // Export `produce_done` + `consume_done` as OPAQUE_FDs (the
         // single-writer-per-edge pair documented in
-        // `docs/architecture/adapter-timeline-single-writer.md`). The
+        // the single-writer-per-edge timeline rule). The
         // surface-share daemon's wire format peels both trailing FDs
         // in the published order.
         let produce_done_fd = produce_done
@@ -2542,7 +2542,7 @@ fn opaque_fd_texture_registration_payload(
 /// `DRM_FORMAT_MODIFIER_EXT` tiling and "no modifier at all" otherwise — the
 /// value alone cannot say which. Render-target consumers must refuse a LINEAR
 /// surface because LINEAR DMA-BUFs are sampler-only on NVIDIA (see
-/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+/// NVIDIA EGL's sampler-only linear DMA-BUFs).
 #[cfg(target_os = "linux")]
 fn dma_buf_texture_registration_payload(
     texture: &crate::vulkan::rhi::HostVulkanTexture,
@@ -3478,7 +3478,7 @@ mod dma_buf_registration_payload_tests {
     /// texture's recorded tiling rather than assume one.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_linear_modifier_surface_publishes_the_tiling_that_reads_its_modifier() {
@@ -3554,7 +3554,7 @@ mod opaque_fd_texture_registration_payload_tests {
     /// registration alone.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_render_target_registers_its_usage_and_imports_from_the_registration() {
@@ -3647,7 +3647,7 @@ mod opaque_fd_texture_registration_payload_tests {
     /// name, before any memory is imported, leaving the fd the caller's.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn an_opaque_fd_texture_import_refuses_a_stated_memory_type_the_image_cannot_bind() {
@@ -4203,7 +4203,7 @@ mod mach_surface_share_pool_tests {
     /// names holds the pixels the producer wrote into the pooled buffer.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_pooled_frame_crosses_the_mach_service_as_the_iosurface_holding_its_pixels() {
@@ -4325,7 +4325,7 @@ mod mach_surface_share_pool_tests {
     /// the engine's pair for a helper's host-side reports.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_slot_registered_with_its_timeline_pair_checks_out_with_both_shared_event_ports() {
@@ -4369,7 +4369,7 @@ mod mach_surface_share_pool_tests {
     /// registration keeps its pair.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_refused_duplicate_registration_leaves_the_live_registrations_pair() {
@@ -4405,7 +4405,7 @@ mod mach_surface_share_pool_tests {
     /// orders host-side, without a rebuild or a refused registration.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_slot_whose_timelines_will_not_export_registers_ordering_host_side() {
@@ -4477,7 +4477,7 @@ mod mach_surface_share_pool_tests {
     /// states, holding the registering side's pixels byte for byte.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn the_store_resolves_a_surface_registered_elsewhere_into_its_pixels() {
@@ -4532,7 +4532,7 @@ mod mach_surface_share_pool_tests {
     /// name rather than read at the wrong stride.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_surface_whose_rows_do_not_pack_at_the_stated_width_is_refused() {
@@ -4567,7 +4567,7 @@ mod mach_surface_share_pool_tests {
     /// as one a helper holds — and takes it back once the use ends.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_slot_whose_iosurface_is_in_use_is_not_rehanded_to_its_producer() {

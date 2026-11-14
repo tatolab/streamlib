@@ -1083,7 +1083,7 @@ mod tests {
     /// and every pool on it are never dropped (#2247).
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn an_acceleration_structure_buffer_taken_apart_releases_its_device() {

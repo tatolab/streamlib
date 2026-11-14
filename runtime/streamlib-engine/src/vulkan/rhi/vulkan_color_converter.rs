@@ -1003,7 +1003,7 @@ mod tests {
     ///   constants and the shader's `read_byte` walk.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn nv12_full_range_bt601_matches_cpu_reference() {
@@ -1044,7 +1044,7 @@ mod tests {
     /// - Transfer-bypass path (`Bt709` source = `Bt709` dest).
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn nv12_video_range_bt709_matches_cpu_reference() {
@@ -1086,7 +1086,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn nv12_bt709_to_srgb_transfer_path_matches_cpu_reference() {
@@ -1180,7 +1180,7 @@ mod tests {
     /// texel, its channels in RGBA order, at an extent no workgroup divides.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn a_bgra_texture_converts_into_an_rgba_texture_in_rgba_order() {
@@ -1292,7 +1292,7 @@ mod tests {
     /// same NV12 starting at byte 0.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn nv12_starting_past_byte_0_converts_identically_to_the_same_bytes_at_byte_0() {
@@ -1350,7 +1350,7 @@ mod tests {
     /// before anything reaches the driver.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn a_plane0_offset_off_the_storage_buffer_offset_alignment_is_refused_naming_both_numbers() {
@@ -1446,7 +1446,7 @@ mod image_to_yuyv_buffer_tests {
     /// pad and the guard band past the frame stay untouched.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn the_yuyv_pass_writes_every_pixel_of_the_target_range() {
@@ -1660,7 +1660,7 @@ mod image_to_nv12_buffer_tests {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+        ignore = "hardware integration — needs a Vulkan device"
     )]
     #[test]
     fn the_nv12_pass_writes_every_sample_of_both_planes() {

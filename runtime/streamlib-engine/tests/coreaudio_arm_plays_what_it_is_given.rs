@@ -25,7 +25,7 @@ use coreaudio_audio_tier::the_coreaudio_arm_with_a_default_device_for;
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests"
 )]
 fn a_real_device_asks_for_whole_periods_of_the_format_it_negotiated() {
     let Some(backend) =
@@ -39,7 +39,7 @@ fn a_real_device_asks_for_whole_periods_of_the_format_it_negotiated() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests"
 )]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     let Some(backend) =
@@ -58,7 +58,7 @@ fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests"
 )]
 fn a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) =

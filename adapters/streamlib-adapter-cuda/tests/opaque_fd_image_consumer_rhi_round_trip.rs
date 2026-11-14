@@ -36,7 +36,7 @@
 //! 6. Consumer records and submits its own `cmd_copy_image_to_buffer`
 //!    (UNDEFINED → TRANSFER_SRC_OPTIMAL → copy → done) — `UNDEFINED →
 //!    TRANSFER_SRC_OPTIMAL` is the bridging fallback documented in
-//!    `docs/learnings/cross-process-vkimage-layout.md`; content
+//!    per-device `VkImageLayout`; content
 //!    preservation across the bridge is empirical on NVIDIA Linux.
 //! 7. Byte-equal assertion: the consumer-side staging buffer's mapped
 //!    pointer matches the host's original pattern.
@@ -50,7 +50,7 @@
 //!   multi-GPU rig).
 //! - `#[serial]` — same `VkInstance` / `VkDevice` discipline as the
 //!   buffer round-trip carve-out (NVIDIA dual-device crash
-//!   `docs/learnings/nvidia-dual-vulkan-device-crash.md`).
+//!   the NVIDIA dual-device crash).
 
 #![cfg(target_os = "linux")]
 
@@ -263,7 +263,7 @@ fn opaque_fd_image_carve_out_round_trip() {
          `VkImage` must produce bytes byte-equal to the host's original \
          upload pattern. Mismatches here indicate either:\n\
          - the cross-process content-preservation invariant broke (driver \
-           regression, see docs/learnings/cross-process-vkimage-layout.md), \
+           regression: `VkImageLayout` is per device), \
          - the host's TRANSFER_DST barrier dropped the upload, or\n\
          - the consumer's bind / FD-import wired memory at the wrong offset \
            or size."

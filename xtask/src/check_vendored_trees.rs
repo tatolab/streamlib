@@ -5,7 +5,7 @@
 //! (`vendor/tatolab-vulkanalia{,-sys,-vma}`).
 //!
 //! Each vendored tree is a verbatim copy of a pinned upstream plus a short,
-//! documented local-patch list (`docs/architecture/vendored-vulkanalia.md`).
+//! documented local-patch list.
 //! Nothing in-tree may edit them casually, and prose alone can't stop that,
 //! so this check pins one deterministic content hash per vendored crate dir,
 //! in a content-hash trip-wire style: any byte change (edit, reformat,
@@ -18,7 +18,7 @@
 //! generated `vk` / sys module declaration; a re-vendor must preserve those.
 //!
 //! When it trips on a DELIBERATE re-vendor or documented local patch:
-//! follow the update recipe in `docs/architecture/vendored-vulkanalia.md` and
+//! follow the update recipe in `vendor/VULKANALIA-FORK.md` and
 //! update the recorded hashes below in the same commit — the hash change in
 //! the diff is the loud signal the vendored tree was touched.
 
@@ -29,7 +29,7 @@ use std::path::Path;
 /// Updated only on a deliberate re-vendor / documented local patch, in the
 /// same commit that changes the tree.
 const VENDORED_TREES: &[(&str, u64)] = &[
-    ("vendor/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
+    ("vendor/tatolab-vulkanalia", 0x3888_c544_2413_404f),
     ("vendor/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
     ("vendor/tatolab-vulkanalia-vma", 0x765e_4ed7_3be3_2585),
 ];
@@ -127,7 +127,7 @@ pub fn run(project_root: &Path) -> Result<()> {
     }
     msg.push_str(
         "If this change is a DELIBERATE re-vendor or a documented local patch, follow the \
-         update recipe in docs/architecture/vendored-vulkanalia.md and update the recorded \
+         update recipe in vendor/VULKANALIA-FORK.md and update the recorded \
          hashes in xtask/src/check_vendored_trees.rs (VENDORED_TREES) in the SAME commit, \
          using the `found` values above. Otherwise revert the vendored-tree edit.",
     );

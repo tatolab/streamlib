@@ -6,7 +6,7 @@
 //! In one address space a held surface is an `Arc` refcount the pool can see; a
 //! helper child holding the same surface bumps nothing, so its checkout records
 //! a lease here instead. Rationale:
-//! `docs/decisions/surface-id-lifetime-contract.md`.
+//! the surface-id lifetime contract.
 //!
 //! What the guard below buys is that a checkout cannot interleave with the
 //! pool's decision. It does not make the publish-to-claim transit safe: a

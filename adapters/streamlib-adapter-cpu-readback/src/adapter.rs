@@ -86,7 +86,7 @@ pub struct CpuReadbackTriggerContext<'a, P: DevicePrivilege> {
     /// host-side counterpart. Consumer-flavor adapters wait on this
     /// timeline post-trigger to confirm the copy completed before
     /// reading the staging buffer. Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    /// the single-writer-per-edge timeline rule.
     pub produce_done: &'a Arc<P::TimelineSemaphore>,
     /// Per-plane staging buffer info. Trigger reads `buffer` and
     /// the geometry; mapped pointers are reached by the adapter
@@ -399,7 +399,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     /// submitted, dropping the reservation with that copy outstanding;
     /// the acquire has failed by then, and what keeps the next one
     /// ordered behind it is the trigger's own serialization. See
-    /// `docs/architecture/adapter-timeline-single-writer.md` §Thread
+    /// the single-writer-per-edge timeline rule, thread
     /// model within the writer process.
     fn submit_copy_and_await_produce_done(
         &self,
@@ -476,7 +476,7 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
         // prior reads have drained on `consume_done`. Both are no-ops
         // on the first acquire (a fresh timeline is at value 0 and
         // `wait(0)` returns immediately). Single-writer-per-edge per
-        // `docs/architecture/adapter-timeline-single-writer.md`.
+        // the single-writer-per-edge timeline rule.
         let pre_wait_target = if write {
             &snap.consume_done
         } else {
@@ -571,7 +571,7 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
         // Consumer-side release: signal `consume_done` so the
         // producer can wait on it before reusing the staging buffer.
         // Single-writer-per-edge per
-        // `docs/architecture/adapter-timeline-single-writer.md` — the
+        // the single-writer-per-edge timeline rule — the
         // consumer process is the only writer of `consume_done`; the
         // producer signals `produce_done` through the trigger's GPU
         // submit. No multi-writer race (the pre-#562 defang fixed a
@@ -1032,7 +1032,7 @@ struct SurfaceCopyPlaneSlot {
 struct SurfaceCopySnapshot<P: DevicePrivilege> {
     /// Producer's `produce_done` timeline — the trigger signals it
     /// and the consumer waits on it. Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    /// the single-writer-per-edge timeline rule.
     produce_done: Arc<P::TimelineSemaphore>,
     /// Consumer's `consume_done` timeline — signaled by
     /// `end_read_access`. Snapshotted into the acquire path so the

@@ -13,7 +13,7 @@ header to one, and never reformat or "improve" those sources — a change to one
 recorded patch against its upstream, never a drive-by edit:
 
 - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
-  `docs/architecture/vendored-vulkanalia.md`.
+  `vendor/VULKANALIA-FORK.md`.
 
 The exception is those paths and nothing else; BUSL is not relaxed anywhere a path is not
 listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.
@@ -34,38 +34,8 @@ Skills, agents, the repository rules and hooks come from `dev-plugin` in
   team Tatolab, issues `TAT-n`, structured project → milestone → issue → sub-issue. An issue
   that lands here is titled `streamlib: …`; a change spanning repos is a parent with one
   sub-issue per repo.
-- **Linear's projects and milestones are the order of work**, and blocking relations the
-  order inside them. `/whats-next` suggests the next issue; the order is the owner's call.
-- The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/plan-project` (the
-  Linear project) → `/implement` (one issue to a PR) → `/ship-change` (fold + prove removals).
-  Beside it: `/pivot`, `/file-issue`, `/diagnose`, `/research`, `/triage`, `/explore-idea`,
-  `/snapshot-architecture`, `/architecture-question`, `/reconcile-understanding`, `/propose-rule`.
-- Plan *decisions* travel through `/align`, `/propose-change`, `/ship-change` or `/pivot`;
-  plan and doc *records* are ordinary work — see §Recording facts vs deciding.
-- Code is the authority on what IS; the plan on what we AGREED (`docs/plan/OPERATING-MODEL.md`).
-
-## Recording facts vs deciding
-
-Writing down what is true is ordinary work. Deciding what we build is not. The lifecycle
-skills exist to sharpen decisions, not to license prose.
-
-- **A factual record needs no skill, no prompt, and no approval.** What a shipped change
-  removed, renamed, or proved — a `REMOVED:` bullet, a superseded claim, a corrected file
-  anchor, a stale reference, a doc describing code that no longer exists — is part of
-  finishing the work. Write it in the same PR as the change it describes. Leaving the
-  record wrong to avoid ceremony is the worse outcome, always.
-- **A decision is the owner's.** Adding, retracting or reversing a `DECIDED` / `OPEN`
-  entry, changing what we agreed to build, or settling a question the plan leaves open
-  is best brought to the owner — usually through `/align`, `/propose-change`,
-  `/ship-change`, or `/pivot`.
-- **A review comment is not a decision source.** A finding on a PR — bot or human — that
-  would change what we build is answered `Owner decision needed: <the gap>` and brought to
-  the owner; a record is fixed in the PR (`streamlib-owner-decisions` (dev-plugin)).
-- The test: **could a careful reader derive it from the diff and the tree?** Then it is a
-  fact — write it, and say in the PR body that you did. Does it commit us to something we
-  have not agreed? Then it is a decision — bring it, while you keep going on the rest.
-- Doc hygiene inside work you are already doing — fixing a claim your own change falsified —
-  is never a separate issue and never a question.
+- Never write documentation, plans or ADRs, and never create Linear projects or milestones; planning happens in Linear, in separate sessions.
+- Code is the only source of truth.
 
 ## Asking the owner
 
@@ -73,7 +43,7 @@ An approved design is standing authority. Implementing it, recording it, and cle
 after it need no further confirmation. Re-asking is not diligence; it spends the owner's
 attention, and attention spent on settled things is unavailable for real forks.
 
-- **Ask only for a live fork the plan does not settle** — two defensible paths, materially
+- **Ask only for a live fork the issue does not settle** — two defensible paths, materially
   different outcomes, where guessing wrong wastes real work.
 - **Never ask** to re-confirm something already agreed, to re-approve a scope already
   signed off, to check that work is going well, or in place of reading the tree. If the
@@ -85,19 +55,16 @@ attention, and attention spent on settled things is unavailable for real forks.
   drip of one-question stops.
 - A finding is not a question. Non-blocking findings go in the PR description, then move on.
 
-## Runtime-first, plan-first (MVP doctrine)
+## Runtime-first (MVP doctrine)
 
 The runtime is the product; consumers lag behind it by design (the Holoscan / Next.js model:
-framework repo first, holohub/examples follow releases). Architecture lives in ONE place —
-`docs/plan/ARCHITECTURE.md` plus `docs/plan/architecture.excalidraw` — agreed with the owner
-before implementation. Sessions implement the plan; when work needs architecture the plan
+framework repo first, holohub/examples follow releases). When work needs architecture the issue
 doesn't state, the owner wants to make that call (§Asking the owner).
 
 - `examples/` and the consumer entries in `packages/` (everything except `test-fixtures`) are
   downstream consumers, **not contract sources** — converted or not. Never read one to infer what
   the engine guarantees; never bend a runtime design to fit their existing patterns. Contracts
-  are stated in the engine and proven by engine tests and fixtures. Disposition per directory is
-  decided in `docs/plan/ARCHITECTURE.md` §Consumers.
+  are stated in the engine and proven by engine tests and fixtures.
 - **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
   editable work.** An engine change that breaks one files a Linear backlog issue for that consumer and
@@ -109,11 +76,7 @@ doesn't state, the owner wants to make that call (§Asking the owner).
   written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
   manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
   wired to the RHI, what a capture path must handle), never for form; breakage is expected, not
-  a defect, and gets no issue. It converts or deletes only through §Consumers' rules, never in
-  passing.
-
-Working agreements are in `docs/working-agreements.md`; `docs/index.md` maps every docs home. Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
-from code at need — do not create summary docs of what code already shows.
+  a defect, and gets no issue. It converts or deletes only as its own issue, never in passing.
 
 ## Reading the Python surface
 
@@ -142,8 +105,8 @@ built-in publishes on means you skipped it.
   sample in place; `read(port_name)` narrows to `PortPayloadBorrow | None`, a borrow with no
   copy, and `read(port_name, into=T)` to `T | None` through `T.from_bytes`. A Records write
   checks only that every declared name is present — a `str` where the wire wants an `int`
-  reaches the runtime silently. Spell a record against the wire contract in
-  `docs/plan/ARCHITECTURE.md`, never from memory.
+  reaches the runtime silently. Spell a record against the producing node's
+  declared fields, never from memory.
 
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +
@@ -162,9 +125,7 @@ built-in publishes on means you skipped it.
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
   migration's scope; a broken *converted* consumer gets a Linear backlog issue, a held
   pre-pivot one just lags.
-- Architecture is decided in `docs/plan/`, not per-issue. A missing decision goes to the
-  owner — as a question or a stated assumption — rather than being inferred from existing
-  code.
+- A missing architecture decision goes to the owner — as a question or a stated assumption.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
 ## Before you push

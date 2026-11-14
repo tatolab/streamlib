@@ -397,7 +397,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             // peer-timeline's kernel `current_value()` snapshot is
             // taken inside `finalize_read` (outside the registry
             // lock) per
-            // `docs/architecture/adapter-timeline-single-writer.md`.
+            // the single-writer-per-edge timeline rule.
             let peer_timeline = Arc::clone(&state.produce_done);
             let image = state
                 .texture

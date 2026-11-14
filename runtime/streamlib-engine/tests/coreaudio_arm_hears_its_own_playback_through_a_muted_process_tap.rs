@@ -540,7 +540,7 @@ fn duration_in_frames(duration: Duration, sample_rate: u32) -> usize {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — plays a tone only into a muted private process tap of this process, once an inaudible pilot has come back through it, and captures it by the tap's aggregate UID. Needs a default output device, and microphone access and System Audio Recording allowed for the terminal running it. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — plays a tone only into a muted private process tap of this process, once an inaudible pilot has come back through it, and captures it by the tap's aggregate UID. Needs a default output device, and microphone access and System Audio Recording allowed for the terminal running it. Run with --features streamlib/hardware-tests"
 )]
 fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process_tap() {
     let Some(backend) =

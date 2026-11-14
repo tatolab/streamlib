@@ -173,7 +173,7 @@ impl HostGpuDeviceExt for GpuDevice {
 /// Cdylib subprocess customers reach surfaces by `surface_id`
 /// lookup (`lookup_texture` / `check_out`), not by re-registering;
 /// the dual-registration shape documented in
-/// `docs/architecture/adapter-runtime-integration.md` is host-side
+/// the adapter runtime integration is host-side
 /// `install_setup_hook` plumbing only.
 ///
 /// # Boundary lock
@@ -206,7 +206,7 @@ pub trait HostSurfaceStoreExt {
     /// Register a texture for cross-process sharing with the
     /// single-writer-per-edge timeline pair (`produce_done` signaled
     /// by the producer, `consume_done` signaled by the consumer).
-    /// See `docs/architecture/adapter-timeline-single-writer.md` for
+    /// See the single-writer-per-edge timeline rule for
     /// the contract.
     fn register_texture(
         &self,

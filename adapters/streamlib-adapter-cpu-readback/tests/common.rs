@@ -43,7 +43,7 @@ pub type HostContext = CpuReadbackContext<HostVulkanDevice>;
 
 /// Shared `GpuContext` for every test in this binary. Two `VkDevice`s
 /// in one process race on NVIDIA Linux (see
-/// `docs/learnings/nvidia-dual-vulkan-device-crash.md`); a single
+/// the NVIDIA dual-device crash); a single
 /// shared device is the standard mitigation for parallel-test
 /// execution.
 static SHARED_GPU: OnceLock<Option<Arc<GpuContext>>> = OnceLock::new();

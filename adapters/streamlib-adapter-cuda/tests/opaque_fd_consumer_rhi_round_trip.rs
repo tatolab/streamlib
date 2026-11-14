@@ -32,7 +32,7 @@
 //!   fails (e.g. missing extension).
 //! - `#[serial]` — same `VkInstance` / `VkDevice` discipline as the
 //!   cpu-readback helper's carve-out (NVIDIA dual-device crash —
-//!   `docs/learnings/nvidia-dual-vulkan-device-crash.md`).
+//!   the NVIDIA dual-device crash).
 //!
 //! The consumer device is built on the host device's `deviceUUID`, as a
 //! processor interpreter is on the runtime's.

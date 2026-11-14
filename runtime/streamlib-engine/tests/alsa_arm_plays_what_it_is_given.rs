@@ -70,7 +70,7 @@ fn alsa_arm_or_skip() -> Option<AlsaAudioDeviceBackend> {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
     let Some(backend) = alsa_arm_or_skip() else {
@@ -85,7 +85,7 @@ fn the_default_device_asks_for_whole_periods_of_the_format_it_negotiated() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     let Some(backend) = alsa_arm_or_skip() else {
@@ -99,7 +99,7 @@ fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a playback device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) = alsa_arm_or_skip() else {

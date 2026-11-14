@@ -9,10 +9,6 @@
 //! Cross-API adapters (`streamlib-adapter-opengl`, `streamlib-adapter-skia`)
 //! compose on top of these views without ever seeing DMA-BUF fds, DRM
 //! modifiers, or timeline-semaphore handles directly.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture brief
-//! and `docs/architecture/adapter-authoring.md` for the 3rd-party
-//! authoring guide.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

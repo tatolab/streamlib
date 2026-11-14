@@ -48,7 +48,7 @@ const DIGITAL_SILENCE_CEILING_DBFS: f64 = -120.0;
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a Mac with a built-in microphone and microphone access allowed. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a Mac with a built-in microphone and microphone access allowed. Run with --features streamlib/hardware-tests"
 )]
 fn the_built_in_microphone_carries_more_than_digital_silence() {
     let Some(microphone_uid) = the_built_in_device_uid_for(CoreAudioStreamDirection::Capture)

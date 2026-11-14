@@ -1,8 +1,5 @@
 # Vendored vulkanalia fork — `vendor/tatolab-vulkanalia*`
 
-> Current shipped state only, per
-> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
-
 ## What this is
 
 The tatolab fork of [vulkanalia](https://github.com/KyleMayes/vulkanalia)
@@ -99,7 +96,7 @@ The vendored copy is byte-identical to the fork rev except:
    and `[lib] doctest = false` on `tatolab-vulkanalia` (its `bytecode.rs`
    doctests `include_bytes!` shader fixtures from the fork repo's
    `tutorial/` + `examples/` dirs, which the trim rule drops; the unit
-   tests in `tests/builders.rs` are the behavior lock instead).
+   tests in `tests/builders.rs` are the behavior lock instead). Its comment names this file as where the trim rule lives.
 2. **`src/vk/builders.rs` (`tatolab-vulkanalia`)** — one token,
    `std::mem::size_of` → `core::mem::size_of` in
    `ShaderModuleCreateInfoBuilder::code`. The fork's code_size fix used
@@ -161,4 +158,4 @@ mechanical:
    commit** as the re-vendor.
 6. `cargo check -p tatolab-vulkanalia-vma` (catches no_std breakage
    standalone builds hit that workspace builds mask), then the workspace
-   test baseline per `docs/testing-hardware.md`.
+   test baseline with `--features streamlib/hardware-tests`.

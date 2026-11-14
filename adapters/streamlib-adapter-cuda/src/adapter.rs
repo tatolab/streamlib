@@ -391,7 +391,6 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
                 // `signal_value` happens outside the lock; by then
                 // state.current is already the about-to-be-signaled
                 // value. Under single-writer-per-edge
-                // (`docs/architecture/adapter-timeline-single-writer.md`)
                 // this site is the producer signaling `produce_done`;
                 // the consumer's signals run on `consume_done` from a
                 // different process counter.
@@ -562,7 +561,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         // been signaled to. The peer-timeline's kernel counter is the
         // source of truth — no cross-process value publishing IPC
         // needed for v1 (see
-        // `docs/architecture/adapter-timeline-single-writer.md`).
+        // the single-writer-per-edge timeline rule).
         let wait_value = acquired.peer_timeline.current_value().unwrap_or(0);
         if acquired
             .peer_timeline

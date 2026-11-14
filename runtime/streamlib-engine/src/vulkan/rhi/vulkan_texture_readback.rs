@@ -908,7 +908,7 @@ mod tests {
     /// primitive on a 32x32 texture.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn submit_then_wait_returns_expected_bytes() {
@@ -961,7 +961,7 @@ mod tests {
     /// the (re-filled) texture.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn multiple_sequential_submits_work() {
@@ -1013,7 +1013,7 @@ mod tests {
     /// Negative: descriptor / texture mismatch must error at submit time.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn rejects_descriptor_mismatch() {
@@ -1068,7 +1068,7 @@ mod tests {
     /// returns InFlight.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn second_submit_before_wait_errors_in_flight() {
@@ -1103,7 +1103,7 @@ mod tests {
     /// Negative: a ticket from one handle is rejected by another.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn foreign_ticket_rejected() {
@@ -1146,7 +1146,7 @@ mod tests {
     /// Negative: try_read with no in-flight submission errors NoSubmission.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn try_read_with_no_submission_errors_no_submission() {
@@ -1179,7 +1179,7 @@ mod tests {
     /// achieved by holding N handles, not by parallelism on one.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn multiple_handles_can_be_in_flight_concurrently() {
@@ -1224,7 +1224,7 @@ mod tests {
     /// Drop on an idle handle must not panic.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn drop_on_idle_handle_no_panic() {
@@ -1250,7 +1250,7 @@ mod tests {
     /// expected dimensions.
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn descriptor_sizes_and_metadata_round_trip() {

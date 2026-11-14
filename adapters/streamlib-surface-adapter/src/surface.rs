@@ -198,7 +198,7 @@ impl SurfaceTransportHandle {
 /// (signaled by the producer process, waited by the consumer before
 /// reading) and `consume_done` (signaled by the consumer process,
 /// waited by the producer before re-writing). See
-/// `docs/architecture/adapter-timeline-single-writer.md` for the
+/// the single-writer-per-edge timeline rule for the
 /// single-writer-per-edge rule.
 ///
 /// Subprocess adapters cannot dereference either `*_semaphore_handle`
@@ -347,8 +347,8 @@ impl StreamlibSurface {
     ///
     /// Subprocess adapters import the `produce_done` and `consume_done`
     /// sync-fds via `vkImportSemaphoreFdKHR` and wait / signal on whichever
-    /// edge they own per the single-writer rule
-    /// (`docs/architecture/adapter-timeline-single-writer.md`). The
+    /// edge they own per the single-writer rule.
+    /// The
     /// opaque semaphore handles are host-only and not dereferenceable in
     /// another address space.
     pub const fn sync(&self) -> &SurfaceSyncState {

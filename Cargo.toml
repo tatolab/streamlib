@@ -35,9 +35,9 @@ members = [
     "runtime/streamlib-project-repository", # engine-free: a project as a versioned repository of assets — its project file, asset sidecars with UUIDs, transactions and the Git history the runtime writes for it
     "runtime/streamlib-relay-track-reader", # engine-free: the one relay-track reader — a track's groups received in arrival order, released in sequence order, a missing one given up only on its reset, the track's end, or newer content past the reader's max_age; `MoqTrackReceive` and `tatolab-read-track` read through it
     "runtime/tatolab-read-track", # `tatolab-read-track` — a MoQ subscriber writing one track's objects to files, the rigs' way to read a port as a user does; a development tool, never shipped in the runtime unit
-    "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
-    "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
-    "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md
+    "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0)
+    "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0)
+    "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309)
     # `examples/*` and the rest of `packages/*` are NOT workspace members.
     # Only the zone crates (`runtime/*`, `sdk/*`, `adapters/*`, `vendor/*`)
     # and `xtask` form this workspace. Build a non-member Rust consumer with
@@ -45,8 +45,7 @@ members = [
     #
     # Everything under both trees other than `test-fixtures` is a downstream
     # CONSUMER — standalone, its own `[workspace]` self-root, never a contract
-    # source; `docs/plan/ARCHITECTURE.md` §Consumers sets each one's
-    # disposition. `test-fixtures` below is INTERNAL test infrastructure — it
+    # source. `test-fixtures` below is INTERNAL test infrastructure — it
     # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).
@@ -65,7 +64,7 @@ repository = "https://github.com/tato123/streamlib"
 # `[lints] workspace = true` in their own Cargo.toml. Binary-only crates
 # (xtask, examples) do not opt in, because
 # stdout IS the user output channel for them. The `disallowed-macros` list
-# itself lives in clippy.toml at the workspace root. See docs/logging.md.
+# itself lives in clippy.toml at the workspace root.
 [workspace.lints.clippy]
 disallowed_macros = "deny"
 
@@ -139,7 +138,7 @@ libc = "0.2.177"
 # patches; Apache-2.0). The `package =` renames keep `use vulkanalia::` code
 # untouched while the workspace resolves the vendored crates by path locally
 # and by `version` from the package source in a published closure. See
-# docs/architecture/vendored-vulkanalia.md.
+# vendor/VULKANALIA-FORK.md.
 vulkanalia = { package = "tatolab-vulkanalia", path = "vendor/tatolab-vulkanalia", version = "0.35.0", features = ["libloading", "provisional"] }
 vulkanalia-vma = { package = "tatolab-vulkanalia-vma", path = "vendor/tatolab-vulkanalia-vma", version = "0.9.0" }
 

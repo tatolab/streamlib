@@ -1140,7 +1140,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn hardware_construct_h264_encode_session() {

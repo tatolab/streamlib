@@ -447,7 +447,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_zero_query_count() {
@@ -481,7 +481,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_pipeline_stats_empty_flags() {
@@ -513,7 +513,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_rejects_encode_feedback_missing_fields() {
@@ -563,7 +563,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn new_timestamp_query_pool_succeeds() {

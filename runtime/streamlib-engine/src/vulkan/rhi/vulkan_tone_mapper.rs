@@ -529,7 +529,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     fn bt2390_pq_to_srgb_matches_cpu_reference() {
         let Some(device) = try_vulkan_device() else {
@@ -644,7 +644,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     fn apply_with_layouts_leaves_sampled_capable_textures_shader_read_only() {
         let Some(device) = try_vulkan_device() else {
@@ -697,7 +697,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     fn apply_with_layouts_refuses_a_declared_layout_the_usage_cannot_hold() {
         let Some(device) = try_vulkan_device() else {
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
     )]
     fn apply_with_layouts_rejects_same_image_for_src_and_dst() {
         let Some(device) = try_vulkan_device() else {

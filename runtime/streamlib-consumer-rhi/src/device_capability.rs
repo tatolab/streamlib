@@ -43,7 +43,7 @@ pub mod private {
 }
 
 /// Privilege marker for consumer-side Vulkan resources — carve-out
-/// only. See `docs/architecture/subprocess-rhi-parity.md`: DMA-BUF FD
+/// only. See the subprocess RHI parity rule: DMA-BUF FD
 /// import + bind + map, tiled-image import via
 /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`, layout transitions on
 /// imported handles, sync wait/signal on imported timeline semaphores.
@@ -96,7 +96,7 @@ pub trait VulkanTimelineSemaphoreLike {
     fn signal_host(&self, value: u64) -> Result<()>;
     /// Read the timeline's current kernel-side counter via
     /// `vkGetSemaphoreCounterValue`. Adapters under the
-    /// single-writer-per-edge model (`docs/architecture/adapter-timeline-single-writer.md`)
+    /// single-writer-per-edge model
     /// query this to learn the peer process's last-signaled value
     /// without IPC — the consumer reads `produce_done.current_value()`
     /// to know how much producer work is visible, the producer reads

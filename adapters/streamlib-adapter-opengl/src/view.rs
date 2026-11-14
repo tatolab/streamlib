@@ -69,7 +69,7 @@ impl GlWritable for OpenGlReadView<'_> {
 /// to host-allocated render-target-capable surfaces. The
 /// external-OES path is read-only by construction (the underlying
 /// import is sampler-only on NVIDIA per
-/// `docs/learnings/nvidia-egl-dmabuf-render-target.md`).
+/// NVIDIA EGL's sampler-only linear DMA-BUFs).
 ///
 /// # Y-axis convention — render Vulkan-conventional
 ///

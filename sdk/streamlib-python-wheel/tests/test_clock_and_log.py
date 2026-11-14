@@ -64,11 +64,6 @@ def test_a_timer_is_started_by_a_function_that_builds_the_native_timer():
 def test_the_runtime_exports_exactly_one_name_for_the_monotonic_clock():
     """The native module's half of the one-clock rule the stream suite holds
     `tatolab.stream` to.
-
-    Matched by suffix rather than named outright: `ship-change-removed-gate.sh`
-    content-greps `sdk/` for each `REMOVED:` pattern a change file declares, so
-    spelling the deleted export here would hold `one-monotonic-clock` red for
-    good.
     """
     assert {name for name in dir(_engine) if name.endswith("_now_ns")} == {
         "monotonic_now_ns"

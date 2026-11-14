@@ -107,7 +107,7 @@ struct TonePlayback {
 #[test]
 #[cfg_attr(
     not(feature = "audible-hardware-tests"),
-    ignore = "audible, attended only — plays two tones through the built-in speaker for the built-in microphone to hear, with microphone access allowed. Run with --features streamlib-engine/audible-hardware-tests. See docs/testing-hardware.md"
+    ignore = "audible, attended only — plays two tones through the built-in speaker for the built-in microphone to hear, with microphone access allowed. Run with --features streamlib-engine/audible-hardware-tests"
 )]
 fn a_tone_played_through_the_built_in_speaker_is_heard_by_the_built_in_microphone() {
     let (Some(speaker_uid), Some(microphone_uid)) = (
