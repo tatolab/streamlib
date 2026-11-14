@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use super::compiler_ops::shader_node_island::RunningShaderNodesALiveEditRestarts;
 use crate::core::graph::{Graph, LinkUniqueId, ProcessorUniqueId};
 
 /// Categorized operations ready for execution.
@@ -39,6 +40,44 @@ impl CompilationPlan {
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
             && self.function_node_promotions.is_empty()
+    }
+
+    /// Queue each running node a live edit restarts to be built again, and each
+    /// of its links to be wired again.
+    pub(super) fn add_each_node_and_link_restarted(
+        &mut self,
+        restarted: &RunningShaderNodesALiveEditRestarts,
+    ) {
+        for node_id in &restarted.nodes {
+            if !self.processors_to_add.contains(node_id) {
+                self.processors_to_add.push(node_id.clone());
+            }
+        }
+        for link_id in &restarted.links {
+            if !self.links_to_add.contains(link_id) {
+                self.links_to_add.push(link_id.clone());
+            }
+        }
+    }
+
+    /// Take each of `node_ids` out of the processors to build, with every link
+    /// into or out of it out of the links to wire.
+    pub(super) fn leave_unbuilt_each_node_whose_thread_was_abandoned(
+        &mut self,
+        graph: &Graph,
+        node_ids: &[ProcessorUniqueId],
+    ) {
+        if node_ids.is_empty() {
+            return;
+        }
+        self.processors_to_add
+            .retain(|processor_id| !node_ids.contains(processor_id));
+        self.links_to_add.retain(|link_id| {
+            graph.traversal().e(link_id).first().is_none_or(|link| {
+                !node_ids.contains(link.source().processor_id())
+                    && !node_ids.contains(link.to_port().processor_id())
+            })
+        });
     }
 
     /// Record each config update for a processor this same batch constructs on

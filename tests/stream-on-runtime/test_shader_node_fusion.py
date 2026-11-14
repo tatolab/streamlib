@@ -10,6 +10,7 @@ Image; both write the pixels the chain computes, exactly. The live graph's
 `fused_group` counts the submissions and dispatches each evaluation recorded.
 """
 
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -144,3 +145,151 @@ def test_a_blur_in_the_middle_splits_the_chain_into_two_kernels_of_one_submissio
     assert fused_group["kernels"] == [["tint"], ["horizontal_blur", "invert"]]
     assert fused_group["submissions"] >= 1
     assert fused_group["dispatches"] == 2 * fused_group["submissions"], fused_group
+
+
+#: How long a live edit of a running island may take to reach the sink's next frame.
+LIVE_EDIT_REACHES_THE_SINK_TIMEOUT_SECONDS = 30.0
+
+
+def inverted_pixel_at_column(column: int) -> "list[int]":
+    """What invert alone writes at `column`."""
+    red, green, blue, alpha = known_pixel_at_column(column)
+    return [255 - red, 255 - green, 255 - blue, alpha]
+
+
+def tinted_then_inverted_pixel_at_column(column: int) -> "list[int]":
+    """What tint, then invert writes at `column`: exact in 8 bits."""
+    red, green, blue, alpha = known_pixel_at_column(column)
+    return [255 - round(channel * TINT_AMOUNT) for channel in (red, green, blue)] + [alpha]
+
+
+def does_the_sink_read(report: "dict[str, Any]", pixel_at_column) -> bool:
+    return all(
+        abs(shaded_channel - expected_channel) <= ONE_STEP_OF_AN_8_BIT_CHANNEL
+        for column in SAMPLED_COLUMNS
+        for shaded_channel, expected_channel in zip(
+            report["pixels_by_column"][str(column)], pixel_at_column(column)
+        )
+    )
+
+
+def await_a_report_after(
+    tatolabd: TatolabdUnderTest, reports_before_the_edit: int, pixel_at_column
+) -> bool:
+    """Whether a sink report after the first `reports_before_the_edit` reads `pixel_at_column`."""
+    deadline = time.monotonic() + LIVE_EDIT_REACHES_THE_SINK_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if any(
+            "failure" not in report and does_the_sink_read(report, pixel_at_column)
+            for report in tatolabd.marker_payloads("PROBE_RESULT")[reports_before_the_edit:]
+        ):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_live_edit_splitting_a_running_island_restarts_its_shader_nodes_without_a_stop(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(
+        shader_node_streams.tint_into_invert_fused_publishing_until_stopped
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_report = tatolabd.await_marker("PROBE_RESULT")
+    assert "failure" not in first_report, first_report.get("failure")
+    assert does_the_sink_read(first_report, tinted_then_inverted_pixel_at_column), first_report
+    local_api = tatolabd.local_api_client()
+    graph = local_api.graph(stream=stream_id)
+    assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
+
+    node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
+    stream_asset = local_api.stream_asset_of(stream_id)
+    reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
+    local_api.call_tool(
+        "transact",
+        {
+            "mode": "live",
+            "operations": [
+                {
+                    "operation": "disconnect",
+                    "stream": stream_asset,
+                    "source": {"node": node_id_of["tint"], "port": "result"},
+                    "target": {"node": node_id_of["invert"], "port": "image"},
+                },
+                {
+                    "operation": "connect",
+                    "stream": stream_asset,
+                    "source": {"node": node_id_of["source"], "port": "video"},
+                    "target": {"node": node_id_of["invert"], "port": "image"},
+                },
+            ],
+        },
+    )
+
+    invert_alone_reached_the_sink = await_a_report_after(
+        tatolabd, reports_before_the_edit, inverted_pixel_at_column
+    )
+    graph = local_api.graph(stream=stream_id)
+    stderr_text = tatolabd.stderr_text
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert invert_alone_reached_the_sink, f"the sink never read invert alone:\n{stderr_text}"
+    assert fused_group_of(graph, "invert")["members"] == ["invert"]
+    assert fused_group_of(graph, "tint")["members"] == ["tint"]
+
+
+def test_a_live_link_fusing_two_running_islands_restarts_their_shader_nodes_without_a_stop(
+    start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
+):
+    tatolabd = start_tatolabd_running_stream(
+        shader_node_streams.tint_and_invert_each_an_island_of_its_own_publishing_until_stopped
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    first_report = tatolabd.await_marker("PROBE_RESULT")
+    assert "failure" not in first_report, first_report.get("failure")
+    assert does_the_sink_read(first_report, inverted_pixel_at_column), first_report
+    local_api = tatolabd.local_api_client()
+    graph = local_api.graph(stream=stream_id)
+    assert fused_group_of(graph, "tint")["members"] == ["tint"]
+    assert fused_group_of(graph, "invert")["members"] == ["invert"]
+
+    node_id_of = {node["name"]: node["id"] for node in graph["nodes"]}
+    stream_asset = local_api.stream_asset_of(stream_id)
+    reports_before_the_edit = len(tatolabd.marker_payloads("PROBE_RESULT"))
+    local_api.call_tool(
+        "transact",
+        {
+            "mode": "live",
+            "operations": [
+                {
+                    "operation": "disconnect",
+                    "stream": stream_asset,
+                    "source": {"node": node_id_of["tint"], "port": "result"},
+                    "target": {"node": node_id_of["discard"], "port": "discarded"},
+                },
+                {
+                    "operation": "disconnect",
+                    "stream": stream_asset,
+                    "source": {"node": node_id_of["source"], "port": "video"},
+                    "target": {"node": node_id_of["invert"], "port": "image"},
+                },
+                {
+                    "operation": "connect",
+                    "stream": stream_asset,
+                    "source": {"node": node_id_of["tint"], "port": "result"},
+                    "target": {"node": node_id_of["invert"], "port": "image"},
+                },
+            ],
+        },
+    )
+
+    tint_then_invert_reached_the_sink = await_a_report_after(
+        tatolabd, reports_before_the_edit, tinted_then_inverted_pixel_at_column
+    )
+    graph = local_api.graph(stream=stream_id)
+    stderr_text = tatolabd.stderr_text
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+    assert tint_then_invert_reached_the_sink, f"the sink never read tint then invert:\n{stderr_text}"
+    assert fused_group_of(graph, "invert")["members"] == ["tint", "invert"]
+    assert fused_group_of(graph, "invert")["submissions"] >= 1

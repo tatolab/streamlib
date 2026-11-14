@@ -37,13 +37,16 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
     hand_each_helper_the_pin_values_its_input_ports_read,
 };
 use crate::core::compiler::compiler_ops::shader_node_island::{
-    place_each_shader_node_island_on_its_host, refuse_a_live_edit_of_a_shader_node_island,
+    RunningShaderNodesALiveEditRestarts, forget_the_build_of_each_shader_node_restarted,
+    place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
+    unwire_each_link_of_the_shader_nodes_restarted,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
     ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
     remove_processors_signalling_every_thread_before_joining_any,
+    stop_processor_threads_signalling_every_thread_before_joining_any,
 };
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
@@ -244,7 +247,7 @@ impl Compiler {
             &plan.links_to_remove,
             &plan.config_updates,
         )?;
-        refuse_a_live_edit_of_a_shader_node_island(
+        let shader_nodes_restarted = the_running_shader_nodes_a_live_edit_restarts(
             &graph_arc.read(),
             &plan.processors_to_add,
             &plan.processors_to_remove,
@@ -254,6 +257,7 @@ impl Compiler {
             ]
             .concat(),
         )?;
+        plan.add_each_node_and_link_restarted(&shader_nodes_restarted);
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.processors_to_add,
@@ -328,6 +332,18 @@ impl Compiler {
         } else {
             Vec::new()
         };
+
+        let abandoned_in_this_compile = [
+            abandoned_in_this_compile,
+            stop_each_shader_node_restarted(
+                &graph_arc,
+                runtime_ctx,
+                abandoned_processor_threads,
+                &shader_nodes_restarted,
+                &mut plan,
+            )?,
+        ]
+        .concat();
 
         // =====================================================================
         // 3. Phase 1: PREPARE - Attach infrastructure components
@@ -502,6 +518,75 @@ impl Compiler {
         }
         Ok(())
     }
+}
+
+/// Unwire every link of the shader nodes a live edit restarts, stop their
+/// threads, and forget their builds, so the compile builds them again with
+/// their islands placed anew; the nodes an abandoned thread still runs. Such a
+/// node, abandoned by this stop or an earlier one, is left unbuilt, its links
+/// with it, since that thread still writes the node's state.
+fn stop_each_shader_node_restarted(
+    graph_arc: &Arc<RwLock<Graph>>,
+    runtime_ctx: &Arc<RuntimeContext>,
+    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    shader_nodes_restarted: &RunningShaderNodesALiveEditRestarts,
+    plan: &mut CompilationPlan,
+) -> Result<Vec<ProcessorDisplayNameAndId>> {
+    if shader_nodes_restarted.is_empty() {
+        return Ok(Vec::new());
+    }
+    tracing::info!(
+        "Restarting {} running shader node(s) so their islands are placed again",
+        shader_nodes_restarted.nodes.len()
+    );
+    unwire_each_link_of_the_shader_nodes_restarted(&mut graph_arc.write(), shader_nodes_restarted)?;
+    stop_processor_threads_signalling_every_thread_before_joining_any(
+        graph_arc,
+        runtime_ctx.loaded_stream_identity(),
+        &shader_nodes_restarted.nodes,
+        ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+        || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
+        runtime_ctx.this_streams_teardown_progress_note(),
+        abandoned_processor_threads,
+    );
+    let still_held_by_an_abandoned_thread = the_restarted_nodes_an_abandoned_thread_still_runs(
+        abandoned_processor_threads,
+        &shader_nodes_restarted.nodes,
+    );
+    let abandoned_node_ids: Vec<ProcessorUniqueId> = still_held_by_an_abandoned_thread
+        .iter()
+        .map(|processor| processor.processor_id.clone())
+        .collect();
+    let mut graph = graph_arc.write();
+    plan.leave_unbuilt_each_node_whose_thread_was_abandoned(&graph, &abandoned_node_ids);
+    let rebuilt_node_ids: Vec<ProcessorUniqueId> = shader_nodes_restarted
+        .nodes
+        .iter()
+        .filter(|node_id| !abandoned_node_ids.contains(node_id))
+        .cloned()
+        .collect();
+    forget_the_build_of_each_shader_node_restarted(&mut graph, &rebuilt_node_ids);
+    Ok(still_held_by_an_abandoned_thread)
+}
+
+/// Each of `node_ids` whose thread, abandoned by this compile or an earlier
+/// one, has not returned. Such a node keeps no thread handle, so a stop finds
+/// nothing to abandon, yet its old thread still writes its state.
+fn the_restarted_nodes_an_abandoned_thread_still_runs(
+    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    node_ids: &[ProcessorUniqueId],
+) -> Vec<ProcessorDisplayNameAndId> {
+    let mut abandoned = abandoned_processor_threads.lock();
+    abandoned.retain(|thread| !thread.join_handle.is_finished());
+    let mut still_running: Vec<ProcessorDisplayNameAndId> = Vec::new();
+    for thread in abandoned.iter() {
+        if node_ids.contains(&thread.processor.processor_id)
+            && !still_running.contains(&thread.processor)
+        {
+            still_running.push(thread.processor.clone());
+        }
+    }
+    still_running
 }
 
 /// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
@@ -966,5 +1051,65 @@ mod already_wired_tests {
             plan.links_to_add,
             vec![link_into_the_first_reader, link_into_the_second_reader]
         );
+    }
+}
+
+#[cfg(test)]
+mod abandoned_shader_node_restart_tests {
+    use super::*;
+
+    fn abandoned_thread_of(
+        processor_id: &str,
+        until_released: std::sync::mpsc::Receiver<()>,
+    ) -> AbandonedProcessorThreadStillRunning {
+        AbandonedProcessorThreadStillRunning {
+            processor: ProcessorDisplayNameAndId {
+                processor_id: ProcessorUniqueId::from(processor_id),
+                processor_display_name: processor_id.to_string(),
+            },
+            join_handle: std::thread::spawn(move || {
+                let _ = until_released.recv();
+            }),
+        }
+    }
+
+    #[test]
+    fn a_restarted_node_an_earlier_compile_abandoned_is_still_held_until_its_thread_returns() {
+        let (release_kaleidoscope, kaleidoscope_waits) = std::sync::mpsc::channel();
+        let (release_other, other_waits) = std::sync::mpsc::channel();
+        let abandoned_processor_threads = Mutex::new(vec![
+            abandoned_thread_of("Pkaleidoscope", kaleidoscope_waits),
+            abandoned_thread_of("Pnot_restarted", other_waits),
+        ]);
+        let restarted = [
+            ProcessorUniqueId::from("Pmix"),
+            ProcessorUniqueId::from("Pkaleidoscope"),
+        ];
+
+        let held = the_restarted_nodes_an_abandoned_thread_still_runs(
+            &abandoned_processor_threads,
+            &restarted,
+        );
+        assert_eq!(
+            held.iter()
+                .map(|processor| processor.processor_id.clone())
+                .collect::<Vec<_>>(),
+            vec![ProcessorUniqueId::from("Pkaleidoscope")]
+        );
+
+        release_kaleidoscope.send(()).unwrap();
+        while abandoned_processor_threads.lock().iter().any(|thread| {
+            thread.processor.processor_id == "Pkaleidoscope" && !thread.join_handle.is_finished()
+        }) {
+            std::thread::yield_now();
+        }
+        assert!(
+            the_restarted_nodes_an_abandoned_thread_still_runs(
+                &abandoned_processor_threads,
+                &restarted,
+            )
+            .is_empty()
+        );
+        release_other.send(()).unwrap();
     }
 }
