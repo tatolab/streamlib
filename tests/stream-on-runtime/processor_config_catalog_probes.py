@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Four processors — three kinds of config class, and one declaring none.

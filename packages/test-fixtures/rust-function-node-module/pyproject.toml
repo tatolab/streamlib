@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 [build-system]
@@ -11,7 +11,7 @@ version = "0.0.0"
 description = "A fixture module of Rust function nodes, built the way a third party builds one, for the integration suite."
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-only" }
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 dependencies = ["tatolab-stream>=0.68.34"]
 
 [project.entry-points."tatolab.nodes"]

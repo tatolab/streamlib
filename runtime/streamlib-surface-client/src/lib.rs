@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Wire helpers for the per-runtime surface-sharing service: a Unix socket

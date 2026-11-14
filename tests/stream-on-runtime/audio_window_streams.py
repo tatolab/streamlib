@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The `@graph_generator` functions `test_audio_window_stage.py` runs from the suite project."""

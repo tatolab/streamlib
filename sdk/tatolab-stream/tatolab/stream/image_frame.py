@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The frame an Image port's read returns: a borrowed GPU surface with its size, format and colour.

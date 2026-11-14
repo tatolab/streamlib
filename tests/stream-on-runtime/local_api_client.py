@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A client of the machine's runtime's local API, from the suite venv alone.

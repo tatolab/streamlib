@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Keeps `tatolab` a PEP 420 namespace package, in the tree and in the lend.

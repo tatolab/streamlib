@@ -56,8 +56,8 @@ plant_untracked() {
   cat >"$repo/$1"
 }
 
-gpl_rust() { printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: GPL-3.0-only\n\npub fn f() {}\n'; }
-gpl_python() { printf '# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: GPL-3.0-only\n\ndef f(): ...\n'; }
+gpl_rust() { printf '// Copyright (c) 2025 Tatolab LLC\n// SPDX-License-Identifier: GPL-3.0-only\n\npub fn f() {}\n'; }
+gpl_python() { printf '# Copyright (c) 2025 Tatolab LLC\n# SPDX-License-Identifier: GPL-3.0-only\n\ndef f(): ...\n'; }
 
 apache_rust() { printf '// SPDX-License-Identifier: Apache-2.0\n\npub fn f() {}\n'; }
 
@@ -111,7 +111,7 @@ expect_fail_naming "an untracked Rust file with no header fails too" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2025 Jonathan Fontanez\n\npub fn f() {}\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2025 Tatolab LLC\n\npub fn f() {}\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "the copyright line without the SPDX line fails" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
@@ -121,12 +121,12 @@ expect_fail_naming "the SPDX line without the copyright line fails" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2025 Jonathan Fontanez, All Rights Reserved\n// SPDX-License-Identifier: GPL-3.0-only\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2025 Tatolab LLC, All Rights Reserved\n// SPDX-License-Identifier: GPL-3.0-only\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "a copyright line with trailing text fails — it is matched whole" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: GPL-3.0-only AND MIT\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2025 Tatolab LLC\n// SPDX-License-Identifier: GPL-3.0-only AND MIT\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "an SPDX line with trailing text fails — so is that one" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 

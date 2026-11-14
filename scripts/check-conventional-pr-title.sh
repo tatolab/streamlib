@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Exits non-zero unless the title given is a conventional-commit title, the form

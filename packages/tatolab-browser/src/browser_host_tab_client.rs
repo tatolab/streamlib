@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! One node's page as a tab in the machine's browser host: leased through the

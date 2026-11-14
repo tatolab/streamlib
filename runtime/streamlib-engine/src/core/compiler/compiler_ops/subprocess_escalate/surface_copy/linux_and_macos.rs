@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::super::surface_bound_kernel_binding::publish_bound_surface_layouts_to_surface_share;

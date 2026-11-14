@@ -2,7 +2,7 @@
 name = "streamlib-clap"
 version = "1.0.0"
 edition = "2024"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "CLAP audio plugin host processor for streamlib (macOS / iOS)."
 keywords = ["clap", "audio", "plugin", "effect", "vst"]
 categories = ["multimedia::audio", "multimedia"]

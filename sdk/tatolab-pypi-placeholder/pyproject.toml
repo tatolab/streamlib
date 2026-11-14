@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 # Holds the bare `tatolab` name on PyPI. Not
@@ -15,7 +15,7 @@ description = "Placeholder that installs nothing. Tatolab installs as an app: se
 readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-3.0-only"
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = ["Development Status :: 7 - Inactive"]
 
 [project.urls]

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The integration suite's fixtures: one `tatolabd` per test, and streams run on it with `tatolab open --play`.

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A node type led by an import's folder imports its module from that folder, and one interpreter refuses a top-level module from two places."""

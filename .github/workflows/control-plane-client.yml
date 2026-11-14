@@ -162,7 +162,7 @@ jobs:
               "api-client",
               "openapi"
             ],
-            "author": "Jonathan Fontanez",
+            "author": "Tatolab LLC",
             "license": "GPL-3.0-only",
             "devDependencies": {
               "typescript": "^5.0.0",

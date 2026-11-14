@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Virtual audio device fixture for E2E tests. Sister to virtual_camera.sh:

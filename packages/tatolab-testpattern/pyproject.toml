@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "GPL-3.0-only"
 license-files = ["LICENSE"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Video",

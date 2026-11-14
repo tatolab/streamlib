@@ -5,7 +5,7 @@
 StreamLib is licensed under the GNU General Public License, version 3 only (GPL-3.0-only).
 Never suggest another licence for it. Every new Rust and Python file carries:
 
-    // Copyright (c) 2025 Jonathan Fontanez
+    // Copyright (c) 2025 Tatolab LLC
     // SPDX-License-Identifier: GPL-3.0-only
 
 with `#` in place of `//` in Python, on lines 2-3 after a shebang.

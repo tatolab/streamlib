@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """A chain of `@node.shader` nodes on `tatolabd` fuses into one kernel, and splits only where it must.

@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The installed wheel carries the notices it owes, with real text in them.
@@ -78,7 +78,7 @@ def test_the_shipped_license_is_the_gpl_text_with_its_copyright_notice(
     assert "GNU GENERAL PUBLIC LICENSE" in contents
     assert "Version 3, 29 June 2007" in contents
     assert "GPL-3.0-only" in contents
-    assert "Jonathan Fontanez" in contents
+    assert "Tatolab LLC" in contents
 
 
 def test_the_shipped_notices_carry_this_wheels_own_closure(

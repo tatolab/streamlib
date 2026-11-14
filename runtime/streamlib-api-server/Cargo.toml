@@ -2,7 +2,7 @@
 name = "streamlib-api-server"
 version.workspace = true
 edition = "2024"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "The local API a host serves for a streamlib engine — graph inspection per loaded stream, node catalogs, channel taps, WebSocket event streaming, MCP, OpenAPI spec."
 keywords = ["api-server", "http", "websocket", "openapi", "streamlib"]
 categories = ["multimedia", "web-programming::http-server"]

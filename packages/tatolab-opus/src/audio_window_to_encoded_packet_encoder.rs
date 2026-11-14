@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The `OpusEncoder` body: one 20 ms audio window in, one Opus packet out, and the port's Packets stream facts — the `OpusHead` hex-encoded as

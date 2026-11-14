@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 [build-system]
@@ -24,7 +24,7 @@ license = { text = "GPL-3.0-only" }
 # the project root (see Cargo.toml) but follows one that resolves out of it, so
 # the root file stays the single copy and there is no second one to drift.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

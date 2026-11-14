@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`ImageFile` reports itself not ready while it names no asset or cannot read the one it names, and tries again at each `process()`."""

@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! MP4 and QuickTime files (ISO/IEC 14496-12 boxes): duration from `mvhd`, and from each

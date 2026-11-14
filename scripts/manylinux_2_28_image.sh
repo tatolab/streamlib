@@ -1,5 +1,5 @@
 # shellcheck shell=bash disable=SC2034
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Sourced by every script that builds inside manylinux_2_28. A `docker run` of

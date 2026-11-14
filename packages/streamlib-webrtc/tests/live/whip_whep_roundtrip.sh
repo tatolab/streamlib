@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # The WebRTC live proof: the test pattern and the microphone published to a

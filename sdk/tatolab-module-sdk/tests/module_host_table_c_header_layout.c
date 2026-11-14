@@ -1,4 +1,4 @@
-/* Copyright (c) 2025 Jonathan Fontanez
+/* Copyright (c) 2025 Tatolab LLC
  * SPDX-License-Identifier: GPL-3.0-only */
 
 /* The C header's layout, held to the same sizes and offsets the Rust mirror's

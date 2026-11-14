@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """The kernel ABI the sink writes a camera through: `<linux/videodev2.h>` and `v4l2loopback.h` 0.15.

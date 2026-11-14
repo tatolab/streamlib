@@ -13,7 +13,7 @@ license = { text = "GPL-3.0-only" }
 # dependency's, generated over this project's own closure by `cargo xtask
 # generate-third-party-notices --extension-package-directory <this directory>`.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

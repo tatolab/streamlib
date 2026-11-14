@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Sourced by the fixture drivers: the runtime unit a fixture stream runs on,

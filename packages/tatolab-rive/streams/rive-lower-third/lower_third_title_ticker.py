@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`LowerThirdTitleTicker`: a numbered title for a `RiveSource`'s `data` input once a second."""

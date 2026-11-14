@@ -1,4 +1,4 @@
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
 """Every core node declares a group and a description, its Slang takes what its signature declares, and each stream names only nodes and ports that exist."""

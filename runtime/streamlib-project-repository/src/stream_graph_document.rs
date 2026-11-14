@@ -1,4 +1,4 @@
-// Copyright (c) 2025 Jonathan Fontanez
+// Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::project_stream_document::STREAM_DOCUMENT_DISPLAY_NAME_KEY;

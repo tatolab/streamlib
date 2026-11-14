@@ -12,7 +12,7 @@ license = { text = "GPL-3.0-only" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
 # dependency's.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

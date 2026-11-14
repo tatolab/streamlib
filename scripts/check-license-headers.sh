@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Jonathan Fontanez
+# Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # Every Rust and Python source file carries the GPL-3.0-only header. Run from the
@@ -78,7 +78,7 @@ failed_language_checks=()
 # the fork ships no `.py`, so the Python check below buys its lack of
 # exemptions for free.
 report_files_missing_header \
-  "// Copyright (c) 2025 Jonathan Fontanez" Rust \
+  "// Copyright (c) 2025 Tatolab LLC" Rust \
   '*.rs' \
   ':(exclude)vendor/tatolab-vulkanalia/*' \
   ':(exclude)vendor/tatolab-vulkanalia-sys/*' \
@@ -86,7 +86,7 @@ report_files_missing_header \
   failed_language_checks+=("Rust")
 
 report_files_missing_header \
-  "# Copyright (c) 2025 Jonathan Fontanez" Python \
+  "# Copyright (c) 2025 Tatolab LLC" Python \
   '*.py' ||
   failed_language_checks+=("Python")
 

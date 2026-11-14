@@ -20,7 +20,7 @@ license = { text = "GPL-3.0-only" }
 # generate-third-party-notices --extension-package-directory <this directory>`.
 # The engine wheel's notices cover the engine wheel and are not inherited here.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
