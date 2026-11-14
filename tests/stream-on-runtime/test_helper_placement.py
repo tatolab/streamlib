@@ -355,11 +355,15 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
         f"two islands into built-ins and one Python class started {helper_pids}; the class and "
         f"one pool get a process:\n{tatolabd.recent_stderr()}"
     )
-    pools = [
-        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    assert all(node["type"] != "tatolab.runtime._function_node_pool:FunctionNodePool" for node in graph["nodes"]), (
+        f"the pool is no node of the graph: {graph['nodes']}"
+    )
+    pool = graph["function_node_pool"]
+    assert len(pool["config"]["carries"]) == 2, pool
+    carried_links = [
+        link for link in graph["links"] if "carried_through_the_function_node_pool" in link["components"]
     ]
-    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
-    assert len(pools[0]["config"]["carries"]) == 2, pools[0]
+    assert len(carried_links) == 2, f"`graph` shows each carried link as it was given: {graph['links']}"
     levels = [record["level"] for record in records_read["records"]]
     assert all(0.0 <= level <= 1.0 for level in levels), (
         f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
@@ -587,10 +591,7 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    (pool,) = [
-        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
-    ]
-    (carry,) = pool["config"]["carries"]
+    (carry,) = graph["function_node_pool"]["config"]["carries"]
     assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
     levels = [record["level"] for record in records_read["records"]]
     assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1.0, (
@@ -743,15 +744,10 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
         f"a Python body read by a native half started {helper_pids}; the class and one pool "
         f"get a process:\n{tatolabd.recent_stderr()}"
     )
-    pools = [
-        node
-        for node in graph["nodes"]
-        if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
-    ]
-    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
-    assert pools[0]["config"]["carries"] == [
+    pool = graph["function_node_pool"]
+    assert pool["config"]["carries"] == [
         {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
-    ], pools[0]
+    ], pool
 
 
 def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_times_moves_out_of_it(

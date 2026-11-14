@@ -127,7 +127,13 @@ const GRAPH_DOCUMENT_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "studio",
     ],
     // `runtime_name` stays so the graphs recorded while `graph` rendered it still load.
-    live_keys: &["extensions", "machine", "references", "runtime_name"],
+    live_keys: &[
+        "extensions",
+        "function_node_pool",
+        "machine",
+        "references",
+        "runtime_name",
+    ],
 };
 
 const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {

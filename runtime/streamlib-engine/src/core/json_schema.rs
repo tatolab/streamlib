@@ -61,6 +61,12 @@ pub struct GraphResponse {
     /// spec key, read by nothing that runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub studio: Option<serde_json::Value>,
+    /// The stream's function node pool, rendered as a node is: a live key, absent when no
+    /// island runs in it. It is no node of the graph, so it is never a link's end; each link
+    /// it carries renders as the link it was given, naming the pool's ports under
+    /// `carried_through_the_function_node_pool`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function_node_pool: Option<ProcessorNodeOutput>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -705,6 +711,45 @@ impl LinkOutput {
                 node_names,
             ),
             capacity: link.capacity.get(),
+            state,
+            error_reason,
+            components,
+        }
+    }
+
+    /// Render `carried_link_id`, the link the graph carries as `into_the_function_node_pool`
+    /// then `out_of_the_function_node_pool`, as it was given: from the first's source to the
+    /// second's target, naming the pool's ports it runs through, in the error either half is
+    /// in, else in the second's state.
+    pub(crate) fn of_a_link_carried_through_the_function_node_pool(
+        carried_link_id: &crate::core::graph::LinkUniqueId,
+        into_the_function_node_pool: &crate::core::graph::Link,
+        out_of_the_function_node_pool: &crate::core::graph::Link,
+        node_names: &NodeNamesByProcessorId,
+    ) -> Self {
+        let into_the_pool = Self::of_a_link(into_the_function_node_pool, node_names);
+        let out_of_the_pool = Self::of_a_link(out_of_the_function_node_pool, node_names);
+        let (state, error_reason) = if into_the_pool.state == LinkStateOutput::Error {
+            (into_the_pool.state, into_the_pool.error_reason)
+        } else {
+            (out_of_the_pool.state, out_of_the_pool.error_reason)
+        };
+        let mut components = out_of_the_pool.components;
+        components.insert(
+            "carried_through_the_function_node_pool".to_string(),
+            serde_json::json!({
+                "input_port": into_the_pool.target.port,
+                "output_port": out_of_the_pool.source.port,
+            }),
+        );
+        if let Some(rendered_state) = components.get_mut("state") {
+            *rendered_state = serde_json::json!(format!("{state:?}"));
+        }
+        Self {
+            id: carried_link_id.to_string(),
+            source: into_the_pool.source,
+            target: out_of_the_pool.target,
+            capacity: out_of_the_pool.capacity,
             state,
             error_reason,
             components,
