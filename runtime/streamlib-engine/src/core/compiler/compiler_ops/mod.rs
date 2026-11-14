@@ -33,6 +33,7 @@ pub(crate) use open_iceoryx2_service_op::{
     close_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
+    unwire_a_link_kept_for_the_restart_of_its_nodes,
 };
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;

@@ -15,10 +15,12 @@ use super::shader_node_program::ShaderNodeInputValueType;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, InputLinkPortRef, Link, LinkUniqueId, ProcessorNode,
-    ProcessorUniqueId, ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland,
-    cast_exposed_name_to_url_safe,
+    Graph, GraphNodeWithComponents, InputLinkPortRef, Link, LinkUniqueId,
+    ProcessorInstanceComponent, ProcessorNode, ProcessorPauseGateComponent, ProcessorUniqueId,
+    ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent,
+    StateComponent, StepProgressOfOneNodeComponent, cast_exposed_name_to_url_safe,
 };
+use crate::core::processors::ProcessorState;
 
 /// The island a shader node evaluates, on the node whose Image leaves it.
 pub(crate) struct ShaderNodeIslandHostedHereComponent {
@@ -289,17 +291,40 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
     Ok(fused_into_another)
 }
 
-/// Refuse a link added or removed while the stream runs that would change a
-/// shader node island already evaluating: one between two shader nodes, or
-/// one into or out of a node fused into another's island. A link going with
-/// a node the same edit removes changes no island that keeps running.
-pub(crate) fn refuse_a_live_edit_of_a_shader_node_island(
+/// The running shader nodes a live edit restarts so their islands are placed
+/// again, and the links rewired with them.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RunningShaderNodesALiveEditRestarts {
+    pub(crate) nodes: Vec<ProcessorUniqueId>,
+    pub(crate) links: Vec<LinkUniqueId>,
+}
+
+impl RunningShaderNodesALiveEditRestarts {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+}
+
+/// The running shader nodes whose islands a link added or removed while the
+/// stream runs changes — one between two shader nodes, or one into or out of a
+/// node fused into another's island — with every running shader node linked
+/// to them through other shader nodes, and every other link into or out of
+/// them. A shader node holds no state, so each is stopped and built again
+/// with its island placed anew. A link going with a node the same edit
+/// removes changes no island that keeps running.
+///
+/// Refused by name, changing nothing, when one of those links joins a function
+/// node, whose wiring into an island is placed once, when its reader starts.
+pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
     graph: &Graph,
     processors_to_add: &[ProcessorUniqueId],
     processors_to_remove: &[ProcessorUniqueId],
     links_changed: &[LinkUniqueId],
-) -> Result<()> {
-    let already_running = |node_id: &ProcessorUniqueId| !processors_to_add.contains(node_id);
+) -> Result<RunningShaderNodesALiveEditRestarts> {
+    let already_running = |node_id: &ProcessorUniqueId| {
+        !processors_to_add.contains(node_id) && !processors_to_remove.contains(node_id)
+    };
+    let mut shader_nodes_to_visit: Vec<ProcessorUniqueId> = Vec::new();
     for link_id in links_changed {
         let Some(link) = graph.traversal().e(link_id).first() else {
             continue;
@@ -308,36 +333,131 @@ pub(crate) fn refuse_a_live_edit_of_a_shader_node_island(
         if processors_to_remove.contains(source_id) || processors_to_remove.contains(reader_id) {
             continue;
         }
-        let ends_in_a_running_island = [source_id, reader_id].into_iter().find(|node_id| {
+        let ends_in_a_running_island = [source_id, reader_id].into_iter().any(|node_id| {
             already_running(node_id)
-                && graph.traversal().v(*node_id).first().is_some_and(|node| {
+                && graph.traversal().v(node_id).first().is_some_and(|node| {
                     node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
                 })
         });
         let joins_running_shader_nodes = is_a_shader_node(graph, source_id)
             && is_a_shader_node(graph, reader_id)
             && (already_running(source_id) || already_running(reader_id));
-        if let Some(node_id) =
-            ends_in_a_running_island.or(joins_running_shader_nodes.then_some(source_id))
-        {
-            let node_name = graph
-                .traversal()
-                .v(node_id)
-                .first()
-                .map_or_else(|| node_id.to_string(), |node| node.display_name.clone());
-            return Err(Error::Configuration(format!(
-                "link `{link_id}` changes the fused group of running shader node `{node_name}`, \
-                 and a fused group is read once, when its nodes start. To fix: stop the stream, \
-                 make the edit, and run it again"
-            )));
+        if ends_in_a_running_island || joins_running_shader_nodes {
+            shader_nodes_to_visit.extend(
+                [source_id, reader_id]
+                    .into_iter()
+                    .filter(|node_id| is_a_shader_node(graph, node_id))
+                    .cloned(),
+            );
         }
     }
-    Ok(())
+
+    let mut shader_nodes_visited: HashSet<ProcessorUniqueId> = HashSet::new();
+    let mut nodes = Vec::new();
+    while let Some(node_id) = shader_nodes_to_visit.pop() {
+        if processors_to_remove.contains(&node_id) || !shader_nodes_visited.insert(node_id.clone())
+        {
+            continue;
+        }
+        if already_running(&node_id) {
+            nodes.push(node_id.clone());
+        }
+        let linked_shader_nodes = graph
+            .traversal()
+            .v(&node_id)
+            .out_e()
+            .iter()
+            .map(|link| link.to_port().processor_id().clone())
+            .chain(
+                graph
+                    .traversal()
+                    .v(&node_id)
+                    .in_e()
+                    .iter()
+                    .map(|link| link.source().processor_id().clone()),
+            )
+            .filter(|linked| is_a_shader_node(graph, linked))
+            .collect::<Vec<_>>();
+        shader_nodes_to_visit.extend(linked_shader_nodes);
+    }
+    nodes.sort();
+
+    let mut links = Vec::new();
+    for node_id in &nodes {
+        let links_of_the_node: Vec<&Link> = graph
+            .traversal()
+            .v(node_id)
+            .in_e()
+            .iter()
+            .chain(graph.traversal().v(node_id).out_e().iter())
+            .collect();
+        for link in links_of_the_node {
+            if links_changed.contains(&link.id) || links.contains(&link.id) {
+                continue;
+            }
+            let (source_id, reader_id) =
+                (link.source().processor_id(), link.to_port().processor_id());
+            if processors_to_remove.contains(source_id) || processors_to_remove.contains(reader_id)
+            {
+                continue;
+            }
+            let function_node_joined =
+                [source_id, reader_id].into_iter().find(|node_id| {
+                    graph.traversal().v(*node_id).first().is_some_and(|node| {
+                        matches!(node.node_kind(), Some(NodeKind::Function { .. }))
+                    })
+                });
+            if let Some(function_node_id) = function_node_joined {
+                let name_of = |node_id: &ProcessorUniqueId| {
+                    graph
+                        .traversal()
+                        .v(node_id)
+                        .first()
+                        .map_or_else(|| node_id.to_string(), |node| node.display_name.clone())
+                };
+                return Err(Error::Configuration(format!(
+                    "the edit changes the fused group of running shader node `{}`, and its link \
+                     `{}` joins function node `{}`, whose place in an island is read once, when \
+                     its nodes start. To fix: stop the stream, make the edit, and run it again",
+                    name_of(node_id),
+                    link.id,
+                    name_of(function_node_id),
+                )));
+            }
+            links.push(link.id.clone());
+        }
+    }
+    links.sort();
+    Ok(RunningShaderNodesALiveEditRestarts { nodes, links })
+}
+
+/// Take each node of `nodes` back to how a node not yet built stands, its
+/// processor dropped and its island forgotten, so the compile builds it again;
+/// their threads are already stopped.
+pub(crate) fn forget_the_build_of_each_shader_node_restarted(
+    graph: &mut Graph,
+    nodes: &[ProcessorUniqueId],
+) {
+    for node_id in nodes {
+        let Some(node) = graph.traversal_mut().v(node_id).first_mut() else {
+            continue;
+        };
+        node.remove::<ProcessorInstanceComponent>();
+        node.remove::<ShutdownChannelComponent>();
+        node.remove::<ProcessorPauseGateComponent>();
+        node.remove::<StepProgressOfOneNodeComponent>();
+        node.remove::<ShaderNodeIslandHostedHereComponent>();
+        node.remove::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>();
+        node.remove::<ShaderNodeFusedGroupComponent>();
+        if let Some(state) = node.get::<StateComponent>() {
+            state.transition_to(ProcessorState::Pending);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::function_node_island::tests::{add_a_node, link};
+    use super::super::function_node_island::tests::{a_function_node_type, add_a_node, link};
     use super::super::function_node_island::{HowALinkIsWired, how_a_link_is_wired};
     use super::super::shader_node_island_program::tests::shader_program;
     use super::*;
@@ -389,7 +509,8 @@ mod tests {
     }
 
     /// A graph resolving `source` and `sink`, two process types carrying
-    /// Images, and `tint`, `blur` and `blend`, three shader types.
+    /// Images, `tint`, `blur` and `blend`, three shader types, and `lfo`, a
+    /// function node type.
     fn a_graph_resolving_shader_and_process_types() -> Graph {
         let node_types = NodeTypesOneStreamResolves::new();
         for descriptor in [
@@ -455,6 +576,14 @@ mod tests {
                 )
                 .unwrap();
         }
+        node_types
+            .register_a_type_described_in_this_streams_processor_interpreter(
+                a_function_node_type("test_ops:lfo", &[], &["result"]),
+                HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                    processor_once_promoted_to_its_own_process: a_constructor_that_builds_nothing(),
+                },
+            )
+            .unwrap();
         crate::core::test_support::ensure_test_mocks_registered();
         Graph::new_resolving_node_types_through(Arc::new(node_types))
     }
@@ -635,8 +764,14 @@ mod tests {
         );
     }
 
+    fn sorted<T: Ord + Clone>(items: &[T]) -> Vec<T> {
+        let mut sorted = items.to_vec();
+        sorted.sort();
+        sorted
+    }
+
     #[test]
-    fn a_live_link_into_a_running_island_is_refused_and_a_teardown_is_not() {
+    fn a_live_link_into_a_fused_nodes_output_restarts_its_whole_island_and_a_teardown_nothing() {
         let mut stream = source_into_tint_into_blur_into_tint_into_sink();
         let every_node = [
             stream.source.clone(),
@@ -652,19 +787,130 @@ mod tests {
             (&stream.blur, "result"),
             (&second_sink, "video"),
         );
-        let refusal = refuse_a_live_edit_of_a_shader_node_island(
+        let restarted = the_running_shader_nodes_a_live_edit_restarts(
             &stream.graph,
             std::slice::from_ref(&second_sink),
             &[],
             std::slice::from_ref(&into_a_fused_node_output),
         )
+        .unwrap();
+        assert_eq!(
+            restarted,
+            RunningShaderNodesALiveEditRestarts {
+                nodes: sorted(&[
+                    stream.tint.clone(),
+                    stream.blur.clone(),
+                    stream.tint_again.clone()
+                ]),
+                links: sorted(&stream.links),
+            }
+        );
+
+        let teardown = the_running_shader_nodes_a_live_edit_restarts(
+            &stream.graph,
+            &[],
+            &every_node,
+            &stream.links,
+        )
+        .unwrap();
+        assert!(teardown.is_empty(), "{teardown:?}");
+    }
+
+    #[test]
+    fn a_live_link_joining_two_running_shader_nodes_restarts_both_with_their_other_links() {
+        let mut graph = a_graph_resolving_shader_and_process_types();
+        let camera = add(&mut graph, "test_streams:source");
+        let test_pattern = add(&mut graph, "test_streams:source");
+        let mix = add(&mut graph, "test_shaders:blend");
+        let kaleidoscope = add(&mut graph, "test_shaders:tint");
+        let program = add(&mut graph, "test_streams:sink");
+        let links_already_running = vec![
+            link(&mut graph, (&camera, "video"), (&mix, "a")),
+            link(&mut graph, (&test_pattern, "video"), (&mix, "b")),
+            link(&mut graph, (&kaleidoscope, "result"), (&program, "video")),
+        ];
+        place_each_shader_node_island_on_its_host(
+            &mut graph,
+            &[
+                camera.clone(),
+                test_pattern.clone(),
+                mix.clone(),
+                kaleidoscope.clone(),
+                program.clone(),
+            ],
+        )
+        .unwrap();
+        let mix_into_kaleidoscope = link(&mut graph, (&mix, "result"), (&kaleidoscope, "image"));
+
+        let restarted = the_running_shader_nodes_a_live_edit_restarts(
+            &graph,
+            &[],
+            &[],
+            std::slice::from_ref(&mix_into_kaleidoscope),
+        )
+        .unwrap();
+        assert_eq!(
+            restarted,
+            RunningShaderNodesALiveEditRestarts {
+                nodes: sorted(&[mix, kaleidoscope]),
+                links: sorted(&links_already_running),
+            }
+        );
+    }
+
+    #[test]
+    fn a_live_link_from_a_process_into_a_running_islands_host_restarts_nothing() {
+        let mut stream = source_into_tint_into_blur_into_tint_into_sink();
+        let every_node = [
+            stream.source.clone(),
+            stream.tint.clone(),
+            stream.blur.clone(),
+            stream.tint_again.clone(),
+            stream.sink.clone(),
+        ];
+        place_each_shader_node_island_on_its_host(&mut stream.graph, &every_node).unwrap();
+        let second_source = add(&mut stream.graph, "test_streams:source");
+        let lone_tint = add(&mut stream.graph, "test_shaders:tint");
+        place_each_shader_node_island_on_its_host(
+            &mut stream.graph,
+            std::slice::from_ref(&lone_tint),
+        )
+        .unwrap();
+        let into_a_host = link(
+            &mut stream.graph,
+            (&second_source, "video"),
+            (&lone_tint, "image"),
+        );
+        let restarted = the_running_shader_nodes_a_live_edit_restarts(
+            &stream.graph,
+            std::slice::from_ref(&second_source),
+            &[],
+            std::slice::from_ref(&into_a_host),
+        )
+        .unwrap();
+        assert!(restarted.is_empty(), "{restarted:?}");
+    }
+
+    #[test]
+    fn a_live_edit_restarting_shader_nodes_a_function_node_feeds_is_refused_naming_it() {
+        let mut graph = a_graph_resolving_shader_and_process_types();
+        let source = add(&mut graph, "test_streams:source");
+        let mix = add(&mut graph, "test_shaders:blend");
+        let tint = add(&mut graph, "test_shaders:tint");
+        let lfo = add(&mut graph, "test_ops:lfo");
+        link(&mut graph, (&source, "video"), (&mix, "a"));
+        link(&mut graph, (&lfo, "result"), (&tint, "amount"));
+        let mix_into_tint = link(&mut graph, (&mix, "result"), (&tint, "image"));
+        let refusal = the_running_shader_nodes_a_live_edit_restarts(
+            &graph,
+            &[],
+            &[],
+            std::slice::from_ref(&mix_into_tint),
+        )
         .unwrap_err()
         .to_string();
-        assert!(refusal.contains("changes the fused group"), "{refusal}");
+        assert!(refusal.contains("joins function node"), "{refusal}");
         assert!(refusal.contains("stop the stream"), "{refusal}");
-
-        refuse_a_live_edit_of_a_shader_node_island(&stream.graph, &[], &every_node, &stream.links)
-            .unwrap();
     }
 
     #[test]

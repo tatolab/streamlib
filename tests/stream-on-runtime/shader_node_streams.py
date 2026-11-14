@@ -82,6 +82,24 @@ def point_wise_chain_unfused_by_a_second_reader_of_each_intermediate(
 
 
 @graph_generator
+def tint_into_invert_fused_publishing_until_stopped(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        name="source",
+        config={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    tinted = stream_builder.add(tint, name="tint")
+    inverted = stream_builder.add(invert, name="invert")
+    sink = stream_builder.add(ShadedFramePixelReadingSink, name="sink")
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    stream_builder.connect(tinted.output("result"), inverted.input("image"))
+    stream_builder.connect(inverted.output("result"), sink.input("shaded"))
+
+
+@graph_generator
 def chain_with_a_blur_in_the_middle(stream_builder: StreamBuilder) -> None:
     _source_into_shader_chain_into_sink(
         stream_builder, CHAIN_WITH_A_BLUR_IN_THE_MIDDLE, every_intermediate_read_twice=False

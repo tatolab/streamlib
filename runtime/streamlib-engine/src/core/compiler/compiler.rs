@@ -37,13 +37,15 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
     hand_each_helper_the_pin_values_its_input_ports_read,
 };
 use crate::core::compiler::compiler_ops::shader_node_island::{
-    place_each_shader_node_island_on_its_host, refuse_a_live_edit_of_a_shader_node_island,
+    RunningShaderNodesALiveEditRestarts, forget_the_build_of_each_shader_node_restarted,
+    place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
     ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
     remove_processors_signalling_every_thread_before_joining_any,
+    stop_processor_threads_signalling_every_thread_before_joining_any,
 };
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
@@ -244,7 +246,7 @@ impl Compiler {
             &plan.links_to_remove,
             &plan.config_updates,
         )?;
-        refuse_a_live_edit_of_a_shader_node_island(
+        let shader_nodes_restarted = the_running_shader_nodes_a_live_edit_restarts(
             &graph_arc.read(),
             &plan.processors_to_add,
             &plan.processors_to_remove,
@@ -254,6 +256,7 @@ impl Compiler {
             ]
             .concat(),
         )?;
+        plan.add_each_node_and_link_restarted(&shader_nodes_restarted);
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.processors_to_add,
@@ -328,6 +331,17 @@ impl Compiler {
         } else {
             Vec::new()
         };
+
+        let abandoned_in_this_compile = [
+            abandoned_in_this_compile,
+            stop_each_shader_node_restarted(
+                &graph_arc,
+                runtime_ctx,
+                abandoned_processor_threads,
+                &shader_nodes_restarted,
+            ),
+        ]
+        .concat();
 
         // =====================================================================
         // 3. Phase 1: PREPARE - Attach infrastructure components
@@ -502,6 +516,46 @@ impl Compiler {
         }
         Ok(())
     }
+}
+
+/// Unwire every link of the shader nodes a live edit restarts, stop their
+/// threads, and forget their builds, so the compile builds them again with
+/// their islands placed anew; the threads abandoned.
+fn stop_each_shader_node_restarted(
+    graph_arc: &Arc<RwLock<Graph>>,
+    runtime_ctx: &Arc<RuntimeContext>,
+    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    shader_nodes_restarted: &RunningShaderNodesALiveEditRestarts,
+) -> Vec<ProcessorDisplayNameAndId> {
+    if shader_nodes_restarted.is_empty() {
+        return Vec::new();
+    }
+    tracing::info!(
+        "Restarting {} running shader node(s) so their islands are placed again",
+        shader_nodes_restarted.nodes.len()
+    );
+    {
+        let mut graph = graph_arc.write();
+        for link_id in &shader_nodes_restarted.links {
+            super::compiler_ops::unwire_a_link_kept_for_the_restart_of_its_nodes(
+                &mut graph, link_id,
+            );
+        }
+    }
+    let abandoned = stop_processor_threads_signalling_every_thread_before_joining_any(
+        graph_arc,
+        runtime_ctx.loaded_stream_identity(),
+        &shader_nodes_restarted.nodes,
+        ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+        || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
+        runtime_ctx.this_streams_teardown_progress_note(),
+        abandoned_processor_threads,
+    );
+    forget_the_build_of_each_shader_node_restarted(
+        &mut graph_arc.write(),
+        &shader_nodes_restarted.nodes,
+    );
+    abandoned
 }
 
 /// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
