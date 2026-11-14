@@ -18,8 +18,8 @@ name: Distribution Checks
 #                               `tatolab-stream`, imports and carries its notices;
 #                               every binary in a macOS wheel is still signed
 #
-# A red scheduled run opens, or comments on, the open "Nightly distribution
-# checks failed" issue.
+# A red scheduled run opens, or comments on, the open Linear issue
+# "streamlib: nightly distribution checks failed".
 on:
   schedule:
     - cron: '0 8 * * *'
@@ -350,12 +350,13 @@ jobs:
       - check-the-module-wheels
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci
       - env:
-          GH_TOKEN: ${{ github.token }}
-          FAILED_NIGHTLY_ISSUE_TITLE: Nightly distribution checks failed
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          FAILED_NIGHTLY_ISSUE_TITLE: "streamlib: nightly distribution checks failed"
           JOB_RESULTS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -366,12 +367,4 @@ jobs:
           ")"
           body="$(printf 'The nightly distribution checks on `%s` failed: %s\n\n%s\n' \
             "$GITHUB_SHA" "$RUN_URL" "$job_result_lines")"
-          open_issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "in:title \"$FAILED_NIGHTLY_ISSUE_TITLE\"" --json number,title \
-            -q "map(select(.title == \"$FAILED_NIGHTLY_ISSUE_TITLE\")) | .[0].number // empty")"
-          if [ -n "$open_issue" ]; then
-            gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$body"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$FAILED_NIGHTLY_ISSUE_TITLE" \
-              --label bug --body "$body"
-          fi
+          scripts/ci/report_failed_nightly_to_linear.sh "$FAILED_NIGHTLY_ISSUE_TITLE" "$body"

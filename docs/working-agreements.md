@@ -1,12 +1,12 @@
 # Working agreements
 
 Owner rulings on how sessions work, and practical lessons from the repo, the rig and CI, that help
-agents across many issues and no other file records. `CLAUDE.md`, `.claude/rules/` and `docs/plan/`
+agents across many issues and no other file records. `CLAUDE.md`, the `streamlib-*` rule skills in dev-plugin and `docs/plan/`
 outrank this file. If an entry contradicts one of them, or the tree shows it is stale, fix or delete
 the entry in the same PR.
 
-Where a fact goes: a bug is a bug issue; a ruling or fact that only matters to one issue is a
-comment on that issue; a fact that helps agents across issues goes here or in the doc that owns its
+Where a fact goes: a bug is a Linear `Bug` issue; a ruling or fact that only matters to one issue
+is a comment on that issue; a fact that helps agents across issues goes here or in the doc that owns its
 topic; `CLAUDE.md` holds only what every session must load.
 
 ## Deciding and asking
@@ -17,11 +17,11 @@ topic; `CLAUDE.md` holds only what every session must load.
 - **An option that breaks a DECIDED entry is not an option.** Present it as a sequencing gap that
   names the step that must come first. Check every noun against `docs/plan/GLOSSARY.md` before
   presenting, because loose wording makes a design look like a reversal (owner, 2026-10-01).
-- **Choosing a pattern is not architecture.** Picking the implementation pattern that meets a
-  ticket's goal is `/implement` work, even when it is substantial. Bring it to the owner only if it
+- **Choosing a pattern is not architecture.** Picking the implementation pattern that meets an
+  issue's goal is `/implement` work, even when it is substantial. Bring it to the owner only if it
   changes what the product does or promises (owner, 2026-08-13).
 - **Desk research before spikes.** Behaviour an OS, language, spec or shipped prior art already
-  defines is answered in-session by research subagents, never by a spike or research ticket.
+  defines is answered in-session by research subagents, never by a spike or research issue.
   Spikes are for what only streamlib's own combination can reveal (owner, 2026-10-01).
 - **Delete residue before asking.** Before an align round, drop any undecided item that later
   DECIDED entries make impossible or redundant. Ask only forks that still exist (owner, 2026-10-02).
@@ -30,10 +30,11 @@ topic; `CLAUDE.md` holds only what every session must load.
 
 - **Never redesign an approved API mid-implementation.** If the approved shape looks wrong while
   building, stop and bring the divergence to the owner before writing it. A note in the PR is not
-  a substitute. A parity ticket inventories the old surface first (owner, 2026-08-03).
-- **A ticket's convenience spelling loses to the naming rule.** When a ticket's API bullet is
+  a substitute. A parity issue inventories the old surface first (owner, 2026-08-03).
+- **An issue's convenience spelling loses to the naming rule.** When an issue's API bullet is
   shorter than its own naming bullet or the layer below, the explicit spelling wins. Raise it once,
-  then record the ruling in the ticket body (owner, 2026-09-03).
+  then record the ruling in the issue's description and in a comment, so it outranks an earlier
+  comment (owner, 2026-09-03).
 - **Question the shape before adding an opt-in.** When a design shows a gap, first ask whether the
   shape that made the gap is right. Never cite the audio-window contract as precedent for another
   payload-reading carve-out (owner, 2026-10-16).
@@ -48,7 +49,7 @@ topic; `CLAUDE.md` holds only what every session must load.
   that path (owner, 2026-09-10).
 - **Python can build everything Rust can.** Codecs, capture and kernels run natively and Python
   drives them. A capability missing from Python gets an owner-visible disposition the day it is
-  found: built, ticketed, or named native-only (owner, 2026-08-03).
+  found: built, filed, or named native-only (owner, 2026-08-03).
 - **Product features are the commercial product's.** AR, web control panels, dashboards,
   marketplaces, agent-to-agent coordination and simulation do not belong in this repo. When the
   line is unclear, ask; never assert it (owner, 2026-09-01).
@@ -63,7 +64,7 @@ topic; `CLAUDE.md` holds only what every session must load.
   config, secret-bearing keys included, inside a trusted boundary. Do not file it or redact a key to
   work around it (owner, 2026-09-05).
 
-## Tickets and PRs
+## Issues and PRs
 
 - **A ready PR is a merge contract.** It never carries open questions or `[NEEDS DECISION]`.
   Settle each fork in chat first, then open it (owner, 2026-10-02).
@@ -75,21 +76,23 @@ topic; `CLAUDE.md` holds only what every session must load.
   issues, each finding gets a PR comment with its action, high and major ones are fixed unless
   they are design, which route to the owner, and the PR squash-merges unless one needs the owner
   (owner, 2026-10-05 and 2026-10-17).
-- **An `/implement` PR closes its ticket.** Do the work that stands between the fix and the exit
-  criteria in the session, say what cannot be proven, and still close. Leave it open only when the
-  owner scopes the PR as partial (owner, 2026-09-13).
+- **An `/implement` PR finishes its issue.** Do the work that stands between the fix and the exit
+  criteria in the session, say what cannot be proven, and let the merge move the issue to Done. It
+  stays open only when the owner scopes the PR as partial; such a PR keeps the id out of its branch
+  and title and writes `Part of TAT-n` in its body, which links without closing (owner, 2026-09-13).
 - **A scope note does not shield a bug.** "Do not touch X" forbids redesigning X, not fixing a
-  defect the ticket's own fix also cures. Fix it and say so in the PR body (owner, 2026-09-06).
-- **Big tickets carry the ultracode marker.** At `/derive-tickets`, split where a clean seam exists
-  and open every ticket still past one session with `**Run with ultracode**`. When the owner talks
-  about ultracode rather than invoking it, answer instead of launching a workflow (owner, 2026-10-02).
-- **A redirected ticket is rewritten, not struck.** State what we want, what we do today, why we
-  are moving, and the constraints. Keep everything an issue comment established (owner, 2026-08-25).
-- **No follow-on ticket without a plan.** A deferred follow-on is filed only with its design, cost,
+  defect the issue's own fix also cures. Fix it and say so in the PR body (owner, 2026-09-06).
+- **Big issues are split.** At `/plan-project`, split where a clean seam exists, and make work
+  still past one session a parent with sub-issues. When the owner talks about ultracode rather
+  than invoking it, answer instead of launching a workflow (owner, 2026-10-02).
+- **A redirected issue is rewritten, not struck.** State what we want, what we do today, why we
+  are moving, and the constraints. Keep everything a comment on it established (owner, 2026-08-25).
+- **No follow-on issue without a plan.** A deferred follow-on is filed only with its design, cost,
   vehicle and exit criteria (owner, 2026-09-05).
-- **Read the comments.** Owner rulings land in issue comments after filing, so every tracker sweep
-  reads `gh issue view <n> --comments`. A ticket too large for one session hands off through a
-  pushed branch and a structured comment, never a handoff file.
+- **Read the comments.** Owner rulings land in Linear comments after filing, and a comment wins
+  over the description, so read an issue with `list_comments` beside `get_issue`. An issue too
+  large for one session hands off through a pushed branch and a structured comment, never a
+  handoff file.
 
 ## Testing, CI and verification
 
@@ -125,14 +128,13 @@ topic; `CLAUDE.md` holds only what every session must load.
 ## Working in the repo
 
 - **Branch work goes in a worktree.** Several sessions share the main checkout, so never run
-  `git checkout`, `switch`, `stash` or `reset` there. Every repo file a session writes goes in a
-  worktree on its own branch (owner, 2026-09-27).
-- **Subagents share the parent's checkout.** After each one returns, check the branch and
-  spot-check integrated files. A worktree-isolated agent must be told to write only inside its
-  worktree.
+  `git checkout`, `switch`, `stash` or `reset` there. Start a session with `claude --worktree`
+  (or the desktop app's worktree option); an agent that edits files runs with
+  `isolation: worktree`. `.worktreeinclude` copies the gitignored per-machine files in
+  (owner, 2026-09-27).
 - **Diff reviews against `origin/main`.** Local `main` goes stale after squash-merges, so reviewers
   flag other people's merged work.
-- **Guard `--body-file` edits.** An empty fetch once blanked an issue. Fetch from inside the repo
+- **Guard `--body-file` edits.** An empty fetch once blanked a body. Fetch from inside the repo
   and gate every edit on `test -s` in the same `&&` chain.
 - **Auto mode refuses opaque bulk scripts.** Have a script emit payload files, then run visible
   `gh` loops with the literal `repos/tatolab/streamlib` path.

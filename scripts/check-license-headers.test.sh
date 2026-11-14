@@ -14,7 +14,7 @@
 # checkout it is running from.
 set -uo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 gate="$repo_root/scripts/check-license-headers.sh"
 [ -f "$gate" ] || { echo "gate not found at $gate" >&2; exit 2; }
 

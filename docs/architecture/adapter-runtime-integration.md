@@ -1,7 +1,7 @@
 # Adapter runtime integration
 
 > Current shipped state only, per
-> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
+> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
 
 ## Overview
 
@@ -119,7 +119,7 @@ surface-share.
 ## The single-pattern shape
 
 Every surface adapter rides the same shape, per the RHI boundary
-rule in `.claude/rules/rhi.md` ("nothing outside the RHI touches
+rule in `streamlib-rhi-boundary` (dev-plugin) ("nothing outside the RHI touches
 `vulkanalia`"):
 pre-register resources via surface-share, import them through
 `consumer-rhi`, run the adapter generic over
@@ -206,7 +206,7 @@ the FD is already an artifact; what the subprocess does with it
 is bounded:
 
 1. `VkImportMemoryFdInfoKHR` (the import-side carve-out from
-   `.claude/rules/rhi.md`)
+   `streamlib-rhi-boundary` (dev-plugin))
 2. `vkBindImageMemory` / `vkBindBufferMemory`
 3. Layout transitions + sync wait/signal on imported handles
 4. Render or compute against the imported handle
@@ -515,7 +515,7 @@ property is load-bearing.
   subprocess obtains a usable RHI surface beyond the import-side
   carve-out (the integration-shape view of how the carve-out
   works alongside this doc's adapter-runtime-shape view)
-- `.claude/rules/rhi.md` — the RHI boundary, including the
+- `streamlib-rhi-boundary` (dev-plugin) — the RHI boundary, including the
   import-side carve-out
 - `docs/architecture/adapter-authoring.md` — the adapter
   implementation contract

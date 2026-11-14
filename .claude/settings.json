@@ -4,8 +4,6 @@
       "Bash(gh api *)",
       "Bash(gh pr *)",
       "Bash(git fetch *)",
-      "Bash(git worktree add *)",
-      "Bash(git worktree list)",
       "Read(//proc/**)",
       "Read(//dev/**)",
       "Bash(nvidia-smi)",
@@ -20,19 +18,32 @@
       "Edit(LICENSE)",
       "Edit(LICENSES/**)",
       "Edit(docs/license/**)"
+    ],
+    "deny": [
+      "Bash(gh issue create*)",
+      "Bash(gh issue edit*)",
+      "Bash(gh issue comment*)",
+      "Bash(gh issue close*)",
+      "Bash(gh issue reopen*)",
+      "Bash(gh issue delete*)",
+      "Bash(gh issue transfer*)",
+      "Bash(gh issue pin*)",
+      "Bash(gh issue lock*)",
+      "mcp__github__issue_write",
+      "mcp__github__add_issue_comment",
+      "mcp__github__update_issue_comment",
+      "mcp__github__sub_issue_write"
     ]
   },
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/worktree-gc.sh"
-          }
-        ]
+  "extraKnownMarketplaces": {
+    "tato-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "tatolab/tato-plugins-official"
       }
-    ]
+    }
+  },
+  "enabledPlugins": {
+    "dev-plugin@tato-plugins-official": true
   }
 }

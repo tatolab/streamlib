@@ -4,8 +4,9 @@ Where each kind of document lives. Code is the authority on what is; `docs/plan/
 on what we agreed.
 
 - [`plan/`](plan/) — the architecture plan, the glossary, the operating model, and change
-  proposals. The single source of architectural decisions. [`plan/ROADMAP.md`](plan/ROADMAP.md)
-  is the order the active changes land in.
+  proposals. The single source of architectural decisions. Linear's projects and milestones are
+  the order of work; [`plan/ROADMAP.md`](plan/ROADMAP.md) holds the two steps Linear does not
+  carry yet.
 - [`decisions/`](decisions/) — ADRs: why a shape was chosen over the alternatives.
 - [`working-agreements.md`](working-agreements.md) — owner rulings on how sessions work, and
   practical lessons from the repo, the rig and CI that no other file records.

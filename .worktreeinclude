@@ -1,0 +1,12 @@
+# Gitignored per-machine files Claude Code copies into each new worktree.
+.env
+.env.local
+.env.*.local
+.envrc
+.dev.vars
+.infisical.json
+.infisical.yaml
+.claude/settings.local.json
+.claude/machine-brake.local.json
+*.local.md
+*.local.sh

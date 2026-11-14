@@ -1,7 +1,7 @@
 # Single-writer-per-edge surface-adapter timelines
 
 > Current shipped state only, per
-> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
+> [`streamlib-docs-policy`](https://github.com/tatolab/tato-plugins-official/blob/main/plugins/dev-plugin/skills/streamlib-docs-policy/SKILL.md).
 
 ## What this is
 
