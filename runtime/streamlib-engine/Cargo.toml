@@ -116,7 +116,7 @@ schemars = "0.8"  # JSON Schema generation from Rust types
 jsonschema = { version = "0.60", default-features = false }
 
 
-# OpenAPI schema derives on the JSON wire types in `core/json_schema.rs`.
+# OpenAPI schema derives on the JSON wire types in `core/json_schema/`.
 utoipa = { version = "5.3", features = ["axum_extras"] }
 
 
