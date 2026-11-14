@@ -40,6 +40,7 @@ generated_licence_texts="$(
     printf '\n\n'
     cat "$appendix_file"
   fi
-} > "$notices_file"
+} > "$notices_file.partial"
+mv "$notices_file.partial" "$notices_file"
 
 echo "wrote $notices_file"
