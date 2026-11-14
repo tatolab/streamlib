@@ -14,7 +14,7 @@ failed_nightly_report_body="$2"
 linear_team_key="TAT"
 
 if [ -z "${LINEAR_API_KEY:-}" ]; then
-  echo "::error::LINEAR_API_KEY is not set, so the failed nightly could not be reported to Linear"
+  echo "::error::LINEAR_API_KEY does not reach this repository — add a Linear personal API key to Infisical's prod environment, which syncs it to the organization's secrets"
   exit 1
 fi
 
