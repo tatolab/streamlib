@@ -1358,6 +1358,7 @@ mod tests {
             machine: "vm".to_string(),
             groups: Vec::new(),
             studio: None,
+            function_node_pool: None,
         };
         resolution
             .variables_as_drawn
@@ -1392,6 +1393,7 @@ mod tests {
             machine: "vm".to_string(),
             groups: Vec::new(),
             studio: None,
+            function_node_pool: None,
         };
         resolution
             .variables_as_drawn

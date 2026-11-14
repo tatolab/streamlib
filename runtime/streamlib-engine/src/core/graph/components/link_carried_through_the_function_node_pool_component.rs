@@ -8,8 +8,7 @@ use crate::core::graph::LinkUniqueId;
 
 /// Marks one of the two links a link from a function node island into a
 /// reader that cannot evaluate it is carried as, through the stream's function
-/// node pool; `graph` renders the carried link's id as
-/// `carried_through_the_function_node_pool`.
+/// node pool; `graph` renders the pair once, as the carried link.
 pub struct LinkCarriedThroughTheFunctionNodePoolComponent {
     /// The link as the graph was given it.
     pub carried_link_id: LinkUniqueId,

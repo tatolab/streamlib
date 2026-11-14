@@ -13,6 +13,10 @@ use super::nodes::ProcessorNode;
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
+use crate::core::compiler::compiler_ops::function_node_pool::{
+    is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
+};
+use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
 use crate::core::json_schema::{
     GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
 };
@@ -222,9 +226,17 @@ impl std::fmt::Display for Graph {
 
 impl Graph {
     /// Render this graph as the `/api/graph` payload, on the machine named
-    /// `machine`.
+    /// `machine`: the graph as it was given, so the stream's function node pool
+    /// renders under `function_node_pool` rather than as a node, and each link
+    /// it carries renders once, as the link it was given.
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
+        let render_a_node = |node: &ProcessorNode| ProcessorNodeOutput {
+            inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
+            ..ProcessorNodeOutput::from(node)
+        };
+        let is_the_pool =
+            |node: &&ProcessorNode| is_the_function_node_pool_type(&node.processor_type);
         GraphResponse {
             asset: self
                 .stream_asset
@@ -234,24 +246,46 @@ impl Graph {
             clock: self.stream_clock_spec,
             nodes: self
                 .digraph
-                .node_indices()
-                .map(|idx| &self.digraph[idx])
-                .map(|node| ProcessorNodeOutput {
-                    inputs_waiting_for_a_value: crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for(self, node),
-                    ..ProcessorNodeOutput::from(node)
-                })
+                .node_weights()
+                .filter(|node| !is_the_pool(node))
+                .map(render_a_node)
                 .collect(),
-            links: self
-                .digraph
-                .edge_indices()
-                .map(|idx| &self.digraph[idx])
-                .map(|link| LinkOutput::of_a_link(link, &node_names))
-                .collect(),
+            links: self.links_rendered_as_given(&node_names),
             references: Vec::new(),
             machine,
             groups: Vec::new(),
             studio: None,
+            function_node_pool: self
+                .digraph
+                .node_weights()
+                .find(is_the_pool)
+                .map(render_a_node),
         }
+    }
+
+    /// Every link, in the order the graph holds them, each pair of links that
+    /// carries one link through the function node pool rendered once as that
+    /// link, where the link into the pool stands.
+    fn links_rendered_as_given(&self, node_names: &NodeNamesByProcessorId) -> Vec<LinkOutput> {
+        let carried_links = the_links_carried_through_the_function_node_pool_of(self);
+        let carried_link_wired_as = |link: &Link| {
+            carried_links.iter().find(|carried| {
+                carried.into_the_function_node_pool.id == link.id
+                    || carried.out_of_the_function_node_pool.id == link.id
+            })
+        };
+        self.digraph
+            .edge_weights()
+            .filter_map(|link| match carried_link_wired_as(link) {
+                None => Some(LinkOutput::of_a_link(link, node_names)),
+                Some(carried) if carried.into_the_function_node_pool.id == link.id => Some(
+                    LinkOutput::of_a_link_carried_through_the_function_node_pool(
+                        carried, node_names,
+                    ),
+                ),
+                Some(_) => None,
+            })
+            .collect()
     }
 }
 

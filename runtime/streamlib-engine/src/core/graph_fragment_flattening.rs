@@ -1077,6 +1077,7 @@ mod tests {
             machine: "rig".to_string(),
             groups: Vec::new(),
             studio: None,
+            function_node_pool: None,
         }
     }
 

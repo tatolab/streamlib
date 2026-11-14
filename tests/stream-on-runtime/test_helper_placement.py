@@ -355,11 +355,13 @@ def test_islands_no_reader_can_evaluate_run_in_one_function_node_pool_per_stream
         f"two islands into built-ins and one Python class started {helper_pids}; the class and "
         f"one pool get a process:\n{tatolabd.recent_stderr()}"
     )
-    pools = [
-        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
+    assert_graph_shows_the_graph_it_was_given(graph, "while the stream runs")
+    pool = graph["function_node_pool"]
+    assert len(pool["config"]["carries"]) == 2, pool
+    carried_links = [
+        link for link in graph["links"] if "carried_through_the_function_node_pool" in link["components"]
     ]
-    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
-    assert len(pools[0]["config"]["carries"]) == 2, pools[0]
+    assert len(carried_links) == 2, f"`graph` shows each carried link as it was given: {graph['links']}"
     levels = [record["level"] for record in records_read["records"]]
     assert all(0.0 <= level <= 1.0 for level in levels), (
         f"`Remap` maps the LFO onto 0..1, and the class read {levels}"
@@ -587,10 +589,7 @@ def test_the_pool_reads_a_python_class_for_a_gate_a_native_converter_reads(
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
 
-    (pool,) = [
-        node for node in graph["nodes"] if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
-    ]
-    (carry,) = pool["config"]["carries"]
+    (carry,) = graph["function_node_pool"]["config"]["carries"]
     assert carry["family"] == "message", f"the pool hands `Gate`'s message on unread: {carry}"
     levels = [record["level"] for record in records_read["records"]]
     assert levels == sorted(levels) and len(set(levels)) > 1 and levels[0] >= 1.0, (
@@ -714,6 +713,85 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
     )
 
 
+FUNCTION_NODE_POOL_NODE_TYPE = "tatolab.runtime._function_node_pool:FunctionNodePool"
+
+
+def assert_graph_shows_the_graph_it_was_given(graph: dict, when: str) -> None:
+    """Require `graph` to show no pool node and every link's ends to be nodes it shows, so its
+    output loads and an editor never draws a node no graph document holds."""
+    node_names = {node["name"] for node in graph["nodes"]}
+    assert all(node["type"] != FUNCTION_NODE_POOL_NODE_TYPE for node in graph["nodes"]), (
+        f"{when}, the pool is no node of the graph: {graph['nodes']}"
+    )
+    assert all(
+        link["source"]["node"] in node_names and link["target"]["node"] in node_names
+        for link in graph["links"]
+    ), f"{when}, each link's ends are nodes `graph` shows: {graph['links']}"
+
+
+def test_a_stream_whose_pool_runs_takes_an_edit_and_stops_and_plays_again(
+    start_tatolabd_running_stream: StartTatolabdRunningStream,
+):
+    """A stream whose pool runs shows the graph it was given, takes an edit applied by
+    reconciling the live graph to its document, and stops and plays again with the pool.
+
+    Fail-without-fix: `graph` shows the pool as a node, a reconcile treats it as a node the
+    document lacks, and the put-back of a stop connects a link to a pool port no pool has.
+    """
+    tatolabd = start_tatolabd_running_stream(
+        python_level_source_through_a_gate_into_a_native_converter
+    )
+    stream_id = tatolabd.await_the_latest_stream_loaded()
+    tatolabd.await_marker("LEVEL_RECORDS_READ")
+    local_api = tatolabd.local_api_client()
+    (listed,) = [listed for listed in local_api.list_streams() if listed["stream"] == stream_id]
+    project_directory = listed["location"]["project_directory"]
+    stream_asset = listed["location"]["stream_asset"]
+
+    running = local_api.call_tool("graph", {"stream": stream_id})
+    assert_graph_shows_the_graph_it_was_given(running, "while the stream runs")
+    (carried_link,) = [
+        link for link in running["links"] if "carried_through_the_function_node_pool" in link["components"]
+    ]
+    local_api.call_tool(
+        "add_note",
+        {
+            "stream": stream_asset,
+            "text": "the pool carries the gate",
+            "position": [0, 0],
+            "size": [200, 100],
+            "author": {"kind": "agent", "name": "test"},
+        },
+    )
+    edited = local_api.call_tool("graph", {"stream": stream_id})
+    assert_graph_shows_the_graph_it_was_given(edited, "after an edit")
+    assert [link["id"] for link in edited["links"] if link["id"] == carried_link["id"]], (
+        f"the edit keeps the carried link: {edited['links']}"
+    )
+    assert len(edited["function_node_pool"]["config"]["carries"]) == 1, edited["function_node_pool"]
+
+    stopped = local_api.call_tool("stop_playback", {"project_directory": project_directory})
+    stop_ended = local_api.stream_action_once_ended(stopped["action"])
+    assert stop_ended["state"] == "done", f"the stop failed: {stop_ended}"
+    assert_graph_shows_the_graph_it_was_given(
+        local_api.call_tool("graph", {"stream": stream_id}), "held stopped"
+    )
+
+    played = local_api.call_tool("start_playback", {"project_directory": project_directory})
+    play_ended = local_api.stream_action_once_ended(played["action"])
+    assert play_ended["state"] == "done", f"playing again failed: {play_ended}"
+    records_read_again = tatolabd.await_marker("LEVEL_RECORDS_READ", occurrence=2)
+    played_again = local_api.call_tool("graph", {"stream": stream_id})
+    tatolabd.interrupt()
+    tatolabd.await_clean_exit()
+
+    assert_graph_shows_the_graph_it_was_given(played_again, "played again")
+    assert len(played_again["function_node_pool"]["config"]["carries"]) == 1, played_again[
+        "function_node_pool"
+    ]
+    assert len(records_read_again["records"]) > 0
+
+
 def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
@@ -743,15 +821,10 @@ def test_a_function_node_run_as_python_that_a_native_half_reads_runs_in_the_pool
         f"a Python body read by a native half started {helper_pids}; the class and one pool "
         f"get a process:\n{tatolabd.recent_stderr()}"
     )
-    pools = [
-        node
-        for node in graph["nodes"]
-        if node["type"] == "tatolab.runtime._function_node_pool:FunctionNodePool"
-    ]
-    assert len(pools) == 1, f"`graph` shows the stream's one pool: {graph['nodes']}"
-    assert pools[0]["config"]["carries"] == [
+    pool = graph["function_node_pool"]
+    assert pool["config"]["carries"] == [
         {"input_port": "island_0", "output_port": "island_0_output", "family": "records"}
-    ], pools[0]
+    ], pool
 
 
 def test_a_pooled_function_node_that_overruns_the_pools_frame_interval_three_times_moves_out_of_it(

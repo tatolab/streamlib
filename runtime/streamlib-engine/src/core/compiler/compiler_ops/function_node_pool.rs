@@ -19,7 +19,7 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, Link,
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
     OutputLinkPortRef, PortInfo, the_family_a_link_out_of_an_output_carries,
 };
@@ -355,6 +355,61 @@ pub(crate) fn the_links_a_link_is_wired_as(
         .collect()
 }
 
+/// One link the graph carries through the function node pool, beside the two
+/// links it is wired as.
+pub(crate) struct LinkCarriedThroughTheFunctionNodePool<'graph> {
+    /// The link as the graph was given it.
+    pub(crate) carried_link_id: LinkUniqueId,
+    /// The link from the island into an input of the pool.
+    pub(crate) into_the_function_node_pool: &'graph Link,
+    /// The link from the matching output of the pool into the reader.
+    pub(crate) out_of_the_function_node_pool: &'graph Link,
+}
+
+/// Each link `graph` carries through its function node pool, in the order
+/// the graph holds the first of its two links; one missing either link is
+/// left out.
+pub(crate) fn the_links_carried_through_the_function_node_pool_of(
+    graph: &Graph,
+) -> Vec<LinkCarriedThroughTheFunctionNodePool<'_>> {
+    let Some(function_node_pool) = the_function_node_pool_of(graph) else {
+        return Vec::new();
+    };
+    let mut halves_of_each_carried_link: Vec<(LinkUniqueId, Option<&Link>, Option<&Link>)> =
+        Vec::new();
+    for link in graph.traversal().e(()).iter() {
+        let Some(carried) = link.get::<LinkCarriedThroughTheFunctionNodePoolComponent>() else {
+            continue;
+        };
+        let index = match halves_of_each_carried_link
+            .iter()
+            .position(|(held, _, _)| held == &carried.carried_link_id)
+        {
+            Some(index) => index,
+            None => {
+                halves_of_each_carried_link.push((carried.carried_link_id.clone(), None, None));
+                halves_of_each_carried_link.len() - 1
+            }
+        };
+        let (_, into_the_pool, out_of_the_pool) = &mut halves_of_each_carried_link[index];
+        if link.source().processor_id() == &function_node_pool {
+            *out_of_the_pool = Some(link);
+        } else {
+            *into_the_pool = Some(link);
+        }
+    }
+    halves_of_each_carried_link
+        .into_iter()
+        .filter_map(|(carried_link_id, into_the_pool, out_of_the_pool)| {
+            Some(LinkCarriedThroughTheFunctionNodePool {
+                carried_link_id,
+                into_the_function_node_pool: into_the_pool?,
+                out_of_the_function_node_pool: out_of_the_pool?,
+            })
+        })
+        .collect()
+}
+
 fn family_name(family: PortFamily) -> &'static str {
     match family {
         PortFamily::Records => "records",
@@ -363,7 +418,7 @@ fn family_name(family: PortFamily) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::core::compiler::compiler_ops::function_node_island::tests::{
         a_class_node_feeding, a_function_node_type, a_graph_resolving_these_function_node_types,
@@ -420,6 +475,98 @@ mod tests {
             .collect();
         links.sort();
         links
+    }
+
+    /// A graph whose `lfo` feeds a reader in the app process, the link carried
+    /// through the pool: the graph, `lfo`, the reader and the carried link.
+    pub(crate) fn a_graph_carrying_an_lfo_into_its_reader_through_the_pool()
+    -> (Graph, ProcessorUniqueId, ProcessorUniqueId, LinkUniqueId) {
+        let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
+        let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+        let reader = a_reader_in_the_app_process(&mut graph);
+        let lfo_into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
+        let mut processors_to_add = vec![lfo.clone(), reader.clone()];
+        let mut links_to_add = vec![lfo_into_the_reader.clone()];
+        carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
+            &mut graph,
+            &mut processors_to_add,
+            &mut links_to_add,
+        )
+        .unwrap();
+        assert_eq!(
+            the_links_a_link_is_wired_as(&graph, &lfo_into_the_reader).len(),
+            2,
+            "the link is carried through the pool"
+        );
+        (graph, lfo, reader, lfo_into_the_reader)
+    }
+
+    #[test]
+    fn graph_renders_the_pool_beside_the_nodes_and_each_carried_link_as_it_was_given() {
+        let (graph, lfo, reader, lfo_into_the_reader) =
+            a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
+        let name_of = |processor_id: &ProcessorUniqueId| {
+            graph
+                .traversal()
+                .v(processor_id)
+                .first()
+                .unwrap()
+                .display_name
+                .clone()
+        };
+
+        let rendered = graph.to_graph_response("rig".to_string());
+
+        assert!(
+            rendered
+                .nodes
+                .iter()
+                .all(|node| !is_the_function_node_pool_type(&node.processor_type)),
+            "the pool is no node of the graph: {:?}",
+            rendered
+                .nodes
+                .iter()
+                .map(|node| &node.name)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(rendered.nodes.len(), 2);
+        let pool = rendered
+            .function_node_pool
+            .as_ref()
+            .expect("`function_node_pool` renders the pool");
+        assert_eq!(
+            pool.config.as_ref().unwrap()["carries"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(rendered.links.len(), 1, "{:?}", rendered.links);
+        let carried = &rendered.links[0];
+        assert_eq!(carried.id, lfo_into_the_reader.to_string());
+        assert_eq!(
+            (carried.source.node.as_str(), carried.source.port.as_str()),
+            (name_of(&lfo).as_str(), "result")
+        );
+        assert_eq!(
+            (carried.target.node.as_str(), carried.target.port.as_str()),
+            (name_of(&reader).as_str(), "in1")
+        );
+        assert_eq!(
+            carried.components["carried_through_the_function_node_pool"],
+            serde_json::json!({"input_port": "island_0", "output_port": "island_0_output"})
+        );
+    }
+
+    #[test]
+    fn a_graph_rendered_with_a_pool_loads_as_the_graph_it_was_given() {
+        let (graph, ..) = a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
+        let rendered = serde_json::to_string(&graph.to_graph_response("rig".to_string())).unwrap();
+
+        let loaded = crate::core::graph_snapshot::GraphSnapshot::from_json_str(&rendered)
+            .expect("`graph`'s output loads");
+
+        assert_eq!(loaded.nodes.len(), 2);
+        assert_eq!(loaded.links.len(), 1);
     }
 
     #[test]

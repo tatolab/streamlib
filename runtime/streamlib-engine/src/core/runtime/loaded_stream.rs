@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use super::graph_change_listener::GraphChangeListener;
 use super::live_graph_reconciled_to_a_graph_document::{
-    LiveNodeAsTheGraphHoldsIt, RunningLinkBetweenTwoNodesByUuid, the_live_links_by_node_uuid_of,
-    the_live_nodes_of,
+    LiveLinkAsGiven, LiveNodeAsTheGraphHoldsIt, the_live_links_as_given_by_node_uuid_of,
+    the_live_nodes_as_given_of,
 };
 use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::EngineResourcesSharedByEveryStream;
@@ -723,7 +723,7 @@ impl LoadedStreamInThisRuntime {
     ) -> (
         Result<()>,
         Vec<LiveNodeAsTheGraphHoldsIt>,
-        Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)>,
+        Vec<LiveLinkAsGiven>,
     ) {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         {
@@ -748,8 +748,8 @@ impl LoadedStreamInThisRuntime {
         let this_streams_runtime_context_while_started = self.runtime_context.lock().clone();
         let (processor_count, nodes_torn_down, links_torn_down) =
             self.compiler.scope(|graph, tx| {
-                let nodes_torn_down = the_live_nodes_of(graph);
-                let links_torn_down = the_live_links_by_node_uuid_of(graph);
+                let nodes_torn_down = the_live_nodes_as_given_of(graph);
+                let links_torn_down = the_live_links_as_given_by_node_uuid_of(graph);
                 let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
                 let count = processor_ids.len();
                 for proc_id in processor_ids {
@@ -836,7 +836,11 @@ impl LoadedStreamInThisRuntime {
                     Error::GraphError(format!("the held graph holds no node {node_uuid}"))
                 })
         };
-        for (_, link) in links_of_the_graph {
+        for LiveLinkAsGiven {
+            link_as_given: link,
+            ..
+        } in links_of_the_graph
+        {
             self.connect(
                 OutputLinkPortRef::new(processor_of(&link.source_node)?, &link.source_port),
                 InputLinkPortRef::new(processor_of(&link.target_node)?, &link.target_port),
