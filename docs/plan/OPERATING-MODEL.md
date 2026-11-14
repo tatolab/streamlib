@@ -233,8 +233,9 @@ model instead:
    raised rather than settled silently).
 2. **Sharp skill descriptions** so a skill triggers on phrasing without being asked, and
    skill bodies that explain why each step exists.
-3. **Hooks** only clean up or add context, never refuse or prompt: `worktree-gc`
-   (post-merge cleanup). The one permission prompt is an edit to the licence files.
+3. **Hooks** only clean up or add context, never refuse or prompt. Worktrees are Claude Code's
+   own (`claude --worktree`, subagent `isolation: worktree`), which clean up after themselves.
+   The one permission prompt is an edit to the licence files.
    Rejected: a PreToolUse hook gating source edits on `.claude/state/active-ticket.json`
    (`plan-gate.sh`) — it prompted on every engine edit and taught sessions to click
    through (owner, 2026-08-15). Rejected: any hook that blocks, prompts on, or stops

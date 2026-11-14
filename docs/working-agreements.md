@@ -128,11 +128,10 @@ topic; `CLAUDE.md` holds only what every session must load.
 ## Working in the repo
 
 - **Branch work goes in a worktree.** Several sessions share the main checkout, so never run
-  `git checkout`, `switch`, `stash` or `reset` there. Every repo file a session writes goes in a
-  worktree on its own branch (owner, 2026-09-27).
-- **Subagents share the parent's checkout.** After each one returns, check the branch and
-  spot-check integrated files. A worktree-isolated agent must be told to write only inside its
-  worktree.
+  `git checkout`, `switch`, `stash` or `reset` there. Start a session with `claude --worktree`
+  (or the desktop app's worktree option); an agent that edits files runs with
+  `isolation: worktree`. `.worktreeinclude` copies the gitignored per-machine files in
+  (owner, 2026-09-27).
 - **Diff reviews against `origin/main`.** Local `main` goes stale after squash-merges, so reviewers
   flag other people's merged work.
 - **Guard `--body-file` edits.** An empty fetch once blanked a body. Fetch from inside the repo
