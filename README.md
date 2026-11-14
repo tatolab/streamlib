@@ -746,7 +746,7 @@ You may use, study, change and share Tatolab, commercially included; a copy you 
 changed or not, goes with its source under the same licence. The vendored vulkanalia fork
 under `vendor/` keeps its Apache-2.0 licence.
 
-Contributors agree to the [Contributor License Agreement](CLA.md) once, in their first pull request.
+Contributors sign the [Tatolab Contributor License Agreement](https://github.com/tatolab/tatolab-cla/blob/main/CLA.md) once, when the CLA Assistant bot asks on their first pull request.
 
 Tatolab also distributes third-party code. Each dependency's copyright notice and licence
 text, as of that file's last regeneration, is reproduced in
