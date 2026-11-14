@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "tatolab-microphone"
-version = "0.68.82"
+version = "0.69.0"
 description = "The microphone node for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -21,7 +21,7 @@ classifiers = [
 ]
 # The stream package and nothing of the engine: the node runs in a processor
 # interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
-dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version
+dependencies = ["tatolab-stream>=0.69.0"]  # x-release-version
 
 # The node catalog lists this in every stream whose environment installs this
 # distribution, before a graph names it.
