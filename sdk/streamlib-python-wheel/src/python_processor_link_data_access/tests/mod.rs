@@ -28,7 +28,7 @@ mod image_and_array_frames;
 
 /// Unique per test: every test in this process shares one iceoryx2 domain,
 /// so a fixed name would let one test's channel meet the next one's.
-pub(super) fn unique_channel_names(label: &str) -> (String, String) {
+fn unique_channel_names(label: &str) -> (String, String) {
     let run = std::process::id();
     (
         format!("wiring{run}_{label}/frames_to_downstream"),
@@ -36,7 +36,7 @@ pub(super) fn unique_channel_names(label: &str) -> (String, String) {
     )
 }
 
-pub(super) fn helper_plane() -> PythonProcessorLinkDataAccess {
+fn helper_plane() -> PythonProcessorLinkDataAccess {
     PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(
         Iceoryx2Node::for_this_test_process(),
     )
@@ -47,7 +47,7 @@ pub(super) fn helper_plane() -> PythonProcessorLinkDataAccess {
 ///
 /// The destination subscribes first: iceoryx2 drops a send with no
 /// subscriber attached, so wiring the publisher first would race.
-pub(super) fn one_wired_link(
+fn one_wired_link(
     python: Python<'_>,
     label: &str,
 ) -> (PythonProcessorLinkDataAccess, PythonProcessorLinkDataAccess) {
@@ -62,11 +62,11 @@ pub(super) fn one_wired_link(
             &channel,
             &notify,
             "read_next_in_order",
-                8,
-                8,
-                2,
-                1,
-                "link-1",
+            8,
+            8,
+            2,
+            1,
+            "link-1",
             None,
             None,
             None,
@@ -92,7 +92,7 @@ pub(super) fn one_wired_link(
 }
 
 /// The next message on the one-link fixture's input, read as its family's type.
-pub(super) fn read_as_the_family_type<'py>(
+fn read_as_the_family_type<'py>(
     python: Python<'py>,
     destination: &PythonProcessorLinkDataAccess,
     family: PortFamilyOfTheRead,
@@ -111,7 +111,7 @@ pub(super) fn read_as_the_family_type<'py>(
 /// The stream distribution's source root on `sys.path`, where the family
 /// types a read builds live; a `cargo test` run has no installed
 /// `tatolab-stream`.
-pub(super) fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>) {
+fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>) {
     let stream_distribution_source_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
     let sys_path = python.import("sys").unwrap().getattr("path").unwrap();
     if !sys_path.contains(stream_distribution_source_root).unwrap() {
@@ -124,7 +124,7 @@ pub(super) fn put_the_stream_distribution_source_on_sys_path(python: Python<'_>)
 /// Lend this interpreter the one runtime callable a family type's claim
 /// reaches, as the runtime lends `tatolab.runtime._engine` to a node's.
 #[cfg(target_os = "linux")]
-pub(super) fn lend_the_typed_read_gpu_offer_to_this_interpreter(python: Python<'_>) {
+fn lend_the_typed_read_gpu_offer_to_this_interpreter(python: Python<'_>) {
     let lent_engine = pyo3::types::PyModule::new(python, "_engine").unwrap();
     lent_engine
         .add_function(
@@ -150,7 +150,7 @@ pub(super) fn lend_the_typed_read_gpu_offer_to_this_interpreter(python: Python<'
 /// Take back what [`lend_the_typed_read_gpu_offer_to_this_interpreter`]
 /// lent, so later tests in this interpreter see no runtime lent.
 #[cfg(target_os = "linux")]
-pub(super) fn withdraw_the_lent_typed_read_gpu_offer(python: Python<'_>) {
+fn withdraw_the_lent_typed_read_gpu_offer(python: Python<'_>) {
     python
         .run(
             c"import sys\n\
@@ -166,10 +166,7 @@ pub(super) fn withdraw_the_lent_typed_read_gpu_offer(python: Python<'_>) {
 
 /// A source and a destination plane joined by one link, as the Python
 /// objects a helper's code holds.
-pub(super) fn one_wired_link_as_python_objects<'py>(
-    python: Python<'py>,
-    label: &str,
-) -> Bound<'py, PyDict> {
+fn one_wired_link_as_python_objects<'py>(python: Python<'py>, label: &str) -> Bound<'py, PyDict> {
     let (source, destination) = one_wired_link(python, label);
     let planes = PyDict::new(python);
     planes

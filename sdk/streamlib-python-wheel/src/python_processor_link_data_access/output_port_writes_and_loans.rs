@@ -548,7 +548,7 @@ pub(crate) enum ArrayOutputPortDeclaredResidency {
 
 impl ArrayOutputPortDeclaredResidency {
     /// The spelling `residency=` takes.
-    pub(super) fn wire_name(self) -> &'static str {
+    fn wire_name(self) -> &'static str {
         match self {
             Self::Gpu => "gpu",
             Self::Cpu => "cpu",
@@ -564,7 +564,7 @@ enum ArrayAttributeCpuBytesHeldForOneWrite<'py> {
 }
 
 impl ArrayAttributeCpuBytesHeldForOneWrite<'_> {
-    pub(super) fn bytes(&self) -> &[u8] {
+    fn bytes(&self) -> &[u8] {
         match self {
             Self::PythonBuffer(held) => held.bytes(),
             Self::ReadAttribute(read_attribute) => read_attribute.get().attribute_bytes(),

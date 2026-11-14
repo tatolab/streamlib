@@ -412,7 +412,7 @@ fn a_write_refuses_a_payload_that_is_not_a_buffer_by_name() {
                 let refusal_text = refusal.to_string();
                 assert!(
                     refusal_text.contains("contiguous buffer")
-                            && refusal_text.contains(&format!("got a {type_name}")),
+                        && refusal_text.contains(&format!("got a {type_name}")),
                     "the refusal names the buffer and what it got: {refusal_text}"
                 );
             }

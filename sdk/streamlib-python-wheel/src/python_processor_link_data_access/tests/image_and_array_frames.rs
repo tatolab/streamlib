@@ -258,8 +258,8 @@ fn an_image_frame_reads_back_claimed_and_writes_on_as_the_same_frame() {
         assert_eq!(field("format").extract::<String>().unwrap(), "bgra8_unorm");
         assert_eq!(field("timestamp_ns").extract::<i64>().unwrap(), 7);
         let colour = field("colour");
-            for (axis, name) in [
-                ("primaries", "bt709"),
+        for (axis, name) in [
+            ("primaries", "bt709"),
             ("transfer", "srgb"),
             ("matrix", "bt709"),
             ("range", "full"),
@@ -304,13 +304,13 @@ fn an_image_frame_reads_back_claimed_and_writes_on_as_the_same_frame() {
             .unwrap();
         let frame_written_on = read_image_frame_on(&destination_on);
         for name in ["surface_id", "width", "height", "format", "colour"] {
-                assert!(
-                    frame_written_on
-                        .getattr(name)
-                        .unwrap()
-                        .eq(frame.getattr(name).unwrap())
-                        .unwrap(),
-                    "{name} survives the write on"
+            assert!(
+                frame_written_on
+                    .getattr(name)
+                    .unwrap()
+                    .eq(frame.getattr(name).unwrap())
+                    .unwrap(),
+                "{name} survives the write on"
             );
         }
         drop((frame, frame_written_on));
@@ -414,12 +414,12 @@ fn image_to_array_borrows_the_frames_own_slot_with_no_copy() {
             unsafe {
                 let managed_tensor =
                     pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
-                            as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
-                    (*managed_tensor).dl_tensor.data as usize
-                }
-            };
+                        as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
+                (*managed_tensor).dl_tensor.data as usize
+            }
+        };
 
-            let (image_source, image_destination) = one_wired_link(python, "image-to-array-image");
+        let (image_source, image_destination) = one_wired_link(python, "image-to-array-image");
         image_source
             .write_described_by(
                 python,

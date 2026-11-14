@@ -48,12 +48,12 @@ fn a_ceiling_refusal_on_a_helpers_egress_names_the_untrusted_session_tier() {
     Python::initialize();
     Python::attach(|python| {
         let (channel, notify) = unique_channel_names("egress-tier");
-            let ceiling_bytes = 1 << 20;
-            let source = helper_plane();
-            source
-                .wire_output_link(
-                    python,
-                    "frames_to_downstream",
+        let ceiling_bytes = 1 << 20;
+        let source = helper_plane();
+        source
+            .wire_output_link(
+                python,
+                "frames_to_downstream",
                 &channel,
                 &notify,
                 1024,
@@ -62,18 +62,18 @@ fn a_ceiling_refusal_on_a_helpers_egress_names_the_untrusted_session_tier() {
                 2,
                 1,
                 "link-egress-tier",
-                    None,
-                )
-                .unwrap();
+                None,
+            )
+            .unwrap();
 
-            let output_writer = source
-                .output_writer
-                .get()
-                .expect("a wired output plane holds its writer");
-            let over_the_ceiling = vec![0u8; ceiling_bytes + 1];
-            let refusal = output_writer
-                .write_bytes_with_timestamp(
-                    "frames_to_downstream",
+        let output_writer = source
+            .output_writer
+            .get()
+            .expect("a wired output plane holds its writer");
+        let over_the_ceiling = vec![0u8; ceiling_bytes + 1];
+        let refusal = output_writer
+            .write_bytes_with_timestamp(
+                "frames_to_downstream",
                 &over_the_ceiling,
                 1,
                 MessageGroupBoundary::StartsGroup,
@@ -524,18 +524,18 @@ fn a_second_link_out_of_one_port_reuses_the_publisher() {
                 None,
             )
             .expect("a second link out of one port must not reopen the publisher");
-        });
-    }
+    });
+}
 
-    /// The parent's copy is wired by the compiler op and owns no node of its
-    /// own; asking it to wire itself must say so rather than panic on a missing
-    /// node.
-    #[test]
-    fn an_engine_wired_plane_refuses_to_wire_itself() {
-        Python::initialize();
-        Python::attach(|python| {
-            let engine_wired = PythonProcessorLinkDataAccess::new();
-            let (channel, notify) = unique_channel_names("engineowned");
+/// The parent's copy is wired by the compiler op and owns no node of its
+/// own; asking it to wire itself must say so rather than panic on a missing
+/// node.
+#[test]
+fn an_engine_wired_plane_refuses_to_wire_itself() {
+    Python::initialize();
+    Python::attach(|python| {
+        let engine_wired = PythonProcessorLinkDataAccess::new();
+        let (channel, notify) = unique_channel_names("engineowned");
         let refusal = engine_wired
             .wire_output_link(
                 python,
@@ -585,7 +585,7 @@ fn an_unknown_read_mode_is_refused_by_name() {
             .unwrap_err();
         assert!(
             refusal.to_string().contains("whenever"),
-                "the refusal must name what it got: {refusal}"
+            "the refusal must name what it got: {refusal}"
         );
     });
 }

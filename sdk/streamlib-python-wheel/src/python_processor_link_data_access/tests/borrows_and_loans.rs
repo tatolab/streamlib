@@ -62,13 +62,13 @@ fn a_borrowed_read_shares_the_samples_memory_through_memoryview_and_dlpack() {
         let tensor_data_address = unsafe {
             let managed_tensor =
                 pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), c"dltensor".as_ptr())
-                        as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
-                (*managed_tensor).dl_tensor.data as usize
-            };
-            assert_eq!(tensor_data_address, sample_address);
-            assert_eq!(
-                received
-                    .call_method0("__dlpack_device__")
+                    as *const streamlib_adapter_cuda::dlpack::ManagedTensor;
+            (*managed_tensor).dl_tensor.data as usize
+        };
+        assert_eq!(tensor_data_address, sample_address);
+        assert_eq!(
+            received
+                .call_method0("__dlpack_device__")
                 .unwrap()
                 .extract::<(i32, i32)>()
                 .unwrap(),
