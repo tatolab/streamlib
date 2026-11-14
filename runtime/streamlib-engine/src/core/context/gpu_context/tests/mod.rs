@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+#[cfg(target_os = "linux")]
+use super::kernels::compute_kernel_cache_key;
 use super::pixel_buffer_pool_manager::POOL_PRE_ALLOCATE_COUNT;
 use super::*;
 

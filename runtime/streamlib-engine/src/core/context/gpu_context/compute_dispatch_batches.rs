@@ -3,6 +3,149 @@
 
 use super::*;
 
+/// One dispatch inside a batched recording, with its bindings already resolved
+/// to registrations.
+///
+/// Resolution happens before the recording opens, on purpose: a name the shader
+/// does not declare, or a surface this graph cannot resolve, is a caller
+/// mistake, and refusing it while a command buffer is open would mean unwinding
+/// one.
+/// Owned rather than borrowing: a kernel and a registration are both opaque
+/// `Arc` handles whose clone is a refcount bump, and a cloned registration
+/// shares the very layout cell `update_layout` writes — so owning them costs a
+/// few increments and spares the caller a second set of vectors to borrow from.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct BatchedComputeKernelDispatch {
+    /// The kernel to bind and dispatch. No kernel may appear twice in one
+    /// batch — see [`GpuContext::dispatch_compute_kernel_batch`].
+    pub kernel: Arc<crate::vulkan::rhi::VulkanComputeKernel>,
+    /// Every binding the kernel declares. Bindings do not persist on a kernel,
+    /// so this is complete for each dispatch.
+    pub bindings: Vec<BatchedComputeKernelDispatchBinding>,
+    /// Push-constant payload for this dispatch alone — recorded into the
+    /// command buffer, so consecutive dispatches of different kernels keep
+    /// their own.
+    pub push_constants: Vec<u8>,
+    /// `vkCmdDispatch` groupCountX.
+    pub group_count_x: u32,
+    /// `vkCmdDispatch` groupCountY.
+    pub group_count_y: u32,
+    /// `vkCmdDispatch` groupCountZ.
+    pub group_count_z: u32,
+}
+
+/// One resolved binding of a [`BatchedComputeKernelDispatch`].
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct BatchedComputeKernelDispatchBinding {
+    /// Descriptor binding number the kernel declares this resource at.
+    pub binding: u32,
+    /// The surface bound there, as the kind the shader declares it.
+    pub surface_bound_resource: SurfaceBoundKernelBindingResource,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl BatchedComputeKernelDispatchBinding {
+    /// Stage this binding on `kernel`, as the kind the shader declares it.
+    ///
+    /// The one place a binding kind becomes a descriptor write: every
+    /// dispatch, batched or alone, records its writes through here.
+    pub fn write_into_kernel(
+        &self,
+        kernel: &crate::vulkan::rhi::VulkanComputeKernel,
+    ) -> Result<()> {
+        match &self.surface_bound_resource {
+            SurfaceBoundKernelBindingResource::StorageImage(registration) => {
+                kernel.set_storage_image(self.binding, registration.texture())
+            }
+            SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
+                kernel.set_sampled_texture(self.binding, registration.texture())
+            }
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
+                kernel.set_storage_buffer_storage(self.binding, buffer)
+            }
+        }
+    }
+}
+
+/// The resource a surface id resolved to for one kernel binding, carried as
+/// the kind the shader declares it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone)]
+pub enum SurfaceBoundKernelBindingResource {
+    /// A texture written through `imageStore`, and the layout it is tracked in.
+    StorageImage(TextureRegistration),
+    /// A texture read through a combined sampler, and the layout it is tracked in.
+    SampledTexture(TextureRegistration),
+    /// A tensor storage buffer, read and written as an SSBO.
+    StorageBuffer(crate::core::rhi::StorageBuffer),
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl SurfaceBoundKernelBindingResource {
+    /// The layout a storage image's descriptor requires.
+    pub const STORAGE_IMAGE_REQUIRED_LAYOUT: VulkanLayout = VulkanLayout::GENERAL;
+    /// The layout a combined image sampler's descriptor requires.
+    pub const SAMPLED_TEXTURE_REQUIRED_LAYOUT: VulkanLayout =
+        VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+
+    /// The binding kind this resource is bound as.
+    pub fn kind(&self) -> crate::core::rhi::SurfaceBoundKernelBindingKind {
+        use crate::core::rhi::SurfaceBoundKernelBindingKind;
+        match self {
+            Self::StorageImage(_) => SurfaceBoundKernelBindingKind::StorageImage,
+            Self::SampledTexture(_) => SurfaceBoundKernelBindingKind::SampledTexture,
+            Self::StorageBuffer(_) => SurfaceBoundKernelBindingKind::StorageBuffer,
+        }
+    }
+
+    /// The bound texture and the image layout its descriptor requires, or
+    /// `None` for a storage buffer, which has no layout.
+    pub fn texture_and_required_layout(&self) -> Option<(&TextureRegistration, VulkanLayout)> {
+        match self {
+            Self::StorageImage(registration) => {
+                Some((registration, Self::STORAGE_IMAGE_REQUIRED_LAYOUT))
+            }
+            Self::SampledTexture(registration) => {
+                Some((registration, Self::SAMPLED_TEXTURE_REQUIRED_LAYOUT))
+            }
+            Self::StorageBuffer(_) => None,
+        }
+    }
+
+    /// The image a texture binding names; `None` for a storage buffer, or a
+    /// texture that carries no image.
+    pub(crate) fn bound_image(&self) -> Option<vulkanalia::vk::Image> {
+        self.texture_and_required_layout()
+            .and_then(|(registration, _)| registration.texture().vulkan_inner().image())
+    }
+
+    /// The bound storage buffer, or `None` for a texture.
+    pub fn storage_buffer(&self) -> Option<&crate::core::rhi::StorageBuffer> {
+        match self {
+            Self::StorageBuffer(buffer) => Some(buffer),
+            Self::StorageImage(_) | Self::SampledTexture(_) => None,
+        }
+    }
+}
+
+/// Where a dispatch's binding sits in `recording`, for a refusal to name.
+///
+/// A recording of one dispatch is the single-dispatch escalate op riding the
+/// batch machinery; its caller wrote no batch, so the location names the
+/// binding alone rather than a "dispatch 0" that exists only host-side.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn binding_location_in_this_recording(
+    recording: &[BatchedComputeKernelDispatch],
+    dispatch_index: usize,
+    binding: u32,
+) -> String {
+    if recording.len() == 1 {
+        format!("binding {binding}")
+    } else {
+        format!("dispatch {dispatch_index} of this batch, binding {binding}")
+    }
+}
+
 impl GpuContext {
     /// Record every dispatch in `batch` into one command buffer, submit once,
     /// and return when that submission has retired.

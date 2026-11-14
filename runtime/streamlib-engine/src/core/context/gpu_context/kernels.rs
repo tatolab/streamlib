@@ -3,6 +3,199 @@
 
 use super::*;
 
+/// Cache key for a compute kernel built from a pre-compiled blob.
+///
+/// The blob fixes stage, entry point and target environment on its own, so the
+/// bytes plus the declared push-constant size are the whole key. A Slang source
+/// contract keys on the compiler's version too, because then the engine is what
+/// turns source into bytes.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn compute_kernel_cache_key(
+    spv: &[u8],
+    push_constant_size: u32,
+    entry_point: &str,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(spv);
+    hasher.update(push_constant_size.to_le_bytes());
+    // Two pipelines built from one module against different entry points are
+    // different kernels, so the id has to tell them apart. The length prefix is
+    // defensive: the name is last in the digest today, so nothing can run into
+    // it yet, but a field appended below would merge with it silently.
+    hasher.update((entry_point.len() as u64).to_le_bytes());
+    hasher.update(entry_point.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Digest a variable-length part of a cache key.
+///
+/// The length prefix is what keeps two different splits of the same
+/// concatenated bytes from hashing the same.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn digest_length_prefixed(hasher: &mut sha2::Sha256, bytes: &[u8]) {
+    use sha2::Digest as _;
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// Cache key for a graphics kernel.
+///
+/// Everything that changes the pipeline the driver builds is in the digest.
+/// The fixed-function state goes in through its `Debug` rendering because that
+/// is total: a field added to `GraphicsPipelineState` joins the key without
+/// anyone remembering to add it, which a hand-enumerated digest cannot promise.
+/// The key never leaves this process, so its stability across builds buys
+/// nothing that would justify the alternative.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn graphics_kernel_cache_key(
+    stages: &[crate::core::rhi::GraphicsStage<'_>],
+    push_constants: crate::core::rhi::GraphicsPushConstants,
+    pipeline_state: &crate::core::rhi::GraphicsPipelineState,
+    descriptor_sets_in_flight: u32,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update((stages.len() as u64).to_le_bytes());
+    for stage in stages {
+        hasher.update((stage.stage as u32).to_le_bytes());
+        digest_length_prefixed(&mut hasher, stage.spv);
+        digest_length_prefixed(&mut hasher, stage.entry_point.as_bytes());
+    }
+    hasher.update(push_constants.size.to_le_bytes());
+    hasher.update(push_constants.stages.bits().to_le_bytes());
+    hasher.update(descriptor_sets_in_flight.to_le_bytes());
+    digest_length_prefixed(&mut hasher, format!("{pipeline_state:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Cache key for a ray-tracing kernel.
+///
+/// Same shape as the graphics key; the shader-group layout and the recursion
+/// depth take the place of the fixed-function state, since those are what the
+/// driver builds the pipeline and its binding table from.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn ray_tracing_kernel_cache_key(
+    stages: &[crate::core::rhi::RayTracingStage<'_>],
+    groups: &[crate::core::rhi::RayTracingShaderGroup],
+    push_constants: crate::core::rhi::RayTracingPushConstants,
+    max_recursion_depth: u32,
+) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update((stages.len() as u64).to_le_bytes());
+    for stage in stages {
+        hasher.update((stage.stage as u32).to_le_bytes());
+        digest_length_prefixed(&mut hasher, stage.spv);
+        digest_length_prefixed(&mut hasher, stage.entry_point.as_bytes());
+    }
+    hasher.update(push_constants.size.to_le_bytes());
+    hasher.update(push_constants.stages.bits().to_le_bytes());
+    hasher.update(max_recursion_depth.to_le_bytes());
+    digest_length_prefixed(&mut hasher, format!("{groups:?}").as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// Settle a caller's push-constant declaration against what the shaders
+/// reflect, for a kernel kind whose push-constant range carries a stage mask.
+///
+/// The size must agree outright. The stage mask follows the same rule a
+/// binding's does — a declaration may widen visibility past what the shaders
+/// read, never narrow it below — and an empty mask asserts nothing, so the
+/// reflected one stands.
+///
+/// Generic over the mask rather than written once per kernel kind, for the same
+/// reason the shared binding reconciliation is: graphics and ray tracing differ
+/// only in which unrelated `u32` newtype they name, and
+/// [`KernelShaderStageMask`] is the seam that already spans both.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn reconciled_push_constant_stages<Stages: KernelShaderStageMask>(
+    kernel_kind_label: &str,
+    declared_size: u32,
+    declared_stages: Stages,
+    reflected_size: u32,
+    reflected_stages: Stages,
+) -> Result<Stages> {
+    if declared_size != reflected_size {
+        return Err(Error::GpuError(format!(
+            "{kernel_kind_label} kernel declares {declared_size} push-constant bytes but its \
+             shaders reflect {reflected_size}"
+        )));
+    }
+    if declared_stages.names_no_stage() {
+        return Ok(reflected_stages);
+    }
+    if !declared_stages.contains_every_stage_in(reflected_stages) {
+        return Err(Error::GpuError(format!(
+            "{kernel_kind_label} kernel declares its push constants for {} but its shaders also \
+             read them from {}",
+            crate::core::rhi::quote_shader_stage_names(&declared_stages.named_stages()),
+            crate::core::rhi::quote_shader_stage_names(
+                &reflected_stages.stages_missing_from(declared_stages)
+            )
+        )));
+    }
+    Ok(declared_stages)
+}
+
+/// A cached graphics kernel with the context's draw recorder locked: its staged
+/// bindings are this holder's until it drops.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct GraphicsKernelHeldForOneDraw<'context> {
+    kernel: Arc<crate::vulkan::rhi::VulkanGraphicsKernel>,
+    input_transition_recorder_slot:
+        parking_lot::MutexGuard<'context, Option<crate::vulkan::rhi::RhiCommandRecorder>>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl GraphicsKernelHeldForOneDraw<'_> {
+    /// The kernel whose bindings this draw stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanGraphicsKernel {
+        &self.kernel
+    }
+
+    /// The kernel, with the draw family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
+        &mut self,
+    ) -> (
+        &crate::vulkan::rhi::VulkanGraphicsKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
+    }
+}
+
+/// A cached ray-tracing kernel with the context's trace recorder locked: its
+/// staged bindings are this holder's until it drops.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub struct RayTracingKernelHeldForOneTrace<'context> {
+    kernel: Arc<crate::vulkan::rhi::VulkanRayTracingKernel>,
+    input_transition_recorder_slot:
+        parking_lot::MutexGuard<'context, Option<crate::vulkan::rhi::RhiCommandRecorder>>,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl RayTracingKernelHeldForOneTrace<'_> {
+    /// The kernel whose bindings this trace stages, borrowed no longer than
+    /// the lock is held.
+    pub fn kernel(&self) -> &crate::vulkan::rhi::VulkanRayTracingKernel {
+        &self.kernel
+    }
+
+    /// The kernel, with the trace family's input-transition recorder — `None`
+    /// until first built — borrowed alongside it.
+    pub(crate) fn kernel_and_input_transition_recorder_slot(
+        &mut self,
+    ) -> (
+        &crate::vulkan::rhi::VulkanRayTracingKernel,
+        &mut Option<crate::vulkan::rhi::RhiCommandRecorder>,
+    ) {
+        (&self.kernel, &mut self.input_transition_recorder_slot)
+    }
+}
+
 impl GpuContext {
     /// Acquire a cached `(src, dst)`-keyed color converter.
     ///
