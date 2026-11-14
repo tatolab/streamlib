@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The native half of `tatolab-webrtc` — the module the wheel's two
 //! `@node.process` classes import as `tatolab.webrtc._native`.

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The HTTP half of WHIP (RFC 9725) and WHEP, which are the same three
 //! requests: POST the offer, PATCH trickled candidates, DELETE the session.

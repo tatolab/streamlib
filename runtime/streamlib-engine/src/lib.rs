@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 // Suppress pedantic clippy warnings that are intentional design choices
 #![allow(clippy::too_many_arguments)] // Some APIs need many parameters (e.g., video encoding config)

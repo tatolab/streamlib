@@ -86,8 +86,8 @@ jobs:
           done
 
       # `tatolab-stream` installs on its own, nothing of the runtime with it.
-      # BUSL-1.1's parameters are in its text, not its SPDX id, so the text has
-      # to reach what a user installs; it is read through importlib.metadata, so
+      # GPL-3.0 §4 conveys each copy with the licence text, which its SPDX id
+      # does not carry, so the text has to reach what a user installs; it is read through importlib.metadata, so
       # a licence present in the checkout and absent from the wheel fails.
       - name: tatolab-stream installs and carries its licence
         run: |
@@ -99,7 +99,7 @@ jobs:
           /tmp/tatolab-stream-venv/bin/python -c "
           from importlib.metadata import distribution
           license_text = distribution('tatolab-stream').read_text('licenses/LICENSE') or ''
-          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          assert 'GNU GENERAL PUBLIC LICENSE' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           "
 
       # `--no-index` beside this run's `tatolab-stream`, which PyPI does not
@@ -114,7 +114,7 @@ jobs:
           /tmp/compositor-wheel-check/bin/python -c "
           from importlib.metadata import distribution, entry_points
           license_text = distribution('tatolab-compositor').read_text('licenses/LICENSE') or ''
-          assert 'Business Source License' in license_text, 'LICENSE is absent from .dist-info/licenses/'
+          assert 'GNU GENERAL PUBLIC LICENSE' in license_text, 'LICENSE is absent from .dist-info/licenses/'
           node_entry_points = [
               node_entry_point for node_entry_point in entry_points(group='tatolab.nodes')
               if node_entry_point.dist.name == 'tatolab-compositor'

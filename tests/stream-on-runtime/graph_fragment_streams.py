@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The `@graph_generator` functions `test_stream_graph_load_on_tatolabd.py` runs to load a
 fragment inside a fragment."""

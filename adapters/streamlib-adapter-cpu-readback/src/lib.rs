@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Explicit GPU→CPU surface adapter — the single named opt-in path for
 //! customers who need CPU memory access to a streamlib surface.

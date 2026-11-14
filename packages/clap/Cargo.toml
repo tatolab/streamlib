@@ -2,12 +2,12 @@
 name = "streamlib-clap"
 version = "1.0.0"
 edition = "2024"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "CLAP audio plugin host processor for streamlib (macOS / iOS)."
 keywords = ["clap", "audio", "plugin", "effect", "vst"]
 categories = ["multimedia::audio", "multimedia"]
 repository = "https://github.com/tato123/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 
 [lib]
 # The crate root is generated from `processors/` before every cargo

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one root a test build of the runtime and its clients keeps the
 //! machine's directories under: the runtime directory, the state directory and,

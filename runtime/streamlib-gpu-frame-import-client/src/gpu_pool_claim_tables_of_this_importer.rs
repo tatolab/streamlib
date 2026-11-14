@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The claim tables this importer was handed, one per GPU pool, and the claims
 //! its frames take in them: a pooled frame is held against producer reuse in

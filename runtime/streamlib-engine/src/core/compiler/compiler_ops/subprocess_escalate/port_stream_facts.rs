@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A helper's stream-facts ops: replacing an output port's facts, and reading
 //! the facts of the output port feeding one of its inputs. Neither reads a

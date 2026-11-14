@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The state of every stateful function node of a stream, by node UUID, as the
 //! runtime carries it across a helper restart, a promotion, a reload, a Stop and

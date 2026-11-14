@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The compatibility record: every golden graph in `golden_graphs/` loads on
 //! this build. A golden is never edited — a change to the graph's shape, a

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A message's payload as Python holds it: a read's borrow of the sample it
 //! arrived in, and a write's loan of the sample it will be published in. Both

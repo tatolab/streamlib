@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Keeping a project's `.venv` current with the uv the runtime unit carries.
 //! A venv whose interpreter does not run is removed and made again by

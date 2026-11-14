@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A video file's first sync sample as one Annex-B access unit, its parameter sets ahead of it,
 //! which the engine's H.264 and H.265 decoders take whole to make a poster frame.

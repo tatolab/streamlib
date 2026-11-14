@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A config value naming another node of the same graph: the reference edge's
 //! one spelling in a config, `{"node": "<name>"}`, and the schema keyword that

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! H.264 or H.265 encode on a Vulkan device this module owns: each published frame,
 //! a pixel buffer or a texture, is checked out over surface-share, imported

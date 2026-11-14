@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `App` is thin sugar over a `Runner` and the one stream it loads: a graph
 //! built through `App` must be byte-for-byte the graph built by the equivalent

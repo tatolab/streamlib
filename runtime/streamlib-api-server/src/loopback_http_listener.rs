@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The runtime's HTTP on loopback: `GET /machine-runtime-lock-holder` answers
 //! the serving process's pid, and `/control/ws` is the local API's control

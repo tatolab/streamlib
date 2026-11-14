@@ -41,7 +41,7 @@ accepted = [
     "Unicode-3.0",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
-    "BUSL-1.1",
+    "GPL-3.0-only",
     "CDLA-Permissive-2.0",
     "MPL-2.0",
 ]

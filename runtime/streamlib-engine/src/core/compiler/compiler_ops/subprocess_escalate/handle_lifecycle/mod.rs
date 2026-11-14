@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.

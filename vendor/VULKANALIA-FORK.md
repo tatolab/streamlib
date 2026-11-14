@@ -51,8 +51,8 @@ No CI workflow runs `cargo fmt`.
 
 The vendored crates are **Apache-2.0** (upstream vulkanalia's license;
 `LICENSE.txt` is copied into each directory). This is a deliberate
-exception to the repo-wide BUSL-1.1 new-file header rule: **do not add
-BUSL headers to any file under `vendor/tatolab-vulkanalia*`**, and do not
+exception to the repo-wide GPL-3.0-only new-file header rule: **do not add
+GPL headers to any file under `vendor/tatolab-vulkanalia*`**, and do not
 "improve" the vendored sources — the only edit they carry beyond the
 pinned fork rev is rustfmt normalisation, which the drift guard records.
 The embedded third-party

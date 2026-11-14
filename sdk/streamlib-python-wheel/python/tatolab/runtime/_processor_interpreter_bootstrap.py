@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 # streamlib:lint-logging:allow-file — bootstrap; the pre-install fatals below
 # are written to raw stderr because the log channel does not exist yet.
 

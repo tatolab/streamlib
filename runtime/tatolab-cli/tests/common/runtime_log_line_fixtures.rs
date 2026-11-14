@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! JSONL records as a runtime writes them into its log files, for the `logs` tests. Shared by the
 //! integration tests and, through `#[path]`, the unit tests.

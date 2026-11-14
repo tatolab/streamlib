@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `streamlib_adapter_vulkan::tests::write_excludes_read` — explicit
 //! redundant-with-conformance test asserting that an active write guard

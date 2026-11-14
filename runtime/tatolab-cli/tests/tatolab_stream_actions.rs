@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab open`, `reload`, `close`, `play`, `stop`, `pause`, `resume`, `rm`, `streams` and
 //! `clock` run as a user runs them, against a stub local API at an isolated machine's fixed

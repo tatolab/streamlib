@@ -3,10 +3,10 @@ name = "tatolab-microphone"
 version = "0.68.82"
 edition = "2024"
 rust-version = "1.88"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "Microphone capture for StreamLib, as the tatolab-microphone extension wheel."
 repository = "https://github.com/tato123/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 
 # `_native` is the module `tatolab.microphone` imports. cdylib only: nothing

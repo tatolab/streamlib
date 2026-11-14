@@ -41,7 +41,6 @@ on:
       - 'docs/**'
       - '**.md'
       - '.claude/**'
-      - 'LICENSES/**'
       - 'examples/**'
       - 'docker/**'
       - 'installer/**'

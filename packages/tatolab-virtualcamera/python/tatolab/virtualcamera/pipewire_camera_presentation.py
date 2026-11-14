@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The PipeWire door's per-frame path: each frame converted to YUYV on the GPU, then copied once into the buffer PipeWire hands the camera."""
 

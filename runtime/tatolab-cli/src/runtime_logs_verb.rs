@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab logs`: a project's log as the machine's runtime reads it from the project's folder —
 //! every record its streams and their loads wrote, oldest first, or those of one stream or one

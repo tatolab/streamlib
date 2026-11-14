@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The cross-floor check of a project's Python, run in the project's own interpreter as a
 //! load reads the project, its findings a warning in the project's log that never blocks a

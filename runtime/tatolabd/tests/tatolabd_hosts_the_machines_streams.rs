@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolabd` hosting the machine's streams, GPU-free: the local API at its
 //! fixed socket, the state directory and the runtime's own log, the recorded

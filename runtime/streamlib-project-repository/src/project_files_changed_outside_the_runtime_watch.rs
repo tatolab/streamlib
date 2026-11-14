@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The watch on an open project's folder that tells of each file that changes, appears or goes
 //! away there, whoever wrote it, coalesced so a burst of writes is told once.

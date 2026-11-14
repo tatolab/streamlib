@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! When an entry of one of the runtime's shared pools — the texture pool, the
 //! pixel-buffer rings — is freed, once the pool has judged it unheld.

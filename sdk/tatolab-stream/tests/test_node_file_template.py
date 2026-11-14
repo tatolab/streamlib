@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The node file template `create_node_file` writes, held to the current `tatolab.stream` idiom.
 
@@ -16,7 +16,7 @@ from tatolab.stream._project_node_type_listing_entry import (
 from tatolab.stream.description_lint import lint_the_descriptions_of_a_node_type
 
 NODE_FILE_TEMPLATE_PATH = Path(__file__).resolve().parents[1] / "node_file_template" / "new_node.py"
-TEMPLATE_LICENCE_HEADER = "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
+TEMPLATE_LICENCE_HEADER = "# Copyright (c) 2025 Tatolab LLC\n# SPDX-License-Identifier: GPL-3.0-only\n\n"
 TEMPLATE_CLASS_STATEMENT = "class NewNode:"
 
 

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab graph` run as a user runs it, against a stub local API at an isolated machine's fixed
 //! socket: its flags, what it prints on stdout and on stderr, and how it exits. The tool arguments

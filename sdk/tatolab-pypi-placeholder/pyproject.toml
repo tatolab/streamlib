@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 # Holds the bare `tatolab` name on PyPI. Not
 # part of the release: bump the version and `uv publish` it by hand whenever
@@ -14,8 +14,8 @@ version = "0.0.1"
 description = "Placeholder that installs nothing. Tatolab installs as an app: see tatolab.com/docs/install"
 readme = "README.md"
 requires-python = ">=3.12"
-license = "BUSL-1.1"
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+license = "GPL-3.0-only"
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = ["Development Status :: 7 - Inactive"]
 
 [project.urls]

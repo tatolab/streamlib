@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # The WebRTC live proof: the test pattern and the microphone published to a
 # WHIP endpoint by one stream, the same live input played back over WHEP by
