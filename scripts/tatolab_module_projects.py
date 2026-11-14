@@ -9,8 +9,10 @@ import copies whole into `imports/<folder>/`: the project file, the module's REA
 licence files, its top-level streams, and every wheel the release built for it under `wheels/`, which its
 `pyproject.toml` declares as uv path sources, one per platform, so a project importing it
 syncs with no Rust toolchain and no index serving the module. The catalog,
-`catalog/v1.json`, lists each archive with its SHA-256 and the `@node`s and `@stream`s it
-brings, read by the `tatolab.stream` listing the runtime runs, never by parsing source here.
+`catalog/v1.json`, lists each archive with its SHA-256, the `@node`s and `@stream`s it
+brings, read by the `tatolab.stream` listing the runtime runs, never by parsing source here,
+and under `platforms` each machine a wheel of it installs on, left out when its one wheel is
+pure, so an app can say a module brings nothing on a machine its wheels leave out.
 
 Stdlib only, beside the uv that makes each listing's venv.
 Commands:
@@ -65,18 +67,26 @@ def wheel_file_name_prefix_of(distribution_name, version):
     return f"{re.sub(r'[-.]+', '_', distribution_name).lower()}-{version}-"
 
 
-def uv_marker_of_a_wheel_platform_tag(wheel_file_name):
-    """The PEP 508 marker of the machines a wheel's platform tag installs on; `None` for `any`."""
+def machine_of_a_wheel_platform_tag(wheel_file_name):
+    """The machine a wheel's platform tag installs on, as PEP 508's `sys_platform` and `platform_machine`; `None` for `any`."""
     platform_tag = Path(wheel_file_name).stem.split("-")[-1]
     if platform_tag == "any":
         return None
     if re.fullmatch(r"(many|musl)linux_\d+_\d+_x86_64(\.(many|musl)linux_\d+_\d+_x86_64)*", platform_tag):
-        return "sys_platform == 'linux' and platform_machine == 'x86_64'"
+        return {"sys_platform": "linux", "platform_machine": "x86_64"}
     if re.fullmatch(r"(many|musl)linux_\d+_\d+_aarch64(\.(many|musl)linux_\d+_\d+_aarch64)*", platform_tag):
-        return "sys_platform == 'linux' and platform_machine == 'aarch64'"
+        return {"sys_platform": "linux", "platform_machine": "aarch64"}
     if re.fullmatch(r"macosx_\d+_\d+_arm64", platform_tag):
-        return "sys_platform == 'darwin' and platform_machine == 'arm64'"
+        return {"sys_platform": "darwin", "platform_machine": "arm64"}
     raise ModuleProjectNotAssembled(f"{wheel_file_name} carries the platform tag {platform_tag}, which no module project names a machine for")
+
+
+def uv_marker_of_a_wheel_platform_tag(wheel_file_name):
+    """The PEP 508 marker of the machines a wheel's platform tag installs on; `None` for `any`."""
+    machine = machine_of_a_wheel_platform_tag(wheel_file_name)
+    if machine is None:
+        return None
+    return f"sys_platform == '{machine['sys_platform']}' and platform_machine == '{machine['platform_machine']}'"
 
 
 def toml_basic_string(text):
@@ -197,6 +207,9 @@ def assemble_one_module_project(module_project_directory, wheels_directory, vers
         "download_sha256": archive_sha256,
         "homepage_url": f"{MODULE_SOURCE_URL_PREFIX}/{module_project_directory.name}",
     }
+    machines = [machine_of_a_wheel_platform_tag(wheel_path.name) for wheel_path in wheel_paths]
+    if None not in machines:
+        entry_without_its_members["platforms"] = machines
     Path(str(archive_path) + ARCHIVE_LISTING_SIDECAR_SUFFIX).write_text(json.dumps(entry_without_its_members, indent=2) + "\n")
     return archive_path
 

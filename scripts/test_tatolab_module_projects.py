@@ -198,7 +198,19 @@ class ModuleProjectArchives(unittest.TestCase):
         self.assertEqual(entry["download_url"], f"https://get.tatolab.com/modules/tatolab-camera-{RELEASE_VERSION}.zip")
         self.assertEqual(entry["download_sha256"], tatolab_module_projects.sha256_of_file(self.output_root / "modules" / f"tatolab-camera-{RELEASE_VERSION}.zip"))
         self.assertEqual(entry["nodes"], [{"name": "FrameMaker", "import_path": "tatolab.camera:FrameMaker", "summary": "Makes frames out of nothing."}])
+        self.assertEqual(
+            entry["platforms"],
+            [{"sys_platform": "darwin", "platform_machine": "arm64"}, {"sys_platform": "linux", "platform_machine": "x86_64"}],
+        )
         self.assertEqual(entry["streams"], [{"name": "Loop", "import_path": "1f9d2c3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f", "summary": ""}])
+
+    def test_the_catalog_names_only_the_machine_a_linux_only_modules_one_wheel_installs_on(self):
+        write_a_module_package(self.workspace_root, "tatolab-browser", "tatolab-browser", "Web page")
+        write_a_module_wheel(self.wheels_directory, "tatolab-browser", LINUX_X86_64_PLATFORM_TAG, {"FrameMaker": "tatolab.browser:FrameMaker"})
+        tatolab_module_projects.assemble_every_module_project(self.workspace_root, self.wheels_directory, RELEASE_VERSION, self.output_root)
+        catalog = json.loads(tatolab_module_projects.write_the_catalog(self.output_root, self.uv, self.tatolab_stream_wheel).read_text())
+        [entry] = catalog["entries"]
+        self.assertEqual(entry["platforms"], [{"sys_platform": "linux", "platform_machine": "x86_64"}])
 
     def test_an_archive_whose_module_declares_no_node_fails_the_catalog(self):
         self.assemble_the_camera(entry_points={})
