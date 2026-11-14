@@ -1,0 +1,558 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use super::*;
+
+impl GpuContext {
+    /// Acquire a cached `(src, dst)`-keyed color converter.
+    ///
+    /// First call for a given pair builds the converter (lazy kernel
+    /// SPIR-V load + reflection); subsequent calls return the cached
+    /// handle. Per-frame `ResolvedColorInfo` lives in push constants,
+    /// so one cached converter handles every variation of source color
+    /// description without invalidating.
+    ///
+    /// The cached converter's kernel — and the bindings staged on it
+    /// between `prepare_*` and the dispatch — is one object shared by every
+    /// holder of the handle, so two processors driving the same format pair
+    /// from their own threads race it. A processor that records the
+    /// dispatch itself takes [`Self::create_color_converter`] instead.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
+        // Fast path: read lock; cache stores Arc<Inner> so we can build
+        // a fresh handle via from_arc_into_raw per request.
+        {
+            let cache = self.color_converter_cache.read().unwrap();
+            if let Some(c) = cache.get(&(src, dst)) {
+                return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
+            }
+        }
+        // Slow path: build under write lock with double-check.
+        let mut cache = self.color_converter_cache.write().unwrap();
+        if let Some(c) = cache.get(&(src, dst)) {
+            return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
+        }
+        let vulkan_device = &self.device.inner;
+        let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
+        let inner_arc = Arc::new(crate::core::rhi::RhiColorConverterInner { inner });
+        cache.insert((src, dst), Arc::clone(&inner_arc));
+        tracing::debug!(
+            rhi_op = "color_converter",
+            ?src,
+            ?dst,
+            "GpuContext::color_converter — converter constructed"
+        );
+        Ok(RhiColorConverter::from_arc_into_raw(inner_arc))
+    }
+
+    /// A color converter of the caller's own — the same `(src, dst)` kernel
+    /// the cached `color_converter` would hand out, built fresh and never
+    /// placed in the cache, so a processor recording its dispatch from its
+    /// own thread shares no pending state with any other.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_color_converter(
+        &self,
+        src: PixelFormat,
+        dst: PixelFormat,
+    ) -> Result<RhiColorConverter> {
+        let vulkan_device = &self.device.inner;
+        let inner = crate::vulkan::rhi::VulkanColorConverter::new(vulkan_device, src, dst)?;
+        tracing::debug!(
+            rhi_op = "create_color_converter",
+            ?src,
+            ?dst,
+            "GpuContext::create_color_converter — owned converter constructed"
+        );
+        Ok(RhiColorConverter::from_arc_into_raw(Arc::new(
+            crate::core::rhi::RhiColorConverterInner { inner },
+        )))
+    }
+
+    /// Create a compute kernel from a SPIR-V shader and a binding declaration.
+    ///
+    /// Reflects the SPIR-V at creation time and validates that the declared
+    /// bindings match the shader; mismatches are reported with a clear error
+    /// message rather than producing undefined GPU behavior at first dispatch.
+    /// Returned kernel is held and dispatched via its own `set_*` / `dispatch`
+    /// methods — one kernel handle per processor pipeline stage is the expected
+    /// usage.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_compute_kernel(
+        &self,
+        descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::VulkanComputeKernel> {
+        tracing::debug!(
+            rhi_op = "create_compute_kernel",
+            label = descriptor.label,
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constant_size,
+            "GpuContext::create_compute_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::VulkanComputeKernel::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            self.pipeline_cache_directory_of_its_stream(),
+        )
+    }
+
+    /// Build a [`crate::vulkan::rhi::VulkanOffscreenCompositor`] for
+    /// `attachment_format`.
+    ///
+    /// A caller that composes every frame into its own destinations builds one
+    /// here and keeps it. A caller that just wants one draw uses
+    /// [`Self::compose_texture_onto_offscreen_texture`] instead, which shares
+    /// a cached compositor rather than compiling a pipeline per call.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_offscreen_compositor(
+        &self,
+        attachment_format: crate::core::rhi::TextureFormat,
+    ) -> Result<crate::vulkan::rhi::VulkanOffscreenCompositor> {
+        tracing::debug!(
+            rhi_op = "create_offscreen_compositor",
+            ?attachment_format,
+            "GpuContext::create_offscreen_compositor"
+        );
+        crate::vulkan::rhi::VulkanOffscreenCompositor::new(&self.device.inner, attachment_format)
+    }
+
+    /// Draw `source` onto `destination` — scaled and aspect-managed — through a
+    /// compositor cached on this context for `destination`'s format.
+    ///
+    /// Submits and waits: `destination` comes back in
+    /// `COLOR_ATTACHMENT_OPTIMAL` and `source` in `SHADER_READ_ONLY_OPTIMAL`.
+    /// Concurrent callers serialize on the cached compositor's lock, which is
+    /// also what makes one descriptor-ring slot enough.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn compose_texture_onto_offscreen_texture(
+        &self,
+        destination: &Texture,
+        source: &Texture,
+        source_current_layout: VulkanLayout,
+        scaling: crate::vulkan::rhi::OffscreenCompositorScalingMode,
+    ) -> Result<()> {
+        let attachment_format = destination.format();
+        let compositor = {
+            let mut cache = self.offscreen_compositor_cache.lock();
+            match cache.get(&attachment_format) {
+                Some(cached) => Arc::clone(cached),
+                None => {
+                    let built = Arc::new(parking_lot::Mutex::new(
+                        self.create_offscreen_compositor(attachment_format)?,
+                    ));
+                    cache.insert(attachment_format, Arc::clone(&built));
+                    built
+                }
+            }
+        };
+        compositor.lock().compose_to_offscreen_texture(
+            destination,
+            source,
+            source_current_layout,
+            scaling,
+        )
+    }
+
+    /// Create a graphics kernel from a multi-stage SPIR-V set + binding
+    /// declaration + pipeline state. Graphics counterpart to
+    /// [`Self::create_compute_kernel`].
+    ///
+    /// Reflects every stage's SPIR-V at creation time and validates that
+    /// the declared bindings + push constants + stage visibility match the
+    /// shaders; mismatches surface as a clear error rather than at first
+    /// draw.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_graphics_kernel(
+        &self,
+        descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::VulkanGraphicsKernel> {
+        tracing::debug!(
+            rhi_op = "create_graphics_kernel",
+            label = descriptor.label,
+            stages = descriptor.stages.len(),
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constants.size,
+            descriptor_sets_in_flight = descriptor.descriptor_sets_in_flight,
+            "GpuContext::create_graphics_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::VulkanGraphicsKernel::new_caching_its_pipeline_in(
+            vulkan_device,
+            descriptor,
+            self.pipeline_cache_directory_of_its_stream(),
+        )
+    }
+
+    /// Create a ray-tracing kernel from shader stages, shader-group
+    /// layout, binding declaration, and push-constant range. Mirror of
+    /// [`Self::create_compute_kernel`] / [`Self::create_graphics_kernel`]
+    /// for `VkRayTracingPipelineKHR`-backed work.
+    ///
+    /// Validates every stage's SPIR-V against the declared bindings +
+    /// push-constants at creation time, builds the pipeline, fetches
+    /// shader-group handles, lays out the shader-binding table, and
+    /// returns a kernel ready for `set_*` + `trace_rays` dispatch.
+    /// Returns a clean error when the device lacks RT support.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_ray_tracing_kernel(
+        &self,
+        descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
+    ) -> Result<crate::vulkan::rhi::VulkanRayTracingKernel> {
+        tracing::debug!(
+            rhi_op = "create_ray_tracing_kernel",
+            label = descriptor.label,
+            stages = descriptor.stages.len(),
+            groups = descriptor.groups.len(),
+            bindings = descriptor.bindings.len(),
+            push_constant_size = descriptor.push_constants.size,
+            max_recursion_depth = descriptor.max_recursion_depth,
+            "GpuContext::create_ray_tracing_kernel"
+        );
+        let vulkan_device = &self.device.inner;
+        crate::vulkan::rhi::VulkanRayTracingKernel::new(vulkan_device, descriptor)
+    }
+
+    // =========================================================================
+    // Compute kernels for the escalate ops — always present, never installed
+    // =========================================================================
+
+    /// Compile Slang kernel source to SPIR-V, reusing what an identical earlier
+    /// request compiled.
+    ///
+    /// `label` is what the compiler's diagnostics name the source as, so it is
+    /// the prefix an author sees on a syntax error.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn compile_slang_shader_source_to_spirv(
+        &self,
+        source: &str,
+        stage: crate::core::rhi::ShaderCompilationTargetStage,
+        entry_point: &str,
+        label: &str,
+    ) -> Result<Arc<[u8]>> {
+        self.slang_shader_source_compiler
+            .compile_or_reuse(source, stage, entry_point, label)
+    }
+
+    /// Build a compute kernel for a caller that named it by SPIR-V, reusing an
+    /// identical one if this context already built it.
+    ///
+    /// The cache key covers everything that changes the compiled output. For a
+    /// pre-compiled blob that is the blob itself plus the declared
+    /// push-constant size — the bytes already fix stage, entry point and target
+    /// environment. A Slang source contract adds the compiler's own version to
+    /// the key, because then the engine is what produces the bytes.
+    ///
+    /// Returns the cache key as the kernel id: a caller re-registering the same
+    /// kernel gets the same id back, and pays no compilation for it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_or_reuse_compute_kernel(
+        &self,
+        spv: &[u8],
+        push_constant_size: u32,
+        declared_bindings: &[crate::core::rhi::ComputeBindingDeclaration],
+        entry_point: &str,
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanComputeKernel>)> {
+        let kernel_id = compute_kernel_cache_key(spv, push_constant_size, entry_point);
+        let cached_kernel = self
+            .compute_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            // The declaration is checked on the hit path too: the cache key
+            // covers the blob, not the caller's assertion, and a wrong
+            // assertion must refuse identically whether or not somebody
+            // registered this blob first.
+            crate::core::rhi::reconcile_compute_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+            )?;
+            tracing::debug!(
+                rhi_op = "create_or_reuse_compute_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_compute_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(&cached)));
+        }
+
+        // Reflection is the source of truth for the binding shape; a caller's
+        // declaration is checked against it rather than replacing it.
+        let (reflected, reflected_push_size) = crate::core::rhi::derive_bindings_from_spirv(spv)?;
+        crate::core::rhi::reconcile_compute_binding_declarations(declared_bindings, &reflected)?;
+        if reflected_push_size != push_constant_size {
+            return Err(Error::GpuError(format!(
+                "compute kernel declares {push_constant_size} push-constant bytes but its \
+                 SPIR-V reflects {reflected_push_size}"
+            )));
+        }
+
+        let kernel = Arc::new(self.create_compute_kernel(
+            &crate::core::rhi::ComputeKernelDescriptor {
+                entry_point,
+                label: "escalate-compute-kernel",
+                spv,
+                bindings: &reflected,
+                push_constant_size,
+            },
+        )?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.compute_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
+    }
+
+    /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
+    /// returned.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn compute_kernel_by_id(
+        &self,
+        kernel_id: &str,
+    ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.compute_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)
+    }
+
+    /// Build a graphics kernel for the `register_graphics_kernel` escalate op,
+    /// or hand back one an identical earlier registration already built.
+    ///
+    /// The twin of [`Self::create_or_reuse_compute_kernel`], and the same
+    /// contract: reflection is the source of truth for the binding shape, the
+    /// caller's declaration is checked against it by name rather than
+    /// replacing it, and the cache key is what the caller gets back as the
+    /// kernel id.
+    ///
+    /// `label` names the pipeline in RHI errors and validation-layer messages,
+    /// and is deliberately outside the cache key — two registrations differing
+    /// only in label are one pipeline, and the first one's label is the one the
+    /// driver keeps.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_or_reuse_graphics_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::GraphicsStage<'_>],
+        declared_push_constants: crate::core::rhi::GraphicsPushConstants,
+        pipeline_state: &crate::core::rhi::GraphicsPipelineState,
+        descriptor_sets_in_flight: u32,
+        declared_bindings: &[crate::core::rhi::GraphicsBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>)> {
+        use crate::core::rhi::GraphicsShaderStageFlags;
+
+        // Both stages are always present — `VulkanGraphicsKernel::new` refuses
+        // anything else — so every graphics kernel is built from both.
+        let stages_the_kernel_was_built_from = GraphicsShaderStageFlags::VERTEX_FRAGMENT;
+        let kernel_id = graphics_kernel_cache_key(
+            stages,
+            declared_push_constants,
+            pipeline_state,
+            descriptor_sets_in_flight,
+        );
+        let cached_kernel = self
+            .graphics_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            // The declaration is checked on the hit path too: the cache key
+            // covers the shaders and the pipeline, not the caller's assertion,
+            // and a wrong assertion must refuse identically whether or not
+            // somebody registered this kernel first.
+            crate::core::rhi::reconcile_graphics_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+                stages_the_kernel_was_built_from,
+            )?;
+            tracing::debug!(
+                rhi_op = "create_or_reuse_graphics_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_graphics_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(&cached)));
+        }
+
+        let (reflected, reflected_push_constants) =
+            crate::core::rhi::derive_bindings_from_spirv_multistage(stages)?;
+        crate::core::rhi::reconcile_graphics_binding_declarations(
+            declared_bindings,
+            &reflected,
+            stages_the_kernel_was_built_from,
+        )?;
+        let push_constants = crate::core::rhi::GraphicsPushConstants {
+            size: reflected_push_constants.size,
+            stages: reconciled_push_constant_stages(
+                "graphics",
+                declared_push_constants.size,
+                declared_push_constants.stages,
+                reflected_push_constants.size,
+                reflected_push_constants.stages,
+            )?,
+        };
+
+        let kernel = Arc::new(self.create_graphics_kernel(
+            &crate::core::rhi::GraphicsKernelDescriptor {
+                label,
+                stages,
+                bindings: &reflected,
+                push_constants,
+                pipeline_state: pipeline_state.clone(),
+                descriptor_sets_in_flight,
+            },
+        )?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.graphics_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
+    }
+
+    /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
+    /// returned, holding the draw recorder for as long as the caller keeps it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn graphics_kernel_by_id_held_for_one_draw(
+        &self,
+        kernel_id: &str,
+    ) -> Option<GraphicsKernelHeldForOneDraw<'_>> {
+        let input_transition_recorder_slot = self.graphics_draw_input_transition_recorder.lock();
+        let kernel = self
+            .graphics_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)?;
+        Some(GraphicsKernelHeldForOneDraw {
+            kernel,
+            input_transition_recorder_slot,
+        })
+    }
+
+    /// Build a ray-tracing kernel for the `register_ray_tracing_kernel`
+    /// escalate op, or hand back one an identical earlier registration already
+    /// built.
+    ///
+    /// The twin of [`Self::create_or_reuse_compute_kernel`]. Unlike graphics,
+    /// a ray-tracing kernel's stage set varies per kernel, so the stages it was
+    /// actually built from are what a declaration naming a stage is checked
+    /// against.
+    ///
+    /// `label` names the pipeline in RHI errors and validation-layer messages,
+    /// and is deliberately outside the cache key — two registrations differing
+    /// only in label are one pipeline, and the first one's label is the one the
+    /// driver keeps.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_or_reuse_ray_tracing_kernel(
+        &self,
+        label: &str,
+        stages: &[crate::core::rhi::RayTracingStage<'_>],
+        groups: &[crate::core::rhi::RayTracingShaderGroup],
+        declared_push_constants: crate::core::rhi::RayTracingPushConstants,
+        max_recursion_depth: u32,
+        declared_bindings: &[crate::core::rhi::RayTracingBindingDeclaration],
+    ) -> Result<(String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>)> {
+        let stages_the_kernel_was_built_from =
+            crate::core::rhi::ray_tracing_stages_covered_by(stages);
+        let kernel_id = ray_tracing_kernel_cache_key(
+            stages,
+            groups,
+            declared_push_constants,
+            max_recursion_depth,
+        );
+        let cached_kernel = self
+            .ray_tracing_kernel_cache
+            .lock()
+            .unwrap()
+            .get(&kernel_id)
+            .map(Arc::clone);
+        if let Some(cached) = cached_kernel {
+            crate::core::rhi::reconcile_ray_tracing_binding_declarations(
+                declared_bindings,
+                &cached.bindings(),
+                stages_the_kernel_was_built_from,
+            )?;
+            tracing::debug!(
+                rhi_op = "create_or_reuse_ray_tracing_kernel",
+                kernel_id,
+                "GpuContext::create_or_reuse_ray_tracing_kernel — cache hit"
+            );
+            return Ok((kernel_id, Arc::clone(&cached)));
+        }
+
+        let (reflected, reflected_push_constants) =
+            crate::core::rhi::derive_ray_tracing_bindings_from_spirv_multistage(stages)?;
+        crate::core::rhi::reconcile_ray_tracing_binding_declarations(
+            declared_bindings,
+            &reflected,
+            stages_the_kernel_was_built_from,
+        )?;
+        let push_constants = crate::core::rhi::RayTracingPushConstants {
+            size: reflected_push_constants.size,
+            stages: reconciled_push_constant_stages(
+                "ray-tracing",
+                declared_push_constants.size,
+                declared_push_constants.stages,
+                reflected_push_constants.size,
+                reflected_push_constants.stages,
+            )?,
+        };
+
+        let kernel = Arc::new(self.create_ray_tracing_kernel(
+            &crate::core::rhi::RayTracingKernelDescriptor {
+                label,
+                stages,
+                groups,
+                bindings: &reflected,
+                push_constants,
+                max_recursion_depth,
+            },
+        )?);
+
+        Ok((
+            kernel_id.clone(),
+            Arc::clone(
+                self.ray_tracing_kernel_cache
+                    .lock()
+                    .unwrap()
+                    .entry(kernel_id)
+                    .or_insert(kernel),
+            ),
+        ))
+    }
+
+    /// Look up a ray-tracing kernel a prior
+    /// `create_or_reuse_ray_tracing_kernel` returned, holding the trace recorder
+    /// for as long as the caller keeps it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn ray_tracing_kernel_by_id_held_for_one_trace(
+        &self,
+        kernel_id: &str,
+    ) -> Option<RayTracingKernelHeldForOneTrace<'_>> {
+        let input_transition_recorder_slot =
+            self.ray_tracing_trace_input_transition_recorder.lock();
+        let kernel = self
+            .ray_tracing_kernel_cache
+            .lock()
+            .unwrap()
+            .get(kernel_id)
+            .map(Arc::clone)?;
+        Some(RayTracingKernelHeldForOneTrace {
+            kernel,
+            input_transition_recorder_slot,
+        })
+    }
+}
