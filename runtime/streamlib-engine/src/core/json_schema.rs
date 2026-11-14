@@ -21,6 +21,8 @@ use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 /// derive the aggregate response types below require.
 pub use streamlib_processor_schema::ProcessorClassImportPath;
 
+use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
+
 // =============================================================================
 // Graph Response Schema (/api/graph)
 // =============================================================================
@@ -695,9 +697,7 @@ impl LinkOutput {
         // check — the same disagreement the top-level state reads the component
         // to avoid, in the other direction.
         let (state, error_reason) = rendered.into_state_and_its_reason();
-        if let Some(rendered_state) = components.get_mut("state") {
-            *rendered_state = serde_json::json!(format!("{state:?}"));
-        }
+        render_the_state_component_as(&mut components, state);
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::of_a_port(
@@ -717,18 +717,15 @@ impl LinkOutput {
         }
     }
 
-    /// Render `carried_link_id`, the link the graph carries as `into_the_function_node_pool`
-    /// then `out_of_the_function_node_pool`, as it was given: from the first's source to the
-    /// second's target, naming the pool's ports it runs through, in the error either half is
-    /// in, else in the second's state.
+    /// Render `carried`, a link the graph carries through the function node pool as two links,
+    /// as it was given: from the island to the reader, naming the pool's ports it runs through,
+    /// in the error either of its links is in, else in the state of the link out of the pool.
     pub(crate) fn of_a_link_carried_through_the_function_node_pool(
-        carried_link_id: &crate::core::graph::LinkUniqueId,
-        into_the_function_node_pool: &crate::core::graph::Link,
-        out_of_the_function_node_pool: &crate::core::graph::Link,
+        carried: &LinkCarriedThroughTheFunctionNodePool<'_>,
         node_names: &NodeNamesByProcessorId,
     ) -> Self {
-        let into_the_pool = Self::of_a_link(into_the_function_node_pool, node_names);
-        let out_of_the_pool = Self::of_a_link(out_of_the_function_node_pool, node_names);
+        let into_the_pool = Self::of_a_link(carried.into_the_function_node_pool, node_names);
+        let out_of_the_pool = Self::of_a_link(carried.out_of_the_function_node_pool, node_names);
         let (state, error_reason) = if into_the_pool.state == LinkStateOutput::Error {
             (into_the_pool.state, into_the_pool.error_reason)
         } else {
@@ -742,11 +739,9 @@ impl LinkOutput {
                 "output_port": out_of_the_pool.source.port,
             }),
         );
-        if let Some(rendered_state) = components.get_mut("state") {
-            *rendered_state = serde_json::json!(format!("{state:?}"));
-        }
+        render_the_state_component_as(&mut components, state);
         Self {
-            id: carried_link_id.to_string(),
+            id: carried.carried_link_id.to_string(),
             source: into_the_pool.source,
             target: out_of_the_pool.target,
             capacity: out_of_the_pool.capacity,
@@ -754,6 +749,17 @@ impl LinkOutput {
             error_reason,
             components,
         }
+    }
+}
+
+/// Set a link's `components.state`, which `LinkStateComponent` renders, to the state the link
+/// reports, so the two never disagree.
+fn render_the_state_component_as(
+    components: &mut serde_json::Map<String, serde_json::Value>,
+    state: LinkStateOutput,
+) {
+    if let Some(rendered_state) = components.get_mut("state") {
+        *rendered_state = serde_json::json!(format!("{state:?}"));
     }
 }
 
@@ -1608,6 +1614,7 @@ mod graph_response_top_level_key_rendering_tests {
                 "asset",
                 "clock",
                 "display_name",
+                "function_node_pool",
                 "groups",
                 "links",
                 "machine",

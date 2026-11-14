@@ -14,13 +14,12 @@ use super::operations_runtime::{
     remove_processor_impl,
 };
 use crate::core::compiler::compiler_ops::function_node_pool::{
-    is_the_function_node_pool_type, the_function_node_pool_of,
+    is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, PendingDeletionComponent,
-    ProcessorUniqueId, cast_exposed_name_to_url_safe,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    PendingDeletionComponent, ProcessorUniqueId, cast_exposed_name_to_url_safe,
 };
 use crate::core::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
@@ -37,6 +36,13 @@ pub(super) struct RunningLinkBetweenTwoNodesByUuid {
     pub(super) source_port: String,
     pub(super) target_node: Uuid,
     pub(super) target_port: String,
+}
+
+/// One link the live graph holds as it was given, as a reconcile compares it to the document's,
+/// beside the links it is wired as, which a disconnect of it takes out together.
+pub(super) struct LiveLinkAsGiven {
+    pub(super) link_as_given: RunningLinkBetweenTwoNodesByUuid,
+    pub(super) wired_as: Vec<LinkUniqueId>,
 }
 
 /// One node the live graph holds, as a reconcile compares it to the document's.
@@ -139,11 +145,11 @@ impl LoadedStreamInThisRuntime {
                 remove_processor_impl(self.live_graph_change(), live_node.processor_id).await?;
             }
         }
-        for (link_ids, live_link) in self.the_live_links_by_node_uuid() {
-            if document_link_set.contains(&live_link) {
+        for live_link in self.the_live_links_by_node_uuid() {
+            if document_link_set.contains(&live_link.link_as_given) {
                 continue;
             }
-            for link_id in link_ids {
+            for link_id in live_link.wired_as {
                 disconnect_impl(self.live_graph_change(), link_id).await?;
             }
         }
@@ -249,7 +255,7 @@ impl LoadedStreamInThisRuntime {
         let live_links: HashSet<RunningLinkBetweenTwoNodesByUuid> = self
             .the_live_links_by_node_uuid()
             .into_iter()
-            .map(|(_, live_link)| live_link)
+            .map(|live_link| live_link.link_as_given)
             .collect();
         let processor_of = |node_uuid: &Uuid| {
             processor_of_each_node_uuid
@@ -405,9 +411,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Each link the live graph holds as it was given, by node UUID, beside the links it is
     /// wired as, as a reconcile compares it.
-    pub(super) fn the_live_links_by_node_uuid(
-        &self,
-    ) -> Vec<(Vec<LinkUniqueId>, RunningLinkBetweenTwoNodesByUuid)> {
+    pub(super) fn the_live_links_by_node_uuid(&self) -> Vec<LiveLinkAsGiven> {
         self.compiler.scope(|this_streams_graph, _tx| {
             the_live_links_as_given_by_node_uuid_of(this_streams_graph)
         })
@@ -415,7 +419,7 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Each node `graph` holds that is not pending deletion, as a reconcile compares it.
-pub(super) fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
+fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
     graph
         .traversal()
         .v(())
@@ -435,7 +439,7 @@ pub(super) fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt>
 }
 
 /// Each link `graph` holds that is not pending deletion, each end its node's UUID.
-pub(super) fn the_live_links_by_node_uuid_of(
+fn the_live_links_by_node_uuid_of(
     graph: &Graph,
 ) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
     let node_uuid_of_each_processor: HashMap<ProcessorUniqueId, Uuid> = graph
@@ -465,7 +469,7 @@ pub(super) fn the_live_links_by_node_uuid_of(
 
 /// Each node `graph` holds as it was given, as [`the_live_nodes_of`] reads them: the stream's
 /// function node pool, a compile result, left out.
-fn the_live_nodes_as_given_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
+pub(super) fn the_live_nodes_as_given_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
     the_live_nodes_of(graph)
         .into_iter()
         .filter(|live_node| !is_the_function_node_pool_type(&live_node.processor_type))
@@ -475,74 +479,49 @@ fn the_live_nodes_as_given_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
 /// Each link `graph` holds as it was given, as [`the_live_links_by_node_uuid_of`] reads them,
 /// beside the links it is wired as: a link carried through the function node pool once, from
 /// its island to its reader, wired as its two links through the pool.
-fn the_live_links_as_given_by_node_uuid_of(
-    graph: &Graph,
-) -> Vec<(Vec<LinkUniqueId>, RunningLinkBetweenTwoNodesByUuid)> {
-    let function_node_pool = the_function_node_pool_of(graph);
-    let carried_link_of = |link_id: &LinkUniqueId| {
-        graph
-            .traversal()
-            .e(link_id)
-            .first()
-            .and_then(|link| link.get::<LinkCarriedThroughTheFunctionNodePoolComponent>())
-            .map(|carried| carried.carried_link_id.clone())
+pub(super) fn the_live_links_as_given_by_node_uuid_of(graph: &Graph) -> Vec<LiveLinkAsGiven> {
+    let live_links = the_live_links_by_node_uuid_of(graph);
+    let live_link_of = |link_id: &LinkUniqueId| {
+        live_links
+            .iter()
+            .find(|(live, _)| live == link_id)
+            .map(|(_, live_link)| live_link)
     };
-    let mut links_as_given = Vec::new();
-    let mut halves_of_each_carried_link: Vec<(
-        LinkUniqueId,
-        Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)>,
-    )> = Vec::new();
-    for (link_id, live_link) in the_live_links_by_node_uuid_of(graph) {
-        match carried_link_of(&link_id) {
-            Some(carried_link_id) => {
-                match halves_of_each_carried_link
-                    .iter_mut()
-                    .find(|(held, _)| held == &carried_link_id)
-                {
-                    Some((_, halves)) => halves.push((link_id, live_link)),
-                    None => halves_of_each_carried_link
-                        .push((carried_link_id, vec![(link_id, live_link)])),
-                }
-            }
-            None => links_as_given.push((vec![link_id], live_link)),
-        }
-    }
-    let node_uuid_of_the_pool = function_node_pool.as_ref().and_then(|pool| {
-        graph
-            .traversal()
-            .v(pool)
-            .first()
-            .map(|pool_node| pool_node.node_uuid)
+    let carried_links = the_links_carried_through_the_function_node_pool_of(graph);
+    let wired_as_a_carried_link: HashSet<&LinkUniqueId> = carried_links
+        .iter()
+        .flat_map(|carried| {
+            [
+                &carried.into_the_function_node_pool.id,
+                &carried.out_of_the_function_node_pool.id,
+            ]
+        })
+        .collect();
+    let carried_links_as_given = carried_links.iter().filter_map(|carried| {
+        let into_the_pool = live_link_of(&carried.into_the_function_node_pool.id)?;
+        let out_of_the_pool = live_link_of(&carried.out_of_the_function_node_pool.id)?;
+        Some(LiveLinkAsGiven {
+            link_as_given: RunningLinkBetweenTwoNodesByUuid {
+                source_node: into_the_pool.source_node,
+                source_port: into_the_pool.source_port.clone(),
+                target_node: out_of_the_pool.target_node,
+                target_port: out_of_the_pool.target_port.clone(),
+            },
+            wired_as: vec![
+                carried.into_the_function_node_pool.id.clone(),
+                carried.out_of_the_function_node_pool.id.clone(),
+            ],
+        })
     });
-    for (_, halves) in halves_of_each_carried_link {
-        let into_the_pool = halves
-            .iter()
-            .find(|(_, half)| Some(half.target_node) == node_uuid_of_the_pool);
-        let out_of_the_pool = halves
-            .iter()
-            .find(|(_, half)| Some(half.source_node) == node_uuid_of_the_pool);
-        let (Some((_, into_the_pool)), Some((_, out_of_the_pool))) =
-            (into_the_pool, out_of_the_pool)
-        else {
-            links_as_given.extend(
-                halves
-                    .into_iter()
-                    .map(|(link_id, half)| (vec![link_id], half)),
-            );
-            continue;
-        };
-        let carried_link = RunningLinkBetweenTwoNodesByUuid {
-            source_node: into_the_pool.source_node,
-            source_port: into_the_pool.source_port.clone(),
-            target_node: out_of_the_pool.target_node,
-            target_port: out_of_the_pool.target_port.clone(),
-        };
-        links_as_given.push((
-            halves.into_iter().map(|(link_id, _)| link_id).collect(),
-            carried_link,
-        ));
-    }
-    links_as_given
+    live_links
+        .iter()
+        .filter(|(link_id, _)| !wired_as_a_carried_link.contains(link_id))
+        .map(|(link_id, live_link)| LiveLinkAsGiven {
+            link_as_given: live_link.clone(),
+            wired_as: vec![link_id.clone()],
+        })
+        .chain(carried_links_as_given)
+        .collect()
 }
 
 #[cfg(test)]
@@ -608,12 +587,17 @@ mod tests {
         let mut links: Vec<_> = stream
             .the_live_links_by_node_uuid()
             .into_iter()
-            .map(|(_, link)| {
-                format!(
-                    "{}/{} -> {}/{}",
-                    link.source_node, link.source_port, link.target_node, link.target_port
-                )
-            })
+            .map(
+                |LiveLinkAsGiven {
+                     link_as_given: link,
+                     ..
+                 }| {
+                    format!(
+                        "{}/{} -> {}/{}",
+                        link.source_node, link.source_port, link.target_node, link.target_port
+                    )
+                },
+            )
             .collect();
         links.sort();
         (nodes, links)
@@ -666,9 +650,12 @@ mod tests {
             "the pool is no node a document holds"
         );
         assert_eq!(live_links.len(), 1);
-        let (wired_as, live_link) = &live_links[0];
+        let LiveLinkAsGiven {
+            link_as_given,
+            wired_as,
+        } = &live_links[0];
         assert_eq!(
-            live_link,
+            link_as_given,
             &RunningLinkBetweenTwoNodesByUuid {
                 source_node: node_uuid_of(&lfo),
                 source_port: "result".to_string(),

@@ -19,7 +19,7 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, Link,
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
     OutputLinkPortRef, PortInfo, the_family_a_link_out_of_an_output_carries,
 };
@@ -352,6 +352,61 @@ pub(crate) fn the_links_a_link_is_wired_as(
                 .is_some_and(|carried| &carried.carried_link_id == link_id)
         })
         .map(|link| link.id.clone())
+        .collect()
+}
+
+/// One link the graph carries through the function node pool, beside the two
+/// links it is wired as.
+pub(crate) struct LinkCarriedThroughTheFunctionNodePool<'graph> {
+    /// The link as the graph was given it.
+    pub(crate) carried_link_id: LinkUniqueId,
+    /// The link from the island into an input of the pool.
+    pub(crate) into_the_function_node_pool: &'graph Link,
+    /// The link from the matching output of the pool into the reader.
+    pub(crate) out_of_the_function_node_pool: &'graph Link,
+}
+
+/// Each link `graph` carries through its function node pool, in the order
+/// the graph holds the first of its two links; one missing either link is
+/// left out.
+pub(crate) fn the_links_carried_through_the_function_node_pool_of(
+    graph: &Graph,
+) -> Vec<LinkCarriedThroughTheFunctionNodePool<'_>> {
+    let Some(function_node_pool) = the_function_node_pool_of(graph) else {
+        return Vec::new();
+    };
+    let mut halves_of_each_carried_link: Vec<(LinkUniqueId, Option<&Link>, Option<&Link>)> =
+        Vec::new();
+    for link in graph.traversal().e(()).iter() {
+        let Some(carried) = link.get::<LinkCarriedThroughTheFunctionNodePoolComponent>() else {
+            continue;
+        };
+        let index = match halves_of_each_carried_link
+            .iter()
+            .position(|(held, _, _)| held == &carried.carried_link_id)
+        {
+            Some(index) => index,
+            None => {
+                halves_of_each_carried_link.push((carried.carried_link_id.clone(), None, None));
+                halves_of_each_carried_link.len() - 1
+            }
+        };
+        let (_, into_the_pool, out_of_the_pool) = &mut halves_of_each_carried_link[index];
+        if link.source().processor_id() == &function_node_pool {
+            *out_of_the_pool = Some(link);
+        } else {
+            *into_the_pool = Some(link);
+        }
+    }
+    halves_of_each_carried_link
+        .into_iter()
+        .filter_map(|(carried_link_id, into_the_pool, out_of_the_pool)| {
+            Some(LinkCarriedThroughTheFunctionNodePool {
+                carried_link_id,
+                into_the_function_node_pool: into_the_pool?,
+                out_of_the_function_node_pool: out_of_the_pool?,
+            })
+        })
         .collect()
 }
 
