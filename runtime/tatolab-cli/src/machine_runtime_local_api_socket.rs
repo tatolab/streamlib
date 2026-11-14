@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one local API socket every verb reaches the machine's runtime through, at its fixed path
 //! in this user's runtime directory, and the refusal when nothing answers there.

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `VulkanSurfaceAdapter<D>` — Vulkan-typed `SurfaceAdapter`.
 //!
@@ -397,7 +397,7 @@ impl<D: VulkanRhiDevice> VulkanSurfaceAdapter<D> {
             // peer-timeline's kernel `current_value()` snapshot is
             // taken inside `finalize_read` (outside the registry
             // lock) per
-            // `docs/architecture/adapter-timeline-single-writer.md`.
+            // the single-writer-per-edge timeline rule.
             let peer_timeline = Arc::clone(&state.produce_done);
             let image = state
                 .texture

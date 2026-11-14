@@ -3,10 +3,10 @@ name = "tatolab-browser-host"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "The machine's browser host: one CEF offscreen browser the runtime supervises, rendering every BrowserSource node's page as a tab, each stream under its own profile."
 repository = "https://github.com/tatolab/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 
 [[bin]]

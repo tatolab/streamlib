@@ -1,5 +1,5 @@
-/* Copyright (c) 2025 Jonathan Fontanez
- * SPDX-License-Identifier: BUSL-1.1 */
+/* Copyright (c) 2025 Tatolab LLC
+ * SPDX-License-Identifier: GPL-3.0-only */
 
 /* The C surface this wheel's Rust reaches rive-runtime through. Every struct
  * here is laid out exactly as its `streamlib_consumer_rhi` namesake; the

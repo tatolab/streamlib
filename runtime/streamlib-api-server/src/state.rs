@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Shared HTTP state, OpenAPI document, and request/response wire types.
 
@@ -39,7 +39,7 @@ pub(crate) struct ErrorResponse {
         title = "StreamLib Runtime API",
         version = "0.1.0",
         description = "Observation API for the machine's runtime: the graph of each stream it loads, the node types each can add, and its event stream. `/api/graph` and `/api/registry` take an optional `stream` query parameter naming one loaded stream, and read every loaded stream without it. A stream's graph is defined by its code, so this API does not mutate it.",
-        license(name = "BUSL-1.1")
+        license(name = "GPL-3.0-only")
     ),
     tags(
         (name = "graph", description = "Graph inspection"),

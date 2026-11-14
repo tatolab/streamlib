@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The engine's colour converter run on surfaces named by id: a YCbCr pixel
 //! buffer — a camera's imported DMA-BUF, a decoder's output — converted into

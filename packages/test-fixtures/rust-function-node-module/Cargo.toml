@@ -3,9 +3,9 @@ name = "rust-function-node-fixture"
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.88"
-authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+authors = ["Tatolab LLC <hello@tatolab.com>"]
 description = "A fixture module of Rust function nodes, built the way a third party builds one, for the integration suite."
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 
 [lib]

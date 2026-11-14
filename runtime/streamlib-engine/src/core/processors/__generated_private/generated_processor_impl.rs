@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Object-safe wrapper for GeneratedProcessor - DO NOT USE DIRECTLY.
 
@@ -1340,7 +1340,7 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Polled beside [`Self::has_failed_unrecoverably`] by the Manual-mode
     /// lifecycle loop. Separate from it because this one acts: a query that
     /// killed a process group would hide the kill behind a name that reads like
-    /// a read. `docs/plan/ARCHITECTURE.md` §Processor model puts a helper's
+    /// a read. The engine puts a helper's
     /// group down at every helper exit, "a crash the engine detects by the
     /// process itself rather than by its socket" included — a descendant
     /// holding that socket keeps its EOF from ever arriving.

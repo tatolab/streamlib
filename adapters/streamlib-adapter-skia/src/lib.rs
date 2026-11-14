@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Skia surface adapter — composes on `streamlib-adapter-vulkan` so
 //! customers get a `skia::Surface` (write) or `skia::Image` (read)
@@ -22,9 +22,7 @@
 //! and never reaches the customer; the deliberate
 //! `VulkanWritable::vk_image_layout()` escape hatch from
 //! `streamlib-surface-adapter` lives on a capability trait that public
-//! consumers of `SurfaceAdapter` cannot reach. See
-//! `docs/architecture/surface-adapter.md` for the full architecture
-//! brief.
+//! consumers of `SurfaceAdapter` cannot reach.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

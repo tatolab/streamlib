@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """`ctx.outputs.has_a_reader_the_last_write_missed`: a reader that connects
 after a write is told apart, so a node that writes only on change can write

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What a running `uv sync` of a project's `.venv` has done so far, read line by line from the
 //! standard error of the uv the runtime unit carries. Off a terminal uv draws no progress bar:

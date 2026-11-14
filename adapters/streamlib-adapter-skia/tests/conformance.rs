@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `streamlib_adapter_skia::tests::conformance` — runs the public
 //! `run_conformance` suite from `streamlib-surface-adapter` against a real
@@ -67,7 +67,7 @@ fn register_one(
         .expect("HostVulkanTexture::new_device_local");
     let texture = Arc::new(raw_tex);
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`.
+    // the single-writer-per-edge timeline rule.
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(inner.device().device(), 0)
             .expect("produce_done timeline"),

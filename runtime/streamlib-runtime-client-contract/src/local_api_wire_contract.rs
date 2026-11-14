@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The names a runtime's local API speaks on its socket and its loopback HTTP listener on its
 //! port, and the shape of each result a client parses, written once for the runtime that serves

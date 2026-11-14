@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 [build-system]
 requires = ["hatchling>=1.27"]
@@ -16,10 +16,10 @@ requires-python = ">=3.12"
 # What this package's own modules import, never the runtime: nothing beyond the
 # standard library. numpy is imported lazily, only where a caller hands it an array.
 dependencies = []
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 # A symlink to the repository's LICENSE, so the one file travels without a copy.
 license-files = ["LICENSE"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

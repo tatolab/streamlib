@@ -8,14 +8,14 @@ version = "0.68.82"
 description = "Opus encode and decode nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "BUSL-1.1" }
+license = { text = "GPL-3.0-only" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
 # dependency's — libopus's included, which `opusic-sys` links in statically.
 # `LICENSE` is a symlink to the repo root, which maturin follows; the notices
 # are generated over this project's own closure by `cargo xtask
 # generate-third-party-notices --extension-package-directory packages/tatolab-opus`.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

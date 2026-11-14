@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Stage 6 integration test for #588 — OPAQUE_FD plumbing chain end-to-end.
 //!
@@ -32,7 +32,7 @@
 //!   fails (e.g. missing extension).
 //! - `#[serial]` — same `VkInstance` / `VkDevice` discipline as the
 //!   cpu-readback helper's carve-out (NVIDIA dual-device crash —
-//!   `docs/learnings/nvidia-dual-vulkan-device-crash.md`).
+//!   the NVIDIA dual-device crash).
 //!
 //! The consumer device is built on the host device's `deviceUUID`, as a
 //! processor interpreter is on the runtime's.

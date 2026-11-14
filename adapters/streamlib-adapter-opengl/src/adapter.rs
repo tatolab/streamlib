@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `OpenGlSurfaceAdapter` — host-allocated `VkImage` consumed as a
 //! GL texture.
@@ -74,7 +74,7 @@ impl OpenGlSurfaceAdapter {
     /// where the modifier is render-target-capable). For sampler-only
     /// inputs (camera ring textures whose modifier is `external_only=TRUE`
     /// on NVIDIA — see
-    /// `docs/learnings/nvidia-egl-dmabuf-render-target.md`) use
+    /// NVIDIA EGL's sampler-only linear DMA-BUFs) use
     /// [`Self::register_external_oes_host_surface`] instead.
     ///
     /// `id` MUST be unique across the adapter's lifetime; double-

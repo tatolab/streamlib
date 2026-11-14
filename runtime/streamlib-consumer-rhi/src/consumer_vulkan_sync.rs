@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Consumer-side timeline semaphore — imports a host-allocated
 //! exportable timeline semaphore (an OPAQUE_FD on Linux, a Metal shared
@@ -180,7 +180,7 @@ impl ConsumerVulkanTimelineSemaphore {
     /// Host-side signal: advance the counter to `value` from the CPU.
     ///
     /// Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`: only
+    /// the single-writer-per-edge timeline rule: only
     /// one process ever signals a given timeline, so `value` is
     /// strictly greater than the current value by construction and
     /// VUID-VkSemaphoreSignalInfo-value-03258 holds without runtime

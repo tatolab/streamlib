@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Each node of a `tatolab-ops` type in a project's stream documents, moved to the Core Nodes
 //! type that replaced it: the same function under the same name, ports and config.

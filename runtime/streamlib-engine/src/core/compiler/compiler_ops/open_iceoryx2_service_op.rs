@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! iceoryx2 service operations for the compiler.
 //!
@@ -466,8 +466,7 @@ impl OpenedSourceSideOfALink {
         // `Wired`: the engine has sent the wiring, and only that end opening its
         // own port makes the link carry anything. `graph` reads the answers off
         // the component below, which the end fills from its bridge's reader
-        // thread. `docs/plan/ARCHITECTURE.md` §Processor model, the
-        // `[local-transport-hardening]` entry.
+        // thread.
         if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
             link.insert(LinkStateComponent(LinkState::Wired));
             tracing::info!(

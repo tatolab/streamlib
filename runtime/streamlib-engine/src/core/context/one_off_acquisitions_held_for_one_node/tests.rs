@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 use super::one_off_acquisition_shapes_for_tests::{
     a_640x480_bgra32_pixel_buffer, a_1280x720_rgba8_unorm_texture,

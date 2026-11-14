@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 [package]
 name = "streamlib-adapter-cpu-readback"
@@ -45,8 +45,7 @@ serde = { workspace = true }
 # `streamlib`-pulling helper does NOT propagate into adapter-cpu-readback's
 # runtime dep graph (and from there into the cdylibs). Tests reach the
 # Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
-# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
-# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+# `VkInstance` creation on NVIDIA Linux trips a driver SIGSEGV.
 serial_test = "3.2"
 
 [[test]]

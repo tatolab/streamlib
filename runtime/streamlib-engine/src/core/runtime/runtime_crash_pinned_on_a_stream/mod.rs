@@ -1,9 +1,9 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Pinning a crash of the runtime on the stream whose thread crashed it.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Processor model, failure isolation: a
+//! Failure isolation: a
 //! thread working for a stream carries the stream's id; handlers for the
 //! fatal signals on the alternate stack, a hook on a panic that ends the
 //! process, and the ends past a watchdog each append the crashing thread's

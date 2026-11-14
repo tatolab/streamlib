@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `SkiaSurfaceAdapter<D>` — Skia-typed `SurfaceAdapter`.
 //!
@@ -14,7 +14,7 @@
 //! reason `VulkanSurfaceAdapter<D>` is — works against either
 //! `HostVulkanDevice` (in-tree host) or `ConsumerVulkanDevice`
 //! (subprocess cdylib). The single-pattern shape from
-//! `docs/architecture/subprocess-rhi-parity.md` carries through.
+//! the subprocess RHI parity rule carries through.
 
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};

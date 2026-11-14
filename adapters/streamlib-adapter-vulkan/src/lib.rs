@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Vulkan-native surface adapter — no-copy passthrough that hands a
 //! host-allocated `VkImage` to any consumer that speaks Vulkan.
@@ -9,10 +9,6 @@
 //! Cross-API adapters (`streamlib-adapter-opengl`, `streamlib-adapter-skia`)
 //! compose on top of these views without ever seeing DMA-BUF fds, DRM
 //! modifiers, or timeline-semaphore handles directly.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture brief
-//! and `docs/architecture/adapter-authoring.md` for the 3rd-party
-//! authoring guide.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

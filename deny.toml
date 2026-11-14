@@ -46,7 +46,6 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
-    "BUSL-1.1",
     # `notify`, reached through `moq-tokio`'s file watch, which its QUIC
     # backend turns on. CC0-1.0 is a public-domain dedication with a
     # permissive fallback licence; it asks nothing of a redistributor.
@@ -55,6 +54,8 @@ allow = [
     # reached through `moq-tokio`. A permissive data licence whose one
     # condition on sharing is carrying its text, which the notices do.
     "CDLA-Permissive-2.0",
+    # Our own crates (the clarifications below).
+    "GPL-3.0-only",
     "ISC",
     "MIT",
     "MIT-0",
@@ -86,13 +87,13 @@ license-files = []
 
 # Our own crates, one entry each.
 #
-# `[workspace.package] license-file = "LICENSE"` points at the BUSL-1.1
-# template with the parameters filled in, and askalono scores that at 0.56
-# against the canonical text — far under the threshold above, so every one of
-# these reads as `unlicensed`. Declaring `license = "BUSL-1.1"` alongside
+# `[workspace.package] license-file = "LICENSE"` points at the GPL-3.0 text
+# under a copyright notice, and askalono does not settle `-only` against
+# `-or-later` from the text alone — so without these every one of these reads
+# as unlicensed or as the wrong arm. Declaring `license = "GPL-3.0-only"` alongside
 # `license-file` is not the fix: cargo then warns `only one of 'license' or
 # 'license-file' is necessary` on every build, and dropping `license-file`
-# would stop cargo copying the parameterized text into each published `.crate`.
+# would stop cargo copying the licence text into each published `.crate`.
 # `licenses.private.ignore` is no shortcut either: it reaches only the crates
 # that set `publish = false`, and every published crate still needs an entry
 # apiece.
@@ -102,165 +103,165 @@ license-files = []
 
 [[licenses.clarify]]
 name = "streamlib"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-adapter-cpu-readback"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-adapter-cuda"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-adapter-opengl"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-adapter-skia"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-adapter-vulkan"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-consumer-rhi"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-engine"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-error"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-ipc-types"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-slang-shader-compiler"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-macros"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-media-builtins"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-processor-schema"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-asset-media-facts"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-project-repository"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-runtime-client-contract"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-control-contract"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-surface-adapter"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-gpu-frame-import-client"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-surface-client"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-video-bitstream"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-owned-device-video-codec-nodes"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-vulkan-video"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-test-fixtures"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "xtask"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-cli"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolabd"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "streamlib-relay-track-reader"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-read-track"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-video-poster-frame"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-module-sdk"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
 name = "tatolab-module-sdk-macros"
-expression = "BUSL-1.1"
+expression = "GPL-3.0-only"
 license-files = []

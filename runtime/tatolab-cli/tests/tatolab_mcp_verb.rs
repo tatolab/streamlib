@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab mcp` launched as an MCP host launches it, its stdio piped, against a stub local API
 //! at an isolated machine's fixed socket: what it writes to stdout and stderr, and how it exits,

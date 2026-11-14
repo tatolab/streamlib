@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `streamlib_adapter_cpu_readback::tests::round_trip_write` — customer
 //! acquires WRITE, modifies bytes, releases. Host then re-acquires READ

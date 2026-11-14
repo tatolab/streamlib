@@ -1,5 +1,5 @@
-/* Copyright (c) 2025 Jonathan Fontanez
- * SPDX-License-Identifier: BUSL-1.1 */
+/* Copyright (c) 2025 Tatolab LLC
+ * SPDX-License-Identifier: GPL-3.0-only */
 
 /* The C header's layout, held to the same sizes and offsets the Rust mirror's
  * layout regression tests hold `module_host_table_abi.rs` to. */

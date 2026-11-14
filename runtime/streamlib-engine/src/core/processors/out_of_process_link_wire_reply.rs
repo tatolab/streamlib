@@ -1,12 +1,11 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What an out-of-process far side answers about a link it was told to wire.
 //!
 //! A link handed to a running far side is not wired when the engine sends it —
 //! it is wired when the far side has opened its own port for it. `connect` does
-//! not wait for that answer (`docs/plan/ARCHITECTURE.md` §Processor model, the
-//! `[local-transport-hardening]` entry): it returns with the link pending, and
+//! not wait for that answer: it returns with the link pending, and
 //! these cells are what `graph` reads afterwards.
 
 use std::collections::HashMap;

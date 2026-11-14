@@ -8,9 +8,9 @@ version = "0.68.82"
 description = "A Rive animation as a stream source, as an extension wheel: rive-runtime draws each frame straight into the stream on the GPU, with no copy."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "BUSL-1.1" }
+license = { text = "GPL-3.0-only" }
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 # A minimum, never an exact pin, as a third party's package depends on it.
 dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version
 

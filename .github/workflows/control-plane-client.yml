@@ -162,8 +162,8 @@ jobs:
               "api-client",
               "openapi"
             ],
-            "author": "Jonathan Fontanez",
-            "license": "BUSL-1.1",
+            "author": "Tatolab LLC",
+            "license": "GPL-3.0-only",
             "devDependencies": {
               "typescript": "^5.0.0",
               "tsup": "^8.0.0"

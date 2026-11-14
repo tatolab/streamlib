@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What `logs -f` and `dev` say when the runtime they follow a stream on goes away: that it
 //! crashed or was stopped, and where its own log is, as `describe_runtime` named it while it

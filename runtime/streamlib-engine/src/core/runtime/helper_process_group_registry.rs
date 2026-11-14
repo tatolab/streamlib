@@ -1,10 +1,10 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The helper process groups a third interrupt, the teardown watchdog and a
 //! stream's own watchdog kill.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs: the third interrupt kills every
+//! The third interrupt kills every
 //! helper's process group and exits at once. It is read from the
 //! signal-forwarding thread while any other thread may be wedged holding any
 //! lock, so the registry takes none.

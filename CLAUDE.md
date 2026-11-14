@@ -2,76 +2,43 @@
 
 ## Licensing (load-bearing — do not modify)
 
-StreamLib is licensed under the Business Source License 1.1 (BUSL-1.1). Never suggest MIT / Apache
-or relax the commercial-use restriction. Every new Rust file carries:
+StreamLib is licensed under the GNU General Public License, version 3 only (GPL-3.0-only).
+Never suggest another licence for it. Every new Rust and Python file carries:
 
-    // Copyright (c) 2025 Jonathan Fontanez
-    // SPDX-License-Identifier: BUSL-1.1
+    // Copyright (c) 2025 Tatolab LLC
+    // SPDX-License-Identifier: GPL-3.0-only
 
-Exception — vendored third-party trees keep the licence they arrived under. Never add a BUSL
+with `#` in place of `//` in Python, on lines 2-3 after a shebang.
+
+Exception — vendored third-party trees keep the licence they arrived under. Never add a GPL
 header to one, and never reformat or "improve" those sources — a change to one is a
 recorded patch against its upstream, never a drive-by edit:
 
 - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
-  `docs/architecture/vendored-vulkanalia.md`.
+  `vendor/VULKANALIA-FORK.md`.
 
-The exception is those paths and nothing else; BUSL is not relaxed anywhere a path is not
-listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.
+The exception is those paths and nothing else; GPL-3.0-only holds everywhere a path is not
+listed. A dependency must be GPL-3.0-compatible (`deny.toml` holds the allow list). Do not modify
+`LICENSE` without explicit approval.
 
 ---
 
-StreamLib is a BUSL-1.1-licensed real-time streaming processing runtime like Nvidia holoscan.It is built like a game engine:
+StreamLib is a GPL-3.0-licensed real-time streaming processing runtime like Nvidia holoscan.It is built like a game engine:
 ONE core system per concern — extend the existing system, never build a parallel one. Search first.
 
 ## How work usually flows
 
-The skills under `.claude/skills/` write down how the owner likes to reason about and
-decompose work. They are descriptive, not gates: each says why its steps exist, and any
-of them can be invoked, adapted, or skipped as the situation calls for. Nothing in this
-repo blocks a tool call or stops a session — no hook refuses or prompts on a workflow
-step. The one permission prompt left is an edit to the licence files (§Licensing).
+Skills describe how the owner likes work reasoned about; adapt or skip them as needed.
+Skills, agents, the repository rules and hooks come from `dev-plugin` in
+[tatolab/tato-plugins-official](https://github.com/tatolab/tato-plugins-official), which
+`.claude/settings.json` enables; change them there, never in this repository.
 
-- `docs/plan/ROADMAP.md` is the order the active changes land in. Pick the next piece of work
-  from it; changing the order is the owner's call.
-- `/plan` is a quick orientation — it reads the plan statuses, open PRs and the tracker
-  and suggests a next step.
-- The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets`
-  (as few tracer bullets as the change honestly needs) → `/implement` (build) →
-  `/ship-change` (fold + prove removals). `/pivot` for direction changes, `/diagnose` for
-  bugs, `/research` for questions, `/reconcile-tracker` keeps GitHub a projection of the
-  plan, `/propose-rule` for changing rules.
-- Source work (`runtime/ sdk/ adapters/ xtask/`) usually traces to a ticket, so the PR
-  can say what it closes. Plan *decisions* usually travel through `/align`,
-  `/propose-change`, `/ship-change` or `/pivot`, because they change what was agreed;
-  plan and doc *records* are ordinary work — see §Recording facts vs deciding.
-- Shared understanding: `/explore-idea` (what-ifs before any commitment),
-  `/snapshot-architecture` (the living code-derived picture), `/architecture-question`
-  (how does X work, with evidence), `/reconcile-understanding` (corrections that stick).
-  Code is the authority on what IS; the plan on what we AGREED.
-- Full model: `docs/plan/OPERATING-MODEL.md`.
-
-## Recording facts vs deciding
-
-Writing down what is true is ordinary work. Deciding what we build is not. The lifecycle
-skills exist to sharpen decisions, not to license prose.
-
-- **A factual record needs no skill, no prompt, and no approval.** What a shipped change
-  removed, renamed, or proved — a `REMOVED:` bullet, a superseded claim, a corrected file
-  anchor, a stale reference, a doc describing code that no longer exists — is part of
-  finishing the work. Write it in the same PR as the change it describes. Leaving the
-  record wrong to avoid ceremony is the worse outcome, always.
-- **A decision is the owner's.** Adding, retracting or reversing a `DECIDED` / `OPEN`
-  entry, changing what we agreed to build, or settling a question the plan leaves open
-  is best brought to the owner — usually through `/align`, `/propose-change`,
-  `/ship-change`, or `/pivot`.
-- **A review comment is not a decision source.** A finding on a PR — bot or human — that
-  would change what we build is answered `Owner decision needed: <the gap>` and brought to
-  the owner; a record is fixed in the PR (`.claude/rules/owner-decisions.md`).
-- The test: **could a careful reader derive it from the diff and the tree?** Then it is a
-  fact — write it, and say in the PR body that you did. Does it commit us to something we
-  have not agreed? Then it is a decision — bring it, while you keep going on the rest.
-- Doc hygiene inside work you are already doing — fixing a claim your own change falsified —
-  is never a separate ticket and never a question.
+- **Work is tracked in Linear, never in GitHub issues** (settings deny `gh issue` writes and the GitHub MCP issue tools):
+  team Tatolab, issues `TAT-n`, structured project → milestone → issue → sub-issue. An issue
+  that lands here is titled `streamlib: …`; a change spanning repos is a parent with one
+  sub-issue per repo.
+- Never write documentation, plans or ADRs, and never create Linear projects or milestones; planning happens in Linear, in separate sessions.
+- Code is the only source of truth.
 
 ## Asking the owner
 
@@ -79,7 +46,7 @@ An approved design is standing authority. Implementing it, recording it, and cle
 after it need no further confirmation. Re-asking is not diligence; it spends the owner's
 attention, and attention spent on settled things is unavailable for real forks.
 
-- **Ask only for a live fork the plan does not settle** — two defensible paths, materially
+- **Ask only for a live fork the issue does not settle** — two defensible paths, materially
   different outcomes, where guessing wrong wastes real work.
 - **Never ask** to re-confirm something already agreed, to re-approve a scope already
   signed off, to check that work is going well, or in place of reading the tree. If the
@@ -91,35 +58,28 @@ attention, and attention spent on settled things is unavailable for real forks.
   drip of one-question stops.
 - A finding is not a question. Non-blocking findings go in the PR description, then move on.
 
-## Runtime-first, plan-first (MVP doctrine)
+## Runtime-first (MVP doctrine)
 
 The runtime is the product; consumers lag behind it by design (the Holoscan / Next.js model:
-framework repo first, holohub/examples follow releases). Architecture lives in ONE place —
-`docs/plan/ARCHITECTURE.md` plus `docs/plan/architecture.excalidraw` — agreed with the owner
-before implementation. Sessions implement the plan; when work needs architecture the plan
+framework repo first, holohub/examples follow releases). When work needs architecture the issue
 doesn't state, the owner wants to make that call (§Asking the owner).
 
 - `examples/` and the consumer entries in `packages/` (everything except `test-fixtures`) are
   downstream consumers, **not contract sources** — converted or not. Never read one to infer what
   the engine guarantees; never bend a runtime design to fit their existing patterns. Contracts
-  are stated in the engine and proven by engine tests and fixtures. Disposition per directory is
-  decided in `docs/plan/ARCHITECTURE.md` §Consumers.
+  are stated in the engine and proven by engine tests and fixtures.
 - **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
-  editable work.** An engine change that breaks one files tracked backlog at that consumer and
+  editable work.** An engine change that breaks one files a Linear backlog issue for that consumer and
   never blocks the engine change; fixing it in-stream is reserved for the rare case where the
   consumer is the deliberate canary of the in-flight work.
-- File an issue only when something blocks the current milestone. Non-blocking findings go in the
-  PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
+- File a Linear issue only when something blocks the milestone in flight. Non-blocking findings
+  go in the PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
 - **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) keeps the old treatment:
   written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
   manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
   wired to the RHI, what a capture path must handle), never for form; breakage is expected, not
-  a defect, and gets no ticket. It converts or deletes only through §Consumers' rules, never in
-  passing.
-
-Working agreements are in `docs/working-agreements.md`; `docs/index.md` maps every docs home. Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
-from code at need — do not create summary docs of what code already shows.
+  a defect, and gets no issue. It converts or deletes only as its own issue, never in passing.
 
 ## Reading the Python surface
 
@@ -148,8 +108,8 @@ built-in publishes on means you skipped it.
   sample in place; `read(port_name)` narrows to `PortPayloadBorrow | None`, a borrow with no
   copy, and `read(port_name, into=T)` to `T | None` through `T.from_bytes`. A Records write
   checks only that every declared name is present — a `str` where the wire wants an `int`
-  reaches the runtime silently. Spell a record against the wire contract in
-  `docs/plan/ARCHITECTURE.md`, never from memory.
+  reaches the runtime silently. Spell a record against the producing node's
+  declared fields, never from memory.
 
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +
@@ -160,16 +120,23 @@ built-in publishes on means you skipped it.
   or anything lower, in this repo or in Tato Studio. A third-party binary's own `minos` and a
   dated research note stay as recorded.
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
-- New Rust files carry the BUSL header, except in the vendored trees §Licensing lists, where
+- New Rust and Python files carry the GPL-3.0-only header, except in the vendored trees §Licensing lists, where
   a change is a recorded patch against upstream and never a drive-by edit. Never touch the
   licence files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
-  migration's scope; a broken *converted* consumer gets backlog filed, a held pre-pivot one
-  just lags.
-- Architecture is decided in `docs/plan/`, not per-ticket. A missing decision goes to the
-  owner — as a question or a stated assumption — rather than being inferred from existing
-  code.
+  migration's scope; a broken *converted* consumer gets a Linear backlog issue, a held
+  pre-pivot one just lags.
+- A missing architecture decision goes to the owner — as a question or a stated assumption.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
+## Before you push
+
+- **Local gates:** spawn `dev-plugin:streamlib-local-ci-runner` — fmt, `cargo xtask check-all-source-gates`,
+  clippy and nextest for the packages touched, pyright for Python under `sdk/`.
+- **Review:** spawn `dev-plugin:streamlib-review-pr`, and `dev-plugin:rust-craftsmanship-reviewer` on Rust; fix every
+  blocker and should-fix before the PR opens.
+- **Live proof:** `/verify-live` for a GPU, camera or codec change, `/verify-audio` for an
+  audio change; the report goes in the PR body.
+- **PR title:** passes `scripts/check-conventional-pr-title.sh`; it or the branch names `TAT-n`.

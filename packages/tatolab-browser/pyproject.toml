@@ -8,11 +8,11 @@ version = "0.68.82"
 description = "A web page as a stream source: the machine's shared Chromium (CEF) browser host renders it offscreen as a tab, and its frames, audio and events are published through the module host table."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "BUSL-1.1" }
+license = { text = "GPL-3.0-only" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
 # dependency's.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",

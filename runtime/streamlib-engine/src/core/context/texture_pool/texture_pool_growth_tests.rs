@@ -8,7 +8,7 @@ use crate::core::rhi::{TextureFormat, TextureUsages};
 /// shape held, the next acquire allocates another.
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1."
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Test support for `tatolab`'s integration tests. The unit tests mount every file here but
 //! `tatolab_binary_run`, `isolated_machine_directories` and `running_tatolab` through `#[path]`, as

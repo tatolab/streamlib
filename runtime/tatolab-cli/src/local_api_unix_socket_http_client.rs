@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! HTTP/1.1 over a runtime's local API socket, through hyper's client: the one `/mcp/stdio`
 //! upgrade `mcp` opens its stream with. The request carries no credential; the socket's file mode

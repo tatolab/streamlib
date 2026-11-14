@@ -1,10 +1,10 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Removing processors: every thread told to stop before any is waited on, each
 //! wait bounded, and a thread that outlives its budget abandoned and named.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Processor model and §Language SDKs: the engine
+//! The engine
 //! stops every helper at once, never one after another, and a native processor
 //! thread that ignores shutdown past its budget is abandoned rather than
 //! joined. A second interrupt abandons a native thread still inside its callback,
@@ -126,15 +126,13 @@ impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
     }
 }
 
-/// Remove `processor_ids` from the graph, telling every one of their threads to
-/// stop before waiting on any.
+/// Stop the threads of `processor_ids`, telling every one to stop before
+/// waiting on any, and leave their nodes in the graph.
 ///
-/// Every node is removed whether its thread returned or not. The threads
-/// abandoned are added to `abandoned_processor_threads` and counted into the
-/// process-wide total before any node is dropped, and named in the return
-/// value. The wait writes what it is waiting on into the stream's
-/// `teardown_progress_note`.
-pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
+/// The threads abandoned are added to `abandoned_processor_threads`, counted
+/// into the process-wide total and named in the return value. The wait writes
+/// what it is waiting on into the stream's `teardown_progress_note`.
+pub(crate) fn stop_processor_threads_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
     the_stream_the_processors_belong_to: &LoadedStreamIdentity,
     processor_ids: &[ProcessorUniqueId],
@@ -142,7 +140,7 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     is_shutdown_forced: impl Fn() -> bool,
     teardown_progress_note: &TeardownProgressNoteOfOneStream,
     abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
-) -> Result<Vec<ProcessorDisplayNameAndId>> {
+) -> Vec<ProcessorDisplayNameAndId> {
     let mut signalled_threads = Vec::with_capacity(processor_ids.len());
     for processor_id in processor_ids {
         the_stream_the_processors_belong_to.publish_on_this_streams_topic(
@@ -197,6 +195,35 @@ pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
             the_stream_the_processors_belong_to.stream_id
         ),
         &the_stream_the_processors_belong_to.stream_id,
+    );
+    abandoned_processors
+}
+
+/// Remove `processor_ids` from the graph, telling every one of their threads to
+/// stop before waiting on any.
+///
+/// Every node is removed whether its thread returned or not. The threads
+/// abandoned are added to `abandoned_processor_threads` and counted into the
+/// process-wide total before any node is dropped, and named in the return
+/// value. The wait writes what it is waiting on into the stream's
+/// `teardown_progress_note`.
+pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
+    graph_arc: &Arc<RwLock<Graph>>,
+    the_stream_the_processors_belong_to: &LoadedStreamIdentity,
+    processor_ids: &[ProcessorUniqueId],
+    budgets: ProcessorThreadJoinBudgets,
+    is_shutdown_forced: impl Fn() -> bool,
+    teardown_progress_note: &TeardownProgressNoteOfOneStream,
+    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+) -> Result<Vec<ProcessorDisplayNameAndId>> {
+    let abandoned_processors = stop_processor_threads_signalling_every_thread_before_joining_any(
+        graph_arc,
+        the_stream_the_processors_belong_to,
+        processor_ids,
+        budgets,
+        is_shutdown_forced,
+        teardown_progress_note,
+        abandoned_processor_threads,
     );
 
     let mut first_node_left_behind = None;

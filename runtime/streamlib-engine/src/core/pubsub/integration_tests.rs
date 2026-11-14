@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The event bus's delivery contract, each test on its own `PubSub` instance
 //! so nothing crosses into the process-wide `PUBSUB`.

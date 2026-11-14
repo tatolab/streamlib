@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! One run of a project's graph generator in the project's own interpreter, for a fragment's
 //! import or refresh: the fragment node it is stored as, or the project's own traceback.

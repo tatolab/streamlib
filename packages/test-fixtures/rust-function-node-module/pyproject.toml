@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 [build-system]
 requires = ["maturin>=1.9,<2.0"]
@@ -10,8 +10,8 @@ name = "rust-function-node-fixture"
 version = "0.0.0"
 description = "A fixture module of Rust function nodes, built the way a third party builds one, for the integration suite."
 requires-python = ">=3.12"
-license = { text = "BUSL-1.1" }
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+license = { text = "GPL-3.0-only" }
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 dependencies = ["tatolab-stream>=0.68.34"]
 
 [project.entry-points."tatolab.nodes"]

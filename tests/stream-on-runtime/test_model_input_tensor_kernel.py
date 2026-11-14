@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A model's input tensor is prepared on the GPU from a processor interpreter
 beneath `tatolabd`, and matches a torch reference of the same parameters for every fit, layout and

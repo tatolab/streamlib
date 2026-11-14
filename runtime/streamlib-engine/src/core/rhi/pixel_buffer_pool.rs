@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Pixel buffer pool for efficient buffer allocation.
 
@@ -54,8 +54,8 @@ impl std::fmt::Display for PixelBufferPoolSlotId {
 ///
 /// Travels as `<slot>#<generation>`; consumers treat it as an opaque string.
 /// Recycling the slot mints the next generation and retires this one, so a
-/// stale id stops resolving instead of naming somebody else's pixels
-/// (`docs/decisions/surface-id-lifetime-contract.md`). The `#<digits>` suffix
+/// stale id stops resolving instead of naming somebody else's pixels.
+/// The `#<digits>` suffix
 /// is reserved for this grammar: no other surface id may carry one.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PublishedPixelBufferFrameId {

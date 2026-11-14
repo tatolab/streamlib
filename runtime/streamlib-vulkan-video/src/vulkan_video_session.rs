@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `VkVideoSessionKHR` + `VkVideoSessionParametersKHR` lifecycle, with the
 //! session's multi-binding device-memory bind. A codec holds
@@ -1140,7 +1140,7 @@ mod tests {
 
     #[cfg_attr(
         not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+        ignore = "hardware integration — set --features streamlib-vulkan-video/hardware-tests + run with --test-threads=1"
     )]
     #[test]
     fn hardware_construct_h264_encode_session() {

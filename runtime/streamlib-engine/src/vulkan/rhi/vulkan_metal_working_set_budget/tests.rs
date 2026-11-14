@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 use std::sync::Arc;
 
@@ -160,7 +160,7 @@ fn assert_counted_once_in_the_working_set(
 
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]
@@ -196,7 +196,7 @@ fn an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usa
 
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
 #[allow(clippy::disallowed_macros)]

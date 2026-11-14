@@ -1,6 +1,6 @@
 {
   "dependencies": [],
-  "description": "A web page as a stream source, rendered offscreen by the machine's shared browser. Linux only.",
+  "description": "A web page as a stream source, rendered offscreen by the machine's shared browser.",
   "name": "Web page",
   "project": "542d15d6-67c0-4a87-b597-d7f41306d391"
 }

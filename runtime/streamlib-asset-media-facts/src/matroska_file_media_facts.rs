@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Matroska and WebM files (RFC 9559 EBML elements): duration from the segment's `Info`, and
 //! each `TrackEntry`'s picture size, frame duration, sample rate, channel count and codec.

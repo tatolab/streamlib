@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Shared command recording for the OPAQUE_FD image tests. Pulled in via
 //! `#[path = "common.rs"] mod common;` in each test file.
@@ -165,7 +165,7 @@ pub unsafe fn record_pattern_upload_to_image(
 ///
 /// The consumer's `VkImage` tracker starts at UNDEFINED by Vulkan spec
 /// regardless of the host's post-upload layout (see
-/// `docs/learnings/cross-process-vkimage-layout.md`). The bridging
+/// per-device `VkImageLayout`). The bridging
 /// transition permits content discard by spec but DMA-BUF / OPAQUE_FD
 /// kernel-cache contents are preserved in practice on NVIDIA Linux. The
 /// full QFOT acquire path (with `VkExternalMemoryAcquireUnmodifiedEXT`)

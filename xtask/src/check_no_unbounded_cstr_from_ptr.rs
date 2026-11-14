@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Bans the unbounded-lifetime spelling `CStr::from_ptr(<owner>.as_ptr())` in
 //! the Vulkan RHI trees.

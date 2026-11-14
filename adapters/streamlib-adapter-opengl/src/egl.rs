@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Surfaceless EGL display + OpenGL context plus the function
 //! pointers the adapter needs to bind imported `EGLImage`s as
@@ -366,7 +366,7 @@ impl Drop for EglRuntime {
     fn drop(&mut self) {
         // The display is the process's shared `EGL_DEFAULT_DISPLAY`, so it is
         // never `eglTerminate`d — see
-        // `docs/learnings/egl-default-display-terminate-is-process-wide.md`.
+        // `eglTerminate` on the default display being process-wide.
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_context(self.display, self.context);
     }

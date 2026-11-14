@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A machine of a test's own: the runtime directory the machine runtime's local API socket sits
 //! in, the state directory and the machine runtime lock, all under one short root, so no test

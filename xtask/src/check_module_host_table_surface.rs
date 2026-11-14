@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! CI gate keeping the module host table data-plane only.
 //!
@@ -56,7 +56,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     eprintln!(
         "\nThe module host table crosses plain data and opaque handles only — never an engine or \
          RHI object. A module that needs GPU work does it on its own device, on memory it \
-         imports; see docs/plan/ARCHITECTURE.md §Packages & extension model, the module host table."
+         imports."
     );
     anyhow::bail!("check-module-host-table-surface failed");
 }

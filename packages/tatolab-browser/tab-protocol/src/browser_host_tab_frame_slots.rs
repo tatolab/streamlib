@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The shared memory a tab's painted frames reach its node in: a fixed count
 //! of slots, each one frame of packed BGRA at the tab's extent. The host

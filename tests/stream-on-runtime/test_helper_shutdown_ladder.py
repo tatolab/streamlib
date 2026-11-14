@@ -1,12 +1,11 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The helper shutdown ladder, proven against a `tatolabd` from outside it.
 
 A terminal's Ctrl-C reaches `tatolabd` alone — every helper leads a process
 group of its own — and is a machine shutdown: `tatolabd` unloads every stream,
-walking each helper down the ladder `docs/plan/ARCHITECTURE.md` §Processor
-model decides: interrupt the callback, `stop()`, `teardown()`, then the group.
+walking each helper down the shutdown ladder: interrupt the callback, `stop()`, `teardown()`, then the group.
 A second interrupt forces the ladder, a third exits at once. Every assertion is
 made from outside, because the failures being ruled out — a surviving helper, a
 hang, a non-zero exit — are only visible to a parent.

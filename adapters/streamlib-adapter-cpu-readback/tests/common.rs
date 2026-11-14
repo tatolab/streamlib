@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Shared test scaffolding for the cpu-readback adapter integration
 //! tests. Pulled in via `#[path = "common.rs"] mod common;` from each
@@ -43,7 +43,7 @@ pub type HostContext = CpuReadbackContext<HostVulkanDevice>;
 
 /// Shared `GpuContext` for every test in this binary. Two `VkDevice`s
 /// in one process race on NVIDIA Linux (see
-/// `docs/learnings/nvidia-dual-vulkan-device-crash.md`); a single
+/// the NVIDIA dual-device crash); a single
 /// shared device is the standard mitigation for parallel-test
 /// execution.
 static SHARED_GPU: OnceLock<Option<Arc<GpuContext>>> = OnceLock::new();

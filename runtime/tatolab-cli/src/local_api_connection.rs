@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! One runtime's local API, reached over one current-thread tokio runtime: the MCP client a verb
 //! drives it through, opened on first use and kept for the run.

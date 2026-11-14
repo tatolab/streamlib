@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The installed wheel carries the notices it owes, with real text in them.
 
@@ -91,7 +91,7 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
 SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "libloading", "axum")
 
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
-BUSL_LICENSE_FILE_NAME = "LICENSE"
+PROJECT_LICENSE_FILE_NAME = "LICENSE"
 
 
 @pytest.fixture(scope="module")
@@ -118,24 +118,24 @@ def read_shipped_license_file(installed_streamlib_distribution, license_file_nam
 
 def test_metadata_names_both_license_files(installed_streamlib_distribution):
     declared = installed_streamlib_distribution.metadata.get_all("License-File") or []
-    assert BUSL_LICENSE_FILE_NAME in declared
+    assert PROJECT_LICENSE_FILE_NAME in declared
     assert NOTICES_LICENSE_FILE_NAME in declared
 
 
-def test_the_shipped_busl_license_is_the_parameterized_text(
+def test_the_shipped_license_is_the_gpl_text_with_its_copyright_notice(
     installed_streamlib_distribution,
 ):
-    """The SPDX id alone does not say who the Licensor is or when the Change Date falls.
+    """GPL-3.0 §4 conveys each copy with the licence text, and the notice names the holder.
 
-    BUSL-1.1 is a template; the parameters are the licence. A wheel carrying
-    only `License: BUSL-1.1` tells a recipient nothing they can act on.
+    The SPDX id alone gives a recipient neither, so the text has to travel in the wheel.
     """
     contents = read_shipped_license_file(
-        installed_streamlib_distribution, BUSL_LICENSE_FILE_NAME
+        installed_streamlib_distribution, PROJECT_LICENSE_FILE_NAME
     )
-    assert "Business Source License 1.1" in contents
-    assert "Change Date:" in contents
-    assert "Jonathan Fontanez" in contents
+    assert "GNU GENERAL PUBLIC LICENSE" in contents
+    assert "Version 3, 29 June 2007" in contents
+    assert "GPL-3.0-only" in contents
+    assert "Tatolab LLC" in contents
 
 
 def test_the_shipped_notices_carry_what_cargo_about_cannot_produce(

@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 # What a module's native half links to reach its node's ports: the module host
 # table's `#[repr(C)]` mirror and the safe Rust over it. It depends on no engine

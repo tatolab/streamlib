@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `skia_animated_stress` — `#[ignore]`-by-default stress test that
 //! drives the Skia adapter through 1800 acquire/draw/flush/release
@@ -111,7 +111,7 @@ fn skia_animated_stress() {
             .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`: the test
+    // the single-writer-per-edge timeline rule: the test
     // only exercises `acquire_write` so `produce_done` is the
     // timeline whose counter tracks frames.
     let produce_done = Arc::new(

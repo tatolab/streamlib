@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The helper process's end of the escalate socket, framed the way
 //! `tatolab/runtime/_processor_interpreter_bootstrap.py` frames it: a

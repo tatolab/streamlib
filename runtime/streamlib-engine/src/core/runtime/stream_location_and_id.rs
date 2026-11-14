@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A stream's location — its project and its stream asset, by UUID, and the directory the
 //! project sits in — and the stream id the runtime computes for it, which keys and addresses

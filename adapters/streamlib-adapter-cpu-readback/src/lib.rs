@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Explicit GPU→CPU surface adapter — the single named opt-in path for
 //! customers who need CPU memory access to a streamlib surface.
@@ -22,9 +22,6 @@
 //! views over the mapped bytes. On WRITE release, every plane's staging
 //! bytes are flushed back via per-plane `vkCmdCopyBufferToImage` before
 //! the timeline release-value is signaled.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture
-//! brief.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

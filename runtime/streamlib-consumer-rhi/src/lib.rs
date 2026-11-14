@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Consumer-side StreamLib RHI carve-out.
 //!
@@ -14,7 +14,7 @@
 //!
 //! - [`ConsumerVulkanDevice`] — own `VkInstance` + `VkDevice` for the
 //!   subprocess; only the carve-out methods listed in
-//!   `docs/architecture/subprocess-rhi-parity.md` (DMA-BUF AND OPAQUE_FD
+//!   the subprocess RHI parity rule (DMA-BUF AND OPAQUE_FD
 //!   FD import + bind + map on Linux, an IOSurface's pages imported as
 //!   host memory on macOS, single-shot layout transitions, sync
 //!   wait/signal on imported timeline semaphores). DMA-BUF imports back
@@ -181,7 +181,7 @@ pub use device_capability::private;
 /// a different path. That stronger property is asserted by:
 ///
 /// - `cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"`
-///   returning 0 (documented in `.claude/rules/polyglot.md`).
+///   returning 0.
 /// - The polyglot adapter crates (`streamlib-adapter-vulkan`,
 ///   `streamlib-adapter-opengl`) holding `streamlib` in
 ///   `[dev-dependencies]` only, with the subprocess helper bin built

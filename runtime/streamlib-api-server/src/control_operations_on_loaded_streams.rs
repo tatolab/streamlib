@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The operations on the streams a runtime loads and on what they log: a project's log records
 //! read, a viewer of an output port opened and closed, and a stream's clock rescaled.

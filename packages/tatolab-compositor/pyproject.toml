@@ -8,9 +8,9 @@ version = "0.68.82"
 description = "Video compositing nodes for Tatolab streams: layer frames with alpha on the GPU."
 readme = "README.md"
 requires-python = ">=3.12"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 license-files = ["LICENSE"]
-authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Multimedia :: Video",

@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The machine's shutdown request funnel, how far it has escalated, and each
 //! loaded stream's own escalation.
@@ -12,7 +12,7 @@
 //! owner is running is observed by the next one to start, and a run's
 //! interrupts never escalate the next one.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs: a delivered signal escalates on
+//! A delivered signal escalates on
 //! repeat — graceful, then forced, then exit at once. A programmatic request is
 //! the graceful step and only that, however often it is repeated.
 

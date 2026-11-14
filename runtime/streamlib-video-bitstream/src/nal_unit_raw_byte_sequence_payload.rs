@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A NAL unit's raw byte sequence payload (ITU-T H.264 §7.3.1, H.265 §7.3.1.1):
 //! the emulation-prevention bytes stripped, and the `u(n)` / `ue(v)` / `se(v)`

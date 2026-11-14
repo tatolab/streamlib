@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A DMA-BUF mapped read-only into this process, for a reader that reaches
 //! a foreign device's pixels through the CPU's view of them rather than a

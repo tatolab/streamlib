@@ -186,7 +186,6 @@ jobs:
       extension_package_directory: packages/tatolab-browser
       extension_distribution_name: tatolab-browser
       ref: ${{ inputs.tag_name }}
-      extension_builds_for_macos: false
   # Wheels and their sidecars first and the pages last, so a page never links a
   # file the bucket does not hold. It shares one concurrency group with the core
   # modules' publish: the pages are written from what the bucket holds, so a

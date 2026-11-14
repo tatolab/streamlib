@@ -1,12 +1,11 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Unified logging pathway: `tracing` → bounded lossy channel → drain
 //! worker → line-buffered pretty mirror + the batched JSONL log of the
 //! project whose stream or stream action emitted each record.
 //!
-//! See `docs/logging-schema.md` for the JSONL schema (the durable
-//! interface contract) and `CLAUDE.md` for the engine-model framing.
+//! The JSONL schema is `RuntimeLogEvent` in `streamlib-runtime-client-contract`.
 
 pub use config::{LoggingTunables, PrettyLogMirrorStandardStream, StreamlibLoggingConfig};
 pub use helper_process_engine_log_capture::{

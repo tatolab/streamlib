@@ -1,12 +1,12 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `streamlib_adapter_vulkan::tests::sync_correctness` — confirms that
 //! the adapter advances the appropriate timeline semaphore on guard
 //! drop and that downstream observers see the post-release value.
 //!
 //! Single-writer-per-edge per
-//! `docs/architecture/adapter-timeline-single-writer.md`: dropping a
+//! the single-writer-per-edge timeline rule: dropping a
 //! write guard signals `produce_done`; dropping the last read guard
 //! signals `consume_done`. Each timeline carries the shared
 //! `current_signal_value` counter, so signals across the two timelines

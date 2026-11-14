@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Where the compute and graphics kernels keep their on-disk pipeline caches,
 //! and how a cache file is read back, created as a `VkPipelineCache` and

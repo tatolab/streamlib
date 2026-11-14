@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Unit tests — pure logic only (no GPU).
 
@@ -223,8 +223,7 @@ fn test_simple_decoder_config_defaults() {
 // ------------------------------------------------------------------
 // align_size — the macroblock rounding an encoder session's coded extent
 // is derived from. It is deliberately not what any decode-side converter is
-// sized from: that must be the DPB's own extent, or the conversion resamples
-// (docs/learnings/nv12-rgba-converter-extent-rescales.md).
+// sized from: that must be the DPB's own extent, or the conversion resamples.
 // ------------------------------------------------------------------
 
 #[test]

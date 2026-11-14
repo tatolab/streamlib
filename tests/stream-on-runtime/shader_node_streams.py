@@ -1,5 +1,5 @@
-# Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per shader-node scenario: a Python source into shader nodes into a Python sink."""
 
@@ -79,6 +79,46 @@ def point_wise_chain_unfused_by_a_second_reader_of_each_intermediate(
     _source_into_shader_chain_into_sink(
         stream_builder, POINT_WISE_CHAIN, every_intermediate_read_twice=True
     )
+
+
+@graph_generator
+def tint_into_invert_fused_publishing_until_stopped(stream_builder: StreamBuilder) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        name="source",
+        config={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    tinted = stream_builder.add(tint, name="tint")
+    inverted = stream_builder.add(invert, name="invert")
+    sink = stream_builder.add(ShadedFramePixelReadingSink, name="sink")
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    stream_builder.connect(tinted.output("result"), inverted.input("image"))
+    stream_builder.connect(inverted.output("result"), sink.input("shaded"))
+
+
+@graph_generator
+def tint_and_invert_each_an_island_of_its_own_publishing_until_stopped(
+    stream_builder: StreamBuilder,
+) -> None:
+    source = stream_builder.add(
+        KnownPixelsVideoSource,
+        name="source",
+        config={
+            "texture_format": "rgba8_unorm",
+            "frames_to_publish": FRAMES_OUTLASTING_THE_START_OF_THE_FUNCTION_NODE_POOL,
+        },
+    )
+    tinted = stream_builder.add(tint, name="tint")
+    discard = stream_builder.add(FrameDiscardingSink, name="discard")
+    inverted = stream_builder.add(invert, name="invert")
+    sink = stream_builder.add(ShadedFramePixelReadingSink, name="sink")
+    stream_builder.connect(source.output("video"), tinted.input("image"))
+    stream_builder.connect(tinted.output("result"), discard.input("discarded"))
+    stream_builder.connect(source.output("video"), inverted.input("image"))
+    stream_builder.connect(inverted.output("result"), sink.input("shaded"))
 
 
 @graph_generator

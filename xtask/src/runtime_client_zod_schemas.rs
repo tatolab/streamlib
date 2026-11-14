@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The zod source of `@tatolab/runtime-client`'s `control_schemas.js`: one zod schema per
 //! component schema of the control contract file, and one per method's params and result and

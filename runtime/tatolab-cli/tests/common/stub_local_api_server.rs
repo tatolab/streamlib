@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A runtime's local API stood in by a stub on a Unix socket: the official MCP SDK's server
 //! answering scripted tool calls — by tool name, and `logs` paging a stream's records by

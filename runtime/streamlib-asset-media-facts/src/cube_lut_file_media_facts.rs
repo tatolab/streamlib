@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `.cube` colour lookup tables (Adobe Cube LUT Specification 1.0): the table's size and domain
 //! from the keyword lines before its first entry.

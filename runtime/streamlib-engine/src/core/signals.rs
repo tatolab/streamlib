@@ -1,5 +1,5 @@
-// Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Shutdown-signal ownership, scoped to the lifetime of a run loop.
 //!
@@ -10,7 +10,7 @@
 //! depends on that restoration: a Ctrl-C then reaches the disposition it had
 //! installed instead of being swallowed by a handler whose run loop is gone.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs: each delivered signal escalates
+//! Each delivered signal escalates
 //! the shutdown one step — graceful, forced, then every helper's process group
 //! killed and the process gone with status 130.
 
