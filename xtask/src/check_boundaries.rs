@@ -324,8 +324,8 @@ const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
     // GpuContext is the wrapper layer between processors and the RHI;
     // touches a small set of Vulkan handles to wire pools.
     AllowEntry {
-        path: "runtime/streamlib-engine/src/core/context/gpu_context.rs",
-        kind: AllowKind::ExactFile,
+        path: "runtime/streamlib-engine/src/core/context/gpu_context/",
+        kind: AllowKind::PathPrefix,
         rationale: "RHI wrapper layer; bridges processors to the RHI",
     },
     // Subprocess cdylibs are NOT allowlisted — post-#550/#553/#572
@@ -1032,7 +1032,7 @@ fn check_packages_facade_runtime_dep(
 //
 // No raw host device crosses a DSO boundary: the raw-`Arc` transit slots were
 // deleted, so `host_vulkan_device_arc` survives only as an engine-internal
-// host-mode accessor (runtime/streamlib-engine/src/core/context/gpu_context.rs).
+// host-mode accessor (runtime/streamlib-engine/src/core/context/gpu_context/).
 // A package can name it only by pulling the engine
 // facade in-workspace; `streamlib::sdk::engine::*` is the curated surface that
 // hands out those raw primitives. Both patterns stay policed as a ratchet

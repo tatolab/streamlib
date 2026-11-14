@@ -17,7 +17,7 @@
 //!     panicked.
 //!
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
-//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`).
+//! test (`runtime/streamlib-engine/src/core/context/gpu_context/tests/access_tiers_and_escalation.rs`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
