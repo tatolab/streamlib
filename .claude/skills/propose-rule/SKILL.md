@@ -1,24 +1,23 @@
 ---
 name: propose-rule
-description: Add, change, or delete a rule under .claude/rules/ — evidence first, one concern, the owner's agreement.
+description: Add, change, or delete a rule that governs how agents work in a repo — a CLAUDE.md line, a rules file, or the check that replaces one. Use when a mistake keeps recurring or the owner says "make that a rule".
 ---
 
 # Propose rule
 
-Rules accumulate easily and rarely leave, so the owner likes each one to be an
-invariant backed by evidence rather than a reaction to one annoyance. This is the shape
-for proposing one.
+Rules pile up and rarely leave, and prose rules cost every later session attention. A rule a tool
+enforces costs none.
 
-1. **Evidence**: the recurring review finding, the repeated owner correction, or the
-   shipped defect. Two occurrences, or one shipped incident, is a good bar.
-2. **Overlap check**: does an existing rule or skill already cover it? Extending beats
-   adding. When the concern is mechanical, a CI check or script that reports it often
-   beats prose — but avoid hooks that block or prompt an agent; describe the reasoning
-   instead and let CI catch the mechanical part.
-3. **Draft**: the rule text (invariant style, one concern, positive phrasing), where it
-   lives (`.claude/rules/<file>.md`, with a `paths:` scope unless genuinely global), and
-   the concrete incident it would have prevented.
-4. **Get the owner's agreement** on the draft — rules shape every later session, so they
-   want to read the wording.
-5. **Land it in its own PR** (`flow.md`), separate from feature work, so the owner can
-   review the operating-model change on its own.
+1. **Bring the evidence**: the recurring review finding, the repeated owner correction, or the
+   shipped defect. Two occurrences or one shipped incident is the bar.
+2. **Check for overlap.** If an existing rule or check already covers it, extend or fix that one.
+3. **Try a mechanical check first**: a CI step, a lint rule, a hook, a permission setting. Propose
+   the check, a planted violation that proves it fires, and the deletion of any prose it replaces.
+4. **Write prose only when no check can carry it** — a judgment the session makes before it opens
+   a file. One invariant, one concern, positive phrasing, scoped to the paths it governs unless
+   it is global, in as few lines as hold it.
+5. **Show the owner** the exact wording or check, with the incident it would have prevented, and
+   land it once they agree — in the PR of the work that needs it, or in its own.
+
+Deleting a rule follows the same steps: the evidence is that a check now covers it, or that
+nothing it guards against still happens.

@@ -1,6 +1,6 @@
 ---
 name: capture-stream-evidence
-description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N objects read off one or more tracks it sends to a relay on disk, and its log records — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab-read-track`, and `tatolab logs`.
+description: Freeze a verifiable record of a running StreamLib stream — a live graph snapshot, N objects read off one or more tracks it sends to a relay on disk, and its log records — into a directory for a PR, a Linear issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a stream-code change. Wraps `tatolab graph`, `tatolab-read-track`, and `tatolab logs`.
 ---
 
 # capture-stream-evidence
@@ -44,7 +44,7 @@ Reads the records the runtime holds for that loaded stream, by sequence number, 
 ```bash
 ls -l "$EVIDENCE_DIR"
 ```
-You now have `graph.json` (unless the stream carries secrets), one `track-<track>/` per track read, and `logs.txt`. Attach them to the PR / issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
+You now have `graph.json` (unless the stream carries secrets), one `track-<track>/` per track read, and `logs.txt`. Attach them to the PR or the Linear issue (upload with the `attach-artifact` skill), or diff a `-before` directory against an `-after` one to show a change's effect.
 
 ## Notes
 - Every verb names the stream; there is no runtime to pick — the machine has one.

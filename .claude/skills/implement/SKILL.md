@@ -1,47 +1,35 @@
 ---
 name: implement
-description: Build one ticket end-to-end — load it, check it against the plan and the tree, build test-first, review, and open the PR.
+description: Build one Linear issue to an open pull request. Use when given a TAT id to implement.
 ---
 
 # Implement
 
-The owner's usual shape for building a ticket. Each step is here because skipping it has
-cost real rework before; use judgment about how much of each a given ticket needs.
+Input: a `TAT-n` id.
 
-1. **Load** the ticket — body plus every comment oldest→newest (a comment is
-   specification and is newer than the body; conflicts resolve toward the comment) —
-   its change file if it has one, and the plan sections it cites.
-2. **Ultracode.** A ticket whose body opens with **Run with ultracode** was sized by the
-   owner for multi-agent orchestration. If this run doesn't have ultracode on, mention
-   that and the command to re-run it with (`/implement <N> ultracode`), then decide
-   whether to go ahead single-session — a small ticket often can. Under ultracode, every
-   agent that edits files runs in its own worktree.
-3. **Check the decisions the work needs.** List the architectural choices the ticket
-   depends on. Where one isn't DECIDED in the plan (or stated in the approved change),
-   the owner prefers to make it: raise it as a `[NEEDS DECISION]` comment on the ticket
-   with options and your recommendation, and keep going on the parts that don't depend
-   on it — or, when it's small and easily reversed, build your recommendation and call
-   it out plainly in the PR. Existing code is a weak guide to intent here; the plan is
-   the stronger one.
-4. **Staleness check.** Verify the ticket's load-bearing claims against the current tree;
-   if they've drifted, correct the body via `gh issue edit`, rewritten to current intent.
-5. **Share the plan** — goal, files, the seams tests will exercise, scope. If the owner
-   is around, a quick confirmation catches misreadings cheaply; if not, proceed and let
-   the PR carry it.
-6. **Branch** `<type>/<N>-<slug>` off fresh `main` (or the branch the session was given).
-7. **Build test-first at the seams the ticket names.** Commit at logical checkpoints with
-   conventional-commit prefixes; every commit builds. Prune the comments that break
-   `.claude/rules/comments.md` in every file you touch.
-8. **Keep to the ticket's scope.** Side findings go in the PR body as notes — a new
-   ticket only if the milestone doesn't land without it.
-9. **Local checks**: `local-ci-runner` runs the fast local gates; fix what it reports.
-   The full suites run in PR CI, so there's no need to repeat them locally first.
-10. **Review**: `review-pr` and `rust-craftsmanship-reviewer` are the usual lenses. If
-    you and a reviewer still disagree after a few rounds, bring the disagreement to the
-    owner rather than looping.
-11. **PR**: push, `gh pr create` — title `type(scope): summary`; body `## Summary`, `## Closes` (one
-    `Closes #N` per line), `## Exit criteria`, `## Test plan`, `## Notes for owner` (the
-    batched findings).
-12. If step 7 pruned comments, say so on the ticket: unnecessary comments were removed
-    in favour of code discoverability. Report the PR URL, tests run, and notes awaiting
-    the owner. The owner merges.
+1. **Load** the issue from Linear with its relations, every comment, its parent, and its project
+   and milestone descriptions. A comment is newer than the description and wins where they
+   conflict. If the issue is a parent, build the sub-issue whose prefix names this repo; if its
+   prefix names another repo, stop and say so.
+2. **Check what it waits on.** Every issue blocking this one must be Done, and where the blocker
+   is another repo's work, present in the version this repo builds against. If not, say which
+   one and stop; never work around a missing dependency.
+3. **Check it against the tree.** Where the issue's claims about the code have drifted, correct
+   the description and carry on with what it now means.
+4. **Branch.** Use the issue's `gitBranchName`. If the session was handed a branch, keep it and
+   put the id in the PR title instead: `fix(scope): summary (TAT-n)`. Either one links the PR;
+   never write `Closes #n`.
+5. **Build test-first at the real seams** the repo already tests through. Every commit builds.
+6. **Keep to the issue's scope.** A side finding is a note in the PR body, or a new Linear issue
+   in the same project only when this work cannot land without it. A scope note forbids
+   redesigning something; it does not forbid fixing a defect the issue's own fix also cures.
+7. **A decision the issue does not settle.** Read the issue, its comments and the tree first —
+   most questions are answered there. For what remains, build your recommendation and state the
+   assumption in the PR. Only when the choice is a real fork — materially different outcomes, a
+   wrong guess wastes the work, or it is expensive to undo — comment on the Linear issue with the
+   options and your recommendation, and keep building everything that does not depend on it.
+8. **Before you push**, run everything the repo's `CLAUDE.md` names under `## Before you push`:
+   the checks, the review agents, the proof. Fix what they find.
+9. **Open the PR**: what changed and why, how it was tested, the proof, and notes for the owner
+   (assumptions made, side findings, anything not proven). Do not move the issue's status or
+   close it — Linear does both from the PR. The owner merges.

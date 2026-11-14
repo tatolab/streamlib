@@ -92,7 +92,7 @@ expect "a short served object fails" '[ "$status" -ne 0 ] && grep -q "serves 3 b
 out="$("$script" streamlib/pr-2920/x "$scratch/page.html" 2>&1)"; status=$?
 expect "an html page is refused" '[ "$status" -ne 0 ] && grep -q "would run as a page or script" <<<"$out"'
 out="$("$script" Streamlib/PR-1 "$scratch/node.log" 2>&1)"; status=$?
-expect "an uppercase prefix is refused" '[ "$status" -ne 0 ] && grep -q "is not <repo>/<pr-N|issue-N>/<topic>" <<<"$out"'
+expect "an uppercase prefix is refused" '[ "$status" -ne 0 ] && grep -q "is not <repo>/<pr-N|tat-N>/<topic>" <<<"$out"'
 out="$("$script" streamlib "$scratch/node.log" 2>&1)"; status=$?
 expect "a one-segment prefix is refused" '[ "$status" -ne 0 ]'
 out="$("$script" streamlib/pr-1 "$scratch/node.log" "$scratch/missing.png" 2>&1)"; status=$?

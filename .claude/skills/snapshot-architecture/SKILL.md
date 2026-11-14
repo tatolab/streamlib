@@ -29,4 +29,4 @@ the fixes it surfaces happen afterwards, where they belong.
    snapshot URL, so the owner's link stays live.
 4. **Close the loop.** End by telling the owner: corrections go through
    `/reconcile-understanding`; drift resolutions go through `/align` (plan moves) or a
-   bug ticket (code regressed). The snapshot is regenerated after either.
+   Linear `Bug` issue (code regressed). The snapshot is regenerated after either.

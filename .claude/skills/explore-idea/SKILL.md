@@ -1,59 +1,33 @@
 ---
 name: explore-idea
-description: Free-form what-if exploration of a direction before it becomes architecture — a sandbox with zero commitments that ends with a concrete recommended starting shape (spike / prototype / MVP slice). Use when an idea is fuzzy, when unknowns are too many for a change proposal, when a milestone has become a mess of tickets with no clear architecture behind it, or when the owner says "what if", "explore", or "I want to think through".
+description: Free-form what-if exploration of a direction before it becomes work, ending in a recommended smallest starting shape. Use when an idea is fuzzy, when it has too many unknowns for an issue, when a set of issues has no clear shape behind it, or when the owner says "what if", "explore", or "I want to think through".
 ---
 
 # Explore idea
 
-The pressure-release valve before the pipeline: ideas too fuzzy or too broad for
-`/propose-change` get explored here first, so unknowns are burned down before any work
-stream exists. It is a sandbox with no commitments — no tickets, plan edits, or
-milestones come out of it, and code only as a throwaway spike when that is the fastest
-way to answer a question.
+A sandbox with no commitments: no work issues, and code only as a throwaway spike when that is the
+fastest way to answer a question. The owner brings a fuzzy want; give it a shape they can react to.
 
-This skill is proactive, not just inquisitive — the owner brings a fuzzy want; Claude's
-job is to give it a shape they can react to. Digging and questioning are means; the
-deliverable is a formed picture plus the smallest sensible way to start.
+1. **Situate.** Read the relevant code, what the repo's CLAUDE.md names as the record of what is
+   agreed, and the Linear issues around the idea. When the input is a messy set of issues, say
+   back what they collectively want first.
+2. **Sharpen it with `grilling`.**
+3. **Sketch two or three genuinely different shapes.** For each: its unknowns, its size (one
+   issue, a milestone, a project), what it needs from another repo, and what it would displace.
+4. **Recommend the lowest rung that teaches something real**:
+   - **Spike** — hours, throwaway, answers exactly one named question.
+   - **Prototype** — demoable, ugly, untested, clearly throwaway; exists to be reacted to.
+   - **MVP slice** — the smallest version someone can actually run; it survives and is iterated.
+   - **Full change** — only when the idea is already small and well understood.
 
-1. **Situate.** Read the plan, the relevant code, and any existing tickets circling the
-   idea. When the input is a messy milestone, reverse-engineer what its tickets
-   collectively want — the coherent picture they never stated — and present that back
-   first.
-2. **Sharpen the fuzz with `grilling`.** One question at a time, each with a
-   recommended answer, until what's in the owner's head and what's in Claude's are the
-   same idea. Facts get looked up, never asked.
-3. **Sketch 2–3 genuinely different shapes** the idea could take (Mermaid sketches
-   welcome). For each: the unknowns it carries, its cost class (one change / one
-   milestone / several milestones), and what existing code or plan entries it would
-   displace or delete.
-4. **Shape the smallest start.** This is the step that prevents accidental overbuilding
-   — "sounds easy on paper" is how a weekend idea becomes a quarter. Place the idea on
-   the build ladder and recommend the lowest rung that teaches something real:
-   - **Spike / proof-of-concept** — hours, throwaway, exists to answer exactly ONE named
-     question. Say what the question is.
-   - **Prototype** — demoable and ugly; no error handling, no tests, clearly marked
-     throwaway. Exists to be reacted to.
-   - **MVP slice** — the smallest *showable* version a user or the owner can actually
-     run; survives and gets iterated on.
-   - **Full change** — only when the idea is already well-understood and small.
+   Name the deferred list (what the full idea has that this start does not) and the path from the
+   start to the target. When the idea can be iterated, pick one rung lower than feels natural.
+5. **Say the idea and the recommended start back** and check the owner recognises both.
+6. **Exit one of three ways**:
+   - **Graduate** — `file-issue` for one piece of work, `plan-project` for more, scoped to the
+     recommended start.
+   - **Park** — a document on the Linear project it belongs to: the idea, the shapes, the
+     recommended start, and the unknown that must resolve before it revives.
+   - **Kill** — the same document, with the reason, so the idea is not explored again by accident.
 
-   State the recommendation plainly: the smallest version worth building, the explicit
-   **deferred list** (what the full idea includes that this deliberately does not), and
-   the iteration path from smallest to target. When the idea is iterable, bias one rung
-   smaller than feels natural — iteration is cheap, unbuilding is not.
-5. **Drive to identical understanding.** Say the idea and the recommended starting shape
-   back in your own words and check it matches what is in the owner's head — an
-   exploration whose conclusion the owner doesn't recognise hasn't done its job.
-6. **Exit explicitly**, one of three ways — the recommended starting shape travels with
-   the exit:
-   - **Graduate** → `/align` (it needs plan sections decided) or `/propose-change` (the
-     plan already covers it and the delta is now crisp — scoped to the starting rung,
-     not the full dream).
-   - **Park** → memo at `docs/research/explorations/<slug>.md`: the idea, the shapes
-     considered, the recommended start, and what unknown must resolve before it revives.
-   - **Kill** → same memo, with the reason — so the idea is not innocently re-explored
-     in three months.
-
-If exploration reveals the idea is really N ideas, or more than one milestone of work,
-say so and split before graduating — a huge milestone discovered at ticket time is this
-skill having been skipped.
+If the idea turns out to be several ideas, split it before graduating.

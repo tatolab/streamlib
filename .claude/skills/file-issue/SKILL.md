@@ -1,35 +1,45 @@
 ---
 name: file-issue
-description: File a well-shaped GitHub issue from a short intent — pick the right form (feature / bug / research), fill its sections, infer kind/zone/milestone, and set native dependency edges. Use when the owner says "file this", "open an issue for X", "log that bug", or when discussion surfaces a trackable task. Never files an umbrella issue — decomposes into self-contained issues with real blocked-by edges.
+description: File a piece of work in Linear — one issue, or a parent with one sub-issue per repo — in the right project and milestone. Use when the owner says "file this", "log that bug", or a discussion surfaces work worth tracking.
 ---
 
-# file-issue
+# File an issue
 
-Turn an intent into a GitHub issue that a future picker can pick up cold. The issue is the goal, not a spec — carry the design content but keep implementation mechanics out (they rot; the picker re-derives them).
+Issues live in Linear, team **Tatolab** (`TAT`), reached through the `mcp__Linear__*` tools.
+Never create, edit or comment on a GitHub issue.
 
-## 1. Pick the form
-Match the intent to one of `.github/ISSUE_TEMPLATE/`:
-- **feature** — a change to the engine, a package, or the tooling.
-- **bug** — something behaves wrong: a crash, wrong output, a broken invariant.
-- **research** — a question to answer before building; produces a doc/decision, not code.
+1. **Look for it first.** Search Linear for an existing issue that covers the intent; extend or
+   comment on that one instead of filing a second.
+2. **Shape it.** Work that lands in one repo is one issue whose title starts with that repo's
+   prefix. Work that needs more than one repo is a parent issue with a plain title stating the
+   outcome, and one prefixed sub-issue per repo (`parentId`).
 
-Read the chosen form's YAML and fill **its** sections — don't invent a structure. As of now:
-- **feature**: What & why · Design (for planned work this section only references the change proposal under `docs/plan/changes/` — `/propose-change` produces it; never restate or extend the plan in an issue) · Done means (2–4 outcome criteria) · Validation shape (test/check shape, not names) · Needs the physical rig? (GPU/camera/audio/none) · Non-derivable notes (hidden invariants / ruled-out approaches with the why; default "None").
-- **bug**: Symptom (exact error strings / VUIDs / behavior) · Where it bit · Expected · Repro (smallest sequence) · Needs the physical rig?
-- **research**: Question · Why now · Deliverable shape.
+   | prefix | repo |
+   |---|---|
+   | `streamlib:` | tatolab/streamlib |
+   | `studio:` | tatolab/tatolab-app |
+   | `site:` | tatolab/main-website |
 
-## 2. Infer kind / zone / milestone
-Infer the form (kind), the zones touched, and the milestone from the intent and the current code. **Milestone assignment is required** — every issue belongs to one. When confidence is low on any of these, asking the owner is usually cheaper than a wrong milestone or a mis-scoped issue — or file on your best guess and say which part you guessed, so they can move it. Milestone scoping is ultimately the owner's call.
+   The title states the outcome or the symptom as a person would see it, not the mechanism.
+3. **Place it.** Pick the existing project and milestone it advances; sub-issues take their
+   parent's. If nothing fits, file it without one and say so, or propose a milestone or project —
+   creating a project is the owner's call unless they asked for it.
+4. **Label it** exactly one of `Bug`, `Feature`, `Improvement`. A parent carries none.
+5. **Relate it.** Order between issues is a `blockedBy` / `blocks` relation, never a sentence in
+   the description. A sub-issue that needs another repo's sub-issue first is blocked by it.
+6. **Write the description for a person**: a few short sentences of what and why, then
+   **Done means** — two to four outcomes someone could check. For a bug: symptom with the exact
+   error text, what was expected, the smallest repro. Anything only an agent needs (where it
+   bit in the code, ruled-out approaches, constraints copied from a design) goes last in a
+   collapsible section, and only when it cannot be re-derived from the tree:
 
-Labels are display output only; the router will classify the issue fresh at pickup, so don't over-label to steer it.
+   ```
+   +++ Agent notes
 
-## 3. Never file an umbrella issue
-An issue that says "do all of X" and lists sub-tasks is the failure mode this skill is shaped to avoid. Decompose into **self-contained issues**, each with its own Done-means and validation shape, connected by **native GitHub dependency edges** — not text like "depends on #N."
+   ...
 
-Set the edges through whichever `gh` surface this repo actually exposes — **verify which exists before using it**: the GraphQL issue-relationship mutations (add-blocked-by) or the sub-issue relationship API. Check with a probe (e.g. inspect `gh api graphql` for the relationship mutation, or `gh` sub-issue support) and use the one that works; the `Related` section of a body is for free-text context only, never for dependency edges.
+   +++
+   ```
 
-## 4. Phrase claims honestly
-Any specific claim about code or behavior in the body is phrased "to the best of our current knowledge" so the picker knows to verify it. Keep file paths, exact test names, and step-by-step ordering out of the body.
-
-## 5. Confirm and report
-Show the drafted issue(s) and the edges before filing when the decomposition is non-trivial; file, then report the issue number(s), milestone, and the dependency graph you set. If the intent decomposed into several, list them with their blocks/blocked-by relationships so the owner can see the shape.
+   Leave out file lists and step-by-step plans; they go stale before the issue is picked up.
+7. **Report** each ID with its project, milestone and relations, and anything you guessed.

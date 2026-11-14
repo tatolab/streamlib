@@ -340,6 +340,6 @@ without its label invites it to be read as though it were.
 - **Pass** / **Fail** / **Cannot run here** — <and for cannot-run, which reason the fixture gave>
 ````
 
-Paste the filled template into the PR description or the issue comment requesting review, and
+Paste the filled template into the PR description or the Linear issue comment requesting review, and
 attach the spectrogram (see the `attach-artifact` skill) — the image is what makes a failure
 legible to a reader who was not there.

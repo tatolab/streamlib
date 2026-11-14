@@ -1,7 +1,7 @@
 # Changes
 
 In-flight delta proposals against `../ARCHITECTURE.md` — written by `/propose-change`,
-ticketed by `/derive-tickets`, folded in and archived by `/ship-change`.
+laid out in Linear by `/plan-project`, folded in and archived by `/ship-change`.
 
 Format: sections typed `ADDED:` / `MODIFIED:` / `REMOVED:`. Every `- REMOVED: <pattern>`
 bullet is a pattern `.claude/scripts/ship-change-removed-gate.sh` verifies is gone from
@@ -19,9 +19,9 @@ is why they are quoted here rather than set in code spans. Write the artifact th
 it is spelled in source: a crate name, a symbol, or a repo-root-relative path. A bullet
 you have not watched fail is not a bullet you have proved.
 
-Limits: ≤350 lines per change. Ticket count
-is guidance, not a cap (owner decision 2026-08-02): derive as few tracer-bullet tickets
-as the change honestly needs — the cap existed to stop ticket-spam, and a change that
+Limits: ≤350 lines per change. Issue count
+is guidance, not a cap (owner decision 2026-08-02): derive as few tracer-bullet issues
+as the change honestly needs — the cap existed to stop issue-spam, and a change that
 needs more vertical slices splits only when it is genuinely two changes.
 
 Unresolvable choices are written as `[NEEDS DECISION]` blocks (options + recommendation)

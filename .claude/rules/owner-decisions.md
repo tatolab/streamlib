@@ -16,6 +16,6 @@ paths:
   fixed in the PR and says so.
 - **`(owner, <date>)` cites something the owner said.** The tag — in a `Rejected:` line, a
   `Decided` heading, or a trailing `Owner, <date>` — is written only from the align's Decided
-  list, an owner comment, or an owner message in the session, and the PR body names which. A
+  list, an owner comment on the PR or the Linear issue, or an owner message in the session, and the PR body names which. A
   line the session derived carries `(session, <date>)` until the owner ratifies it at the next
   `/align`, and never reaches `docs/decisions/` or a `DECIDED` entry with that tag.

@@ -5,27 +5,21 @@ description: A direction change — the plan moves first, then the legacy is inv
 
 # Pivot
 
-For when the owner has changed direction. Pivots are the owner's to declare — they
-retire agreed architecture — so if implementation surfaces a reason to pivot, raise it
-with the owner rather than starting one unprompted.
+A pivot retires agreed architecture, so it is the owner's to declare. If implementation
+surfaces a reason to pivot, raise it with the owner.
 
-The point of the order below is that agents otherwise keep the old shape alive beside
-the new one; moving the plan first and inventorying the legacy makes deletion the
-expected outcome.
+The plan moves first and the legacy is inventoried, so the old shape is deleted and never
+kept alive beside the new one.
 
-1. **Pin the new direction** with `grilling` until it can be said in five sentences or
-   fewer and the owner agrees with them as written.
-2. **Plan first**: rewrite the affected ARCHITECTURE.md sections — new DECIDED entries,
-   invalidated sections back to OPEN, diagrams updated. Superseded entries are retired
-   by deletion, with a `Rejected:` line only where `.claude/rules/docs-policy.md` allows
-   one. Rationale goes to an ADR.
-3. **Inventory the legacy** (read-only sweep): the code paths, docs, rules, skills,
-   tickets and milestones the old direction leaves behind. Present it — the goal is
-   deletion, not keeping the old shape running in parallel.
-4. **Write the rip-out change** via `/propose-change`, with the inventory as its
-   `REMOVED` bullets, and derive its tickets via `/derive-tickets`.
-5. **Clean the tracker** with `/reconcile-tracker` for the tickets and milestones the
-   pivot orphaned.
-
-A pivot is usually done when the plan PR is open, the rip-out change is proposed, and the
-tracker batch has been presented.
+1. **Pin the new direction** with `grilling` until it fits in five sentences and the
+   owner agrees with them as written.
+2. **Plan first:** rewrite the affected ARCHITECTURE.md sections. New DECIDED entries,
+   invalidated sections back to OPEN, diagrams updated. A superseded entry is deleted,
+   with a `Rejected:` line only where `.claude/rules/docs-policy.md` allows one.
+   Rationale goes to an ADR.
+3. **Inventory the legacy,** read-only: the code paths, docs, rules and skills the old
+   direction leaves behind, and the Linear projects and issues it orphans. Present it.
+4. **Write the rip-out change** with `/propose-change`, the inventory as its `REMOVED`
+   bullets, and turn it into a Linear project with `/plan-project`.
+5. **Cancel the orphaned issues and projects** in Linear, each with a one-line comment
+   naming the pivot, once the owner has seen the list.

@@ -21,9 +21,9 @@ name: CI
 #                              suites pass; merge queue and `main`
 #   Integration test (macOS)   the same end-to-end tests on macOS; nightly on
 #                              `main`
-#   Report a failed nightly    opens or comments on the open "Nightly
-#   integration run            integration run failed" issue when either
-#                              integration job fails on the schedule
+#   Report a failed nightly    opens or comments on the open Linear issue
+#   integration run            "streamlib: nightly integration run failed"
+#                              when either integration job fails on the schedule
 #
 # A change that touches only prose or code CI never builds skips every job, and a
 # skipped job satisfies a required check. Caches
@@ -1180,32 +1180,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
 
-  # A red nightly opens one issue naming its run, or comments on the one still
-  # open, since a failed scheduled run otherwise notifies only whoever last
+  # A red nightly opens one Linear issue naming its run, or comments on the one
+  # still open, since a failed scheduled run otherwise notifies only whoever last
   # edited the cron line.
   report-failed-nightly-integration:
     name: Report a failed nightly integration run
     needs: [integration-test-linux, integration-test-macos]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
-    permissions:
-      issues: write
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/ci
       - env:
-          GH_TOKEN: ${{ github.token }}
-          FAILED_NIGHTLY_ISSUE_TITLE: Nightly integration run failed
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          FAILED_NIGHTLY_ISSUE_TITLE: "streamlib: nightly integration run failed"
           LINUX_RESULT: ${{ needs.integration-test-linux.result }}
           MACOS_RESULT: ${{ needs.integration-test-macos.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           body="$(printf 'The nightly run on `%s` failed: %s\n\n- Integration test (Linux): %s\n- Integration test (macOS): %s\n' \
             "$GITHUB_SHA" "$RUN_URL" "$LINUX_RESULT" "$MACOS_RESULT")"
-          open_issue="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "in:title \"$FAILED_NIGHTLY_ISSUE_TITLE\"" --json number,title \
-            -q "map(select(.title == \"$FAILED_NIGHTLY_ISSUE_TITLE\")) | .[0].number // empty")"
-          if [ -n "$open_issue" ]; then
-            gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body "$body"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$FAILED_NIGHTLY_ISSUE_TITLE" \
-              --label bug --body "$body"
-          fi
+          scripts/ci/report_failed_nightly_to_linear.sh "$FAILED_NIGHTLY_ISSUE_TITLE" "$body"

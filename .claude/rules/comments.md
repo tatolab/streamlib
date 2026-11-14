@@ -15,11 +15,11 @@ issue or PR references, dates, or change history: git blame, git bisect, the iss
 those. Comments are not version history.
 
 A `FIXME` meets a high bar. It names a real defect left unfixed on purpose, never a style or
-preference point. In most cases the defect is proposed as a GitHub issue instead. A `FIXME` is
+preference point. In most cases the defect is filed as a Linear issue instead. A `FIXME` is
 written only when a reader must see the defect at that line, and it names no issue number.
 
-When work on an issue touches a file, prune the comments in it that break this rule, and note on the
-issue that unnecessary comments were removed in favour of code discoverability. Agents and
+When work on an issue touches a file, prune the comments in it that break this rule, and note in the
+PR body that unnecessary comments were removed in favour of code discoverability. Agents and
 subagents, reviewers included, push back on a comment wherever clearer code would do its job.
 
 ## Don't

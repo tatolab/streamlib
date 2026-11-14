@@ -1,27 +1,27 @@
 ---
 name: grilling
-description: Interview the owner relentlessly, one question at a time, to reach shared understanding of a plan, decision, or idea. Use when the owner wants to stress-test thinking, align on a design or direction, or says "grill me", "let's debate", or "am I missing something".
+description: Interview the owner, one question at a time, to reach shared understanding of a plan, decision, or idea. Use when the owner wants to stress-test thinking, align on a design or direction, settle a whole area in one sitting, or says "grill me", "batch grill me", "let's debate", or "am I missing something".
 ---
 
 # Grilling
 
-Interview until understanding is genuinely shared — then stop. Acting on the subject
-mid-interview tends to anchor on a half-formed answer, so the work comes after.
+Interview until understanding is shared, then stop. Take no action on the subject during the
+interview: acting early anchors on a half-formed answer.
 
-- **Situate before the first question.** Read how the subject slots into the plan AND
-  the code: is it net-new, a refactor of an existing system, or a lesson learned from
-  using one (developer-experience pain)? A minute of searching beats a wasted opening
-  question. State what you found as premises the owner can shoot down before the
-  interview starts.
-- Ask **one question at a time** and wait. A wall of questions is bewildering.
-- Every question carries **your recommended answer** — the owner wants a strong read,
-  not a menu.
-- Walk the decision tree **dependency-first**: settle the questions other questions rest
-  on before their dependents.
-- **Facts are yours; decisions are the owner's.** Anything discoverable in the repo, the
-  plan, or the tracker gets looked up, never asked. Only judgment calls go to the owner.
-- Challenge vague terms against `docs/plan/GLOSSARY.md`; when the vocabulary itself is
-  changing, run the `glossary` skill.
+- **Situate before the first question.** Read the code and what is already agreed (the repo's
+  CLAUDE.md says where that is recorded). State what you found as premises the owner can reject.
+- **Ask one question at a time**, and wait for the answer.
+- **Every question carries your recommended answer.**
+- **Go dependency-first**: settle a question before the questions that rest on it.
+- **Facts are yours; decisions are the owner's.** Anything discoverable in the code, the agreed
+  record, or Linear is looked up, never asked.
+- **Challenge vague or overloaded terms** against the glossary the repo's CLAUDE.md names.
 
-Done when the owner confirms shared understanding: restate the decisions taken in your
-own words and check they agree.
+**Batch mode**, for an area with many open decisions: map the decision tree, then work it in
+rounds. In each round, consider only the questions whose prerequisites are settled. Take every
+reversible or engineering-shaped one as a stated assumption with your recommendation, and ask the
+owner only the one or two that are theirs to decide. Look facts up while the round is out, then
+recompute from the answers and repeat until nothing is open.
+
+Done when the owner confirms your restatement of the decisions taken, numbered. A decision that
+should outlive the session goes on the Linear issue or project document it settles.

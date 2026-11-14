@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # attach-artifact — put evidence files (decoded frames, spectrograms, logs, videos) in the public R2
 # bucket behind https://gh-artifact.tatolab.com, check each one is served whole, and print the URL
-# and the markdown that shows it in a PR or an issue.
+# and the markdown that shows it in a PR or a Linear issue.
 #
 # Usage:
 #   attach-artifact <key-prefix> <file>...   upload each file to <key-prefix>/<its file name>
 #   attach-artifact --remove <key>...        delete objects, and check each one is gone
 #   attach-artifact --url <key>...           print the public URL of each key
 #
-# <key-prefix> names where the evidence belongs: <repo>/<pr-N|issue-N>/<topic>, e.g.
+# <key-prefix> names where the evidence belongs: <repo>/<pr-N|tat-N>/<topic>, e.g.
 # streamlib/pr-2920/verify-live. Lowercase letters, digits, '.', '_' and '-' only.
 #
 # Credentials come from the Infisical project Tatolab (env prod), never from the shell:
@@ -105,7 +105,7 @@ served_status_of() {
 upload() {
   local key_prefix="$1"
   shift
-  [[ "$key_prefix" =~ $KEY_PREFIX_PATTERN ]] || fail "$key_prefix is not <repo>/<pr-N|issue-N>/<topic> in lowercase letters, digits, '.', '_' and '-'"
+  [[ "$key_prefix" =~ $KEY_PREFIX_PATTERN ]] || fail "$key_prefix is not <repo>/<pr-N|tat-N>/<topic> in lowercase letters, digits, '.', '_' and '-'"
   [ "$#" -gt 0 ] || usage
   local file
   for file in "$@"; do

@@ -70,7 +70,7 @@ One fixture rig guards the color path; it has bug-injection modes that must dete
 
 ## Networking arm
 
-One rig-only fixture, owned by the extension wheel it proves. It is the codec rigs' decode-back with a network hop inside it: the vivid camera and the microphone out through `H264Encoder` / `OpusEncoder` and back through the wheel's player into `H264Decoder` / `OpusDecoder`. Its reader and its whole-frame colour lock are deleted, so it cannot run until #2867 rebuilds it as a sender stream and a receiver stream on `TestPatternSource`, locked by `cargo xtask psnr bar-colors`. **The lock is that score, never a liveness check** — the network sits inside a path the codec rig already scored, so drift is the wheel's.
+One rig-only fixture, owned by the extension wheel it proves. It is the codec rigs' decode-back with a network hop inside it: the vivid camera and the microphone out through `H264Encoder` / `OpusEncoder` and back through the wheel's player into `H264Decoder` / `OpusDecoder`. Its reader and its whole-frame colour lock are deleted, so it cannot run until it is rebuilt as a sender stream and a receiver stream on `TestPatternSource`, locked by `cargo xtask psnr bar-colors`. **The lock is that score, never a liveness check** — the network sits inside a path the codec rig already scored, so drift is the wheel's.
 
 - **`packages/streamlib-webrtc/tests/live/whip_whep_roundtrip.sh [out]`** — WHIP publish to Cloudflare Stream and WHEP play-back of the same live input.
 
@@ -105,7 +105,7 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
   Read-only observation evals auto-run, but a real-world SAFETY gate (actuators, motors, drone control) still asks the owner first.
 - **Handshake fallback (rig unavailable / bypass denied).** Print the command block for the owner's terminal, then audit what it produced. Two sub-modes:
   - *Interactive* — print the command block now; the owner runs it; you audit the output directory in the same session.
-  - *Async* — the owner comments "done, output in `<dir>`" on the issue; spawn `evidence-verifier` to audit `<dir>` when they report back.
+  - *Async* — the owner comments "done, output in `<dir>`" on the Linear issue; spawn `evidence-verifier` to audit `<dir>` when they report back.
 
 ## Auditing the output (all modes)
 1. **Log gates — all zero.** Grep the pipeline log for `OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`, `process() failed`, `Validation Error`. Any nonzero fails (a `Validation Error` is acceptable only if it also exists on `main` for the same scenario — say so if you claim it).
@@ -168,7 +168,7 @@ Drive these through **`/verify-audio`**, which owns the workflow: it picks the m
 #### Outcome
 
 - **Pass** / **Pass with caveats** / **Fail**
-- Caveats / follow-ups filed: <list of issue numbers, or "none">
+- Caveats / follow-ups filed: <list of TAT issues, or "none">
 ````
 
-Paste the filled template (one per scenario) into the PR description or the issue comment requesting review — verbatim structure so it's grep-able across PRs.
+Paste the filled template (one per scenario) into the PR description or the Linear issue comment requesting review — verbatim structure so it's grep-able across PRs.

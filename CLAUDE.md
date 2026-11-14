@@ -25,30 +25,21 @@ ONE core system per concern — extend the existing system, never build a parall
 
 ## How work usually flows
 
-The skills under `.claude/skills/` write down how the owner likes to reason about and
-decompose work. They are descriptive, not gates: each says why its steps exist, and any
-of them can be invoked, adapted, or skipped as the situation calls for. Nothing in this
-repo blocks a tool call or stops a session — no hook refuses or prompts on a workflow
-step. The one permission prompt left is an edit to the licence files (§Licensing).
+Skills describe how the owner likes work reasoned about; adapt or skip them as needed.
 
-- `docs/plan/ROADMAP.md` is the order the active changes land in. Pick the next piece of work
-  from it; changing the order is the owner's call.
-- `/plan` is a quick orientation — it reads the plan statuses, open PRs and the tracker
-  and suggests a next step.
-- The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets`
-  (as few tracer bullets as the change honestly needs) → `/implement` (build) →
-  `/ship-change` (fold + prove removals). `/pivot` for direction changes, `/diagnose` for
-  bugs, `/research` for questions, `/reconcile-tracker` keeps GitHub a projection of the
-  plan, `/propose-rule` for changing rules.
-- Source work (`runtime/ sdk/ adapters/ xtask/`) usually traces to a ticket, so the PR
-  can say what it closes. Plan *decisions* usually travel through `/align`,
-  `/propose-change`, `/ship-change` or `/pivot`, because they change what was agreed;
+- **Work is tracked in Linear, never in GitHub issues** (permissions refuse a write to one):
+  team Tatolab, issues `TAT-n`, structured project → milestone → issue → sub-issue. An issue
+  that lands here is titled `streamlib: …`; a change spanning repos is a parent with one
+  sub-issue per repo.
+- **Linear's projects and milestones are the order of work**, and blocking relations the
+  order inside them. `/whats-next` suggests the next issue; the order is the owner's call.
+- The usual lifecycle: `/align` (decide) → `/propose-change` (delta) → `/plan-project` (the
+  Linear project) → `/implement` (one issue to a PR) → `/ship-change` (fold + prove removals).
+  Beside it: `/pivot`, `/file-issue`, `/diagnose`, `/research`, `/triage`, `/explore-idea`,
+  `/snapshot-architecture`, `/architecture-question`, `/reconcile-understanding`, `/propose-rule`.
+- Plan *decisions* travel through `/align`, `/propose-change`, `/ship-change` or `/pivot`;
   plan and doc *records* are ordinary work — see §Recording facts vs deciding.
-- Shared understanding: `/explore-idea` (what-ifs before any commitment),
-  `/snapshot-architecture` (the living code-derived picture), `/architecture-question`
-  (how does X work, with evidence), `/reconcile-understanding` (corrections that stick).
-  Code is the authority on what IS; the plan on what we AGREED.
-- Full model: `docs/plan/OPERATING-MODEL.md`.
+- Code is the authority on what IS; the plan on what we AGREED (`docs/plan/OPERATING-MODEL.md`).
 
 ## Recording facts vs deciding
 
@@ -71,7 +62,7 @@ skills exist to sharpen decisions, not to license prose.
   fact — write it, and say in the PR body that you did. Does it commit us to something we
   have not agreed? Then it is a decision — bring it, while you keep going on the rest.
 - Doc hygiene inside work you are already doing — fixing a claim your own change falsified —
-  is never a separate ticket and never a question.
+  is never a separate issue and never a question.
 
 ## Asking the owner
 
@@ -106,16 +97,16 @@ doesn't state, the owner wants to make that call (§Asking the owner).
   decided in `docs/plan/ARCHITECTURE.md` §Consumers.
 - **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
-  editable work.** An engine change that breaks one files tracked backlog at that consumer and
+  editable work.** An engine change that breaks one files a Linear backlog issue for that consumer and
   never blocks the engine change; fixing it in-stream is reserved for the rare case where the
   consumer is the deliberate canary of the in-flight work.
-- File an issue only when something blocks the current milestone. Non-blocking findings go in the
-  PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
+- File a Linear issue only when something blocks the milestone in flight. Non-blocking findings
+  go in the PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
 - **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) keeps the old treatment:
   written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
   manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
   wired to the RHI, what a capture path must handle), never for form; breakage is expected, not
-  a defect, and gets no ticket. It converts or deletes only through §Consumers' rules, never in
+  a defect, and gets no issue. It converts or deletes only through §Consumers' rules, never in
   passing.
 
 Working agreements are in `docs/working-agreements.md`; `docs/index.md` maps every docs home. Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
@@ -166,10 +157,19 @@ built-in publishes on means you skipped it.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
-  migration's scope; a broken *converted* consumer gets backlog filed, a held pre-pivot one
-  just lags.
-- Architecture is decided in `docs/plan/`, not per-ticket. A missing decision goes to the
+  migration's scope; a broken *converted* consumer gets a Linear backlog issue, a held
+  pre-pivot one just lags.
+- Architecture is decided in `docs/plan/`, not per-issue. A missing decision goes to the
   owner — as a question or a stated assumption — rather than being inferred from existing
   code.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
+## Before you push
+
+- **Local gates:** spawn `local-ci-runner` — fmt, `cargo xtask check-all-source-gates`,
+  clippy and nextest for the packages touched, pyright for Python under `sdk/`.
+- **Review:** spawn `review-pr`, and `rust-craftsmanship-reviewer` on Rust; fix every
+  blocker and should-fix before the PR opens.
+- **Live proof:** `/verify-live` for a GPU, camera or codec change, `/verify-audio` for an
+  audio change; the report goes in the PR body.
+- **PR title:** passes `scripts/check-conventional-pr-title.sh`; it or the branch names `TAT-n`.

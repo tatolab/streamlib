@@ -6,9 +6,9 @@ paths:
 # Docs policy
 
 - **Architecture docs (`docs/architecture/`) describe current shipped state only.** No tracker
-  references (issue / PR / milestone numbers), no dates, no roadmap / proposed-work / "will become
+  references (Linear issue, PR or milestone identifiers), no dates, no roadmap / proposed-work / "will become
   X", no history of superseded designs. Proposed architecture lives in the plan (`docs/plan/`) —
-  the single decision source — never in individual issues; issues reference the plan, they do not
+  the single decision source — never in individual Linear issues; issues reference the plan, they do not
   restate or extend it.
 - **`docs/learnings/` is empirical only** — surprising driver / library / spec behavior in
   symptom → root cause → fix shape. Tie the lesson to the constraint, not a line number. A new

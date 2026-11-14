@@ -1,29 +1,27 @@
 ---
 name: module-design
-description: Design vocabulary and procedure for new or reshaped modules, traits, and API surfaces — before writing them. Use when designing any trait, module, public interface, or cross-crate boundary, or when comparing alternative shapes for one.
+description: Vocabulary and procedure for designing a new or reshaped module, interface, or API surface before writing it. Use when designing any interface, module, command, contract, or cross-package seam, or when comparing alternative shapes for one.
 ---
 
 # Module design
 
-Vocabulary — use exactly these terms: **module** (anything with an interface and an
-implementation), **interface** (everything a caller must know: signature plus
-invariants, ordering, error modes, performance), **depth** (behavior gained per unit of
-interface learned), **seam** (a place behavior can change without editing there),
-**adapter**, **locality** (what maintainers get), **leverage** (what callers get).
-Never "component", "service", or "boundary".
+Use exactly these terms. A **module** is anything with an interface and an implementation. Its
+**interface** is everything a caller must know: the signature, plus invariants, ordering, error
+modes, and performance or asynchrony. **Depth** is behaviour gained per unit of interface learned.
+A **seam** is a place behaviour can change without editing there; an **adapter** fills one.
+**Locality** is what maintainers get, **leverage** what callers get. Never "component", "service",
+or "boundary".
 
-Procedure:
+1. **Search first.** Prove no existing system in the tree already covers the concern. Extend that
+   one; never build a parallel one.
+2. **Design it twice or more.** Produce independent designs under different constraints, in
+   parallel subagents when available: the smallest interface, the best fit for the dominant
+   caller, ports and adapters. Each gives the interface, a usage example, what it hides, its
+   error taxonomy, and its trade-offs.
+3. **Compare on depth, locality and seam placement**, and give one recommendation, not a menu.
+4. **Record the chosen shape before code commits to it**, where the repo's CLAUDE.md says design
+   decisions live; failing that, in the Linear issue's description. What the shape needs from
+   another repo is an issue there, through `file-issue`, that this work is blocked by.
 
-1. **Search first.** Prove no core system (RHI, `GpuContext`, pubsub, processor model,
-   the escalate bridge) already covers the concern. Extending beats parallel — always.
-2. **Design it twice.** Spawn parallel design subagents with different constraints —
-   minimize the interface / optimize for the dominant caller / ports-and-adapters. Each
-   returns: the interface, a usage example, what's hidden, the error taxonomy,
-   trade-offs.
-3. **Compare** on depth, locality, and seam placement. Give ONE opinionated
-   recommendation — never a menu.
-4. The chosen shape usually goes into a change proposal via `/propose-change`, so the
-   owner sees a new interface before code commits to it.
-
-Testing stance: **the interface is the test surface.** Wanting to test past it means the
-module is the wrong shape. One adapter is a hypothetical seam; two adapters is a real one.
+The interface is the test surface: wanting to test past it means the module has the wrong shape.
+One adapter is a hypothetical seam; two is a real one.

@@ -5,16 +5,16 @@ StreamLib is a game-engine-shaped substrate: one core system per concern, many c
 ## The plan decides; sessions implement
 
 - The architecture plan (`docs/plan/ARCHITECTURE.md` + `docs/plan/architecture.excalidraw`) is
-  the single source of architectural decisions. Tickets implement the plan rather than make
-  architecture. If work needs a decision the plan doesn't state, **bring it to the owner** —
+  the single source of architectural decisions. Linear issues implement the plan rather than
+  make architecture. If work needs a decision the plan doesn't state, **bring it to the owner** —
   ask it while you keep going on what doesn't depend on it, or build your recommendation and
   state it as an assumption in the PR. Don't infer it from existing code, consumers, or git
   history; those show what is, not what was agreed.
 - Existing code that contradicts the plan is legacy to be replaced, not a pattern to accommodate.
   A pivot updates the plan first; code follows. When the plan changes direction, the old shape is
   ripped out — no parallel old/new coexistence.
-- Scope is what the ticket states, gated by the plan. Findings outside it go in the PR
-  description as notes, not into new tickets and not into the diff.
+- Scope is what the Linear issue states, gated by the plan. Findings outside it go in the PR
+  description as notes, not into new issues and not into the diff.
 
 ## Structure
 
