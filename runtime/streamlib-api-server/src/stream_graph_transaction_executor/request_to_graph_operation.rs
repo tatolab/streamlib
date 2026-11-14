@@ -444,12 +444,103 @@ pub(super) fn graph_operation_for_the_request(
     }
 }
 
-pub(super) fn the_note_named(note: &str) -> Result<Uuid, String> {
+/// Whether `link`, once `staged_graph` holds it, closes a loop every node of which is a
+/// function node and none a `PreviousValue` node: the loop the compiler refuses.
+pub(super) fn the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
+    staged_graph: &StreamGraphDocument,
+    link: &StreamGraphDocumentLink,
+    function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
+) -> Result<bool, String> {
+    let links = staged_graph.links();
+    let nodes_reached_from = |node: Uuid, may_pass_through: &dyn Fn(Uuid) -> bool| {
+        let mut reached = HashSet::from([node]);
+        let mut nodes_to_walk_from = vec![node];
+        while let Some(walked_from) = nodes_to_walk_from.pop() {
+            for held in &links {
+                if held.source.node == walked_from
+                    && may_pass_through(held.target.node)
+                    && reached.insert(held.target.node)
+                {
+                    nodes_to_walk_from.push(held.target.node);
+                }
+            }
+        }
+        reached
+    };
+    if !nodes_reached_from(link.target.node, &|_| true).contains(&link.source.node) {
+        return Ok(false);
+    }
+    let previous_value_nodes: HashSet<Uuid> = staged_graph
+        .nodes()
+        .into_iter()
+        .filter(|node| node.node_type == PREVIOUS_VALUE_NODE_TYPE)
+        .map(|node| node.id)
+        .collect();
+    let function_nodes = function_nodes_of_the_running_stream()?;
+    let may_be_in_the_loop =
+        |node: Uuid| function_nodes.contains(&node) && !previous_value_nodes.contains(&node);
+    Ok(may_be_in_the_loop(link.target.node)
+        && nodes_reached_from(link.target.node, &may_be_in_the_loop).contains(&link.source.node))
+}
+
+/// The addition of a `PreviousValue` node to `staged_graph` with `link` carried through it,
+/// drawn halfway between the two nodes `link` joins when the canvas places both.
+pub(super) fn the_previous_value_node_added_on_the_link(
+    staged_graph: &StreamGraphDocument,
+    link: StreamGraphDocumentLink,
+) -> StreamGraphOperation {
+    let canvas_position_of = |node: Uuid| {
+        let [x, y] = staged_graph.node(node).ok()?.studio.position?;
+        Some((x.as_f64()?, y.as_f64()?))
+    };
+    let position_halfway_along_the_link = canvas_position_of(link.source.node)
+        .zip(canvas_position_of(link.target.node))
+        .and_then(|((source_x, source_y), (target_x, target_y))| {
+            Some([
+                serde_json::Number::from_f64((source_x + target_x) / 2.0)?,
+                serde_json::Number::from_f64((source_y + target_y) / 2.0)?,
+            ])
+        });
+    let previous_value_node = Uuid::new_v4();
+    StreamGraphOperation::AddNode {
+        node: StreamGraphDocumentNode {
+            id: previous_value_node,
+            name: String::new(),
+            node_type: PREVIOUS_VALUE_NODE_TYPE.to_owned(),
+            config: Value::Object(Map::new()),
+            pins: Map::new(),
+            exposed_config_fields: Vec::new(),
+            studio: Box::new(StreamGraphNodeStudioFields {
+                position: position_halfway_along_the_link,
+                ..StreamGraphNodeStudioFields::default()
+            }),
+            fragment: None,
+        },
+        links: vec![
+            StreamGraphDocumentLink {
+                source: link.source,
+                target: StreamGraphDocumentLinkEnd {
+                    node: previous_value_node,
+                    port: PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned(),
+                },
+            },
+            StreamGraphDocumentLink {
+                source: StreamGraphDocumentLinkEnd {
+                    node: previous_value_node,
+                    port: PREVIOUS_VALUE_NODE_OUTPUT_PORT.to_owned(),
+                },
+                target: link.target,
+            },
+        ],
+    }
+}
+
+fn the_note_named(note: &str) -> Result<Uuid, String> {
     Uuid::parse_str(note)
         .map_err(|_| format!("`{note}` is no note's UUID; `graph` lists each note's under `notes`"))
 }
 
-pub(super) fn the_group_named(group: &str) -> Result<Uuid, String> {
+fn the_group_named(group: &str) -> Result<Uuid, String> {
     Uuid::parse_str(group).map_err(|_| {
         format!("`{group}` is no group's UUID; `graph` lists each group's under `groups`")
     })
@@ -458,7 +549,7 @@ pub(super) fn the_group_named(group: &str) -> Result<Uuid, String> {
 /// The fragment node one graph generator run places, as the run entry prints it: its nodes
 /// and links by name.
 #[derive(Deserialize)]
-pub(super) struct StreamGraphFragmentNodeAGeneratorRunPlaced {
+struct StreamGraphFragmentNodeAGeneratorRunPlaced {
     name: String,
     #[serde(rename = "type")]
     generator: String,

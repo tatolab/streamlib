@@ -173,7 +173,7 @@ impl StreamGraphTransactionExecutor<'_> {
     /// stream of `streams_taking_their_edits_once_the_documents_hold_them` takes each later edit
     /// that way too, so its running stream takes the transaction's edits in order.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn apply_one_request(
+    fn apply_one_request(
         &self,
         request: StreamGraphAction,
         stream_id: &str,
@@ -443,7 +443,7 @@ impl StreamGraphTransactionExecutor<'_> {
     /// asset, with the operation carrying its links onto that stream's ports across the edit that
     /// leaves its document as `placed_document_after_the_edit`, each staged on the placing
     /// stream's document; a stream the transaction saves is among them.
-    pub(super) fn the_links_carried_in_every_stream_placing(
+    fn the_links_carried_in_every_stream_placing(
         &self,
         reached: &StreamGraphLevelOfAPlacedStream,
         placed_document_after_the_edit: &StreamGraphDocument,

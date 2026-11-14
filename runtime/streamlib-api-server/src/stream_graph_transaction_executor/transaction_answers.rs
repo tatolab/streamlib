@@ -148,7 +148,7 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 }
 
-pub(super) fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWire {
+fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWire {
     GraphLinkEndOnTheWire {
         node: end.node.to_string(),
         port: end.port.clone(),
@@ -157,7 +157,7 @@ pub(super) fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLin
 
 /// The `state` and `error_reason` the `graph` render `graph_render` gives `link`, whose ends it
 /// names by node name.
-pub(super) fn how_the_graph_reads_the_link(
+fn how_the_graph_reads_the_link(
     graph_render: &Value,
     link: &StreamGraphDocumentLink,
 ) -> (Option<String>, Option<String>) {

@@ -11,10 +11,11 @@ use streamlib_project_repository::{
 };
 use uuid::Uuid;
 
-use super::{
+use super::request_to_graph_operation::{
     the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in,
-    the_module_a_project_file_is_imported_as, the_previous_value_node_added_on_the_link,
+    the_previous_value_node_added_on_the_link,
 };
+use super::the_module_a_project_file_is_imported_as;
 
 fn a_link_between(source: Uuid, target: Uuid) -> StreamGraphDocumentLink {
     StreamGraphDocumentLink {
