@@ -84,12 +84,11 @@ def decoded_rgba_pixels_of_the_image_file(path: str) -> Any:
         return numpy.asarray(upright)
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=100,
-    description="Show a picture from the project's assets. Pick a PNG or JPEG you imported in its `asset` setting.",
+@node.meta(
     category="Sources",
+    description="Show a picture from the project's assets. Pick a PNG or JPEG you imported in its `asset` setting.",
 )
+@node.process(execution="continuous", interval_ms=100)
 class ImageFile:
     """Publishes the project image asset its config names, once at start and again on each config change.
 

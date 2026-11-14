@@ -10,10 +10,11 @@ from tatolab.stream import node
 __all__ = ["PreviousValue"]
 
 
-@node.function(
-    description="A number as it was at the last evaluation. A loop of number nodes closes through it.",
+@node.meta(
     category="Logic",
+    description="A number as it was at the last evaluation. A loop of number nodes closes through it.",
 )
+@node.function
 def PreviousValue(value: float = 0.0) -> float:
     """`value` as it was at the last evaluation, 0 at the first. The runtime reads this
     node's input one evaluation late, so a loop of function nodes passes through one."""

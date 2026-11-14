@@ -78,7 +78,8 @@ class GlitchFlashSchedule:
             self.intensity = random.uniform(0.3, 0.6)
 
 
-@node.process(description="Cyberpunk colour grade with intermittent glitch flashes")
+@node.meta(description="Cyberpunk colour grade with intermittent glitch flashes")
+@node.process
 class CyberpunkGlitch(SinglePassVideoEffect):
     """The grade is always on; the glitch is not."""
 

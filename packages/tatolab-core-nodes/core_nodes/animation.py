@@ -20,10 +20,11 @@ class LfoPhase:
     started: bool = False
 
 
-@node.function(
-    description="A smooth wave that swings between -1 and 1, rate_hz times a second. Wire it into any number input to animate it.",
+@node.meta(
     category="Animation",
+    description="A smooth wave that swings between -1 and 1, rate_hz times a second. Wire it into any number input to animate it.",
 )
+@node.function
 def Lfo(  # noqa: N802
     rate_hz: float = 1.0, *, now: Time, previous: State[LfoPhase]
 ) -> Stateful[float, LfoPhase]:
@@ -41,10 +42,11 @@ class TimerStart:
     started: bool = False
 
 
-@node.function(
-    description="Seconds since the stream started, or since reset was last on.",
+@node.meta(
     category="Animation",
+    description="Seconds since the stream started, or since reset was last on.",
 )
+@node.function
 def Timer(  # noqa: N802
     reset: bool = False, *, now: Time, previous: State[TimerStart]
 ) -> Stateful[float, TimerStart]:
@@ -63,10 +65,11 @@ class LagValue:
     started: bool = False
 
 
-@node.function(
-    description="Smooth a jumpy number: follow it, taking about `seconds` to catch up.",
+@node.meta(
     category="Animation",
+    description="Smooth a jumpy number: follow it, taking about `seconds` to catch up.",
 )
+@node.function
 def Lag(  # noqa: N802
     x: float, seconds: float = 0.1, *, now: Time, previous: State[LagValue]
 ) -> Stateful[float, LagValue]:
@@ -87,10 +90,11 @@ class RampPhase:
     started: bool = False
 
 
-@node.function(
-    description="A number that climbs from 0 to 1 and starts over, rate_hz times a second. Drives anything that loops: a wipe, a rotation, a scroll.",
+@node.meta(
     category="Animation",
+    description="A number that climbs from 0 to 1 and starts over, rate_hz times a second. Drives anything that loops: a wipe, a rotation, a scroll.",
 )
+@node.function
 def Ramp(  # noqa: N802
     rate_hz: float = 1.0, *, now: Time, previous: State[RampPhase]
 ) -> Stateful[float, RampPhase]:
@@ -109,10 +113,11 @@ class PulsePhase:
     started: bool = False
 
 
-@node.function(
-    description="On and off in a steady beat: on for the first `width` of each cycle, rate_hz times a second. Set rate_hz to BPM / 60 for a beat.",
+@node.meta(
     category="Animation",
+    description="On and off in a steady beat: on for the first `width` of each cycle, rate_hz times a second. Set rate_hz to BPM / 60 for a beat.",
 )
+@node.function
 def Pulse(  # noqa: N802
     rate_hz: float = 2.0, width: float = 0.5, *, now: Time, previous: State[PulsePhase]
 ) -> Stateful[bool, PulsePhase]:
@@ -131,10 +136,11 @@ class SpeedPosition:
     started: bool = False
 
 
-@node.function(
-    description="Turn a speed into a position: adds `rate` every second, so a steady input makes a steadily growing number. Reset sends it back to 0.",
+@node.meta(
     category="Animation",
+    description="Turn a speed into a position: adds `rate` every second, so a steady input makes a steadily growing number. Reset sends it back to 0.",
 )
+@node.function
 def Speed(  # noqa: N802
     rate: float = 1.0, reset: bool = False, *, now: Time, previous: State[SpeedPosition]
 ) -> Stateful[float, SpeedPosition]:
@@ -154,10 +160,11 @@ class EnvelopeLevel:
     started: bool = False
 
 
-@node.function(
-    description="Fade up while the gate is on and fade down when it lets go: rises to 1 over `attack_seconds`, falls to 0 over `release_seconds`.",
+@node.meta(
     category="Animation",
+    description="Fade up while the gate is on and fade down when it lets go: rises to 1 over `attack_seconds`, falls to 0 over `release_seconds`.",
 )
+@node.function
 def Envelope(  # noqa: N802
     gate: bool = False,
     attack_seconds: float = 0.1,

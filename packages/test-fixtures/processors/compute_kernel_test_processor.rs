@@ -80,9 +80,11 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
 ];
 
 #[streamlib::sdk::processor(
-    description = "Compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2, and asserts CPU-reference match",
     execution = manual,
     config = crate::test_fixture_processor_configs::ComputeKernelTestProcessorConfig,
+)]
+#[meta(
+    description = "Compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2, and asserts CPU-reference match"
 )]
 pub struct ComputeKernelTest {}
 

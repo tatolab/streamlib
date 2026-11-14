@@ -1987,9 +1987,12 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `__main__`; only processor classes may not live there.
   Every node names its kind — `@node.shader`, `@node.function` or `@node.process` — and a
   module's `#[function_node]` is a node type too; a function's type is its import path, as a
-  class's is, and bare `@node` does not exist. `@node.process` declares execution, interval,
-  scheduling priority, and description only. Mechanically means at the authoring seam, never from a
-  runtime reflection API: Rust captures the type path where the macro expands, because
+  class's is, and bare `@node` does not exist. `@node.process` declares execution, interval and
+  scheduling priority only. What describes a node type of any kind, its `category` and
+  `description`, is declared in `@node.meta(...)` beside the kind decorator, or in the
+  `#[meta(...)]` under `#[processor]` or `#[function_node]`; a category is a path, as
+  `Effects/Stylize`, and a node type that declares none has none. Mechanically means at the
+  authoring seam, never from a runtime reflection API: Rust captures the type path where the macro expands, because
   `std::any::type_name`'s output format is unspecified across compiler versions and must
   never key a registry; Python joins `__module__` and `__qualname__` with a colon. Nothing
   derives a per-processor isolation tier: every processor runs at the one tier the engine

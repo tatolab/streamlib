@@ -14,6 +14,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from tatolab.stream._node_type_source_reader import (
+    read_node_types_and_graph_generators_from_module_sources,
+)
 from tatolab.stream._project_node_type_listing_entry import (
     list_the_node_types_and_graph_generators_of_a_project,
 )
@@ -35,7 +40,8 @@ from tatolab.stream import Description, Image, Input, Output, State, Stateful, T
 INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
 
 
-@node.process(execution="continuous", category="Robot", description=INVERSE_KINEMATICS_DESCRIPTION)
+@node.meta(category="Robot/Arms", description=INVERSE_KINEMATICS_DESCRIPTION)
+@node.process(execution="continuous")
 class InverseKinematics:
     """A docstring, which the listing never reads."""
 
@@ -57,7 +63,8 @@ class Phase:
     phase: float = 0.0
 
 
-@node.function(description="Splits a value at a threshold.")
+@node.function
+@node.meta(description="Splits a value at a threshold.")
 def split(
     x: "Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None",
     threshold: float = 0.5,
@@ -73,6 +80,11 @@ def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Descr
     return previous.phase, previous
 
 
+@node.meta(
+    category="Color",
+    description="Scales every channel by `amount`.",
+)
+@node.meta(category="Effects")
 @node.shader("float4 tint(ImageInput image, float amount) { return image.pixel * amount; }")
 def tint(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...
 
@@ -217,16 +229,16 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "type": "nodes.inverse_kinematics:InverseKinematics",
         "kind": "process",
         "description": "Solves joint angles for a target pose.",
-        "category": "Robot",
+        "category": "Robot/Arms",
         "inputs": [{"name": "target", "family": "image", "description": "The target pose.", "annotation": None}],
         "outputs": [{"name": "joint_angles", "family": None, "description": "", "annotation": None}],
         "path": "nodes/inverse_kinematics.py",
-        "line": 12,
+        "line": 13,
     }
     split = node_types["nodes.inverse_kinematics:split"]
     assert split["kind"] == "function"
     assert split["description"] == "Splits a value at a threshold."
-    assert split["category"] == "nodes.inverse_kinematics"
+    assert split["category"] is None
     assert split["inputs"] == [
         {
             "name": "x",
@@ -258,6 +270,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     ]
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
+    assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
     assert [port["family"] for port in tint["inputs"]] == ["image", "channels"]
     assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "ImageFrame"}]
 
@@ -275,6 +288,42 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         }
     ]
     assert project["unreadable_modules"] == []
+
+
+NODE_META_AS_WRITTEN = '@node.meta(category="Effects/Stylize", description="Tints a frame.")'
+KIND_DECORATOR_AND_DECLARATION_BY_KIND = {
+    "process": ('@node.process(execution="reactive")', "class Tint:\n    pass"),
+    "function": ("@node.function", "def Tint(amount: float = 1.0) -> float:\n    return amount"),
+    "shader": (
+        '@node.shader("float4 Tint(ImageInput image) { return image.pixel; }")',
+        "def Tint(image: ImageFrame) -> ImageFrame: ...",
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(KIND_DECORATOR_AND_DECLARATION_BY_KIND))
+@pytest.mark.parametrize("meta_is_written", ["above_the_kind_decorator", "below_the_kind_decorator"])
+def test_a_node_meta_is_read_from_source_above_or_below_the_decorator_of_every_kind(
+    kind: str, meta_is_written: str
+) -> None:
+    kind_decorator, declaration = KIND_DECORATOR_AND_DECLARATION_BY_KIND[kind]
+    decorators = [NODE_META_AS_WRITTEN, kind_decorator]
+    if meta_is_written == "below_the_kind_decorator":
+        decorators.reverse()
+    module_source = "\n".join(
+        ["from tatolab.stream import ImageFrame, node", "", "", *decorators, declaration, RAISES_AT_IMPORT]
+    )
+
+    read = read_node_types_and_graph_generators_from_module_sources(
+        [("nodes.tint", "nodes/tint.py", module_source)]
+    )
+
+    assert read["unreadable_modules"] == []
+    (node_type,) = read["node_types"]
+    assert node_type["type"] == "nodes.tint:Tint"
+    assert node_type["kind"] == kind
+    assert node_type["category"] == "Effects/Stylize"
+    assert node_type["description"] == "Tints a frame."
 
 
 def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: Path) -> None:
@@ -304,6 +353,7 @@ def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: 
             [{"name": "grip", "family": "channels", "description": "", "annotation": None}],
         )
     ]
+    assert [node_type["category"] for node_type in dependency_source["node_types"]] == [None]
 
 
 def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
@@ -336,6 +386,7 @@ def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
     assert node_types["tatolab_fixture_ops:Lerp"]["kind"] == "function"
     assert node_types["tatolab_fixture_ops:Lerp"]["inputs"] is None
     assert node_types["tatolab_fixture_ops:Missing"]["kind"] is None
+    assert [node_type["category"] for node_type in node_types.values()] == [None, None, None, None]
 
 
 def test_the_project_source_leaves_out_the_node_code_of_its_imports_folder(

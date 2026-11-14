@@ -3099,13 +3099,13 @@ export interface NodeTypeReadFromSource {
    */
   kind?: string | null;
   /**
-   * The declared description, or the docstring.
+   * The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
    */
   description: string;
   /**
-   * The palette category, the declaring module when none is declared.
+   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
    */
-  category: string;
+  category?: string | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -3808,13 +3808,13 @@ export type NodeTypeOfOneProjectSource = {
    */
   kind?: string | null;
   /**
-   * The declared description, or the docstring.
+   * The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
    */
   description: string;
   /**
-   * The palette category, the declaring module when none is declared.
+   * The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
    */
-  category: string;
+  category?: string | null;
   /**
    * The input ports, `None` where only the node's native half states them.
    */
@@ -4778,7 +4778,7 @@ export interface ControlOperations {
   /**
    * List the node types a project offers, from its own node files and the packages it installs.
    *
-   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category`, and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
+   * List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.
    *
    * Since contract version 1, stable.
    */
@@ -4966,7 +4966,7 @@ export type ControlOperationMethodName = keyof ControlOperations;
 export type ControlNotificationMethodName = keyof ControlNotifications;
 
 /** The contract version this package was generated from. */
-export declare const CONTROL_CONTRACT_VERSION: 2;
+export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

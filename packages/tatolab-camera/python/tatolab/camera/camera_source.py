@@ -47,9 +47,7 @@ class CameraSourceConfig:
     ] = 4
 
 
-@node.process(
-    execution="manual",
-    paced_by_real_time=True,
+@node.meta(
     description=(
         "Captures a camera — V4L2 on Linux, AVFoundation on macOS — and converts each frame "
         "on the GPU, with no CPU copy. On macOS a stream someone loads or starts asks for camera "
@@ -57,6 +55,7 @@ class CameraSourceConfig:
         "re-loads on its own never asks, and is refused at setup until access has been answered."
     ),
 )
+@node.process(execution="manual", paced_by_real_time=True)
 class CameraSource:
     """A camera, published as RGBA Image frames."""
 

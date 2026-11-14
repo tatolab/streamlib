@@ -60,15 +60,13 @@ class SpeakerSinkConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
-    scheduling="realtime",
-    paced_by_real_time=True,
+@node.meta(
     description=(
         "Plays timestamped Channels blocks on the machine's audio backend "
         "(discarding where no backend exists)."
     ),
 )
+@node.process(execution="manual", scheduling="realtime", paced_by_real_time=True)
 class SpeakerSink:
     """Plays timestamped Channels blocks on the machine's audio backend
     (discarding where no backend exists).

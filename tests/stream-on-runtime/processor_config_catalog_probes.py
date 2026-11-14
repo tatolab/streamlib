@@ -42,7 +42,8 @@ class ModelProbeConfig(pydantic.BaseModel):
     width: int = 1280
 
 
-@node.process(execution="manual", description="Configured by a TypedDict")
+@node.meta(description="Configured by a TypedDict")
+@node.process(execution="manual")
 class TypedDictConfiguredProbe:
     def __init__(self, config: TypedDictProbeConfig) -> None:
         self.config = config
@@ -51,7 +52,8 @@ class TypedDictConfiguredProbe:
         _report("TypedDictConfiguredProbe", self.config)
 
 
-@node.process(execution="manual", description="Configured by a dataclass")
+@node.meta(description="Configured by a dataclass")
+@node.process(execution="manual")
 class DataclassConfiguredProbe:
     def __init__(self, config: DataclassProbeConfig) -> None:
         self.config = config
@@ -71,7 +73,8 @@ class ModelConfiguredProbe:
         _report("ModelConfiguredProbe", self.config)
 
 
-@node.process(execution="manual", description="Takes no configuration at all")
+@node.meta(description="Takes no configuration at all")
+@node.process(execution="manual")
 class UnconfiguredProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report("UnconfiguredProbe", None)

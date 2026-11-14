@@ -44,7 +44,8 @@ DESCRIBED_NODES_SOURCE = '''
 from tatolab.stream import AudioWindowContract, Channels, Input, Output, Packets, node
 
 
-@node.process(scheduling="high", description="Relays each audio window as a frame.")
+@node.meta(category="Audio/Relays", description="Relays each audio window as a frame.")
+@node.process(scheduling="high")
 class WindowedRelay:
     audio_from_upstream = Input(
         Channels,
@@ -60,14 +61,16 @@ class WindowedRelay:
     def process(self, ctx) -> None: ...
 
 
-@node.process(execution="continuous", interval_ms=20, description="ticks on its own")
+@node.meta(description="ticks on its own")
+@node.process(execution="continuous", interval_ms=20)
 class Ticker:
     ticks_to_downstream = Output(Packets)
 
     def process(self, ctx) -> None: ...
 
 
-@node.process(execution="manual", paced_by_real_time=True, description="captures on its own")
+@node.meta(description="captures on its own")
+@node.process(execution="manual", paced_by_real_time=True)
 class LiveCapture:
     frames_to_downstream = Output(Packets)
 
@@ -202,7 +205,7 @@ def test_a_stamped_node_type_is_described_as_its_stamps(project_directory: Path)
                         "family": {"family": "packets"},
                     }
                 ],
-                "category": "described_nodes",
+                "category": "Audio/Relays",
             }
         ],
         "refused_node_types": [],
@@ -217,6 +220,7 @@ def test_a_continuous_node_carries_its_interval_and_no_priority(project_director
     assert ticker["execution"] == {"mode": "continuous", "interval_ms": 20}
     assert ticker["scheduling_priority"] is None
     assert ticker["description"] == "ticks on its own"
+    assert ticker["category"] is None
     assert ticker["input_ports"] == []
     assert ticker["paced_by_real_time"] is False
 
@@ -845,12 +849,12 @@ def test_the_bootstrap_drops_its_own_directory_from_the_import_path(project_dire
         )
 
 
-        @node.process(
-            execution="manual",
+        @node.meta(
             description=",".join(
                 name for name in BESIDE_THE_BOOTSTRAP if importlib.util.find_spec(name)
             )
         )
+        @node.process(execution="manual")
         class ShadowProbe:
             nothing_to_downstream = Output(Packets)
 

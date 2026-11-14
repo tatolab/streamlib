@@ -19,8 +19,8 @@ import re
 from collections.abc import Callable
 from typing import Any, NoReturn, ParamSpec, TypeVar
 
-from ._description import refuse_a_description_that_is_not_a_string
 from ._function_node_declaration import FunctionNode, _FunctionNodeSignatureReading
+from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
 
 __all__ = ["ShaderNode"]
 
@@ -57,12 +57,11 @@ def declare_shader_node(
     function: Callable[_ShaderNodeParameters, _ShaderNodeReturn],
     *,
     shader_source: str,
-    description: str,
-    category: str,
     declaration_stamps: dict[str, str],
 ) -> ShaderNode[_ShaderNodeParameters, _ShaderNodeReturn]:
     """Read `function`'s signature into a shader node over `shader_source`, refusing by name what is not one."""
     _refuse_what_is_not_a_plain_module_level_function(function)
+    declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     name = function.__name__
     signature_reading = _FunctionNodeSignatureReading(function)
     signature = signature_reading.function_signature
@@ -74,10 +73,8 @@ def declare_shader_node(
         declaration_stamps["kind"]: SHADER_NODE_KIND,
         declaration_stamps["config_class"]: None,
         declaration_stamps["config_schema"]: _json_schema_for_a_shader_node(),
-        declaration_stamps["description"]: refuse_a_description_that_is_not_a_string(
-            description, f"@node.shader on {name}"
-        ),
-        declaration_stamps["category"]: category or function.__module__,
+        declaration_stamps["description"]: declared_meta.get("description", ""),
+        declaration_stamps["category"]: declared_meta.get("category"),
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_SHADER_SOURCE_STAMP: shader_source,

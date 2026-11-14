@@ -8,6 +8,10 @@ from __future__ import annotations
 from tatolab.stream import ImageFrame, node
 
 
+@node.meta(
+    category="Transform",
+    description="Move, resize and turn a picture. Move is a fraction of the frame, scale 1 is full size, rotate is in turns (0.25 is a quarter turn). Outside the picture is see-through.",
+)
 @node.shader(
     """
 float4 Transform(ImageInput image, float move_x, float move_y, float scale, float rotate)
@@ -21,8 +25,6 @@ float4 Transform(ImageInput image, float move_x, float move_y, float scale, floa
     return image.sample(source) * inside;
 }
 """,
-    description="Move, resize and turn a picture. Move is a fraction of the frame, scale 1 is full size, rotate is in turns (0.25 is a quarter turn). Outside the picture is see-through.",
-    category="Transform",
 )
 def Transform(  # noqa: N802
     image: ImageFrame,
@@ -33,6 +35,10 @@ def Transform(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Transform",
+    description="Cut away the edges of a picture, each by a fraction of the frame. What is cut is see-through.",
+)
 @node.shader(
     """
 float4 Crop(ImageInput image, float left, float right, float top, float bottom)
@@ -41,8 +47,6 @@ float4 Crop(ImageInput image, float left, float right, float top, float bottom)
     return image.pixel * inside;
 }
 """,
-    description="Cut away the edges of a picture, each by a fraction of the frame. What is cut is see-through.",
-    category="Transform",
 )
 def Crop(  # noqa: N802
     image: ImageFrame,
@@ -53,6 +57,10 @@ def Crop(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Transform",
+    description="Mirror a picture left to right, top to bottom, or both. Set each to 1 to flip.",
+)
 @node.shader(
     """
 float4 Flip(ImageInput image, float horizontal, float vertical)
@@ -61,12 +69,14 @@ float4 Flip(ImageInput image, float horizontal, float vertical)
     return image.sample(source);
 }
 """,
-    description="Mirror a picture left to right, top to bottom, or both. Set each to 1 to flip.",
-    category="Transform",
 )
 def Flip(image: ImageFrame, horizontal: float = 1.0, vertical: float = 0.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Transform",
+    description="Repeat a picture in a grid. Wire a Ramp into scroll to slide the tiles forever.",
+)
 @node.shader(
     """
 float4 Tile(ImageInput image, float across, float down, float scroll_x, float scroll_y)
@@ -74,8 +84,6 @@ float4 Tile(ImageInput image, float across, float down, float scroll_x, float sc
     return image.sample(frac(image.uv * float2(max(across, 0.0001), max(down, 0.0001)) + float2(scroll_x, scroll_y)));
 }
 """,
-    description="Repeat a picture in a grid. Wire a Ramp into scroll to slide the tiles forever.",
-    category="Transform",
 )
 def Tile(  # noqa: N802
     image: ImageFrame,
@@ -86,6 +94,10 @@ def Tile(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Transform",
+    description="Reflect one half of a picture onto the other, for a symmetric image.",
+)
 @node.shader(
     """
 float4 Mirror(ImageInput image, float horizontal, float vertical)
@@ -96,12 +108,14 @@ float4 Mirror(ImageInput image, float horizontal, float vertical)
     return image.sample(source);
 }
 """,
-    description="Reflect one half of a picture onto the other, for a symmetric image.",
-    category="Transform",
 )
 def Mirror(image: ImageFrame, horizontal: float = 1.0, vertical: float = 0.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Transform",
+    description="Fold a picture into mirrored wedges around its centre. Wire a Ramp into rotate to make it spin.",
+)
 @node.shader(
     """
 float4 Kaleidoscope(ImageInput image, float segments, float rotate, float zoom)
@@ -116,8 +130,6 @@ float4 Kaleidoscope(ImageInput image, float segments, float rotate, float zoom)
     return image.sample(saturate(source));
 }
 """,
-    description="Fold a picture into mirrored wedges around its centre. Wire a Ramp into rotate to make it spin.",
-    category="Transform",
 )
 def Kaleidoscope(  # noqa: N802
     image: ImageFrame, segments: float = 6.0, rotate: float = 0.0, zoom: float = 1.0

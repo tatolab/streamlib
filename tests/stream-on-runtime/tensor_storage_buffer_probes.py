@@ -377,10 +377,10 @@ float4 main() : SV_Target {
 """
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
 )
+@node.process(execution="manual")
 class TensorStorageBufferKernelBindingProbe:
     """A compute kernel writes an index pattern into one tensor, which torch
     reads back; a second tensor the kernel never names keeps its sentinel.

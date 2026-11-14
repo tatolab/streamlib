@@ -101,7 +101,8 @@ class SyntheticFisheyeLensConfig:
     radial_distortion_k2: float = DEFAULT_RADIAL_DISTORTION_K2
 
 
-@node.process(description="Barrels each camera frame the way a wide-FOV lens would, on the GPU")
+@node.meta(description="Barrels each camera frame the way a wide-FOV lens would, on the GPU")
+@node.process
 class SyntheticFisheyeLens:
     """Camera frame in, the same picture through a synthetic fisheye lens out."""
 

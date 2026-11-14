@@ -12,6 +12,10 @@ from __future__ import annotations
 from tatolab.stream import ImageFrame, node
 
 
+@node.meta(
+    category="Generators",
+    description="A smooth fade from one colour to another across the frame. Angle is in turns: 0 runs left to right, 0.25 top to bottom.",
+)
 @node.shader(
     """
 float4 Gradient(ImageInput size_from, float angle, float start_red, float start_green, float start_blue, float end_red, float end_green, float end_blue)
@@ -21,8 +25,6 @@ float4 Gradient(ImageInput size_from, float angle, float start_red, float start_
     return float4(lerp(float3(start_red, start_green, start_blue), float3(end_red, end_green, end_blue), along), 1.0);
 }
 """,
-    description="A smooth fade from one colour to another across the frame. Angle is in turns: 0 runs left to right, 0.25 top to bottom.",
-    category="Generators",
 )
 def Gradient(  # noqa: N802
     size_from: ImageFrame,
@@ -36,6 +38,10 @@ def Gradient(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="A round fade from an inner colour at the centre to an outer colour at the radius.",
+)
 @node.shader(
     """
 float4 RadialGradient(ImageInput size_from, float center_x, float center_y, float radius, float inner_red, float inner_green, float inner_blue, float outer_red, float outer_green, float outer_blue)
@@ -45,8 +51,6 @@ float4 RadialGradient(ImageInput size_from, float center_x, float center_y, floa
     return float4(lerp(float3(inner_red, inner_green, inner_blue), float3(outer_red, outer_green, outer_blue), along), 1.0);
 }
 """,
-    description="A round fade from an inner colour at the centre to an outer colour at the radius.",
-    category="Generators",
 )
 def RadialGradient(  # noqa: N802
     size_from: ImageFrame,
@@ -62,6 +66,10 @@ def RadialGradient(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="Soft grey clouds. Wire a Timer or a Speed into time to make them drift. A good map for Displace and a good mask.",
+)
 @node.shader(
     """
 float Noise_hash(float3 lattice_point)
@@ -101,8 +109,6 @@ float4 Noise(ImageInput size_from, float scale, float time, float detail, float 
     return float4(level, level, level, 1.0);
 }
 """,
-    description="Soft grey clouds. Wire a Timer or a Speed into time to make them drift. A good map for Displace and a good mask.",
-    category="Generators",
 )
 def Noise(  # noqa: N802
     size_from: ImageFrame,
@@ -113,6 +119,10 @@ def Noise(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="Black and white squares, for lining up a projector or testing an effect.",
+)
 @node.shader(
     """
 float4 Checkerboard(ImageInput size_from, float cells_across, float scroll_x, float scroll_y)
@@ -122,14 +132,16 @@ float4 Checkerboard(ImageInput size_from, float cells_across, float scroll_x, fl
     return float4(level, level, level, 1.0);
 }
 """,
-    description="Black and white squares, for lining up a projector or testing an effect.",
-    category="Generators",
 )
 def Checkerboard(  # noqa: N802
     size_from: ImageFrame, cells_across: float = 16.0, scroll_x: float = 0.0, scroll_y: float = 0.0
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="Evenly spaced bars at any angle. Wire a Ramp into scroll to make them march.",
+)
 @node.shader(
     """
 float4 Stripes(ImageInput size_from, float count, float angle, float scroll, float width, float softness)
@@ -141,8 +153,6 @@ float4 Stripes(ImageInput size_from, float count, float angle, float scroll, flo
     return float4(level, level, level, 1.0);
 }
 """,
-    description="Evenly spaced bars at any angle. Wire a Ramp into scroll to make them march.",
-    category="Generators",
 )
 def Stripes(  # noqa: N802
     size_from: ImageFrame,
@@ -154,6 +164,10 @@ def Stripes(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="A filled circle on a see-through background. Use it as a spotlight, a dot, or a mask.",
+)
 @node.shader(
     """
 float4 Circle(ImageInput size_from, float center_x, float center_y, float radius, float softness, float red, float green, float blue)
@@ -163,8 +177,6 @@ float4 Circle(ImageInput size_from, float center_x, float center_y, float radius
     return float4(float3(red, green, blue), cover);
 }
 """,
-    description="A filled circle on a see-through background. Use it as a spotlight, a dot, or a mask.",
-    category="Generators",
 )
 def Circle(  # noqa: N802
     size_from: ImageFrame,
@@ -178,6 +190,10 @@ def Circle(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Generators",
+    description="A filled rectangle on a see-through background. Width and height are fractions of the frame.",
+)
 @node.shader(
     """
 float4 Rectangle(ImageInput size_from, float center_x, float center_y, float width, float height, float softness, float red, float green, float blue)
@@ -188,8 +204,6 @@ float4 Rectangle(ImageInput size_from, float center_x, float center_y, float wid
     return float4(float3(red, green, blue), cover);
 }
 """,
-    description="A filled rectangle on a see-through background. Width and height are fractions of the frame.",
-    category="Generators",
 )
 def Rectangle(  # noqa: N802
     size_from: ImageFrame,

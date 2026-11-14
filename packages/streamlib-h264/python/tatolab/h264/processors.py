@@ -54,10 +54,8 @@ class H264EncoderConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
-    description="Encodes published video surfaces to H.264 on Vulkan Video or VideoToolbox",
-)
+@node.meta(description="Encodes published video surfaces to H.264 on Vulkan Video or VideoToolbox")
+@node.process(execution="manual")
 class H264Encoder:
     """Video frames in, H.264 access units out, encoded with Vulkan Video or VideoToolbox.
 
@@ -141,10 +139,10 @@ class H264DecoderConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="Decodes H.264 access units to published video textures on Vulkan Video or VideoToolbox",
 )
+@node.process(execution="manual")
 class H264Decoder:
     """H.264 access units in, video frames out, decoded with Vulkan Video or VideoToolbox.
 

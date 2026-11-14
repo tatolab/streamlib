@@ -30,7 +30,8 @@ from ..gpu_surface_conventions import (
 )
 
 
-@node.process(description="Copies the camera's frame into a bindable device texture")
+@node.meta(description="Copies the camera's frame into a bindable device texture")
+@node.process
 class CameraFrameToTexture:
     """Buffer-backed camera frame in, texture-backed frame out."""
 

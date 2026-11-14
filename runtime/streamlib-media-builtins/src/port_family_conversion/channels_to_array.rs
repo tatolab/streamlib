@@ -22,12 +22,6 @@ pub const CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Converts each Channels block on `channels` into one Array frame on `array`, \
-                  whose one CPU attribute `samples` holds the block's samples as a `[channels, \
-                  samples]` tensor of the block's sample type, `float32` or `float64`. The \
-                  samples are copied once, from the block into the frame. The block's sample \
-                  rate, start sample and channel names are not carried: an Array frame states \
-                  none of them.",
     execution = reactive,
     input(
         "channels",
@@ -42,6 +36,14 @@ pub const CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
         names = ["samples"],
         residency = "cpu"
     ),
+)]
+#[meta(
+    description = "Converts each Channels block on `channels` into one Array frame on `array`, \
+                   whose one CPU attribute `samples` holds the block's samples as a `[channels, \
+                   samples]` tensor of the block's sample type, `float32` or `float64`. The \
+                   samples are copied once, from the block into the frame. The block's sample \
+                   rate, start sample and channel names are not carried: an Array frame states \
+                   none of them."
 )]
 pub struct ChannelsToArray;
 

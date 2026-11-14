@@ -26,7 +26,8 @@ NODE_MODULE_SOURCE = '''
 from tatolab.stream import node
 
 
-@node.process(description="Makes frames out of nothing.\\n\\nA second paragraph.")
+@node.meta(description="Makes frames out of nothing.\\n\\nA second paragraph.")
+@node.process
 class FrameMaker:
     def process(self, ctx):
         pass

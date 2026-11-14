@@ -48,16 +48,6 @@ impl Default for RecordsToChannelsConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Converts each Records message on `records` into a Channels block of one \
-                  `f64` sample per channel on `channels`, one channel per key in \
-                  `channel_names`: latest-value control, such as a parameter an agent or a UI \
-                  sets, read by a node that takes Channels. A key the record leaves out keeps \
-                  its channel's latest value, 0 until a record names it; a key not in \
-                  `channel_names` is ignored. A value is an integer or a float, or a boolean \
-                  read as 1 or 0; a record that is not a map of string keys, or that holds \
-                  another value under a name, is refused and writes nothing. Each block's start \
-                  sample is the record's stamp since the first record's, counted at \
-                  `sample_rate`, and always past the block before it.",
     execution = reactive,
     config = crate::port_family_conversion::records_to_channels::RecordsToChannelsConfig,
     input(
@@ -74,6 +64,18 @@ impl Default for RecordsToChannelsConfig {
         rate = from_config("sample_rate"),
         dtype = "f64"
     ),
+)]
+#[meta(
+    description = "Converts each Records message on `records` into a Channels block of one \
+                   `f64` sample per channel on `channels`, one channel per key in \
+                   `channel_names`: latest-value control, such as a parameter an agent or a UI \
+                   sets, read by a node that takes Channels. A key the record leaves out keeps \
+                   its channel's latest value, 0 until a record names it; a key not in \
+                   `channel_names` is ignored. A value is an integer or a float, or a boolean \
+                   read as 1 or 0; a record that is not a map of string keys, or that holds \
+                   another value under a name, is refused and writes nothing. Each block's start \
+                   sample is the record's stamp since the first record's, counted at \
+                   `sample_rate`, and always past the block before it."
 )]
 pub struct RecordsToChannels {
     latest_value_of_each_channel: Vec<f64>,

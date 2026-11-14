@@ -131,9 +131,7 @@ class MoqGatewayConfig:
         }
 
 
-@node.process(
-    execution="manual",
-    paced_by_real_time=True,
+@node.meta(
     description=(
         "Holds one connection to a MoQ relay and publishes one broadcast there.\n\n"
         "`MoqTrack` nodes naming this gateway are the broadcast's tracks, and the "
@@ -145,6 +143,7 @@ class MoqGatewayConfig:
         "moq.pro credential is renewed before it expires."
     ),
 )
+@node.process(execution="manual", paced_by_real_time=True)
 class MoqGateway:
     """One relay connection, one broadcast."""
 
@@ -224,8 +223,7 @@ class MoqTrackConfig:
             )
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description=(
         "Declares one outgoing track of a `MoqGateway`'s broadcast.\n\n"
         "A stream holds it as a graph variable, and one `MoqTrackSend` writes to it by "
@@ -234,6 +232,7 @@ class MoqTrackConfig:
         "the port feeding its send. It has no ports."
     ),
 )
+@node.process(execution="manual")
 class MoqTrack:
     """One track of a gateway's broadcast."""
 
@@ -277,7 +276,7 @@ class MoqTrackSendConfig:
     ] = None
 
 
-@node.process(
+@node.meta(
     description=(
         "Writes each message of `content` to the `MoqTrack` it names.\n\n"
         "Payload bytes go to the relay as written, stamped with the message's own stamp, "
@@ -292,6 +291,7 @@ class MoqTrackSendConfig:
         "An Image carries no bytes off its machine: encode it first."
     ),
 )
+@node.process
 class MoqTrackSend:
     """A port's messages, out to a track."""
 
@@ -389,9 +389,7 @@ class MoqTrackReceiveConfig:
             )
 
 
-@node.process(
-    execution="manual",
-    paced_by_real_time=True,
+@node.meta(
     description=(
         "Reads one track of a broadcast at the relay its `MoqGateway` dials.\n\n"
         "`content` carries each object's payload bytes as the relay delivered them — on a "
@@ -408,6 +406,7 @@ class MoqTrackReceiveConfig:
         "withdrawn, is asked for again and never ends the stream."
     ),
 )
+@node.process(execution="manual", paced_by_real_time=True)
 class MoqTrackReceive:
     """A track at a relay, into the graph."""
 

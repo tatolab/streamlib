@@ -94,6 +94,7 @@ class RustFunctionNodeDeclaration:
 
     short_name: str
     description: str
+    category: Optional[str]
     input_pins: "tuple[RustFunctionNodeInputPin, ...]"
     output_ports: "tuple[RustFunctionNodeOutputPort, ...]"
     config_fields: "tuple[RustFunctionNodeRecordField, ...]"
@@ -276,7 +277,7 @@ def declare_rust_function_node(
         declaration_stamps["config_class"]: None,
         declaration_stamps["config_schema"]: _config_schema(declaration.config_fields),
         declaration_stamps["description"]: declaration.description,
-        declaration_stamps["category"]: module_name,
+        declaration_stamps["category"]: declaration.category,
         declaration_stamps["input_ports"]: input_ports,
         declaration_stamps["output_ports"]: [
             {
@@ -360,6 +361,7 @@ def read_rust_function_node_declaration(native_declaration: Mapping[str, Any]) -
     return RustFunctionNodeDeclaration(
         short_name=short_name,
         description=reading.text("description"),
+        category=reading.text_absent_as_none("category"),
         input_pins=input_pins,
         output_ports=output_ports,
         config_fields=reading.record_fields("config_fields"),
@@ -395,6 +397,12 @@ class _NativeDeclarationReading:
         value = self._entry(key)
         if value is not None and not isinstance(value, str):
             raise ValueError(f"a Rust function node's `{key}` is {value!r}, not text or None")
+        return value
+
+    def text_absent_as_none(self, key: str) -> Optional[str]:
+        value = self._entries_by_key.get(key)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"a Rust function node's `{key}` is {value!r}, not text")
         return value
 
     def whole_number(self, key: str) -> int:

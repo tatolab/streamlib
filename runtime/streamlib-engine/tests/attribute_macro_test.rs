@@ -153,10 +153,10 @@ impl Default for ConfiguredProbeProcessorConfig {
 
 #[streamlib::sdk::processor(
     execution = manual,
-    description = PROBE_NODE_DESCRIPTION,
     config = crate::ConfiguredProbeProcessorConfig,
     output("video_out", family = Image, description = "Frames as *recorded*."),
 )]
+#[meta(category = "Probes/Recording", description = PROBE_NODE_DESCRIPTION)]
 pub struct ConfiguredProbeProcessor;
 
 impl streamlib_engine::ManualProcessor for ConfiguredProbeProcessor::Processor {
@@ -551,6 +551,14 @@ fn a_node_and_a_port_description_reach_the_descriptor_as_written_from_a_const_or
     let descriptor = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
     assert_eq!(descriptor.description, PROBE_NODE_DESCRIPTION);
     assert_eq!(descriptor.outputs[0].description, "Frames as *recorded*.");
+}
+
+#[test]
+fn a_node_category_reaches_the_descriptor_as_the_path_written_and_none_when_undeclared() {
+    let described = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
+    assert_eq!(described.category.as_deref(), Some("Probes/Recording"));
+    let undescribed = TestProcessor::Processor::descriptor().expect("a descriptor");
+    assert_eq!(undescribed.category, None);
 }
 
 #[test]

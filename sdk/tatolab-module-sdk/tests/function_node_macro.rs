@@ -7,9 +7,9 @@
 #![cfg(feature = "function-node")]
 
 use tatolab_module_sdk::function_node::{
-    FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeOutput, FunctionNodeOutputPort,
-    FunctionNodeRecord, FunctionNodeRecordFieldWithItsDefault, FunctionNodeValueType, State,
-    Stateful, Time, UnreadMessage, function_node,
+    FunctionNodeDeclaration, FunctionNodeInputPin, FunctionNodeNamedValue, FunctionNodeOutput,
+    FunctionNodeOutputPort, FunctionNodeRecord, FunctionNodeRecordFieldWithItsDefault,
+    FunctionNodeValueType, State, Stateful, Time, UnreadMessage, function_node,
     refuse_an_unread_message_output_following_no_one_input,
 };
 use tatolab_module_sdk::module_host_table_abi::{
@@ -19,7 +19,8 @@ use tatolab_module_sdk::module_host_table_abi::{
 const SCALE_AND_OFFSET_DESCRIPTION: &str = "`x` scaled by `gain`, then moved by `offset`.";
 
 /// The doc comment, which is never the node's description.
-#[function_node(description = SCALE_AND_OFFSET_DESCRIPTION)]
+#[function_node]
+#[meta(description = SCALE_AND_OFFSET_DESCRIPTION)]
 fn scale_and_offset(x: f64, #[pin_default(2.0)] gain: f64, #[pin_default(0.5)] offset: f64) -> f64 {
     x * gain + offset
 }
@@ -652,7 +653,8 @@ fn a_doc_comment_is_never_a_function_nodes_description() {
 }
 
 /// A doc comment beside the declared description.
-#[function_node(description = "One over `x`, *or nothing* at zero.")]
+#[function_node]
+#[meta(description = "One over `x`, *or nothing* at zero.")]
 fn described_reciprocal(x: f64) -> Option<f64> {
     (x != 0.0).then(|| 1.0 / x)
 }
@@ -663,4 +665,57 @@ fn a_literal_description_is_declared_exactly_as_written() {
         described_reciprocal_function_node_declaration().description,
         "One over `x`, *or nothing* at zero."
     );
+}
+
+#[test]
+fn a_function_node_with_no_category_declares_none() {
+    assert_eq!(
+        described_reciprocal_function_node_declaration().category,
+        None
+    );
+    assert_eq!(gate_function_node_declaration().category, None);
+}
+
+#[function_node]
+#[meta(category = "Math/Rounding")]
+#[meta(description = "`x` rounded down to a whole number.")]
+fn floor_to_a_whole_number(x: f64) -> f64 {
+    x.floor()
+}
+
+#[test]
+fn a_category_is_declared_exactly_as_written_beside_a_description_in_its_own_meta() {
+    let declaration = floor_to_a_whole_number_function_node_declaration();
+    assert_eq!(declaration.category, Some("Math/Rounding"));
+    assert_eq!(
+        declaration.description,
+        "`x` rounded down to a whole number."
+    );
+}
+
+#[cfg(feature = "pyo3")]
+#[test]
+fn a_declared_category_reaches_python_and_an_undeclared_one_reaches_it_as_none() {
+    use pyo3::prelude::*;
+
+    Python::attach(|python| {
+        let category_reaching_python = |declaration: FunctionNodeDeclaration| {
+            declaration
+                .to_python_declaration(python)
+                .expect("the declaration converts")
+                .get_item("category")
+                .expect("a dict lookup")
+                .expect("the declaration carries `category`")
+                .extract::<Option<String>>()
+                .unwrap()
+        };
+        assert_eq!(
+            category_reaching_python(floor_to_a_whole_number_function_node_declaration()),
+            Some("Math/Rounding".to_owned())
+        );
+        assert_eq!(
+            category_reaching_python(described_reciprocal_function_node_declaration()),
+            None
+        );
+    });
 }

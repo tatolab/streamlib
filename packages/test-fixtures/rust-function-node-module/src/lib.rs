@@ -10,7 +10,8 @@ use tatolab_module_sdk::function_node::{
     FunctionNodeRecord, State, Stateful, UnreadMessage, function_node,
 };
 
-#[function_node(description = "`x` scaled by `gain`, then moved by `offset`.")]
+#[function_node]
+#[meta(description = "`x` scaled by `gain`, then moved by `offset`.")]
 fn scale_and_offset(
     x: f64,
     #[pin_default(0.5)] gain: f64,
@@ -37,7 +38,8 @@ impl Default for CountsItsOwnCallsConfig {
     }
 }
 
-#[function_node(description = "The number of times it was called, counted by the config's `step`.")]
+#[function_node]
+#[meta(description = "The number of times it was called, counted by the config's `step`.")]
 fn counts_its_own_calls(
     config: CountsItsOwnCallsConfig,
     previous: State<CallsCountedSoFar>,
@@ -46,7 +48,8 @@ fn counts_its_own_calls(
     (calls, CallsCountedSoFar { calls })
 }
 
-#[function_node(description = "`value` handed on unread while `open`, and nothing while closed.")]
+#[function_node]
+#[meta(description = "`value` handed on unread while `open`, and nothing while closed.")]
 fn rust_gate(value: UnreadMessage, #[pin_default(true)] open: bool) -> Option<UnreadMessage> {
     open.then_some(value)
 }

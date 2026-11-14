@@ -1365,10 +1365,10 @@ pub struct NodeTypeReadFromSource {
     pub node_type: String,
     /// `process`, `function` or `shader`; `None` for an entry point whose declaration source does not show.
     pub kind: Option<String>,
-    /// The declared description, or the docstring.
+    /// The description its `@node.meta` declares; empty when it declares none, and where only the node's native half states it.
     pub description: String,
-    /// The palette category, the declaring module when none is declared.
-    pub category: String,
+    /// The group its `@node.meta` files it under, a path where the group is inside another, as `Effects/Stylize`; null when it declares none, and for a Rust function node or an entry point whose declaration source does not show, since only the node's native half states it.
+    pub category: Option<String>,
     /// The input ports, `None` where only the node's native half states them.
     pub inputs: Option<Vec<NodeTypePortReadFromSource>>,
     /// The output ports, `None` where only the node's native half states them.
@@ -1735,7 +1735,7 @@ mod tests {
                 "type": "nodes.gripper:Gripper",
                 "kind": "function",
                 "description": "",
-                "category": "nodes.gripper",
+                "category": null,
                 "inputs": [{"name": "grip", "family": "channels", "description": "", "annotation": "float | None", "pin_default": null}],
                 "outputs": null,
                 "path": "nodes/gripper.py",

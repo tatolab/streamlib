@@ -178,13 +178,13 @@ class WhipPublisherConfig:
     ] = None
 
 
-@node.process(
-    paced_by_real_time=True,
+@node.meta(
     description=(
         "Publishes encoded video and audio to a WHIP endpoint, "
         "one RTP track per inbound link"
     ),
 )
+@node.process(paced_by_real_time=True)
 class WhipPublisher:
     """Media frames in, one WHIP session out.
 
@@ -382,10 +382,8 @@ class WhepPlayerConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
-    description="Plays encoded video and audio back from a WHEP endpoint",
-)
+@node.meta(description="Plays encoded video and audio back from a WHEP endpoint")
+@node.process(execution="manual")
 class WhepPlayer:
     """One WHEP session in, access units and Opus packets out.
 

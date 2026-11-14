@@ -44,8 +44,8 @@ project, not wheel, the runtime unit gives to every project.
 - **The unit carries sample projects** as directories beside the lend
   (`SampleProjectTheRuntimeUnitCarries`, `new_project_scaffold.rs:63-80`), so a project
   directory in the unit is an existing shape.
-- **Core Nodes** (`packages/tatolab-core-nodes`, #3663) holds 74 nodes in ten groups, each with
-  `category=` and `description=`, two streams and the Program view. Its `core_nodes/` holds its own
+- **Core Nodes** (`packages/tatolab-core-nodes`, #3663) holds 74 nodes in ten groups, each declaring
+  its `category` and `description` in `@node.meta`, two streams and the Program view. Its `core_nodes/` holds its own
   copy of `tatolab-ops`'s 29 function nodes and `ImageFile`. It requires `tatolab-stream`,
   `numba`, `numpy` and `pillow`, the same third-party set `tatolab-ops` requires, which the unit
   already carries as wheels (offline-new-projects).

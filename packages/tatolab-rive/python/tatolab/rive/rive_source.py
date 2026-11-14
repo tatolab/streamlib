@@ -49,10 +49,10 @@ class RiveSourceConfig:
     ] = 4
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="Plays a Rive state machine, drawing each frame straight into the stream on the GPU",
 )
+@node.process(execution="manual")
 class RiveSource:
     """A `.riv` file's state machine, published as RGBA Image frames over transparency.
 

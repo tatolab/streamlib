@@ -283,7 +283,7 @@ mod tests {
             node_type: node_type.to_owned(),
             kind: Some("process".to_owned()),
             description: description.to_owned(),
-            category: "camera".to_owned(),
+            category: Some("camera".to_owned()),
             inputs: None,
             outputs: None,
             path: None,

@@ -60,18 +60,6 @@ impl Default for ArrayToImageConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Converts one attribute of each Array frame on `array`, `attribute` (`image` \
-                  by default), into one Image frame on `image` stating `format` \
-                  (`rgba8_unorm` by default; also `rgba8_unorm_srgb`, `bgra8_unorm`, \
-                  `bgra8_unorm_srgb`, `rgba16_float` and `rgba32_float`). The attribute is an \
-                  `[h, w, 4]` tensor of the format's element type, its channels in the format's \
-                  order: `uint8` for the 8-bit formats, `float16` for `rgba16_float` and \
-                  `float32` for `rgba32_float`. A GPU attribute's pool slot becomes the Image \
-                  frame's slot and nothing is copied, so the slot holds what `format` states, \
-                  as an attribute `ImageToArray` wrote does. A CPU attribute is copied once into \
-                  a pixel buffer from this node's own output pool. A frame without the \
-                  attribute, or whose attribute is of another dtype or another shape, is \
-                  refused and writes nothing. Each Image frame states no colour.",
     execution = reactive,
     config = crate::port_family_conversion::array_to_image::ArrayToImageConfig,
     input(
@@ -85,6 +73,20 @@ impl Default for ArrayToImageConfig {
         description = "One Image frame per Array frame",
         family = Image
     ),
+)]
+#[meta(
+    description = "Converts one attribute of each Array frame on `array`, `attribute` (`image` \
+                   by default), into one Image frame on `image` stating `format` \
+                   (`rgba8_unorm` by default; also `rgba8_unorm_srgb`, `bgra8_unorm`, \
+                   `bgra8_unorm_srgb`, `rgba16_float` and `rgba32_float`). The attribute is an \
+                   `[h, w, 4]` tensor of the format's element type, its channels in the format's \
+                   order: `uint8` for the 8-bit formats, `float16` for `rgba16_float` and \
+                   `float32` for `rgba32_float`. A GPU attribute's pool slot becomes the Image \
+                   frame's slot and nothing is copied, so the slot holds what `format` states, \
+                   as an attribute `ImageToArray` wrote does. A CPU attribute is copied once into \
+                   a pixel buffer from this node's own output pool. A frame without the \
+                   attribute, or whose attribute is of another dtype or another shape, is \
+                   refused and writes nothing. Each Image frame states no colour."
 )]
 pub struct ArrayToImage {
     image_format: Option<TextureFormat>,

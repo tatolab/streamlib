@@ -33,7 +33,8 @@ class BlurConfig:
     sigma: float = 1.0
 
 
-@node.process(description="Blurs each frame.")
+@node.meta(description="Blurs each frame.")
+@node.process
 class Blur:
     """A docstring the lint never counts as a description."""
 
@@ -58,7 +59,8 @@ from typing import Annotated
 from tatolab.stream import Description, node
 
 
-@node.function(description="Doubles `x`, see <https://tatolab.com>.")
+@node.meta(description="Doubles `x`, see <https://tatolab.com>.")
+@node.function
 def doubled(
     x: Annotated[float, Description("The value, when `x < <b>`.")],
 ) -> Annotated[float, Description("Twice `x`.")]:

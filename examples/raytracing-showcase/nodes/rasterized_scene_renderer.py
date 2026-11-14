@@ -166,11 +166,8 @@ class RasterizedSceneRendererConfig:
     height: int = 720
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=16,
-    description="The showcase scene rasterized — direct lighting and nothing else",
-)
+@node.meta(description="The showcase scene rasterized — direct lighting and nothing else")
+@node.process(execution="continuous", interval_ms=16)
 class RasterizedSceneRenderer:
     """Ray tracing off: flat direct lighting, no shadows, no reflections."""
 

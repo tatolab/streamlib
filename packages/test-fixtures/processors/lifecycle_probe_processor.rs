@@ -26,9 +26,11 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
-    description = "Lifecycle-probe processor — appends marker lines for each lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched correctly.",
     execution = continuous,
     config = crate::test_fixture_processor_configs::LifecycleProbeProcessorConfig,
+)]
+#[meta(
+    description = "Lifecycle-probe processor — appends marker lines for each lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched correctly."
 )]
 pub struct LifecycleProbe {
     iter_count: AtomicU32,

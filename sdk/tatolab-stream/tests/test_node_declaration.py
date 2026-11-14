@@ -633,7 +633,7 @@ def test_a_contract_is_frozen_after_declaration():
 
 
 def test_a_docstring_never_stands_in_for_a_description():
-    """A docstring is the code's own reading; only `description=` reaches the catalog."""
+    """A docstring is the code's own reading; only `@node.meta`'s description reaches the catalog."""
 
     @node.process(execution="manual")
     class DescribedByItsDocstringAlone:
@@ -645,7 +645,8 @@ def test_a_docstring_never_stands_in_for_a_description():
 def test_the_description_keyword_is_served_exactly_as_written():
     markdown = "Blurs `video`.\n\n- **radius**: in pixels"
 
-    @node.process(execution="manual", description=markdown)
+    @node.meta(description=markdown)
+    @node.process(execution="manual")
     class DescribedInMarkdown:
         """The docstring, which the catalog never reads."""
 
@@ -655,7 +656,8 @@ def test_the_description_keyword_is_served_exactly_as_written():
 def test_a_description_held_in_a_variable_is_served():
     blur_node_description = "Blurs each frame."
 
-    @node.process(execution="manual", description=blur_node_description)
+    @node.meta(description=blur_node_description)
+    @node.process(execution="manual")
     class DescribedByAVariable:
         pass
 
@@ -667,7 +669,8 @@ def test_a_description_that_is_not_a_string_is_refused():
 
     with pytest.raises(TypeError, match="never a path to read it from"):
 
-        @node.process(execution="manual", description=pathlib.Path("README.md"))  # type: ignore[arg-type]
+        @node.meta(description=pathlib.Path("README.md"))  # type: ignore[arg-type]
+        @node.process(execution="manual")
         class DescribedByAPath:
             pass
 
@@ -682,14 +685,15 @@ def test_a_node_with_neither_is_described_by_the_empty_string():
     assert DescribedByNothingAtAll.__tatolab_node_description__ == ""
 
 
-def test_a_process_node_is_filed_under_its_module_unless_it_names_a_category():
+def test_a_process_node_has_the_category_it_declares_and_none_when_it_declares_none():
     @node.process
     class Uncategorized:
         frames_from_upstream = Input(Image, delivery="newest")
 
-    @node.process(category="Image effects")
+    @node.meta(category="Image effects")
+    @node.process
     class Categorized:
         frames_from_upstream = Input(Image, delivery="newest")
 
-    assert Uncategorized.__tatolab_node_category__ == __name__
+    assert Uncategorized.__tatolab_node_category__ is None
     assert Categorized.__tatolab_node_category__ == "Image effects"

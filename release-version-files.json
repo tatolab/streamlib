@@ -20,12 +20,20 @@
     "table": "project"
   },
   {
+    "path": "packages/streamlib-webrtc/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/tatolab-microphone/Cargo.toml",
     "table": "package"
   },
   {
     "path": "packages/tatolab-microphone/pyproject.toml",
     "table": "project"
+  },
+  {
+    "path": "packages/tatolab-microphone/pyproject.toml",
+    "marked_lines": "x-release-version"
   },
   {
     "path": "packages/tatolab-speaker/Cargo.toml",
@@ -36,12 +44,20 @@
     "table": "project"
   },
   {
+    "path": "packages/tatolab-speaker/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/streamlib-h264/Cargo.toml",
     "table": "package"
   },
   {
     "path": "packages/streamlib-h264/pyproject.toml",
     "table": "project"
+  },
+  {
+    "path": "packages/streamlib-h264/pyproject.toml",
+    "marked_lines": "x-release-version"
   },
   {
     "path": "packages/tatolab-browser/Cargo.toml",
@@ -52,12 +68,20 @@
     "table": "project"
   },
   {
+    "path": "packages/tatolab-browser/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/tatolab-opus/Cargo.toml",
     "table": "package"
   },
   {
     "path": "packages/tatolab-opus/pyproject.toml",
     "table": "project"
+  },
+  {
+    "path": "packages/tatolab-opus/pyproject.toml",
+    "marked_lines": "x-release-version"
   },
   {
     "path": "packages/tatolab-moq/Cargo.toml",
@@ -80,6 +104,10 @@
     "table": "project"
   },
   {
+    "path": "packages/streamlib-h265/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/tatolab-camera/Cargo.toml",
     "table": "package"
   },
@@ -88,12 +116,20 @@
     "table": "project"
   },
   {
+    "path": "packages/tatolab-camera/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/tatolab-rive/Cargo.toml",
     "table": "package"
   },
   {
     "path": "packages/tatolab-rive/pyproject.toml",
     "table": "project"
+  },
+  {
+    "path": "packages/tatolab-rive/pyproject.toml",
+    "marked_lines": "x-release-version"
   },
   {
     "path": "packages/tatolab-compositor/pyproject.toml",
@@ -108,11 +144,19 @@
     "table": "project"
   },
   {
+    "path": "packages/tatolab-testpattern/pyproject.toml",
+    "marked_lines": "x-release-version"
+  },
+  {
     "path": "packages/tatolab-virtualcamera/Cargo.toml",
     "table": "package"
   },
   {
     "path": "packages/tatolab-virtualcamera/pyproject.toml",
     "table": "project"
+  },
+  {
+    "path": "packages/tatolab-virtualcamera/pyproject.toml",
+    "marked_lines": "x-release-version"
   }
 ]

@@ -92,9 +92,15 @@ Ramp = node.rust_function(a_ramp_declaration())
 def test_a_rust_function_node_is_a_function_node_named_by_its_module_and_short_name():
     assert isinstance(Ramp, RustFunctionNode)
     assert (Ramp.__module__, Ramp.__qualname__) == (__name__, "Ramp")
-    assert getattr(Ramp, NODE_DECLARATION_CATEGORY_STAMP) == __name__
+    assert getattr(Ramp, NODE_DECLARATION_CATEGORY_STAMP) is None
     assert getattr(Ramp, NODE_DECLARATION_KIND_STAMP) == "function"
     assert getattr(Ramp, NODE_DECLARATION_LANGUAGE_STAMP) == "rust"
+
+
+def test_a_rust_function_node_carries_the_category_its_native_half_declares():
+    categorized = node.rust_function(a_ramp_declaration(category="Animation/Ramps"))
+
+    assert getattr(categorized, NODE_DECLARATION_CATEGORY_STAMP) == "Animation/Ramps"
 
 
 def test_its_ports_config_and_state_are_stamped_as_a_function_nodes():

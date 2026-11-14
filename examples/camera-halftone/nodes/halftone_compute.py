@@ -135,7 +135,8 @@ class HalftoneComputeConfig:
     """The grey the paper is, from 0.0 (black) to 1.0 (white)."""
 
 
-@node.process(description="Screens each camera frame into halftone dots with a compute kernel")
+@node.meta(description="Screens each camera frame into halftone dots with a compute kernel")
+@node.process
 class HalftoneCompute:
     """Camera frame in, the same picture as a halftone dot screen out."""
 

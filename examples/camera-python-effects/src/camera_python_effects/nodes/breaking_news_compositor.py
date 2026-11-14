@@ -68,7 +68,8 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
     return ease_out_back(clamped, overshoot=1.9)
 
 
-@node.process(description="Three-layer compositor with a sliding picture-in-picture")
+@node.meta(description="Three-layer compositor with a sliding picture-in-picture")
+@node.process
 class BreakingNewsCompositor:
     """Video underneath, overlay over it, the android's stage inside the PiP."""
 

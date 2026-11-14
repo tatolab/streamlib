@@ -25,16 +25,14 @@ import inspect
 import typing
 from typing import Any, Callable, Generic, Optional, ParamSpec, TypeVar
 
-from ._description import (
-    description_and_annotation_without_it,
-    refuse_a_description_that_is_not_a_string,
-)
+from ._description import description_and_annotation_without_it
 from ._exposed_name_cast import ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe
 from ._function_node_side_effect_check import refuse_a_function_node_body_with_side_effects
 from ._node_config_schema import (
     derive_node_config_json_schema_refusing_a_key_with_no_default,
     json_schema_for_a_node_declaring_no_config,
 )
+from ._node_meta_declaration import take_node_meta_held_for_the_kind_decorator
 
 __all__ = [
     "FunctionNode",
@@ -103,8 +101,6 @@ class FunctionNode(Generic[_FunctionNodeParameters, _FunctionNodeReturn]):
 def declare_function_node(
     function: Callable[_FunctionNodeParameters, _FunctionNodeReturn],
     *,
-    description: str,
-    category: str,
     declaration_stamps: "dict[str, str]",
 ) -> FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]:
     """Read `function`'s signature into a function node, refusing by name what is not one.
@@ -113,6 +109,7 @@ def declare_function_node(
     `_node_declaration` spells them, so both kinds stamp one set.
     """
     _refuse_what_is_not_a_plain_module_level_function(function)
+    declared_meta = take_node_meta_held_for_the_kind_decorator(function)
     signature_reading = _FunctionNodeSignatureReading(function)
     refuse_a_function_node_body_with_side_effects(function)
     function_node = FunctionNode(function)
@@ -129,10 +126,8 @@ def declare_function_node(
                 config_class, f"@node.function on {function.__name__}"
             )
         ),
-        declaration_stamps["description"]: refuse_a_description_that_is_not_a_string(
-            description, f"@node.function on {function.__name__}"
-        ),
-        declaration_stamps["category"]: category or function.__module__,
+        declaration_stamps["description"]: declared_meta.get("description", ""),
+        declaration_stamps["category"]: declared_meta.get("category"),
         declaration_stamps["input_ports"]: signature_reading.input_ports,
         declaration_stamps["output_ports"]: signature_reading.output_ports,
         NODE_DECLARATION_FUNCTION_SIGNATURE_STAMP: signature_reading.function_signature,
@@ -267,7 +262,7 @@ class _FunctionNodeSignatureReading:
             raise TypeError(
                 f"{self._function_name}'s parameter `{parameter.name}` carries a "
                 f"`Description`, and only a port takes one. To fix: drop it, or describe "
-                f"the node with `@node.function(description=...)`."
+                f"the node with `@node.meta(description=...)`."
             )
         if annotation is Time:
             self._read_time_parameter(parameter)

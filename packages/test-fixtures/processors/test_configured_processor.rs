@@ -10,9 +10,11 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
-    description = "Attribute-macro test fixture verifying config-emit against a streamlib.yaml package block",
     execution = continuous,
     config = crate::test_fixture_processor_configs::TestConfiguredProcessorConfig,
+)]
+#[meta(
+    description = "Attribute-macro test fixture verifying config-emit against a streamlib.yaml package block"
 )]
 pub struct ConfiguredProcessor;
 
