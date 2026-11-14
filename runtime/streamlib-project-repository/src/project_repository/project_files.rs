@@ -4,8 +4,6 @@
 use super::*;
 
 impl ProjectRepository {
-    /// Write each staged graph document at the path its stream asset holds once the
-    /// transaction applies, answering what each held before so a refusal can restore it.
     /// Every file of the project under `under`, or the whole project, as a listing shows it.
     pub fn list_project_files(
         &self,
@@ -97,45 +95,6 @@ impl ProjectRepository {
             let _ = std::fs::remove_file(&staged_copy);
         }
         applied.map(ProjectActionApplyOutcome::AppliedNow)
-    }
-
-    /// Move each node of a `tatolab-ops` type in the project's stream documents to the Core Nodes
-    /// type that replaced it, as one transaction by the runtime under
-    /// [`TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY`]. `None` when no document holds such a node,
-    /// or history already holds the move, undone since or not, so an undo of it holds.
-    pub fn move_each_tatolab_ops_node_to_core_nodes(
-        &mut self,
-    ) -> Result<Option<ProjectActionApplyOutcome>, ProjectRepositoryRefusal> {
-        let move_key =
-            ProjectActionIdempotencyKey::from_caller(TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY)?;
-        if self.commit_of_each_idempotency_key.contains_key(&move_key) {
-            return Ok(None);
-        }
-        let assets = self.every_asset()?;
-        let mut operations = Vec::new();
-        for asset in assets.values() {
-            if asset.kind != ProjectAssetKind::Stream {
-                continue;
-            }
-            let Ok((_, document)) = self.read_stream_graph_document(&assets, asset.asset) else {
-                continue;
-            };
-            operations.extend(operations_moving_each_tatolab_ops_node_to_core_nodes(
-                asset.asset,
-                &document,
-            ));
-        }
-        if operations.is_empty() {
-            return Ok(None);
-        }
-        self.apply_project_operations(
-            &ProjectTransactionAuthor::the_runtime(),
-            Some(&move_key),
-            Vec::new(),
-            operations,
-            ProjectTransactionLineage::NewEdit,
-        )
-        .map(Some)
     }
 
     /// Write a new file of the project as one transaction, as [`Self::write_project_file`]
