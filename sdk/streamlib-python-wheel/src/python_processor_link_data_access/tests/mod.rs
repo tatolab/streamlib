@@ -1,16 +1,21 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use pyo3::exceptions::PyTypeError;
 use pyo3::types::{PyBytes, PyDict, PyString};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
-    ChannelsBlockSampleType, DataChannelPayloadDescriptor, GpuPoolSlotFrameDescriptorBody,
-    Iceoryx2Node, ImageFrameDescriptorBody, ImageFrameH273Colour, MessageGroupBoundary,
+    ChannelsBlockSampleType, DataChannelPayloadDescriptor, Iceoryx2Node, MessageGroupBoundary,
     PacketsUnitDescriptorBody,
 };
+#[cfg(target_os = "linux")]
+use streamlib::sdk::iceoryx2::{
+    GpuPoolSlotFrameDescriptorBody, ImageFrameDescriptorBody, ImageFrameH273Colour,
+};
+#[cfg(target_os = "linux")]
 use streamlib::sdk::rhi::TextureFormat;
 
 use super::*;
