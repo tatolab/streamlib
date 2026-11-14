@@ -1317,6 +1317,9 @@ pub enum NodeTypeSourceOrigin {
         folder: String,
         /// The version its copy carried.
         version: String,
+        /// The imported project's name as the project file in its folder holds it; `null` when
+        /// that file does not read.
+        project_name: Option<String>,
     },
     /// An installed distribution that declares `tatolab.nodes` entry points.
     InstalledDistribution {
@@ -1731,6 +1734,7 @@ mod tests {
             "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
             "folder": "gripper",
             "version": "ab".repeat(32),
+            "project_name": "Gripper",
             "node_types": [{
                 "type": "nodes.gripper:Gripper",
                 "kind": "function",
@@ -1754,8 +1758,34 @@ mod tests {
                 project: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
                 folder: "gripper".to_owned(),
                 version: "ab".repeat(32),
+                project_name: Some("Gripper".to_owned()),
             }
         );
         assert_eq!(serde_json::to_value(&source).unwrap(), wire);
+    }
+
+    /// The project's interpreter lists an import's source with no project name, which the runtime
+    /// names from the import's project file.
+    #[test]
+    fn an_imports_source_listed_with_no_project_name_reads_with_none() {
+        let source: NodeTypeSourceReadWithoutRunningIt =
+            serde_json::from_value(serde_json::json!({
+                "source": "dependency",
+                "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+                "folder": "gripper",
+                "version": "ab".repeat(32),
+                "node_types": [],
+                "graph_generators": [],
+                "unreadable_modules": [],
+            }))
+            .unwrap();
+
+        assert!(matches!(
+            source.origin,
+            NodeTypeSourceOrigin::Dependency {
+                project_name: None,
+                ..
+            }
+        ));
     }
 }

@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! The node types each project offered when this runtime last listed it, and the follower that
-//! lists a project again after a change that can alter them, so the project's feed announces
-//! each node type added, removed or updated.
+//! lists a project again after a change that can alter them, or after a stream action when its
+//! last listing was refused, so the project's feed announces each node type added, removed or
+//! updated.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
+use streamlib::sdk::runtime::StreamAction;
 use streamlib_control_contract::ListProjectNodeTypesRequest;
 use streamlib_project_repository::{ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -49,8 +51,44 @@ struct OneProjectsNodeTypesLastListed {
     listing_started: NodeTypeListingStarted,
     project_directory: PathBuf,
     node_types_offered: NodeTypesOfferedByType,
+    /// Whether the last listing was refused, as while the project's venv is being made, which
+    /// leaves `node_types_offered` as the listing before it read them.
+    last_listing_was_refused: bool,
     listing_it_again: bool,
     listing_wanted_again: bool,
+}
+
+impl OneProjectsNodeTypesLastListed {
+    /// A project's first listing that read, as kept, with no listing of it again running.
+    fn of_a_first_listing_that_read(
+        listing_started: NodeTypeListingStarted,
+        project_directory: PathBuf,
+        node_types_offered: NodeTypesOfferedByType,
+    ) -> Self {
+        Self {
+            listing_started,
+            project_directory,
+            node_types_offered,
+            last_listing_was_refused: false,
+            listing_it_again: false,
+            listing_wanted_again: false,
+        }
+    }
+
+    /// A project's first listing that was refused, as kept: it offers nothing yet.
+    fn of_a_first_listing_refused(
+        listing_started: NodeTypeListingStarted,
+        project_directory: PathBuf,
+    ) -> Self {
+        Self {
+            last_listing_was_refused: true,
+            ..Self::of_a_first_listing_that_read(
+                listing_started,
+                project_directory,
+                NodeTypesOfferedByType::new(),
+            )
+        }
+    }
 }
 
 /// The node types each project offered when this runtime last listed it, by project UUID.
@@ -90,45 +128,84 @@ impl ProjectNodeTypesLastListed {
                 last_listed.listing_started = listing_started;
                 last_listed.project_directory = listing.project_directory.clone();
                 last_listed.node_types_offered = node_types_offered;
+                last_listed.last_listing_was_refused = false;
                 announce_what_changed(changed);
             }
             None => {
                 by_project.insert(
                     project,
-                    OneProjectsNodeTypesLastListed {
+                    OneProjectsNodeTypesLastListed::of_a_first_listing_that_read(
                         listing_started,
-                        project_directory: listing.project_directory.clone(),
+                        listing.project_directory.clone(),
                         node_types_offered,
-                        listing_it_again: false,
-                        listing_wanted_again: false,
-                    },
+                    ),
                 );
             }
         }
     }
 
-    /// Start following the change feed of `dispatcher`'s projects once, listing again each
-    /// project already listed after a change that can alter its node types.
+    /// Keep that the listing of `project` started at `listing_started` was refused, so the
+    /// follower lists it again and the listing that reads announces what it offers; a project
+    /// never listed before offered nothing, and one listed before keeps what it offered.
+    pub(crate) fn take_in_the_refusal_of_a_listing(
+        &self,
+        project: Uuid,
+        listing_started: NodeTypeListingStarted,
+        project_directory: &Path,
+    ) {
+        let mut by_project = self.by_project.lock();
+        match by_project.get_mut(&project) {
+            Some(last_listed) if last_listed.listing_started > listing_started => {}
+            Some(last_listed) => {
+                last_listed.listing_started = listing_started;
+                last_listed.project_directory = project_directory.to_path_buf();
+                last_listed.last_listing_was_refused = true;
+            }
+            None => {
+                by_project.insert(
+                    project,
+                    OneProjectsNodeTypesLastListed::of_a_first_listing_refused(
+                        listing_started,
+                        project_directory.to_path_buf(),
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Start following the change feed and the stream actions of `dispatcher`'s projects once,
+    /// listing again each project already listed after a change that can alter its node types,
+    /// and each whose last listing was refused after a stream action of it finishes.
     pub(crate) fn follow_the_change_feed_once(&self, dispatcher: &ControlOperationDispatcher) {
         self.follower_started.get_or_init(|| {
             let mut change_feed = dispatcher
                 .project_repositories
                 .subscribe_to_the_change_feed();
+            let mut stream_action_changes = dispatcher
+                .operations_on_the_loaded_streams
+                .listen_for_each_stream_action_change();
             let dispatcher = dispatcher.held_weakly();
             tokio::spawn(async move {
+                let mut stream_action_changes_still_arrive = true;
                 loop {
-                    let projects_to_list_again = match change_feed.recv().await {
-                        Ok(announcement) if can_change_the_node_types(&announcement) => {
-                            vec![announcement.project]
+                    let projects_to_list_again = tokio::select! {
+                        announced = change_feed.recv() => {
+                            projects_to_list_again_after_the_change_feed(&dispatcher, announced)
                         }
-                        Ok(_) => continue,
-                        Err(RecvError::Lagged(_)) => match dispatcher.upgrade() {
-                            Some(dispatcher) => dispatcher
-                                .project_node_types_last_listed
-                                .every_project_listed(),
-                            None => return,
-                        },
-                        Err(RecvError::Closed) => return,
+                        changed_action_id = stream_action_changes.recv(),
+                            if stream_action_changes_still_arrive =>
+                        {
+                            let projects_to_list_again =
+                                projects_to_list_again_after_a_stream_action_change(
+                                    &dispatcher,
+                                    changed_action_id,
+                                );
+                            stream_action_changes_still_arrive = projects_to_list_again.is_some();
+                            Some(projects_to_list_again.unwrap_or_default())
+                        }
+                    };
+                    let Some(projects_to_list_again) = projects_to_list_again else {
+                        return;
                     };
                     for project in projects_to_list_again {
                         list_the_project_again(&dispatcher, project);
@@ -140,6 +217,36 @@ impl ProjectNodeTypesLastListed {
 
     fn every_project_listed(&self) -> Vec<Uuid> {
         self.by_project.lock().keys().copied().collect()
+    }
+
+    fn every_project_last_refused(&self) -> Vec<Uuid> {
+        self.by_project
+            .lock()
+            .iter()
+            .filter(|(_, last_listed)| last_listed.last_listing_was_refused)
+            .map(|(project, _)| *project)
+            .collect()
+    }
+
+    /// Each project at `stream_action`'s directory whose last listing was refused, once the
+    /// action has finished: the action can have made the venv the listing reads with. The
+    /// action and the listing both spell the directory with its symbolic links resolved.
+    fn projects_a_stream_action_can_make_listable(
+        &self,
+        stream_action: &StreamAction,
+    ) -> Vec<Uuid> {
+        if !stream_action.state.is_finished() {
+            return Vec::new();
+        }
+        self.by_project
+            .lock()
+            .iter()
+            .filter(|(_, last_listed)| {
+                last_listed.last_listing_was_refused
+                    && last_listed.project_directory == stream_action.project_directory
+            })
+            .map(|(project, _)| *project)
+            .collect()
     }
 
     /// The project's directory when it was listed and no listing of it again is running, marking
@@ -204,6 +311,66 @@ fn list_the_project_again(dispatcher: &ControlOperationDispatcherHeldWeakly, pro
             }
         }
     });
+}
+
+/// Each project to list again after `announced` on the change feed; `None` once the feed has
+/// closed or the dispatcher is gone, which ends the follower.
+fn projects_to_list_again_after_the_change_feed(
+    dispatcher: &ControlOperationDispatcherHeldWeakly,
+    announced: Result<ProjectChangeFeedAnnouncement, RecvError>,
+) -> Option<Vec<Uuid>> {
+    match announced {
+        Ok(announcement) if can_change_the_node_types(&announcement) => {
+            Some(vec![announcement.project])
+        }
+        Ok(_) => Some(Vec::new()),
+        Err(RecvError::Lagged(_)) => Some(
+            dispatcher
+                .upgrade()?
+                .project_node_types_last_listed
+                .every_project_listed(),
+        ),
+        Err(RecvError::Closed) => None,
+    }
+}
+
+/// Each project to list again after the stream action `changed_action_id` names changed; `None`
+/// once no further change arrives or the dispatcher is gone.
+fn projects_to_list_again_after_a_stream_action_change(
+    dispatcher: &ControlOperationDispatcherHeldWeakly,
+    changed_action_id: Result<String, RecvError>,
+) -> Option<Vec<Uuid>> {
+    match changed_action_id {
+        Ok(changed_action_id) => {
+            let dispatcher = dispatcher.upgrade()?;
+            Some(
+                dispatcher
+                    .operations_on_the_loaded_streams
+                    .describe_stream_action(&changed_action_id)
+                    .map(|stream_action| {
+                        dispatcher
+                            .project_node_types_last_listed
+                            .projects_a_stream_action_can_make_listable(&stream_action)
+                    })
+                    .unwrap_or_else(|not_described| {
+                        tracing::debug!(
+                            action = %changed_action_id,
+                            %not_described,
+                            "a stream action that changed is not described, so no project is \
+                             listed again after it"
+                        );
+                        Vec::new()
+                    }),
+            )
+        }
+        Err(RecvError::Lagged(_)) => Some(
+            dispatcher
+                .upgrade()?
+                .project_node_types_last_listed
+                .every_project_last_refused(),
+        ),
+        Err(RecvError::Closed) => None,
+    }
 }
 
 fn can_change_the_node_types(announcement: &ProjectChangeFeedAnnouncement) -> bool {
@@ -274,6 +441,7 @@ fn node_types_changed_between(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use streamlib::sdk::runtime::{StreamActionKind, StreamActionState};
     use streamlib_runtime_client_contract::local_api_wire_contract::{
         NodeTypeReadFromSource, NodeTypeSourceOrigin, NodeTypeSourceReadWithoutRunningIt,
     };
@@ -450,6 +618,127 @@ mod tests {
             what_the_listing_changed(&last_listed, &newer),
             NodeTypesChangedSinceTheLastListing::default()
         );
+    }
+
+    fn a_stream_action_of(project_directory: &str, state: StreamActionState) -> StreamAction {
+        StreamAction {
+            action_id: "runtime-1".to_owned(),
+            project_directory: PathBuf::from(project_directory),
+            kind: StreamActionKind::Open,
+            state,
+            step: None,
+            venv_sync: None,
+            streams: Vec::new(),
+            failed_because: None,
+        }
+    }
+
+    #[test]
+    fn a_project_whose_first_listing_was_refused_announces_what_its_next_listing_offers() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        let refused_listing_started = last_listed.start_a_listing();
+        last_listed.take_in_the_refusal_of_a_listing(
+            Uuid::nil(),
+            refused_listing_started,
+            Path::new("/projects/show"),
+        );
+
+        let changed = what_the_listing_changed(
+            &last_listed,
+            &a_listing_of(vec![a_node_type("tatolab.camera:CameraSource", "a camera")]),
+        );
+
+        assert_eq!(
+            the_types_of(&changed.added),
+            ["tatolab.camera:CameraSource"]
+        );
+    }
+
+    #[test]
+    fn a_refused_listing_keeps_what_the_listing_before_it_offered() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        let offered = a_listing_of(vec![a_node_type("tatolab.camera:CameraSource", "a camera")]);
+        what_the_listing_changed(&last_listed, &offered);
+        let refused_listing_started = last_listed.start_a_listing();
+        last_listed.take_in_the_refusal_of_a_listing(
+            Uuid::nil(),
+            refused_listing_started,
+            Path::new("/projects/show"),
+        );
+
+        assert_eq!(
+            what_the_listing_changed(&last_listed, &offered),
+            NodeTypesChangedSinceTheLastListing::default()
+        );
+    }
+
+    #[test]
+    fn a_refusal_of_a_listing_started_before_the_one_kept_is_dropped() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        let refused_listing_started = last_listed.start_a_listing();
+        what_the_listing_changed(&last_listed, &a_listing_of(Vec::new()));
+        last_listed.take_in_the_refusal_of_a_listing(
+            Uuid::nil(),
+            refused_listing_started,
+            Path::new("/projects/show"),
+        );
+
+        assert!(
+            last_listed
+                .projects_a_stream_action_can_make_listable(&a_stream_action_of(
+                    "/projects/show",
+                    StreamActionState::Done
+                ))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_finished_stream_action_lists_again_only_its_project_last_refused() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        let refused_listing_started = last_listed.start_a_listing();
+        last_listed.take_in_the_refusal_of_a_listing(
+            Uuid::nil(),
+            refused_listing_started,
+            Path::new("/projects/show"),
+        );
+        let listable = |project_directory: &str, state: StreamActionState| {
+            last_listed.projects_a_stream_action_can_make_listable(&a_stream_action_of(
+                project_directory,
+                state,
+            ))
+        };
+
+        assert!(listable("/projects/show", StreamActionState::Queued).is_empty());
+        assert!(listable("/projects/show", StreamActionState::InProgress).is_empty());
+        assert!(listable("/projects/other", StreamActionState::Done).is_empty());
+        assert_eq!(
+            listable("/projects/show", StreamActionState::Done),
+            [Uuid::nil()]
+        );
+        assert_eq!(
+            listable("/projects/show", StreamActionState::Failed),
+            [Uuid::nil()]
+        );
+
+        what_the_listing_changed(&last_listed, &a_listing_of(Vec::new()));
+        assert!(listable("/projects/show", StreamActionState::Done).is_empty());
+    }
+
+    #[test]
+    fn every_project_last_refused_leaves_out_one_whose_last_listing_read() {
+        let last_listed = ProjectNodeTypesLastListed::default();
+        assert!(last_listed.every_project_last_refused().is_empty());
+        let refused_listing_started = last_listed.start_a_listing();
+        last_listed.take_in_the_refusal_of_a_listing(
+            Uuid::nil(),
+            refused_listing_started,
+            Path::new("/projects/show"),
+        );
+        assert_eq!(last_listed.every_project_last_refused(), [Uuid::nil()]);
+
+        what_the_listing_changed(&last_listed, &a_listing_of(Vec::new()));
+        assert!(last_listed.every_project_last_refused().is_empty());
     }
 
     #[test]

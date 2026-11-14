@@ -5146,7 +5146,8 @@ const STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING: &str = "#!/
 
 /// Project `cell` imports project `arm`: the listing is sent the Python files of `arm`'s folder
 /// under `imports/` as they are on disk and nothing else of it, and answers each source as the
-/// project's interpreter read it, under the project's UUID and name.
+/// project's interpreter read it, under the project's UUID and name, the import's source named
+/// as the project file in its folder names it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_its_folder() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -5187,7 +5188,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
     .expect("the arm is imported");
     let folder = added["dependency"]["folder"].clone();
     let version = added["dependency"]["version"].clone();
-    let dependency_source = json!({
+    let mut dependency_source = json!({
         "source": "dependency", "project": arm.project, "folder": folder, "version": version,
         "node_types": [], "graph_generators": [], "unreadable_modules": [],
     });
@@ -5206,6 +5207,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
 
     assert_eq!(listed["project"], json!(cell.project), "{listed}");
     assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    dependency_source["project_name"] = json!(TEST_PROJECT_NAME);
     assert_eq!(
         listed["sources"],
         json!([project_source, dependency_source]),
@@ -5267,6 +5269,30 @@ fn the_node_types_named_by(
     )
 }
 
+/// Write the `listing.json` the stub interpreter prints for `project`: one installed distribution
+/// offering `node_types`.
+fn write_the_listing_of_one_distribution_offering(
+    project: &ProjectWithGraphDocuments,
+    node_types: Value,
+) {
+    std::fs::write(
+        project.path().join("listing.json"),
+        json!({ "sources": [{
+            "source": "installed_distribution", "distribution": "tatolab-camera",
+            "distribution_version": "0.68.90", "node_types": node_types,
+            "graph_generators": [], "unreadable_modules": [],
+        }] })
+        .to_string(),
+    )
+    .expect("the listing document");
+}
+
+/// A node type as a listing document offers it, with no pins.
+fn a_listed_node_type(node_type: &str, description: &str) -> Value {
+    json!({ "type": node_type, "kind": "process", "description": description,
+            "category": "Sources/Cameras", "inputs": [], "outputs": [] })
+}
+
 /// Once a client has listed a project's node types, a node file saved in its folder and its venv
 /// made current each list them again, and the feed names each node type added, removed or
 /// updated, carrying the source it comes from.
@@ -5281,22 +5307,6 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
         &cell.interpreter(),
         STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
     );
-    let a_listing_offering = |node_types: Value| {
-        std::fs::write(
-            cell.path().join("listing.json"),
-            json!({ "sources": [{
-                "source": "installed_distribution", "distribution": "tatolab-camera",
-                "distribution_version": "0.68.90", "node_types": node_types,
-                "graph_generators": [], "unreadable_modules": [],
-            }] })
-            .to_string(),
-        )
-        .expect("the listing document");
-    };
-    let a_node_type = |node_type: &str, description: &str| {
-        json!({ "type": node_type, "kind": "process", "description": description,
-                "category": "Sources/Cameras", "inputs": [], "outputs": [] })
-    };
     let handler = crate::mcp::LocalApiMcpServerHandler::new(
         engine.operations_on_the_loaded_streams(),
         tokio_util::sync::CancellationToken::new(),
@@ -5308,10 +5318,13 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
     let mut change_feed = dispatcher
         .project_repositories
         .subscribe_to_the_change_feed();
-    a_listing_offering(json!([
-        a_node_type("tatolab.camera:CameraSource", "a camera"),
-        a_node_type("tatolab.camera:LatencyProbe", "a probe"),
-    ]));
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([
+            a_listed_node_type("tatolab.camera:CameraSource", "a camera"),
+            a_listed_node_type("tatolab.camera:LatencyProbe", "a probe"),
+        ]),
+    );
     dispatcher
         .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
             project_directory: cell.path().to_path_buf(),
@@ -5319,11 +5332,14 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
         .await
         .expect("the cell's node types are listed");
 
-    a_listing_offering(json!([
-        a_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
-        a_node_type("tatolab.camera:LatencyProbe", "a probe"),
-        a_node_type("tatolab.camera:FrameCounter", "counts frames"),
-    ]));
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([
+            a_listed_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
+            a_listed_node_type("tatolab.camera:LatencyProbe", "a probe"),
+            a_listed_node_type("tatolab.camera:FrameCounter", "counts frames"),
+        ]),
+    );
     std::fs::write(cell.path().join("counter.py"), "x = 1\n").expect("a node file saved");
 
     let added = the_next_node_types_announced(&mut change_feed).await;
@@ -5347,10 +5363,13 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
                 "distribution_version": "0.68.90" })
     );
 
-    a_listing_offering(json!([
-        a_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
-        a_node_type("tatolab.camera:FrameCounter", "counts frames"),
-    ]));
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([
+            a_listed_node_type("tatolab.camera:CameraSource", "a camera, now with HDR"),
+            a_listed_node_type("tatolab.camera:FrameCounter", "counts frames"),
+        ]),
+    );
     dispatcher
         .project_repositories
         .announce_the_venv_made_current(cell.project);
@@ -5359,6 +5378,108 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
     assert_eq!(
         the_node_types_named_by(&removed),
         ("removed", vec!["tatolab.camera:LatencyProbe".to_owned()])
+    );
+}
+
+/// A project's node types listed while its venv's interpreter does not answer the listing are
+/// refused; once a stream action of the project has finished and the interpreter answers, the
+/// project is listed again and the feed names every node type it offers as added.
+///
+/// Mental-revert: with the refusal not kept, or the follower not hearing stream actions, nothing
+/// is announced after the action finishes.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_refused_its_node_type_listing_is_listed_again_once_an_action_of_it_finishes() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
+    let handler = crate::mcp::LocalApiMcpServerHandler::new(
+        Arc::clone(&operations_on_the_loaded_streams),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let dispatcher = handler.control_operation_dispatcher();
+    let mut change_feed = dispatcher
+        .project_repositories
+        .subscribe_to_the_change_feed();
+    dispatcher
+        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
+            project_directory: cell.path().to_path_buf(),
+        })
+        .await
+        .expect_err("an interpreter that prints no listing is refused");
+
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([a_listed_node_type(
+            "tatolab.camera:CameraSource",
+            "a camera"
+        )]),
+    );
+    write_an_executable_script_from_a_child_process(
+        &cell.interpreter(),
+        STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
+    );
+    the_project_action_once_finished(
+        "open_project",
+        &operations_on_the_loaded_streams,
+        cell.path(),
+    )
+    .await;
+
+    assert_eq!(
+        the_node_types_named_by(&the_next_node_types_announced(&mut change_feed).await),
+        ("added", vec!["tatolab.camera:CameraSource".to_owned()])
+    );
+}
+
+/// Over a runtime whose stream action changes have stopped arriving, a node file saved in a
+/// listed project's folder still lists it again.
+///
+/// Mental-revert: with the follower ending when the stream action changes close, nothing is
+/// announced after the save.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_project_is_listed_again_after_a_change_once_stream_action_changes_stop_arriving() {
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    write_an_executable_script_from_a_child_process(
+        &cell.interpreter(),
+        STUB_VENV_INTERPRETER_PRINTING_THE_PROJECTS_NODE_TYPE_LISTING,
+    );
+    let handler = crate::mcp::LocalApiMcpServerHandler::new(
+        Arc::new(crate::mcp::tests::ControlPlaneMcpDispatchStubRuntime::new()),
+        tokio_util::sync::CancellationToken::new(),
+    );
+    let dispatcher = handler.control_operation_dispatcher();
+    let _files_watched = dispatcher
+        .project_repositories
+        .watch_the_files_of(cell.project);
+    let mut change_feed = dispatcher
+        .project_repositories
+        .subscribe_to_the_change_feed();
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([a_listed_node_type(
+            "tatolab.camera:CameraSource",
+            "a camera"
+        )]),
+    );
+    dispatcher
+        .list_project_node_types(streamlib_control_contract::ListProjectNodeTypesRequest {
+            project_directory: cell.path().to_path_buf(),
+        })
+        .await
+        .expect("the cell's node types are listed");
+
+    write_the_listing_of_one_distribution_offering(
+        &cell,
+        json!([
+            a_listed_node_type("tatolab.camera:CameraSource", "a camera"),
+            a_listed_node_type("tatolab.camera:FrameCounter", "counts frames"),
+        ]),
+    );
+    std::fs::write(cell.path().join("counter.py"), "x = 1\n").expect("a node file saved");
+
+    assert_eq!(
+        the_node_types_named_by(&the_next_node_types_announced(&mut change_feed).await),
+        ("added", vec!["tatolab.camera:FrameCounter".to_owned()])
     );
 }
 
