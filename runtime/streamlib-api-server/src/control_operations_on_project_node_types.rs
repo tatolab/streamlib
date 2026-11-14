@@ -4,7 +4,7 @@
 //! The operation listing the node types a project offers.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use streamlib::sdk::runtime::{
     ImportedProjectPythonSources, list_a_projects_node_types_and_graph_generators_from_source,
@@ -157,7 +157,14 @@ impl ControlOperationDispatcher {
             project_read.project_directory.clone(),
             project_read.import_sources,
         )
-        .await?;
+        .await
+        .inspect_err(|_| {
+            self.take_in_the_refusal_of_the_node_type_listing(
+                project_read.project,
+                listing_started,
+                &project_read.project_directory,
+            )
+        })?;
         let mut what_the_runtime_read_of_each_import =
             project_read.what_the_runtime_read_of_each_import;
         for source in &mut sources {
@@ -206,6 +213,20 @@ impl ControlOperationDispatcher {
                     .announce_the_node_types_changed(project, added, removed, updated)
             },
         );
+        self.project_node_types_last_listed
+            .follow_the_change_feed_once(self);
+    }
+
+    /// Keep that `project`'s listing started at `listing_started` was refused, and follow the
+    /// feed and the stream actions for what lists it again.
+    fn take_in_the_refusal_of_the_node_type_listing(
+        &self,
+        project: Uuid,
+        listing_started: NodeTypeListingStarted,
+        project_directory: &Path,
+    ) {
+        self.project_node_types_last_listed
+            .take_in_the_refusal_of_a_listing(project, listing_started, project_directory);
         self.project_node_types_last_listed
             .follow_the_change_feed_once(self);
     }
