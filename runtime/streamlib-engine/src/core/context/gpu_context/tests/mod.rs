@@ -3,6 +3,7 @@
 
 #[cfg(target_os = "linux")]
 use super::kernels::compute_kernel_cache_key;
+#[cfg(target_os = "linux")]
 use super::pixel_buffer_pool_manager::POOL_PRE_ALLOCATE_COUNT;
 use super::*;
 
@@ -10,8 +11,11 @@ use super::*;
 use crate::core::test_support::wait_for_every_gpu_submission_made_so_far;
 
 mod access_tiers_and_escalation;
+#[cfg(target_os = "linux")]
 mod cross_process_leases;
+#[cfg(target_os = "linux")]
 mod freed_pool_entries;
+#[cfg(target_os = "linux")]
 mod native_node_output_pools;
 mod texture_cache_and_pixel_buffer_registration;
 
