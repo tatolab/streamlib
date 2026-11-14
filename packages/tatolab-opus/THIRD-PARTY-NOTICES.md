@@ -15,7 +15,7 @@ engine crate, so the `streamlib` wheel's own notices are neither reproduced nor
 implied here.
 
 **Generated — do not edit.** Regenerate with
-`cargo xtask generate-third-party-notices --extension-package-directory packages/tatolab-opus`;
+`scripts/generate-third-party-notices.sh packages/tatolab-opus`;
 the accepted licences are the workspace's own `about.toml`, which this project
 shares — a licence outside that list fails the regeneration itself rather than
 landing here quietly. StreamLib's own terms are in [`LICENSE`](LICENSE) and are
@@ -1450,8 +1450,9 @@ authorization of the copyright holder.
 
 Every project below ships inside the wheel and owes terms the generated half above
 cannot carry: it is compiled in from vendored sources, and so appears in no resolve
-graph `cargo about` walks. These sections are appended by
-`cargo xtask generate-third-party-notices`.
+graph `cargo about` walks. These sections are kept by hand in
+`THIRD-PARTY-NOTICES.appendix.md` and appended by
+`scripts/generate-third-party-notices.sh`.
 
 - Through the `opusic-sys` crate, linked statically into the native module as `libopus.a`: libopus
 

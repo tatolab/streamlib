@@ -11,8 +11,8 @@ requires-python = ">=3.12"
 license = { text = "GPL-3.0-only" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
 # dependency's. `LICENSE` is a symlink to the repo root, which maturin follows;
-# the notices are generated over this project's own closure by `cargo xtask
-# generate-third-party-notices --extension-package-directory packages/tatolab-moq`.
+# the notices are generated over this project's own closure by `scripts/generate-third-party-notices.sh
+# packages/tatolab-moq`.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [

@@ -24,12 +24,10 @@ pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
-pub mod extension_build_script_fetched_notices;
 pub mod generate_built_in_node_classes;
 pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;
 pub mod generate_runtime_client;
-pub mod generate_third_party_notices;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
@@ -751,21 +749,6 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
-
-    /// Regenerate `THIRD-PARTY-NOTICES.md` — the Rust closure's licence texts
-    /// via `cargo about generate`, plus the vendored C++ projects that are not
-    /// packages in the Cargo resolve graph and so reach the file only by being
-    /// appended. Needs `cargo-about` installed and the network, which is why it
-    /// is a command and not a gate; `cargo deny check licenses` is the half that
-    /// runs on every PR. See [`generate_third_party_notices`] for the roster and
-    /// why each project is on it.
-    GenerateThirdPartyNotices {
-        /// Generate for one standalone extension wheel under `packages/`
-        /// instead of the engine workspace: its own closure, its own file, and
-        /// no vendored C++ appendix.
-        #[arg(long, value_name = "PACKAGE_DIRECTORY")]
-        extension_package_directory: Option<PathBuf>,
-    },
 }
 
 fn main() -> Result<()> {
@@ -862,13 +845,6 @@ fn main() -> Result<()> {
         Commands::GenerateModuleHostTableCHeader { check } => {
             generate_module_host_table_c_header::run(&workspace_root()?, check)?
         }
-        Commands::GenerateThirdPartyNotices {
-            extension_package_directory,
-        } => generate_third_party_notices::run(
-            &workspace_root()?,
-            &generate_third_party_notices::NoticesGenerationTarget::
-                from_optional_extension_package_directory(extension_package_directory),
-        )?,
     }
 
     Ok(())

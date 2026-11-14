@@ -1,18 +1,17 @@
 # What `cargo about generate` puts in THIRD-PARTY-NOTICES.md.
 #
-# Driven by `cargo xtask generate-third-party-notices`, which also appends the
-# vendored C++ projects this tool structurally cannot see: none of them is a
-# package in the resolve graph, and every one of them ships in the wheel. The
-# roster lives in `xtask/src/generate_third_party_notices.rs`, once. Not run in CI:
+# Driven by `scripts/generate-third-party-notices.sh`, which also appends each
+# project's hand-kept `THIRD-PARTY-NOTICES.appendix.md`: the vendored C/C++
+# projects this tool structurally cannot see, since none of them is a package in
+# the resolve graph and every one of them ships in the wheel. Not run in CI:
 # it needs `cargo-about` installed and reaches the network for crates that ship
 # no licence file of their own. The gate that runs on every PR is
 # `cargo deny check licenses` (deny.toml) — that one is the durable half.
 
 # A superset of deny.toml's allow list, and deliberately so: deny.toml guards the
 # workspace closure, while this file is also pointed at each extension wheel's
-# closure — `cargo xtask generate-third-party-notices
-# --extension-package-directory <dir>` passes `--config` back to this one file so
-# every wheel ships one licensing posture.
+# closure — `scripts/generate-third-party-notices.sh <dir>` passes `--config`
+# back to this one file so every wheel ships one licensing posture.
 #
 # Nothing is silently omitted if the two drift the other way: a licence in the
 # graph but not in `accepted` makes `cargo about generate` itself exit 1 with no

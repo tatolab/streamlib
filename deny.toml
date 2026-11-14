@@ -9,7 +9,7 @@
 # it refuses a licence the notices could not cover, and nothing else. A crate
 # arriving under a licence already on the list — one more MIT dependency —
 # leaves this gate green while its copyright line is absent from the notices,
-# until someone runs `cargo xtask generate-third-party-notices`. Closing that
+# until someone runs `scripts/generate-third-party-notices.sh`. Closing that
 # gap needs a name-level drift check against the notices, which does not exist
 # yet; regenerate on a dependency bump until it does.
 #

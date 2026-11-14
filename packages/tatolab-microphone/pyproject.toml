@@ -10,8 +10,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-only" }
 # PEP 639: `LICENSE` for our own terms, `THIRD-PARTY-NOTICES.md` for every
-# dependency's, generated over this project's own closure by `cargo xtask
-# generate-third-party-notices --extension-package-directory <this directory>`.
+# dependency's, generated over this project's own closure by `scripts/generate-third-party-notices.sh
+# <this directory>`.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]
 classifiers = [
