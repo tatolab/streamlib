@@ -1,7 +1,20 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DependencyTransactionToolResult, GraphTransactionToolResult, ListDependenciesToolResult,
+    UpdateDependencyToolResult,
+};
+
+use super::EVERY_SURFACE;
+use crate::control_operation::{
+    ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
+    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+};
+use crate::control_operation_requests::{
+    AddDependencyRequest, ListDependenciesRequest, RefreshFragmentsRequest,
+    RemoveDependencyRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+};
 
 /// `add_dependency`: import another project into a project, as one transaction.
 pub struct AddDependency;

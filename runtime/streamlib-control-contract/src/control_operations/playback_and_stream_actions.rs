@@ -1,7 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    CancelStreamActionToolResult, DescribeStreamActionToolResult, PausePlaybackToolResult,
+    ProjectStreamActionQueuedToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
+};
+
+use super::EVERY_SURFACE;
+use crate::control_operation::{
+    ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
+    ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
+};
+use crate::control_operation_requests::{
+    OneProjectByItsDirectoryRequest, OneStreamActionRequest, SetStreamClockScaleRequest,
+};
 
 /// `start_playback`: queue the start of an open project's playback.
 pub struct StartPlayback;

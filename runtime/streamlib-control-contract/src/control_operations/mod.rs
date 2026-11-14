@@ -5,26 +5,9 @@
 //! dispatcher matches on.
 
 use serde_json::Value;
-use streamlib_runtime_client_contract::local_api_wire_contract::{
-    AssetTransactionToolResult, CancelStreamActionToolResult, CloseViewerToolResult,
-    CreateNodeFileToolResult, CreateProjectToolResult, DeleteProjectToolResult,
-    DependencyTransactionToolResult, DescribeAssetToolResult, DescribeRuntimeToolResult,
-    DescribeStreamActionToolResult, DuplicateProjectToolResult, GraphTransactionToolResult,
-    ImportProjectToolResult, ListAssetsToolResult, ListDependenciesToolResult,
-    ListProjectFilesToolResult, ListProjectNodeTypesToolResult, ListProjectViewsToolResult,
-    ListSamplesToolResult, ListStreamsToolResult, LogsToolResult, OpenViewerToolResult,
-    PausePlaybackToolResult, ProjectFileTransactionToolResult,
-    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
-    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
-    SetStreamClockScaleToolResult, UpdateDependencyToolResult, WriteGraphInputToolResult,
-    WriteStudioViewOutputToolResult,
-};
 
 use crate::control_operation::{
-    ControlOperation, ControlOperationAgentToolListing, ControlOperationDeclaration,
-    ControlOperationEffect, ControlOperationExposure, ControlOperationGroup,
-    ControlOperationStability,
+    ControlOperation, ControlOperationDeclaration, ControlOperationExposure,
 };
 use crate::control_operation_requests::{
     AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest, CloseViewerRequest,
@@ -45,10 +28,6 @@ use crate::control_operation_requests::{
     SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
     UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
     WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
-};
-use crate::control_operation_results::{
-    DiscoverResult, SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
-    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
 };
 
 mod assets_and_streams;
