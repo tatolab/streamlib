@@ -205,7 +205,7 @@ contract (no I/O, no clock but `Time`, no state but `State`) by review.
 ## From C
 
 `include/tatolab_module_host_table.h` declares the same table for a native half
-written in C or C++. It is generated from `src/module_host_table_abi.rs` by
+written in C or C++. It is generated from `src/module_host_table_abi/mod.rs` by
 `cargo xtask generate-module-host-table-c-header`, and CI fails when the two
 differ.
 
