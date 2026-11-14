@@ -38,9 +38,9 @@ installs.
 
 `MIT` is already an accepted identifier in `about.toml` and `deny.toml`. The
 project is not a package in the `cargo metadata` graph, so `cargo about` cannot
-see it: it reaches `THIRD-PARTY-NOTICES.md` through
-`VENDORED_CPP_PROJECTS` in `xtask/src/generate_third_party_notices.rs`, which
-reproduces `COPYING` out of this directory, and the shipped wheel is checked for
+see it: its `COPYING` is reproduced in the hand-kept
+`THIRD-PARTY-NOTICES.appendix.md` at the repository root, which
+`scripts/generate-third-party-notices.sh` appends, and the shipped wheel is checked for
 it by `sdk/streamlib-python-wheel/tests/test_third_party_notices.py`.
 
 ## Upgrading

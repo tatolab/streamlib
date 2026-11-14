@@ -12,14 +12,14 @@ a superset of what any one artifact links — the wheel ships this file entire
 rather than a per-artifact subset, because over-attribution costs a longer file
 and under-attribution is a term unmet.
 
-**Generated — do not edit.** Regenerate with `cargo xtask
-generate-third-party-notices`; the licence policy that decides what may appear
+**Generated — do not edit.** Regenerate with
+`scripts/generate-third-party-notices.sh`; the licence policy that decides what may appear
 here lives in `deny.toml` and is enforced on every pull request. StreamLib's own
 terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 598 crates
+- **MIT License** — 599 crates
 - **BSD 3-Clause "New" or "Revised" License** — 41 crates
 - **Unicode License v3** — 19 crates
 - **Apache License 2.0** — 17 crates
@@ -7664,6 +7664,34 @@ DEALINGS IN THE SOFTWARE.
 
 Used by:
 
+- [redb 4.5.0](https://github.com/cberner/redb)
+
+````text
+Copyright (c) 2021 Christopher Berner
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+````
+
+### MIT License
+
+Used by:
+
 - [crypto-common 0.1.7](https://github.com/RustCrypto/traits)
 
 ````text
@@ -11840,8 +11868,9 @@ Every project below ships inside the wheel and owes terms the generated half abo
 cannot carry: most are compiled in from vendored sources and so appear in no resolve
 graph `cargo about` walks, and some ship inside the prebuilt Vulkan loader and
 driver the macOS or Linux wheel carries, or among the packages the runtime unit
-carries for new projects. These sections are appended by
-`cargo xtask generate-third-party-notices`.
+carries for new projects. These sections are kept by hand in
+`THIRD-PARTY-NOTICES.appendix.md` and appended by
+`scripts/generate-third-party-notices.sh`.
 
 - In the macOS and Linux wheels, compiled into the Slang shader compiler libraries each carries beside the engine: Slang, DirectX Shader Compiler API header, glslang, SPIRV-Tools, SPIRV-Headers, miniz, LZ4, unordered_dense, fast_float and cmark-gfm
 - Through the `libgit2-sys` crate, compiled from its bundled sources and linked statically into `tatolabd`, which keeps each project's history with it: libgit2

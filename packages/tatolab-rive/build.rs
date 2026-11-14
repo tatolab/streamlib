@@ -144,7 +144,7 @@ fn give_the_rive_renderer_its_own_vma_symbols(renderer_static_library: &Path) {
 }
 
 /// Copy a named checkout's `LICENSE` to where a fetched checkout keeps it,
-/// so `cargo xtask generate-third-party-notices` reads one location either way.
+/// so the notices appendix is copied from one location either way.
 fn stage_the_licence_of_a_named_checkout(named_checkout: &Path, staged_licence_directory: &Path) {
     std::fs::create_dir_all(staged_licence_directory)
         .expect("the staged rive-runtime licence directory is created");

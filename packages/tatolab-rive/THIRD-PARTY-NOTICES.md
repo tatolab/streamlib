@@ -15,7 +15,7 @@ engine crate, so the `streamlib` wheel's own notices are neither reproduced nor
 implied here.
 
 **Generated — do not edit.** Regenerate with
-`cargo xtask generate-third-party-notices --extension-package-directory packages/tatolab-rive`;
+`scripts/generate-third-party-notices.sh packages/tatolab-rive`;
 the accepted licences are the workspace's own `about.toml`, which this project
 shares — a licence outside that list fails the regeneration itself rather than
 landing here quietly. StreamLib's own terms are in [`LICENSE`](LICENSE) and are
@@ -1183,8 +1183,9 @@ the following restrictions:
 
 Every project below is compiled into the wheel by
 `vendor/tatolab-vulkanalia-vma/build.rs` from sources checked into this repository, so it
-appears in no resolve graph `cargo about` walks. These sections are appended by
-`cargo xtask generate-third-party-notices`.
+appears in no resolve graph `cargo about` walks. These sections are kept by hand in
+`THIRD-PARTY-NOTICES.appendix.md` and appended by
+`scripts/generate-third-party-notices.sh`.
 
 ### VulkanMemoryAllocator (MIT)
 
@@ -1226,8 +1227,9 @@ SPDX-License-Identifier: Apache-2.0
 
 Every project below is fetched at a pinned revision and compiled into the wheel by
 its own `build.rs`, so it appears in no resolve graph `cargo about` walks. These
-sections are appended by `cargo xtask generate-third-party-notices` from the
-sources the package's last build fetched.
+sections are kept by hand in `THIRD-PARTY-NOTICES.appendix.md`, copied from the
+sources the package's build fetches, and appended by
+`scripts/generate-third-party-notices.sh`.
 
 ### rive-runtime (MIT)
 

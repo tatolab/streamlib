@@ -16,8 +16,8 @@ license = { text = "GPL-3.0-only" }
 # does not carry, so the text has to travel too.
 #
 # `LICENSE` is a symlink to the repo root, which maturin follows; the notices
-# are this project's own, generated over its own closure by `cargo xtask
-# generate-third-party-notices --extension-package-directory <this directory>`.
+# are this project's own, generated over its own closure by `scripts/generate-third-party-notices.sh
+# <this directory>`.
 # The engine wheel's notices cover the engine wheel and are not inherited here.
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.md"]
 authors = [{ name = "Tatolab LLC", email = "hello@tatolab.com" }]

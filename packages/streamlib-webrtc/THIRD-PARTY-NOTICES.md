@@ -15,7 +15,7 @@ engine crate, so the `streamlib` wheel's own notices are neither reproduced nor
 implied here.
 
 **Generated — do not edit.** Regenerate with
-`cargo xtask generate-third-party-notices --extension-package-directory packages/streamlib-webrtc`;
+`scripts/generate-third-party-notices.sh packages/streamlib-webrtc`;
 the accepted licences are the workspace's own `about.toml`, which this project
 shares — a licence outside that list fails the regeneration itself rather than
 landing here quietly. StreamLib's own terms are in [`LICENSE`](LICENSE) and are
