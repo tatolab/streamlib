@@ -20,38 +20,33 @@ class Comparison:
     greater: bool
 
 
-@node.function(
-    description="Whether a is less than, equal to or greater than b.",
-    category="Logic",
-)
+@node.meta(category="Logic", description="Whether a is less than, equal to or greater than b.")
+@node.function
 def Compare(a: float = 0.0, b: float = 0.0, tolerance: float = 0.0) -> Comparison:  # noqa: N802
     """Whether `a` is less than, equal to (within `tolerance`) or greater than `b`."""
     equal = abs(a - b) <= tolerance
     return Comparison(less=not equal and a < b, equal=equal, greater=not equal and a > b)
 
 
-@node.function(
-    description="Let a signal of any kind through while open, and block it while closed.",
+@node.meta(
     category="Logic",
+    description="Let a signal of any kind through while open, and block it while closed.",
 )
+@node.function
 def Gate(value: UnreadMessage, open: bool = True) -> UnreadMessage | None:  # noqa: N802, A002
     """`value` handed on unread while `open`, else nothing, of any family."""
     return value if open else None
 
 
-@node.function(
-    description="Pick one of two numbers with an on/off input.",
-    category="Logic",
-)
+@node.meta(category="Logic", description="Pick one of two numbers with an on/off input.")
+@node.function
 def Switch(on: bool = False, when_on: float = 1.0, when_off: float = 0.0) -> float:  # noqa: N802
     """`when_on` while `on`, else `when_off`."""
     return when_on if on else when_off
 
 
-@node.function(
-    description="Pick one of four numbers by index.",
-    category="Logic",
-)
+@node.meta(category="Logic", description="Pick one of four numbers by index.")
+@node.function
 def Select(  # noqa: N802
     index: int = 0,
     option_0: float = 0.0,
@@ -77,10 +72,8 @@ class TriggerLevel:
     was_on: bool = False
 
 
-@node.function(
-    description="A one-frame pulse each time its input turns on.",
-    category="Logic",
-)
+@node.meta(category="Logic", description="A one-frame pulse each time its input turns on.")
+@node.function
 def Trigger(  # noqa: N802
     x: bool = False, *, previous: State[TriggerLevel]
 ) -> Stateful[bool, TriggerLevel]:
@@ -96,10 +89,8 @@ class CounterCount:
     increment_was_on: bool = False
 
 
-@node.function(
-    description="Count how many times its input has turned on.",
-    category="Logic",
-)
+@node.meta(category="Logic", description="Count how many times its input has turned on.")
+@node.function
 def Counter(  # noqa: N802
     increment: bool = False, reset: bool = False, *, previous: State[CounterCount]
 ) -> Stateful[int, CounterCount]:
@@ -118,10 +109,11 @@ class SampledValue:
     sample_was_on: bool = False
 
 
-@node.function(
-    description="Grab a number when sample turns on and hold it until the next time.",
+@node.meta(
     category="Logic",
+    description="Grab a number when sample turns on and hold it until the next time.",
 )
+@node.function
 def SampleAndHold(  # noqa: N802
     x: float = 0.0, sample: bool = False, *, previous: State[SampledValue]
 ) -> Stateful[float, SampledValue]:
@@ -137,10 +129,11 @@ class HeldFrame:
     frame: UnreadMessage | None = None
 
 
-@node.function(
-    description="Freeze a picture: hold the first frame until refresh takes a newer one.",
+@node.meta(
     category="Logic",
+    description="Freeze a picture: hold the first frame until refresh takes a newer one.",
 )
+@node.function
 def HoldFrame(  # noqa: N802
     frame: Annotated[UnreadMessage, Image] | None = None,
     refresh: bool = False,

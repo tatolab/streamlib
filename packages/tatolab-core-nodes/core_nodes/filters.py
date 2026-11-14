@@ -8,6 +8,10 @@ from __future__ import annotations
 from tatolab.stream import ImageFrame, node
 
 
+@node.meta(
+    category="Filters",
+    description="Soften a picture. Radius is a fraction of its height: 0.01 is gentle, 0.05 is heavy. Chain two for a smoother blur.",
+)
 @node.shader(
     """
 float4 Blur(ImageInput image, float radius)
@@ -23,12 +27,11 @@ float4 Blur(ImageInput image, float radius)
     return sum;
 }
 """,
-    description="Soften a picture. Radius is a fraction of its height: 0.01 is gentle, 0.05 is heavy. Chain two for a smoother blur.",
-    category="Filters",
 )
 def Blur(image: ImageFrame, radius: float = 0.01) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(category="Filters", description="Crisp up edges and fine detail.")
 @node.shader(
     """
 float4 Sharpen(ImageInput image, float amount, float radius)
@@ -40,14 +43,16 @@ float4 Sharpen(ImageInput image, float amount, float radius)
     return float4(saturate(color), image.pixel.a);
 }
 """,
-    description="Crisp up edges and fine detail.",
-    category="Filters",
 )
 def Sharpen(  # noqa: N802
     image: ImageFrame, amount: float = 1.0, radius: float = 0.002
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Filters",
+    description="Draw only the outlines in a picture: white lines where brightness changes, black elsewhere.",
+)
 @node.shader(
     """
 float EdgeDetect_luma(float4 pixel)
@@ -66,14 +71,16 @@ float4 EdgeDetect(ImageInput image, float strength, float radius)
     return float4(edge, edge, edge, image.pixel.a);
 }
 """,
-    description="Draw only the outlines in a picture: white lines where brightness changes, black elsewhere.",
-    category="Filters",
 )
 def EdgeDetect(  # noqa: N802
     image: ImageFrame, strength: float = 4.0, radius: float = 0.002
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Filters",
+    description="Turn a picture into big square blocks. Fewer cells across means bigger blocks.",
+)
 @node.shader(
     """
 float4 Pixelate(ImageInput image, float cells_across)
@@ -82,12 +89,14 @@ float4 Pixelate(ImageInput image, float cells_across)
     return image.sample((floor(image.uv * cells) + 0.5) / cells);
 }
 """,
-    description="Turn a picture into big square blocks. Fewer cells across means bigger blocks.",
-    category="Filters",
 )
 def Pixelate(image: ImageFrame, cells_across: float = 64.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Filters",
+    description="Bend a picture using another one as a map: the map's red pushes pixels sideways, its green up and down. Try Noise as the map.",
+)
 @node.shader(
     """
 float4 Displace(ImageInput image, ImageInput map, float amount)
@@ -96,12 +105,14 @@ float4 Displace(ImageInput image, ImageInput map, float amount)
     return image.sample(image.uv + push);
 }
 """,
-    description="Bend a picture using another one as a map: the map's red pushes pixels sideways, its green up and down. Try Noise as the map.",
-    category="Filters",
 )
 def Displace(image: ImageFrame, map: ImageFrame, amount: float = 0.1) -> ImageFrame: ...  # noqa: N802, A002
 
 
+@node.meta(
+    category="Filters",
+    description="Pull the red and blue apart for a glitchy, out-of-register look. Angle is in turns: 0.25 is straight up.",
+)
 @node.shader(
     """
 float4 RgbSplit(ImageInput image, float amount, float angle)
@@ -112,12 +123,14 @@ float4 RgbSplit(ImageInput image, float amount, float angle)
     return float4(red, image.pixel.g, blue, image.pixel.a);
 }
 """,
-    description="Pull the red and blue apart for a glitchy, out-of-register look. Angle is in turns: 0.25 is straight up.",
-    category="Filters",
 )
 def RgbSplit(image: ImageFrame, amount: float = 0.005, angle: float = 0.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Filters",
+    description="Darken the corners of a picture to draw the eye to the middle.",
+)
 @node.shader(
     """
 float4 Vignette(ImageInput image, float amount, float size, float softness)
@@ -127,14 +140,16 @@ float4 Vignette(ImageInput image, float amount, float size, float softness)
     return float4(image.pixel.rgb * (1.0 - shade * saturate(amount)), image.pixel.a);
 }
 """,
-    description="Darken the corners of a picture to draw the eye to the middle.",
-    category="Filters",
 )
 def Vignette(  # noqa: N802
     image: ImageFrame, amount: float = 0.6, size: float = 0.5, softness: float = 0.5
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Filters",
+    description="Make one colour see-through, such as a green screen. Layer the result over a background with Over.",
+)
 @node.shader(
     """
 float4 ChromaKey(ImageInput image, float key_red, float key_green, float key_blue, float tolerance, float softness)
@@ -147,8 +162,6 @@ float4 ChromaKey(ImageInput image, float key_red, float key_green, float key_blu
     return float4(image.pixel.rgb, image.pixel.a * keep);
 }
 """,
-    description="Make one colour see-through, such as a green screen. Layer the result over a background with Over.",
-    category="Filters",
 )
 def ChromaKey(  # noqa: N802
     image: ImageFrame,
@@ -160,6 +173,10 @@ def ChromaKey(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Filters",
+    description="Make the dark parts of a picture see-through, keeping the bright parts.",
+)
 @node.shader(
     """
 float4 LumaKey(ImageInput image, float threshold, float softness)
@@ -169,8 +186,6 @@ float4 LumaKey(ImageInput image, float threshold, float softness)
     return float4(image.pixel.rgb, image.pixel.a * keep);
 }
 """,
-    description="Make the dark parts of a picture see-through, keeping the bright parts.",
-    category="Filters",
 )
 def LumaKey(  # noqa: N802
     image: ImageFrame, threshold: float = 0.2, softness: float = 0.1

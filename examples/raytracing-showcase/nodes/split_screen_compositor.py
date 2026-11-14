@@ -205,7 +205,8 @@ class SplitScreenCompositorConfig:
     right_label: str = DEFAULT_RIGHT_LABEL
 
 
-@node.process(description="Cuts the rasterized and ray-traced frames together")
+@node.meta(description="Cuts the rasterized and ray-traced frames together")
+@node.process
 class SplitScreenCompositor:
     """Rasterized on the left, ray traced on the right, one labelled frame out."""
 

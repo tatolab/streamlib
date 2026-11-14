@@ -245,10 +245,8 @@ class _RayTracingKernelProbeBase:
         raise NotImplementedError
 
 
-@node.process(
-    execution="manual",
-    description="Builds a BLAS and a TLAS and traces them into a storage image",
-)
+@node.meta(description="Builds a BLAS and a TLAS and traces them into a storage image")
+@node.process(execution="manual")
 class TracedTriangleProbe(_RayTracingKernelProbeBase):
     """The demo: a Python processor builds a scene and traces it.
 
@@ -272,10 +270,8 @@ class TracedTriangleProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Every way of getting a trace's bindings wrong, refused by name",
-)
+@node.meta(description="Every way of getting a trace's bindings wrong, refused by name")
+@node.process(execution="manual")
 class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
     """Unknown, missing and kind-mismatched, each raising with a message naming
     what the shaders actually declare."""
@@ -340,10 +336,8 @@ class RayTracingBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A binding declared for a stage this kernel has no module for",
-)
+@node.meta(description="A binding declared for a stage this kernel has no module for")
+@node.process(execution="manual")
 class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
     """The ticket's named validation case, at the line it belongs to.
 
@@ -383,10 +377,8 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A uniform-buffer binding a trace cannot name a surface for",
-)
+@node.meta(description="A uniform-buffer binding a trace cannot name a surface for")
+@node.process(execution="manual")
 class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     """A uniform-buffer binding is reflected, and refused at the trace.
 
@@ -424,10 +416,8 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="An acceleration structure is named by its handle, or not at all",
-)
+@node.meta(description="An acceleration structure is named by its handle, or not at all")
+@node.process(execution="manual")
 class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
     """Nothing publishes an acceleration structure for another processor to
     resolve, so a surface id is not a spelling for one — and the structure a
@@ -487,10 +477,8 @@ class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
 RAY_TRACING_TIER_ABSENT = "the ray-tracing tier is absent"
 
 
-@node.process(
-    execution="manual",
-    description="Ray-tracing constructors refuse at setup() naming the absent tier",
-)
+@node.meta(description="Ray-tracing constructors refuse at setup() naming the absent tier")
+@node.process(execution="manual")
 class RayTracingTierAbsentRefusalProbe:
     """Each ray-tracing constructor called from `setup()`, answered or refused.
 

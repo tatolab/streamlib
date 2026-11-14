@@ -54,10 +54,10 @@ class H265EncoderConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="Encodes published video surfaces to H.265 (HEVC) on Vulkan Video or VideoToolbox",
 )
+@node.process(execution="manual")
 class H265Encoder:
     """Video frames in, H.265 access units out, encoded with Vulkan Video or VideoToolbox.
 
@@ -141,10 +141,10 @@ class H265DecoderConfig:
     ] = None
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="Decodes H.265 access units to published video textures on Vulkan Video or VideoToolbox",
 )
+@node.process(execution="manual")
 class H265Decoder:
     """H.265 access units in, video frames out, decoded with Vulkan Video or VideoToolbox.
 

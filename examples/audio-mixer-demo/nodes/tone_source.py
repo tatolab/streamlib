@@ -44,11 +44,10 @@ class ToneSourceConfig:
     amplitude: float = 0.3
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=5,
+@node.meta(
     description="A phase-continuous sine wave at the rate and channel count its config names",
 )
+@node.process(execution="continuous", interval_ms=5)
 class ToneSource:
     """A phase-continuous sine wave, paced by the monotonic clock.
 

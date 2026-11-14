@@ -69,11 +69,8 @@ class SolidPremultipliedColourSourceConfig:
     premultiplied_rgba: "list[int]" = dataclasses.field(default_factory=lambda: [0, 0, 0, 255])
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=SOURCE_INTERVAL_MS,
-    description="Publishes frames of one premultiplied RGBA colour",
-)
+@node.meta(description="Publishes frames of one premultiplied RGBA colour")
+@node.process(execution="continuous", interval_ms=SOURCE_INTERVAL_MS)
 class SolidPremultipliedColourSource:
     """Every frame is `premultiplied_rgba`, each channel 0-255, at `width`x`height`."""
 
@@ -110,7 +107,8 @@ class SolidPremultipliedColourSource:
         )
 
 
-@node.process(execution="manual", description="Declares a video output and never publishes on it")
+@node.meta(description="Declares a video output and never publishes on it")
+@node.process(execution="manual")
 class NeverPublishingVideoSource:
     """Stands for a layer that is wired and has never sent a frame."""
 
@@ -125,11 +123,8 @@ def _pixels_of(gpu: GpuContextLimitedAccess, surface_id: str) -> "list[Any]":
     return pixels
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=10,
-    description="Reports the pixels of the composite it holds once the sources have settled",
-)
+@node.meta(description="Reports the pixels of the composite it holds once the sources have settled")
+@node.process(execution="continuous", interval_ms=10)
 class AlphaOverCompositeProbe:
     """Holds the newest composite and reports its pixels, or reports that none arrived."""
 

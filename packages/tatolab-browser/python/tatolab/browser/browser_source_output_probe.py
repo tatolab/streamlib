@@ -65,7 +65,8 @@ class BrowserSourceOutputProbeConfig:
                 )
 
 
-@node.process(description="Logs a BrowserSource's frame rate, audio continuity and data round trip")
+@node.meta(description="Logs a BrowserSource's frame rate, audio continuity and data round trip")
+@node.process
 class BrowserSourceOutputProbe:
     """A `BrowserSource`'s outputs in, `data` messages to it out, a report every window."""
 

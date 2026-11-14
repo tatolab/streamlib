@@ -104,7 +104,8 @@ class ShaderEffectConfig:
     effect_slang: str = "float4 effect(float4 source, int2 at) { return source; }"
 
 
-@node.process(description="Runs the Slang effect function its config carries over every frame")
+@node.meta(description="Runs the Slang effect function its config carries over every frame")
+@node.process
 class ShaderEffect:
     """Frame in, the same frame through a Slang `effect` function out."""
 

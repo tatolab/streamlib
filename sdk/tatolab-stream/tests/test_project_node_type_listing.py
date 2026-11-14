@@ -35,7 +35,8 @@ from tatolab.stream import Description, Image, Input, Output, State, Stateful, T
 INVERSE_KINEMATICS_DESCRIPTION = "Solves joint angles for a target pose."
 
 
-@node.process(execution="continuous", category="Robot", description=INVERSE_KINEMATICS_DESCRIPTION)
+@node.meta(category="Robot/Arms", description=INVERSE_KINEMATICS_DESCRIPTION)
+@node.process(execution="continuous")
 class InverseKinematics:
     """A docstring, which the listing never reads."""
 
@@ -57,7 +58,8 @@ class Phase:
     phase: float = 0.0
 
 
-@node.function(description="Splits a value at a threshold.")
+@node.function
+@node.meta(description="Splits a value at a threshold.")
 def split(
     x: "Annotated[float, Description(INVERSE_KINEMATICS_DESCRIPTION)] | None",
     threshold: float = 0.5,
@@ -73,6 +75,11 @@ def ramp(rate: float, previous: State[Phase]) -> Stateful[Annotated[float, Descr
     return previous.phase, previous
 
 
+@node.meta(
+    category="Color",
+    description="Scales every channel by `amount`.",
+)
+@node.meta(category="Effects")
 @node.shader("float4 tint(ImageInput image, float amount) { return image.pixel * amount; }")
 def tint(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...
 
@@ -217,16 +224,16 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
         "type": "nodes.inverse_kinematics:InverseKinematics",
         "kind": "process",
         "description": "Solves joint angles for a target pose.",
-        "category": "Robot",
+        "category": "Robot/Arms",
         "inputs": [{"name": "target", "family": "image", "description": "The target pose.", "annotation": None}],
         "outputs": [{"name": "joint_angles", "family": None, "description": "", "annotation": None}],
         "path": "nodes/inverse_kinematics.py",
-        "line": 12,
+        "line": 13,
     }
     split = node_types["nodes.inverse_kinematics:split"]
     assert split["kind"] == "function"
     assert split["description"] == "Splits a value at a threshold."
-    assert split["category"] == "nodes.inverse_kinematics"
+    assert split["category"] is None
     assert split["inputs"] == [
         {
             "name": "x",
@@ -258,6 +265,7 @@ def test_a_plain_projects_node_types_are_read_with_their_ports_and_nothing_runs(
     ]
     tint = node_types["nodes.inverse_kinematics:tint"]
     assert tint["kind"] == "shader"
+    assert (tint["category"], tint["description"]) == ("Color", "Scales every channel by `amount`.")
     assert [port["family"] for port in tint["inputs"]] == ["image", "channels"]
     assert tint["outputs"] == [{"name": "result", "family": "image", "description": "", "annotation": "ImageFrame"}]
 
@@ -304,6 +312,7 @@ def test_an_imports_node_code_is_read_from_the_files_its_folder_holds(tmp_path: 
             [{"name": "grip", "family": "channels", "description": "", "annotation": None}],
         )
     ]
+    assert [node_type["category"] for node_type in dependency_source["node_types"]] == [None]
 
 
 def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
@@ -336,6 +345,7 @@ def test_an_installed_distribution_lists_each_node_type_its_entry_points_name(
     assert node_types["tatolab_fixture_ops:Lerp"]["kind"] == "function"
     assert node_types["tatolab_fixture_ops:Lerp"]["inputs"] is None
     assert node_types["tatolab_fixture_ops:Missing"]["kind"] is None
+    assert [node_type["category"] for node_type in node_types.values()] == [None, None, None, None]
 
 
 def test_the_project_source_leaves_out_the_node_code_of_its_imports_folder(

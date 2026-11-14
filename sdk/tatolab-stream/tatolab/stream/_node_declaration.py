@@ -24,12 +24,16 @@ import typing
 from collections.abc import Mapping
 from typing import Any, Callable, NoReturn, Optional, ParamSpec, TypeVar, overload
 
-from ._description import refuse_a_description_that_is_not_a_string
 from ._exposed_name_cast import (
     ExposedNameCastsToNothingError,
     cast_exposed_name_to_url_safe,
 )
 from ._function_node_declaration import FunctionNode, declare_function_node
+from ._node_meta_declaration import (
+    hold_node_meta_for_the_kind_decorator,
+    read_node_meta,
+    take_node_meta_held_for_the_kind_decorator,
+)
 from ._rust_function_node_declaration import RustFunctionNode, declare_rust_function_node
 from ._shader_node_declaration import ShaderNode, declare_shader_node
 from ._port_family_declaration import Input, Output
@@ -278,6 +282,7 @@ def _audio_window_declaration(
 
 
 NodeClassUnderDeclaration = TypeVar("NodeClassUnderDeclaration", bound=type)
+_NodeUnderDeclaration = TypeVar("_NodeUnderDeclaration")
 
 
 class NodeDeclarationDecorator:
@@ -291,35 +296,55 @@ class NodeDeclarationDecorator:
             "bare `@node` declares no kind; every node names its kind. A class with "
             "`setup()` / `process()` and ports is `@node.process`, bare or with the same "
             "keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-            "`paced_by_real_time`, `description`). A function that computes its outputs "
-            "from its inputs is `@node.function`."
+            "`paced_by_real_time`). A function that computes its outputs "
+            "from its inputs is `@node.function`. What describes a node, its "
+            "`category` and `description`, is `@node.meta`."
         )
+
+    def meta(
+        self, *, category: Optional[str] = None, description: Optional[str] = None
+    ) -> "Callable[[_NodeUnderDeclaration], _NodeUnderDeclaration]":
+        """Declare what describes a node type: its `category` and its `description`.
+
+        Written above or below the decorator that says the node's kind, and the same
+        on every kind. `category` is the group an editor files the node type under,
+        `"Effects"`, or a path into a group inside one, `"Effects/Stylize"`; a node
+        type that declares none has none. `description` is CommonMark with no raw
+        HTML, served exactly as written, and a docstring never stands in for it.
+        Each is a string written in the code, which is what lets a project's node
+        types be listed from source without running them.
+        """
+        declared = read_node_meta(category=category, description=description)
+
+        def apply_to_node(node_under_declaration: _NodeUnderDeclaration) -> _NodeUnderDeclaration:
+            if vars(node_under_declaration).get(NODE_DECLARATION_DECLARED_STAMP) is True:
+                for meta_key, declared_value in declared.items():
+                    setattr(
+                        node_under_declaration,
+                        _DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES[meta_key],
+                        declared_value,
+                    )
+            else:
+                hold_node_meta_for_the_kind_decorator(node_under_declaration, declared)
+            return node_under_declaration
+
+        return apply_to_node
 
     @overload
     def function(
         self,
         node_function: "Callable[_FunctionNodeParameters, _FunctionNodeReturn]",
-        *,
-        description: str = "",
-        category: str = "",
     ) -> "FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]": ...
 
     @overload
     def function(
-        self, node_function: None = None, *, description: str = "", category: str = ""
+        self, node_function: None = None
     ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], FunctionNode[_FunctionNodeParameters, _FunctionNodeReturn]]": ...
 
-    def function(
-        self,
-        node_function: "Optional[Callable[..., Any]]" = None,
-        *,
-        description: str = "",
-        category: str = "",
-    ) -> Any:
+    def function(self, node_function: "Optional[Callable[..., Any]]" = None) -> Any:
         """Mark a function as a function node: one that computes its outputs from its inputs.
 
-        Usable bare (`@node.function`) or with `description=` and `category=`,
-        the palette category, which defaults to the function's module. The signature is
+        It takes only the function; what describes the node is `@node.meta`. The signature is
         the node: each plain parameter is an input pin, its default the pin's
         value when nothing is wired, and `T | None = None` an optional input.
         The return annotation is the output `result`, or one output per field
@@ -338,8 +363,6 @@ class NodeDeclarationDecorator:
         ) -> "FunctionNode[..., Any]":
             return declare_function_node(
                 function_under_decoration,
-                description=description,
-                category=category,
                 declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
             )
 
@@ -348,7 +371,7 @@ class NodeDeclarationDecorator:
         return apply_to_function(node_function)
 
     def shader(
-        self, shader_source: str, *, description: str = "", category: str = ""
+        self, shader_source: str
     ) -> "Callable[[Callable[_FunctionNodeParameters, _FunctionNodeReturn]], ShaderNode[_FunctionNodeParameters, _FunctionNodeReturn]]":
         """Mark a function as a shader node: a Slang function from Images and values to an Image.
 
@@ -370,8 +393,6 @@ class NodeDeclarationDecorator:
             return declare_shader_node(
                 function_under_decoration,
                 shader_source=shader_source,
-                description=description,
-                category=category,
                 declaration_stamps=_DECLARATION_STAMPS_EVERY_NODE_KIND_CARRIES,
             )
 
@@ -404,14 +425,12 @@ class NodeDeclarationDecorator:
         interval_ms: int = 0,
         scheduling: Optional[str] = None,
         paced_by_real_time: bool = False,
-        description: str = "",
-        category: str = "",
     ) -> Any:
         """Mark a class as a process node: one that runs in a process of its own.
 
         Usable bare (`@node.process`) or with keyword arguments; its ports are `Input`
         and `Output` class attributes, each of one family. It declares execution,
-        interval, scheduling priority and description — never identity: a node is
+        interval and scheduling priority — never identity: a node is
         named by the import path of the class it is, derived from `__module__` and
         `__qualname__`.
 
@@ -433,10 +452,8 @@ class NodeDeclarationDecorator:
         node.
 
         Decorating registers nothing: it stamps the declaration on the class, and
-        the class reaches the node catalog when a stream that uses it loads.
-        `description` is the node type's description, CommonMark with no raw HTML,
-        and the class's docstring never stands in for it. `category`, the palette
-        category, defaults to the class's module.
+        the class reaches the node catalog when a stream that uses it loads. What
+        describes the node type, its `category` and `description`, is `@node.meta`.
 
         `paced_by_real_time=True` declares a node that paces itself on real time,
         as a live device does. It loads in a stream on any clock: what it writes
@@ -451,8 +468,6 @@ class NodeDeclarationDecorator:
                 interval_ms=interval_ms,
                 scheduling=scheduling,
                 paced_by_real_time=paced_by_real_time,
-                description=description,
-                category=category,
             )
 
         if isinstance(node_class, type):
@@ -465,8 +480,7 @@ class NodeDeclarationDecorator:
                 f"of the class it is — `my_app.filters:BlurEffect` — derived from "
                 f"`__module__` and `__qualname__` and never authored. Use `@node.process` bare, "
                 f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
-                f"`paced_by_real_time`, "
-                f"`description`)."
+                f"`paced_by_real_time`)."
             )
 
         return apply_to_class
@@ -476,7 +490,7 @@ class NodeDeclarationDecorator:
 
 
 node = NodeDeclarationDecorator()
-"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images."""
+"""Declares a node by its kind: `@node.process` for a class whose `Input` and `Output` attributes are its ports, `@node.function` for a function whose signature is its ports, `@node.shader` for a Slang function over Images. `@node.meta` declares what describes it."""
 
 
 def _declare_node(
@@ -486,9 +500,8 @@ def _declare_node(
     interval_ms: int,
     scheduling: Optional[str],
     paced_by_real_time: bool,
-    description: str,
-    category: str,
 ) -> NodeClassUnderDeclaration:
+    declared_meta = take_node_meta_held_for_the_kind_decorator(node_class)
     input_ports, output_ports = _collect_declared_ports(node_class)
     config_class = _config_class_named_by_the_init_annotation(node_class)
 
@@ -504,14 +517,8 @@ def _declare_node(
             config_class, f"@node.process on {node_class.__name__}"
         ),
     )
-    setattr(
-        node_class,
-        NODE_DECLARATION_DESCRIPTION_STAMP,
-        refuse_a_description_that_is_not_a_string(
-            description, f"@node.process on {node_class.__name__}"
-        ),
-    )
-    setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, category or node_class.__module__)
+    setattr(node_class, NODE_DECLARATION_DESCRIPTION_STAMP, declared_meta.get("description", ""))
+    setattr(node_class, NODE_DECLARATION_CATEGORY_STAMP, declared_meta.get("category"))
     setattr(
         node_class,
         NODE_DECLARATION_EXECUTION_STAMP,

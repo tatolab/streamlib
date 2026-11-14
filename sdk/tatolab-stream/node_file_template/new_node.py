@@ -4,7 +4,8 @@
 from tatolab.stream import Image, Input, Output, RuntimeContextLimitedAccess, node
 
 
-@node.process(description="Hands on each frame it reads, unchanged.")
+@node.meta(description="Hands on each frame it reads, unchanged.")
+@node.process
 class NewNode:
     video_in = Input(Image, delivery="newest", description="The frames this node reads.")
     video_out = Output(Image, description="Each frame read from `video_in`, unchanged.")

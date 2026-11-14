@@ -45,12 +45,11 @@ def rgba_bytes_of_the_solid_color(config: SolidColorConfig) -> tuple[int, int, i
     )
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=SOLID_COLOR_INTERVAL_BETWEEN_PICTURES_MS,
-    description="A flat colour at the size you set, sent about 60 times a second. Also the blank canvas a generator such as Noise or Gradient takes its size and its frame rate from.",
+@node.meta(
     category="Generators",
+    description="A flat colour at the size you set, sent about 60 times a second. Also the blank canvas a generator such as Noise or Gradient takes its size and its frame rate from.",
 )
+@node.process(execution="continuous", interval_ms=SOLID_COLOR_INTERVAL_BETWEEN_PICTURES_MS)
 class SolidColor:
     """Sends the picture of its config's colour and size at each interval, filled once at start
     and again on each config change."""

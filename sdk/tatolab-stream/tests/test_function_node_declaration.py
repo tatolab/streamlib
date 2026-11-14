@@ -36,7 +36,8 @@ from tatolab.stream._node_declaration import (
 )
 
 
-@node.function(description="Map 0..1 onto low..high.")
+@node.meta(description="Map 0..1 onto low..high.")
+@node.function
 def remap(x: float, low: float = 0.0, high: float = 1.0) -> float:
     """The docstring, which the catalog never reads."""
     return low + x * (high - low)
@@ -61,7 +62,8 @@ class SplitColour:
     green: float
 
 
-@node.function(description="Split a grey level into two channels.", category="Colour")
+@node.meta(category="Colour", description="Split a grey level into two channels.")
+@node.function
 def split(grey: float) -> SplitColour:
     return SplitColour(red=grey, green=grey)
 
@@ -94,8 +96,8 @@ def test_a_function_node_carries_kind_function_and_language_python():
     assert remap.__qualname__ == "remap"
 
 
-def test_a_function_node_is_filed_under_its_module_unless_it_names_a_category():
-    assert getattr(remap, NODE_DECLARATION_CATEGORY_STAMP) == __name__
+def test_a_function_node_has_the_category_it_declares_and_none_when_it_declares_none():
+    assert getattr(remap, NODE_DECLARATION_CATEGORY_STAMP) is None
     assert getattr(split, NODE_DECLARATION_CATEGORY_STAMP) == "Colour"
 
 
@@ -427,7 +429,8 @@ def test_a_family_named_on_anything_but_an_unread_message_is_refused_and_other_m
 GAIN_PORT_DESCRIPTION = "The factor `x` is multiplied by."
 
 
-@node.function(description="Scales `x`.")
+@node.meta(description="Scales `x`.")
+@node.function
 def scaled(
     x: Annotated[float, Description("The value to scale.")],
     gain: Annotated[float, Description(GAIN_PORT_DESCRIPTION)] = 1.0,

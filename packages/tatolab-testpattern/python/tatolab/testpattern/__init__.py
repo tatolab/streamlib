@@ -222,14 +222,13 @@ def _upload_overlay_into_a_texture(
     return overlay_texture
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=33,
+@node.meta(
     description=(
         "Synthetic SMPTE-style color bars with a bouncing potato and the sample stream's "
         "captions, rendered on the GPU — demos a pipeline with no camera attached"
     ),
 )
+@node.process(execution="continuous", interval_ms=33)
 class TestPatternSource:
     """The sample stream's animation at about 30 frames a second, as RGBA Image frames."""
 

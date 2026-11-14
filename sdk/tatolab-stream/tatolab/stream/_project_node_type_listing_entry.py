@@ -198,7 +198,7 @@ def _node_types_the_entry_points_name(
                 "type": import_path,
                 "kind": None,
                 "description": "",
-                "category": import_path.split(":", 1)[0],
+                "category": None,
                 "inputs": None,
                 "outputs": None,
                 "path": None,

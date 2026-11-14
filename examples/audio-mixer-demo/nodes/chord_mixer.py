@@ -87,7 +87,8 @@ class ChordVoiceWindow:
         )
 
 
-@node.process(description="Emits one mixed window per set of three time-aligned voice windows")
+@node.meta(description="Emits one mixed window per set of three time-aligned voice windows")
+@node.process
 class ChordMixer:
     """Three voices in, at any rate and channel count; their mono sum out."""
 

@@ -142,13 +142,13 @@ class _LatchedRefusal(Exception):
     """A frame the camera can never carry; every later frame is dropped."""
 
 
-@node.process(
-    scheduling="high",
+@node.meta(
     description=(
         "Presents video frames as a virtual camera any Linux application can select: one "
         "v4l2loopback or PipeWire camera per instance, created at setup and removed at teardown"
     ),
 )
+@node.process(scheduling="high")
 class VirtualCameraSink:
     """Each frame's picture, converted to YUYV, as the camera's next picture.
 

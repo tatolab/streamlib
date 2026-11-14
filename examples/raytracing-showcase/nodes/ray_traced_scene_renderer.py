@@ -252,11 +252,8 @@ class RayTracedSceneRendererConfig:
     height: int = 720
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=16,
-    description="The showcase scene with ray-traced shadows and a mirror floor",
-)
+@node.meta(description="The showcase scene with ray-traced shadows and a mirror floor")
+@node.process(execution="continuous", interval_ms=16)
 class RayTracedSceneRenderer:
     """Ray tracing on: hard shadows that track the light, and reflections."""
 

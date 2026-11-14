@@ -35,7 +35,8 @@ class CrtFilmGrainConfig:
     brightness: float = 1.05
 
 
-@node.process(description="80s CRT tube and film grain over the whole frame")
+@node.meta(description="80s CRT tube and film grain over the whole frame")
+@node.process
 class CrtFilmGrain(SinglePassVideoEffect):
     """Barrel curve, scanlines, aberration, vignette and 24 fps grain."""
 

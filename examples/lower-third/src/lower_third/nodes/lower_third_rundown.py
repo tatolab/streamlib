@@ -10,11 +10,8 @@ from ..lower_third_template import DEMO_RUNDOWN, LOWER_THIRD_RECORD_NAMES
 SECONDS_ON_AIR_PER_LOWER_THIRD = 4
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=SECONDS_ON_AIR_PER_LOWER_THIRD * 1000,
-    description="Sends the next lower third of the rundown to the page",
-)
+@node.meta(description="Sends the next lower third of the rundown to the page")
+@node.process(execution="continuous", interval_ms=SECONDS_ON_AIR_PER_LOWER_THIRD * 1000)
 class LowerThirdRundown:
     """Cycles through `DEMO_RUNDOWN`, one `LowerThirdTemplate` per tick."""
 

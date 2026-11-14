@@ -8,6 +8,10 @@ from __future__ import annotations
 from tatolab.stream import ImageFrame, node
 
 
+@node.meta(
+    category="Color",
+    description="Brightness, contrast, gamma and opacity in one node. Brightness adds, contrast multiplies around mid grey.",
+)
 @node.shader(
     """
 float4 Level(ImageInput image, float brightness, float contrast, float gamma, float opacity)
@@ -17,8 +21,6 @@ float4 Level(ImageInput image, float brightness, float contrast, float gamma, fl
     return float4(color, image.pixel.a * saturate(opacity));
 }
 """,
-    description="Brightness, contrast, gamma and opacity in one node. Brightness adds, contrast multiplies around mid grey.",
-    category="Color",
 )
 def Level(  # noqa: N802
     image: ImageFrame,
@@ -29,6 +31,10 @@ def Level(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Color",
+    description="Shift hue around the colour wheel (0 to 1 is one full turn) and scale saturation and brightness.",
+)
 @node.shader(
     """
 float3 HsvAdjust_rgb_to_hsv(float3 color)
@@ -56,14 +62,16 @@ float4 HsvAdjust(ImageInput image, float hue_shift, float saturation, float valu
     return float4(HsvAdjust_hsv_to_rgb(hsv), image.pixel.a);
 }
 """,
-    description="Shift hue around the colour wheel (0 to 1 is one full turn) and scale saturation and brightness.",
-    category="Color",
 )
 def HsvAdjust(  # noqa: N802
     image: ImageFrame, hue_shift: float = 0.0, saturation: float = 1.0, value: float = 1.0
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Color",
+    description="Flip every colour to its opposite, like a film negative. Amount fades the effect in.",
+)
 @node.shader(
     """
 float4 Invert(ImageInput image, float amount)
@@ -71,12 +79,14 @@ float4 Invert(ImageInput image, float amount)
     return float4(lerp(image.pixel.rgb, 1.0 - image.pixel.rgb, saturate(amount)), image.pixel.a);
 }
 """,
-    description="Flip every colour to its opposite, like a film negative. Amount fades the effect in.",
-    category="Color",
 )
 def Invert(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Color",
+    description="Turn a picture black and white. Amount fades between colour and grey.",
+)
 @node.shader(
     """
 float4 Monochrome(ImageInput image, float amount)
@@ -85,12 +95,14 @@ float4 Monochrome(ImageInput image, float amount)
     return float4(lerp(image.pixel.rgb, float3(luma, luma, luma), saturate(amount)), image.pixel.a);
 }
 """,
-    description="Turn a picture black and white. Amount fades between colour and grey.",
-    category="Color",
 )
 def Monochrome(image: ImageFrame, amount: float = 1.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Color",
+    description="Pure black below a brightness, pure white above it. Softness blurs the cut.",
+)
 @node.shader(
     """
 float4 Threshold(ImageInput image, float threshold, float softness)
@@ -101,14 +113,16 @@ float4 Threshold(ImageInput image, float threshold, float softness)
     return float4(level, level, level, image.pixel.a);
 }
 """,
-    description="Pure black below a brightness, pure white above it. Softness blurs the cut.",
-    category="Color",
 )
 def Threshold(  # noqa: N802
     image: ImageFrame, threshold: float = 0.5, softness: float = 0.02
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Color",
+    description="Multiply a picture by a colour, like a coloured gel over a light.",
+)
 @node.shader(
     """
 float4 Tint(ImageInput image, float red, float green, float blue, float amount)
@@ -117,8 +131,6 @@ float4 Tint(ImageInput image, float red, float green, float blue, float amount)
     return float4(lerp(image.pixel.rgb, tinted, saturate(amount)), image.pixel.a);
 }
 """,
-    description="Multiply a picture by a colour, like a coloured gel over a light.",
-    category="Color",
 )
 def Tint(  # noqa: N802
     image: ImageFrame,
@@ -129,6 +141,10 @@ def Tint(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Color",
+    description="Recolour a picture with two colours: one for the shadows, one for the highlights.",
+)
 @node.shader(
     """
 float4 Duotone(ImageInput image, float dark_red, float dark_green, float dark_blue, float light_red, float light_green, float light_blue)
@@ -138,8 +154,6 @@ float4 Duotone(ImageInput image, float dark_red, float dark_green, float dark_bl
     return float4(color, image.pixel.a);
 }
 """,
-    description="Recolour a picture with two colours: one for the shadows, one for the highlights.",
-    category="Color",
 )
 def Duotone(  # noqa: N802
     image: ImageFrame,
@@ -152,6 +166,10 @@ def Duotone(  # noqa: N802
 ) -> ImageFrame: ...
 
 
+@node.meta(
+    category="Color",
+    description="Reduce a picture to a few flat colour steps per channel, for a screen-print look.",
+)
 @node.shader(
     """
 float4 Posterize(ImageInput image, float levels)
@@ -160,12 +178,14 @@ float4 Posterize(ImageInput image, float levels)
     return float4(floor(image.pixel.rgb * steps + 0.5) / steps, image.pixel.a);
 }
 """,
-    description="Reduce a picture to a few flat colour steps per channel, for a screen-print look.",
-    category="Color",
 )
 def Posterize(image: ImageFrame, levels: float = 4.0) -> ImageFrame: ...  # noqa: N802
 
 
+@node.meta(
+    category="Color",
+    description="Recolour a picture through a gradient: dark pixels take the gradient's left edge, bright ones its right.",
+)
 @node.shader(
     """
 float4 Lookup(ImageInput image, ImageInput gradient)
@@ -174,7 +194,5 @@ float4 Lookup(ImageInput image, ImageInput gradient)
     return float4(gradient.sample(float2(saturate(luma), 0.5)).rgb, image.pixel.a);
 }
 """,
-    description="Recolour a picture through a gradient: dark pixels take the gradient's left edge, bright ones its right.",
-    category="Color",
 )
 def Lookup(image: ImageFrame, gradient: ImageFrame) -> ImageFrame: ...  # noqa: N802

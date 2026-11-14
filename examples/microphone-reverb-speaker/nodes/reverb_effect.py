@@ -166,7 +166,8 @@ class ReverbEffectConfig:
     dry_level: float = 0.7
 
 
-@node.process(description="Adds a reverb tail to the audio it is given, mixed under the original")
+@node.meta(description="Adds a reverb tail to the audio it is given, mixed under the original")
+@node.process
 class ReverbEffect:
     """Mono audio in, the same audio with its own reverb tail mixed under it out."""
 

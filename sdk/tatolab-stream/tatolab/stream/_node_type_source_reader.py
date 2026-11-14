@@ -5,7 +5,8 @@
 
 A module is parsed with `ast` and its decorators are matched against the names it imports
 from `tatolab.stream`: `@node.process` classes, `@node.function` and `@node.shader`
-functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions. A
+functions, `X = node.rust_function(...)` assignments and `@graph_generator` functions, each
+node's `@node.meta` beside its kind decorator. A
 port is listed where the declaration states it in source; one whose family is computed at
 import is listed with no family, and a node whose ports only its native half knows is listed
 with none. The answer is a JSON-ready dict the runtime's node-type listing passes on.
@@ -32,6 +33,7 @@ SDK_MODULE_NAME = "tatolab.stream"
 PROCESS_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.process"
 FUNCTION_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.function"
 SHADER_NODE_DECORATOR = f"{SDK_MODULE_NAME}.node.shader"
+NODE_META_DECORATOR = f"{SDK_MODULE_NAME}.node.meta"
 RUST_FUNCTION_NODE_DECLARATION = f"{SDK_MODULE_NAME}.node.rust_function"
 GRAPH_GENERATOR_DECORATOR = f"{SDK_MODULE_NAME}.graph_generator"
 DESCRIPTION_DECLARATION = f"{SDK_MODULE_NAME}.Description"
@@ -61,6 +63,8 @@ _PORT_FAMILY_BY_ANNOTATED_TYPE = {
     "ChannelsBlock": "channels",
     "PacketsUnit": "packets",
 }
+
+_NODE_META_KEYS = ("category", "description")
 
 # Annotations a function node's signature reads that are never pins.
 _FUNCTION_NODE_NON_PIN_ANNOTATIONS = ("Time", "State")
@@ -196,7 +200,7 @@ class _ModuleDeclarationReading:
             decorator = self._decorated_with(function, decorator_name)
             if decorator is not None:
                 self.node_types.append(
-                    self._function_or_shader_node_type(function, qualname, kind, decorator)
+                    self._function_or_shader_node_type(function, qualname, kind)
                 )
 
     def _decorated_with(
@@ -219,7 +223,6 @@ class _ModuleDeclarationReading:
         return f"{sdk_name}.{rest}" if rest else sdk_name
 
     def _process_node_type(self, node_class: ast.ClassDef, qualname: str) -> dict[str, Any]:
-        decorator = self._decorated_with(node_class, PROCESS_NODE_DECORATOR)
         inputs: list[dict[str, Any]] = []
         outputs: list[dict[str, Any]] = []
         for statement in node_class.body:
@@ -240,8 +243,6 @@ class _ModuleDeclarationReading:
             qualname,
             "process",
             declaration=node_class,
-            description=self._keyword_string(decorator, "description"),
-            category=self._keyword_string(decorator, "category"),
             inputs=inputs,
             outputs=outputs,
         )
@@ -264,7 +265,6 @@ class _ModuleDeclarationReading:
         function: ast.FunctionDef | ast.AsyncFunctionDef,
         qualname: str,
         kind: str,
-        decorator: ast.expr,
     ) -> dict[str, Any]:
         inputs = [
             self._function_port(parameter.arg, parameter.annotation, pin_default=default)
@@ -276,8 +276,6 @@ class _ModuleDeclarationReading:
             qualname,
             kind,
             declaration=function,
-            description=self._keyword_string(decorator, "description"),
-            category=self._keyword_string(decorator, "category"),
             inputs=inputs,
             outputs=self._function_outputs(function.returns),
         )
@@ -318,6 +316,23 @@ class _ModuleDeclarationReading:
         if pin_default is not None:
             function_port.update(_default_as_listed(pin_default, literal_key="pin_default"))
         return function_port
+
+    def _node_meta_declared_beside(self, declaration: ast.stmt) -> dict[str, str]:
+        """What the `@node.meta` decorators on `declaration` declare, by key: each a string its source states, the topmost winning."""
+        if not isinstance(declaration, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            return {}
+        declared: dict[str, str] = {}
+        for decorator in reversed(declaration.decorator_list):
+            if (
+                not isinstance(decorator, ast.Call)
+                or self._sdk_name_of(decorator.func) != NODE_META_DECORATOR
+            ):
+                continue
+            for meta_key in _NODE_META_KEYS:
+                stated = self._keyword_string(decorator, meta_key)
+                if stated:
+                    declared[meta_key] = stated
+        return declared
 
     def _keyword_string(self, call: Optional[ast.expr], keyword_name: str) -> str:
         if not isinstance(call, ast.Call):
@@ -380,8 +395,6 @@ class _ModuleDeclarationReading:
                 targets[0].id,
                 "function",
                 declaration=statement,
-                description="",
-                category="",
                 inputs=None,
                 outputs=None,
             )
@@ -393,16 +406,15 @@ class _ModuleDeclarationReading:
         kind: str,
         *,
         declaration: ast.stmt,
-        description: str,
-        category: str,
         inputs: Optional[list[dict[str, Any]]],
         outputs: Optional[list[dict[str, Any]]],
     ) -> dict[str, Any]:
+        declared_meta = self._node_meta_declared_beside(declaration)
         return {
             "type": f"{self._module_name}:{qualname}",
             "kind": kind,
-            "description": description,
-            "category": category or self._module_name,
+            "description": declared_meta.get("description", ""),
+            "category": declared_meta.get("category"),
             "inputs": inputs,
             "outputs": outputs,
             "path": self._listed_path,

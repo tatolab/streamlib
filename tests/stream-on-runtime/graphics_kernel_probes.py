@@ -194,10 +194,8 @@ class _GraphicsKernelProbeBase:
         raise NotImplementedError
 
 
-@node.process(
-    execution="manual",
-    description="Draws a fullscreen triangle sampling one texture into another",
-)
+@node.meta(description="Draws a fullscreen triangle sampling one texture into another")
+@node.process(execution="manual")
 class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
     """The demo: a Python processor renders a pass with named bindings.
 
@@ -221,10 +219,8 @@ class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Every way of getting a draw's bindings wrong, refused by name",
-)
+@node.meta(description="Every way of getting a draw's bindings wrong, refused by name")
+@node.process(execution="manual")
 class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
     """Unknown, missing, kind-mismatched and unresolvable, each raising with a
     message naming what the shaders actually declare."""
@@ -293,10 +289,8 @@ class GraphicsBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A binding declared for a stage the shaders do not read it in",
-)
+@node.meta(description="A binding declared for a stage the shaders do not read it in")
+@node.process(execution="manual")
 class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
     """The ticket's named validation case, at the line it belongs to.
 
@@ -335,10 +329,8 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A uniform-buffer binding a draw cannot name a surface for",
-)
+@node.meta(description="A uniform-buffer binding a draw cannot name a surface for")
+@node.process(execution="manual")
 class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
     """A uniform-buffer binding is reflected, declared and refused at the draw.
 
@@ -374,10 +366,8 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Pass shapes a Python draw cannot ask for",
-)
+@node.meta(description="Pass shapes a Python draw cannot ask for")
+@node.process(execution="manual")
 class GraphicsPassShapeRefusalProbe(_GraphicsKernelProbeBase):
     """Vertex buffers, an index buffer and a depth target are not arguments.
 
@@ -493,7 +483,8 @@ class RenderedTextureFrameProducer:
         )
 
 
-@node.process(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
+@node.meta(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
+@node.process
 class RenderedFrameCpuReader:
     """Reads the first frame it is handed through `cpu()`, in a processor
     interpreter of its own, and reports what each half holds."""

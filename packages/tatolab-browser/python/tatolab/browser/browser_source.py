@@ -87,10 +87,10 @@ def page_url_of(url_or_project_path: str) -> str:
     return page_path.as_uri()
 
 
-@node.process(
-    execution="manual",
+@node.meta(
     description="Renders a web page offscreen with Chromium and publishes its frames, audio and events",
 )
+@node.process(execution="manual")
 class BrowserSource:
     """A web page, published as RGBA Image frames, Channels blocks and Records."""
 

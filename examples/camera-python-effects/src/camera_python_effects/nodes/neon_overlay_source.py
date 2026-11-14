@@ -49,11 +49,8 @@ class NeonOverlaySourceConfig:
     height: int = 1080
 
 
-@node.process(
-    execution="continuous",
-    interval_ms=OVERLAY_REDRAW_INTERVAL_MS,
-    description="Cyberpunk lower third and spray-paint watermark, drawn with skia",
-)
+@node.meta(description="Cyberpunk lower third and spray-paint watermark, drawn with skia")
+@node.process(execution="continuous", interval_ms=OVERLAY_REDRAW_INTERVAL_MS)
 class NeonOverlaySource:
     """A transparent RGBA layer, redrawn every tick."""
 

@@ -75,8 +75,7 @@ class OpusEncoderConfig:
     ] = "audio"
 
 
-@node.process(
-    scheduling="high",
+@node.meta(
     description=(
         "Encodes 20 ms windows of audio to Opus via libopus.\n\n"
         "`audio` declares `AudioWindowContract(sample_rate=48000, dtype=\"f32\", "
@@ -95,6 +94,7 @@ class OpusEncoderConfig:
         "and are not knobs."
     ),
 )
+@node.process(scheduling="high")
 class OpusEncoder:
     """Audio windows in, Opus packets out."""
 
@@ -181,8 +181,7 @@ class OpusEncoder:
         )
 
 
-@node.process(
-    scheduling="high",
+@node.meta(
     description=(
         "Decodes Opus packets to audio blocks via libopus.\n\n"
         "`encoded_audio` takes bare Opus packets, one per message as `OpusEncoder` "
@@ -208,6 +207,7 @@ class OpusEncoder:
         "concealment, no FEC decode."
     ),
 )
+@node.process(scheduling="high")
 class OpusDecoder:
     """Opus packets in, audio blocks out."""
 

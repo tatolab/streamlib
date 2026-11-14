@@ -69,7 +69,8 @@ class CyberpunkAvatarConfig:
     pose_model_path: str | None = None
 
 
-@node.process(description="3D android on a neon stage, dancing your pose")
+@node.meta(description="3D android on a neon stage, dancing your pose")
+@node.process
 class CyberpunkAvatar:
     """Camera frame in, rendered avatar stage out."""
 

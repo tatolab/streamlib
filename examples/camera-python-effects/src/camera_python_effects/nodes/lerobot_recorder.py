@@ -60,7 +60,8 @@ class LeRobotRecorderConfig:
     record_stylized: bool = True
 
 
-@node.process(description="Writes camera, stylized view and pose into a LeRobotDataset")
+@node.meta(description="Writes camera, stylized view and pose into a LeRobotDataset")
+@node.process
 class LeRobotRecorder:
     """Three timestamp-joined ports in, imitation-learning episodes out."""
 

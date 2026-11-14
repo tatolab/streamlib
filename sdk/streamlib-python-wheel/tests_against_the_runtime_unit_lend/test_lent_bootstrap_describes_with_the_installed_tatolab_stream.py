@@ -25,7 +25,7 @@ NODES_EVERY_RUNNABLE_TATOLAB_STREAM_DECLARES = '''
 from tatolab.stream import Input, Output, Packets, node
 
 
-@node.process(description="relays each packet")
+@node.process
 class PacketRelay:
     packets_from_upstream = Input(Packets, delivery="ordered")
     packets_to_downstream = Output(Packets)

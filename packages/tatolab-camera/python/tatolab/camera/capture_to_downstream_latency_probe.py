@@ -27,7 +27,8 @@ class CaptureToDownstreamLatencyProbeConfig:
     frames_between_reports: Annotated[int, "How many frames one report summarises."] = 600
 
 
-@node.process(description="Logs the frame rate and capture-to-read latency of the frames it receives")
+@node.meta(description="Logs the frame rate and capture-to-read latency of the frames it receives")
+@node.process
 class CaptureToDownstreamLatencyProbe:
     """Video frames in; a report every `frames_between_reports` frames."""
 

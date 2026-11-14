@@ -33,10 +33,10 @@ def whip_publisher_config_from_the_runtime_environment() -> WhipPublisherConfig:
     return WhipPublisherConfig(url=whip_url, bearer_token=bearer_token)
 
 
-@node.process(
-    paced_by_real_time=True,
+@node.meta(
     description="Publishes encoded video and audio to the WHIP endpoint the runtime's environment names",
 )
+@node.process(paced_by_real_time=True)
 class WhipPublisherToTheRuntimeEnvironmentsEndpoint(WhipPublisher):
     """`WhipPublisher`, configured from `STREAMLIB_WHIP_URL` and `STREAMLIB_WHIP_BEARER_TOKEN`."""
 

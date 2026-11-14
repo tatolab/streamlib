@@ -136,10 +136,8 @@ class _ComputeKernelProbeBase:
         raise NotImplementedError
 
 
-@node.process(
-    execution="manual",
-    description="Reads one surface and writes another through a compute kernel",
-)
+@node.meta(description="Reads one surface and writes another through a compute kernel")
+@node.process(execution="manual")
 class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
     """The pass the v1 wire could not express."""
 
@@ -158,10 +156,8 @@ class ReadOneWriteAnotherProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Every way of getting the bindings wrong, refused by name",
-)
+@node.meta(description="Every way of getting the bindings wrong, refused by name")
+@node.process(execution="manual")
 class BindingRefusalProbe(_ComputeKernelProbeBase):
     """Unknown, missing and wrong-target refusals, each raising before any
     GPU work is submitted and each naming the shader's own bindings."""
@@ -220,10 +216,8 @@ class BindingRefusalProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A texture's pixels reach the CPU through the staged door",
-)
+@node.meta(description="A texture's pixels reach the CPU through the staged door")
+@node.process(execution="manual")
 class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
     """The staged CPU door end to end, with numpy as the only consumer.
 
@@ -266,10 +260,8 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A raise inside the CPU door over a texture propagates",
-)
+@node.meta(description="A raise inside the CPU door over a texture propagates")
+@node.process(execution="manual")
 class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
     """A raise inside the CPU door over a texture, and the pixel the frame
     holds afterwards — the staged door's own on Linux, the stores made before
@@ -301,10 +293,8 @@ class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="An acquired texture takes a write-back without spelling copy usage",
-)
+@node.meta(description="An acquired texture takes a write-back without spelling copy usage")
+@node.process(execution="manual")
 class AcquiredTextureImpliesCopyUsageProbe(_ComputeKernelProbeBase):
     """The LUT flow the ruling widened #1758 to cover, spelled the way an
     author would: acquire with one usage token, fill it through the CPU
@@ -433,10 +423,8 @@ class _TwoPassProbeBase:
         raise NotImplementedError
 
 
-@node.process(
-    execution="manual",
-    description="A two-pass filter dispatched as one batch",
-)
+@node.meta(description="A two-pass filter dispatched as one batch")
+@node.process(execution="manual")
 class TwoPassBatchProbe(_TwoPassProbeBase):
     """The demo: a chain whose intermediate is written by pass 1 and read by
     pass 2, inside one scope."""
@@ -465,10 +453,8 @@ class TwoPassBatchProbe(_TwoPassProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="A raise inside a batch scope submits nothing and propagates",
-)
+@node.meta(description="A raise inside a batch scope submits nothing and propagates")
+@node.process(execution="manual")
 class BatchExceptionProbe(_TwoPassProbeBase):
     """Half of a multi-pass filter is not what the author wrote, so a raise
     inside the scope discards the whole batch — and the exception is not
@@ -497,10 +483,8 @@ class BatchExceptionProbe(_TwoPassProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Every way of getting a batch wrong, refused by name",
-)
+@node.meta(description="Every way of getting a batch wrong, refused by name")
+@node.process(execution="manual")
 class BatchRefusalProbe(_TwoPassProbeBase):
     """A batch refuses in the caller's own stack: a wrong binding at the
     `dispatch` line, a repeated kernel at the line that repeats it, and a
@@ -570,10 +554,8 @@ class BatchRefusalProbe(_TwoPassProbeBase):
         }
 
 
-@node.process(
-    execution="manual",
-    description="Every way of getting the kernel's source wrong, refused by name",
-)
+@node.meta(description="Every way of getting the kernel's source wrong, refused by name")
+@node.process(execution="manual")
 class ShaderSourceRefusalProbe(_ComputeKernelProbeBase):
     """Slang source and pre-compiled SPIR-V are alternatives, and a shader that
     does not compile says so with the compiler's own diagnostic."""

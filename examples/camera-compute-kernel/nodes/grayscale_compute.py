@@ -97,7 +97,8 @@ class GrayscaleComputeConfig:
     strength: float = 1.0
 
 
-@node.process(description="Grades each frame toward its luma with a compute kernel")
+@node.meta(description="Grades each frame toward its luma with a compute kernel")
+@node.process
 class GrayscaleCompute:
     """Camera frame in, the same picture in black and white out."""
 

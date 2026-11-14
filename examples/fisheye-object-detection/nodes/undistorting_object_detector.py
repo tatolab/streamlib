@@ -174,9 +174,10 @@ class UndistortingObjectDetectorConfig:
     """An ultralytics detection checkpoint; a relative path resolves against the project directory, where a missing known checkpoint is downloaded."""
 
 
-@node.process(
-    description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on"
+@node.meta(
+    description="Rectifies the fisheye frame, detects objects in it, and draws their boxes on",
 )
+@node.process
 class UndistortingObjectDetector:
     """Fisheye frame in; the rectified frame with its boxes drawn on, and the detections, out."""
 
