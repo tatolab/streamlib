@@ -1,6 +1,6 @@
 [package]
 name = "tatolab-microphone"
-version = "0.68.82"
+version = "0.69.9"
 edition = "2024"
 rust-version = "1.88"
 authors = ["Tatolab LLC <hello@tatolab.com>"]

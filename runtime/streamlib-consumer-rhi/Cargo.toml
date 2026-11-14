@@ -18,7 +18,7 @@ path = "src/lib.rs"
 thiserror.workspace = true
 tracing.workspace = true
 # The Slang compiler release and library file names the runtime unit carries.
-streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.82" }
+streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.69.9" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 vulkanalia.workspace = true
@@ -28,7 +28,7 @@ libc.workspace = true
 # Mach send right a Metal shared event crosses as on macOS.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies.streamlib-surface-client]
 path = "../streamlib-surface-client"
-version = "0.68.82"
+version = "0.69.9"
 
 # The owned-device tier's allocator: a codec module's sessions, reference
 # pictures and bitstream buffers on the device it owns.
