@@ -41,12 +41,6 @@ impl Default for ChannelsToRecordsConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Converts each Channels block on `channels` into one Records message on \
-                  `records` holding the block's last sample of each channel as a float, keyed by \
-                  that channel's name in `channel_names`: latest-value control, such as a \
-                  sensor's reading or a fader's position, read by a node that takes Records. A \
-                  block whose channel count is not the number of names is refused and writes \
-                  nothing; a block of no samples writes nothing.",
     execution = reactive,
     config = crate::port_family_conversion::channels_to_records::ChannelsToRecordsConfig,
     input(
@@ -61,6 +55,14 @@ impl Default for ChannelsToRecordsConfig {
         family = Records,
         names = from_config("channel_names")
     ),
+)]
+#[meta(
+    description = "Converts each Channels block on `channels` into one Records message on \
+                   `records` holding the block's last sample of each channel as a float, keyed by \
+                   that channel's name in `channel_names`: latest-value control, such as a \
+                   sensor's reading or a fader's position, read by a node that takes Records. A \
+                   block whose channel count is not the number of names is refused and writes \
+                   nothing; a block of no samples writes nothing."
 )]
 pub struct ChannelsToRecords;
 

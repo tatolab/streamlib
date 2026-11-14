@@ -2,9 +2,9 @@
   "openrpc": "1.3.2",
   "info": {
     "title": "StreamLib runtime control API",
-    "version": "2",
+    "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change; an addition is marked by its method's `x-since`.",
-    "x-contract-version": 2
+    "x-contract-version": 3
   },
   "methods": [
     {
@@ -2781,7 +2781,7 @@
     {
       "name": "list_project_node_types",
       "summary": "List the node types a project offers, from its own node files and the packages it installs.",
-      "description": "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category`, and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
+      "description": "List the node types and graph generators a project offers, read from source without running any of its code: its own node code outside `imports/`, each import's as its folder holds it now, and each installed distribution that declares `tatolab.nodes` entry points, each under `sources` by `source` (`project`, `dependency` or `installed_distribution`). A node type has its `type` (what `add_node` takes; an import's is led by its folder, `imports/<folder>/<module>:<class>`, and imported from there), `kind` (`process`, `function` or `shader`), `description`, `category` (the group its `@node.meta` files it under, or a path into a group inside one, as `Effects/Stylize`; null when it declares none), and `inputs` and `outputs` where its declaration states them, each port's `family` null where source alone does not say. A graph generator has its `generator` (what `import_graph_generator` takes), its docstring as `description`, and its `promoted_config`. A module that does not parse is listed under its source's `unreadable_modules` with why and where; the rest still lists.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -9066,11 +9066,14 @@
           },
           "description": {
             "type": "string",
-            "description": "The declared description, or the docstring."
+            "description": "The description its `@node.meta` declares; empty when it declares none."
           },
           "category": {
-            "type": "string",
-            "description": "The palette category, the declaring module when none is declared."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group its `@node.meta` files it under, or a path into a group inside\none, as `Effects/Stylize`; `None` when it declares none."
           },
           "inputs": {
             "type": [
@@ -9111,8 +9114,7 @@
         },
         "required": [
           "type",
-          "description",
-          "category"
+          "description"
         ],
         "description": "One node type as its declaration states it in source."
       },
@@ -10217,11 +10219,14 @@
           },
           "description": {
             "type": "string",
-            "description": "The declared description, or the docstring."
+            "description": "The description its `@node.meta` declares; empty when it declares none."
           },
           "category": {
-            "type": "string",
-            "description": "The palette category, the declaring module when none is declared."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The group its `@node.meta` files it under, or a path into a group inside\none, as `Effects/Stylize`; `None` when it declares none."
           },
           "inputs": {
             "type": [
@@ -10262,8 +10267,7 @@
         },
         "required": [
           "type",
-          "description",
-          "category"
+          "description"
         ]
       },
       "StreamGraphChangedNotificationParams": {

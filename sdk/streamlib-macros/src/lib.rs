@@ -6,7 +6,9 @@
 //! - `#[streamlib::processor(execution = …, …)]` — processor definition. The
 //!   attribute is the single source of truth: execution mode and input/output
 //!   ports are declared in code, read from no file at expansion. See
-//!   [`grammar`] for the full grammar. It declares no identity — a processor is
+//!   [`grammar`] for the full grammar. What describes the node type, its
+//!   `category` and `description`, is the `#[meta(…)]` helper attribute
+//!   written under it. It declares no identity — a processor is
 //!   named by the import path of the class it is, which the macro captures from
 //!   its expansion site.
 //! - `#[streamlib::sdk::processor_config]` — a config type whose keys'
@@ -43,9 +45,14 @@ use syn::{ItemStruct, parse_macro_input};
 /// engine-internal mocks use this path.
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let item_struct = parse_macro_input!(item as ItemStruct);
+    let mut item_struct = parse_macro_input!(item as ItemStruct);
 
-    let parsed = match attribute_grammar::parse2(attr.into(), &item_struct.ident) {
+    let node_meta =
+        match attribute_grammar::DeclaredNodeMeta::take_from_attributes(&mut item_struct.attrs) {
+            Ok(node_meta) => node_meta,
+            Err(err) => return err.to_compile_error().into(),
+        };
+    let parsed = match attribute_grammar::parse2(attr.into(), node_meta, &item_struct.ident) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };

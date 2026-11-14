@@ -5166,7 +5166,7 @@ async fn a_projects_node_types_are_listed_with_each_imports_python_sources_in_it
         "source": "project",
         "node_types": [{
             "type": "nodes.ik:InverseKinematics", "kind": "process", "description": "",
-            "category": "nodes.ik", "inputs": [], "outputs": [], "path": "nodes/ik.py", "line": 4,
+            "category": null, "inputs": [], "outputs": [], "path": "nodes/ik.py", "line": 4,
         }],
         "graph_generators": [],
         "unreadable_modules": [{
@@ -5295,7 +5295,7 @@ async fn a_projects_node_types_added_removed_and_updated_are_announced_on_its_fe
     };
     let a_node_type = |node_type: &str, description: &str| {
         json!({ "type": node_type, "kind": "process", "description": description,
-                "category": "camera", "inputs": [], "outputs": [] })
+                "category": "Sources/Cameras", "inputs": [], "outputs": [] })
     };
     let handler = crate::mcp::LocalApiMcpServerHandler::new(
         engine.operations_on_the_loaded_streams(),

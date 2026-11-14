@@ -291,6 +291,9 @@ What a node declares:
 - **When it runs**, with `@node.process(execution=…)`: `reactive` (the default once it has an input),
   `manual` (driven by a callback it owns), or `continuous` with `interval_ms`. A source has nothing
   to react to, so it must name one. `scheduling` asks for `realtime`, `high` or `normal` priority.
+- **What describes it**, with `@node.meta(category=…, description=…)` beside `@node.process`: the
+  group an editor files it under, or a path into a group inside one such as `Effects/Stylize`,
+  and its description. A node that declares no category has none.
 - **Its configuration**, as the annotation on `__init__`'s `config` parameter — a `TypedDict`, a
   dataclass or a pydantic model — that the node's `config` in the graph document fills.
 

@@ -18,7 +18,13 @@
 //!     input("video_in", delivery_profile = "newest", family = Image),
 //!     output("video", family = Image),
 //! )]
+//! #[meta(category = "Sources/Cameras", description = "Captures a camera.")]
 //! ```
+//!
+//! What describes the node type, its `category` and `description`, is the
+//! `#[meta(...)]` helper attribute written under `#[processor(...)]`. A
+//! category is the group an editor files the node type under, or a path into a
+//! group inside one; a node type that declares none has none.
 //!
 //! A port declares a name, its family, a description, and — on an input — a
 //! delivery profile, plus the family's keys, an optional `audio_window`
@@ -40,7 +46,7 @@ use streamlib_processor_schema::{
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
-use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
+use syn::{Attribute, Ident, LitInt, LitStr, Path, Token, parenthesized};
 use unicode_normalization::UnicodeNormalization;
 
 /// Which side of a link a port sits on. `delivery_profile` is a consumer-side
@@ -138,6 +144,120 @@ pub fn declared_description_str_expression(
     }
 }
 
+/// The helper attribute a node type's category and description are declared in.
+pub const NODE_META_ATTRIBUTE_NAME: &str = "meta";
+
+/// What a category path's levels are separated by, as `Effects/Stylize`.
+const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
+
+/// What the `#[meta(...)]` attributes under a node's main macro declare.
+#[derive(Default)]
+pub struct DeclaredNodeMeta {
+    /// The group an editor files the node type under, or a path into a group
+    /// inside one, exactly as written.
+    pub category: Option<String>,
+    pub description: Option<DeclaredDescription>,
+}
+
+impl DeclaredNodeMeta {
+    /// Take every `#[meta(...)]` off `attributes` and read what they declare.
+    ///
+    /// They are removed because `meta` is no attribute rustc knows: left on the
+    /// item the macro emits, it would not compile.
+    pub fn take_from_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Self> {
+        let mut declared = DeclaredNodeMeta::default();
+        let mut refusal: Option<syn::Error> = None;
+        attributes.retain(|attribute| {
+            if !attribute.path().is_ident(NODE_META_ATTRIBUTE_NAME) {
+                return true;
+            }
+            if let Err(refused) =
+                attribute.parse_args_with(|input: ParseStream<'_>| declared.read_meta_keys(input))
+            {
+                match &mut refusal {
+                    Some(earlier) => earlier.combine(refused),
+                    None => refusal = Some(refused),
+                }
+            }
+            false
+        });
+        match refusal {
+            Some(refusal) => Err(refusal),
+            None => Ok(declared),
+        }
+    }
+
+    fn read_meta_keys(&mut self, input: ParseStream<'_>) -> syn::Result<()> {
+        if input.is_empty() {
+            return Err(syn::Error::new(
+                input.span(),
+                "`#[meta()]` declares nothing — it takes `category`, `description` or both, \
+                 `#[meta(category = \"Effects/Stylize\", description = \"…\")]`",
+            ));
+        }
+        while !input.is_empty() {
+            let key: Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            match key.to_string().as_str() {
+                "category" => {
+                    let category: LitStr = input.parse().map_err(|not_a_literal| {
+                        syn::Error::new(
+                            not_a_literal.span(),
+                            "`category` takes a string literal — `category = \"Effects\"`, or a \
+                             path into a group inside one, `category = \"Effects/Stylize\"`",
+                        )
+                    })?;
+                    refuse_a_category_with_a_level_that_has_no_name(&category)?;
+                    if self.category.replace(category.value()).is_some() {
+                        return Err(declared_more_than_once(&key));
+                    }
+                }
+                "description" => {
+                    let description = DeclaredDescription::parse(input)?;
+                    if self.description.replace(description).is_some() {
+                        return Err(declared_more_than_once(&key));
+                    }
+                }
+                other => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        format!(
+                            "unknown `#[meta(...)]` key `{other}` — expected `category` or \
+                             `description`"
+                        ),
+                    ));
+                }
+            }
+            if !input.is_empty() {
+                input.parse::<Token![,]>()?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn declared_more_than_once(key: &Ident) -> syn::Error {
+    syn::Error::new(
+        key.span(),
+        format!("`{key}` is declared more than once in this node's `#[meta(...)]`"),
+    )
+}
+
+fn refuse_a_category_with_a_level_that_has_no_name(category: &LitStr) -> syn::Result<()> {
+    if category
+        .value()
+        .split(NODE_CATEGORY_PATH_SEPARATOR)
+        .any(|level| level.trim().is_empty())
+    {
+        return Err(syn::Error::new(
+            category.span(),
+            "this category names a group with no name — a category is `\"Effects\"`, or a path \
+             whose every level is named, `\"Effects/Stylize\"`",
+        ));
+    }
+    Ok(())
+}
+
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
     /// The name as the author wrote it, spanned at the declaration — the
@@ -166,7 +286,10 @@ pub struct ParsedPort {
 pub struct ParsedProcessorAttr {
     /// The author's type name — what an instance's display name defaults to.
     pub processor_class_short_name: String,
+    /// The description the node's `#[meta(...)]` declares.
     pub description: Option<DeclaredDescription>,
+    /// The category the node's `#[meta(...)]` declares, exactly as written.
+    pub category: Option<String>,
     pub execution: ProcessorSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
     pub unsafe_send: bool,
@@ -245,18 +368,23 @@ impl ParsedProcessorAttr {
 /// parser — code is the
 /// source of truth, so both readers of that truth share one grammar.
 ///
-/// `struct_ident` supplies the class short name the display-name default reads.
+/// `struct_ident` supplies the class short name the display-name default reads,
+/// and `node_meta` what the `#[meta(...)]` under the attribute declares.
 pub fn parse2(
     attr: proc_macro2::TokenStream,
+    node_meta: DeclaredNodeMeta,
     struct_ident: &Ident,
 ) -> syn::Result<ParsedProcessorAttr> {
     let struct_name = struct_ident.to_string();
-    let parser = move |input: ParseStream<'_>| parse_body(input, &struct_name);
+    let parser = move |input: ParseStream<'_>| parse_body(input, node_meta, &struct_name);
     parser.parse2(attr)
 }
 
-fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedProcessorAttr> {
-    let mut description: Option<DeclaredDescription> = None;
+fn parse_body(
+    input: ParseStream<'_>,
+    node_meta: DeclaredNodeMeta,
+    struct_name: &str,
+) -> syn::Result<ParsedProcessorAttr> {
     let mut execution: Option<ProcessorSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
     let mut unsafe_send = false;
@@ -276,9 +404,15 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
             "unsafe_send" => unsafe_send = true,
             "built_in_node" => built_in_node = true,
             "paced_by_real_time" => paced_by_real_time = true,
-            "description" => {
-                input.parse::<Token![=]>()?;
-                description = Some(DeclaredDescription::parse(input)?);
+            meta_key @ ("description" | "category") => {
+                return Err(syn::Error::new(
+                    key.span(),
+                    format!(
+                        "`{meta_key}` describes the node type, so it is declared in the \
+                         `#[meta(...)]` under `#[processor(...)]`, \
+                         `#[meta({meta_key} = \"…\")]`, never here"
+                    ),
+                ));
             }
             "execution" => {
                 input.parse::<Token![=]>()?;
@@ -346,7 +480,8 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
 
     Ok(ParsedProcessorAttr {
         processor_class_short_name: struct_name.to_string(),
-        description,
+        description: node_meta.description,
+        category: node_meta.category,
         execution,
         scheduling,
         unsafe_send,
@@ -997,7 +1132,6 @@ const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
     "paced_by_real_time",
     "config",
     "config_field",
-    "description",
     "input",
     "output",
 ];
@@ -1047,14 +1181,45 @@ mod tests {
     }
 
     fn parse_ok(tokens: proc_macro2::TokenStream) -> ParsedProcessorAttr {
-        parse2(tokens, &ident("MyProcessor")).expect("attribute should parse")
+        parse2(tokens, DeclaredNodeMeta::default(), &ident("MyProcessor"))
+            .expect("attribute should parse")
     }
 
     fn parse_err(tokens: proc_macro2::TokenStream) -> String {
-        match parse2(tokens, &ident("MyProcessor")) {
+        match parse2(tokens, DeclaredNodeMeta::default(), &ident("MyProcessor")) {
             Ok(_) => panic!("attribute should fail to parse"),
             Err(err) => err.to_string(),
         }
+    }
+
+    /// The struct a `#[processor]` is handed, with `attributes` written under it.
+    fn node_struct_with(attributes: proc_macro2::TokenStream) -> syn::ItemStruct {
+        syn::parse_quote! {
+            #attributes
+            struct MyProcessor;
+        }
+    }
+
+    fn node_meta_ok(attributes: proc_macro2::TokenStream) -> DeclaredNodeMeta {
+        let mut node_struct = node_struct_with(attributes);
+        DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+            .expect("the node's meta should read")
+    }
+
+    fn node_meta_err(attributes: proc_macro2::TokenStream) -> String {
+        let mut node_struct = node_struct_with(attributes);
+        match DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs) {
+            Ok(_) => panic!("the node's meta should be refused"),
+            Err(refusal) => refusal.to_string(),
+        }
+    }
+
+    fn parse_ok_with_meta(
+        attributes: proc_macro2::TokenStream,
+        tokens: proc_macro2::TokenStream,
+    ) -> ParsedProcessorAttr {
+        parse2(tokens, node_meta_ok(attributes), &ident("MyProcessor"))
+            .expect("attribute should parse")
     }
 
     #[test]
@@ -1078,17 +1243,19 @@ mod tests {
 
     #[test]
     fn processor_and_port_descriptions_parse() {
-        let parsed = parse_ok(quote! {
-            description = "Captures video from cameras",
-            execution = manual,
-            input(
-                "video_in",
-                family = Image,
-                delivery_profile = "newest",
-                description = "Frames to convert"
-            ),
-            output("video", family = Image, description = "Live video frames"),
-        });
+        let parsed = parse_ok_with_meta(
+            quote! { #[meta(description = "Captures video from cameras")] },
+            quote! {
+                execution = manual,
+                input(
+                    "video_in",
+                    family = Image,
+                    delivery_profile = "newest",
+                    description = "Frames to convert"
+                ),
+                output("video", family = Image, description = "Live video frames"),
+            },
+        );
         let literal_text_of = |description: &Option<DeclaredDescription>| {
             description
                 .as_ref()
@@ -1110,11 +1277,13 @@ mod tests {
 
     #[test]
     fn a_description_may_name_a_const_on_the_node_and_on_a_port() {
-        let parsed = parse_ok(quote! {
-            description = crate::descriptions::CAMERA_NODE_DESCRIPTION,
-            execution = manual,
-            output("video", family = Image, description = VIDEO_PORT_DESCRIPTION),
-        });
+        let parsed = parse_ok_with_meta(
+            quote! { #[meta(description = crate::descriptions::CAMERA_NODE_DESCRIPTION)] },
+            quote! {
+                execution = manual,
+                output("video", family = Image, description = VIDEO_PORT_DESCRIPTION),
+            },
+        );
         assert!(matches!(
             &parsed.description,
             Some(DeclaredDescription::Constant(path))
@@ -1129,14 +1298,135 @@ mod tests {
 
     #[test]
     fn a_description_that_is_neither_a_literal_nor_a_const_path_is_refused() {
-        let msg = parse_err(quote! {
-            description = include_str!("README.md"),
-            execution = manual,
-        });
+        let msg = node_meta_err(quote! { #[meta(description = include_str!("README.md"))] });
         assert!(
             msg.contains("string literal or the path of a `const`"),
             "got: {msg}"
         );
+    }
+
+    #[test]
+    fn a_node_meta_declares_a_category_and_a_description_in_one_attribute() {
+        let parsed = parse_ok_with_meta(
+            quote! { #[meta(category = "Sources/Cameras", description = "Captures a camera.")] },
+            quote! { execution = manual },
+        );
+        assert_eq!(parsed.category.as_deref(), Some("Sources/Cameras"));
+        assert_eq!(
+            parsed
+                .description
+                .as_ref()
+                .and_then(DeclaredDescription::literal_text)
+                .as_deref(),
+            Some("Captures a camera.")
+        );
+    }
+
+    #[test]
+    fn a_node_with_no_meta_has_no_category_and_no_description() {
+        let parsed = parse_ok(quote! { execution = manual });
+        assert_eq!(parsed.category, None);
+        assert!(parsed.description.is_none());
+    }
+
+    #[test]
+    fn a_node_meta_may_be_written_as_one_attribute_per_key() {
+        let declared = node_meta_ok(quote! {
+            #[meta(category = "Effects")]
+            #[meta(description = "Tints a frame.")]
+        });
+        assert_eq!(declared.category.as_deref(), Some("Effects"));
+        assert!(declared.description.is_some());
+    }
+
+    #[test]
+    fn reading_a_node_meta_takes_it_off_the_struct_and_leaves_every_other_attribute() {
+        let mut node_struct = node_struct_with(quote! {
+            #[derive(Debug)]
+            #[meta(category = "Effects")]
+            #[allow(dead_code)]
+        });
+        DeclaredNodeMeta::take_from_attributes(&mut node_struct.attrs)
+            .expect("the node's meta should read");
+        let left_on_the_struct: Vec<String> = node_struct
+            .attrs
+            .iter()
+            .map(|attribute| {
+                attribute
+                    .path()
+                    .get_ident()
+                    .map(Ident::to_string)
+                    .unwrap_or_default()
+            })
+            .collect();
+        assert_eq!(left_on_the_struct, ["derive", "allow"]);
+    }
+
+    #[test]
+    fn a_node_meta_key_declared_twice_is_refused_naming_the_key() {
+        let msg = node_meta_err(quote! {
+            #[meta(category = "Effects")]
+            #[meta(category = "Sources")]
+        });
+        assert!(
+            msg.contains("`category` is declared more than once"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_node_meta_that_declares_nothing_is_refused() {
+        let msg = node_meta_err(quote! { #[meta()] });
+        assert!(msg.contains("declares nothing"), "got: {msg}");
+    }
+
+    #[test]
+    fn an_unknown_node_meta_key_is_refused_naming_it_and_the_keys_there_are() {
+        let msg = node_meta_err(quote! { #[meta(tags = "video")] });
+        assert!(
+            msg.contains("unknown `#[meta(...)]` key `tags`"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("`category` or `description`"), "got: {msg}");
+    }
+
+    #[test]
+    fn a_category_with_a_level_that_has_no_name_is_refused() {
+        for category in [
+            "",
+            "  ",
+            "/Effects",
+            "Effects/",
+            "Effects//Stylize",
+            "Effects/ /Blur",
+        ] {
+            let msg = node_meta_err(quote! { #[meta(category = #category)] });
+            assert!(
+                msg.contains("names a group with no name"),
+                "category {category:?} got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_category_that_is_not_a_string_literal_is_refused() {
+        let msg = node_meta_err(quote! { #[meta(category = EFFECTS_CATEGORY)] });
+        assert!(
+            msg.contains("`category` takes a string literal"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_meta_key_written_in_the_processor_attribute_is_refused_naming_where_it_goes() {
+        for meta_key in ["description", "category"] {
+            let key = ident(meta_key);
+            let msg = parse_err(quote! { #key = "Captures a camera.", execution = manual });
+            assert!(
+                msg.contains(&format!("#[meta({meta_key} = \"…\")]")),
+                "key {meta_key} got: {msg}"
+            );
+        }
     }
 
     #[test]
@@ -1224,8 +1514,12 @@ mod tests {
         // The display-name default's only carrier. It is read off the item the
         // attribute is attached to — never authored, and never recovered by
         // splitting the import path.
-        let parsed = parse2(quote! { execution = reactive }, &ident("MyLocalProcessor"))
-            .expect("a bare processor should parse");
+        let parsed = parse2(
+            quote! { execution = reactive },
+            DeclaredNodeMeta::default(),
+            &ident("MyLocalProcessor"),
+        )
+        .expect("a bare processor should parse");
         assert_eq!(parsed.processor_class_short_name, "MyLocalProcessor");
         assert_eq!(parsed.to_processor_schema().name, "MyLocalProcessor");
     }
@@ -1266,7 +1560,7 @@ mod tests {
 
     #[test]
     fn missing_execution_is_an_error() {
-        let msg = parse_err(quote! { description = "no execution" });
+        let msg = parse_err(quote! { scheduling = high });
         assert!(msg.contains("missing required `execution`"), "got: {msg}");
     }
 

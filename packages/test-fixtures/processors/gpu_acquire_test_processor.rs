@@ -26,9 +26,11 @@ use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::PixelFormat;
 
 #[streamlib::sdk::processor(
-    description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess",
     execution = manual,
     config = crate::test_fixture_processor_configs::GpuAcquireTestProcessorConfig,
+)]
+#[meta(
+    description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess"
 )]
 pub struct GpuAcquireTest {
     gpu: Option<GpuContextLimitedAccess>,

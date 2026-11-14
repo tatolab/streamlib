@@ -5,7 +5,9 @@
 //! the read seam calls, beside the declaration its module's Python half hands
 //! `node.rust_function(...)`.
 //!
-//! The grammar is `@node.function`'s. Each plain parameter is an input pin, and
+//! The grammar is `@node.function`'s. What describes the node, its `category`
+//! and `description`, is the `#[meta(...)]` written under `#[function_node]`,
+//! as `@node.meta(...)` is beside `@node.function`. Each plain parameter is an input pin, and
 //! `#[pin_default(...)]` its value when nothing is wired. A parameter typed
 //! [`Time`] is handed the reader's stream time, one typed [`State<Record>`] the
 //! state the last call returned in its [`Stateful<Output, Record>`], and one
@@ -427,8 +429,11 @@ pub fn function_node_record_fields_with_their_defaults<Record: FunctionNodeRecor
 pub struct FunctionNodeDeclaration {
     /// The node type's short name, its function's name in UpperCamelCase.
     pub short_name: &'static str,
-    /// Its function's doc comment.
+    /// What its `#[meta(description = …)]` declares; empty when it declares none.
     pub description: &'static str,
+    /// The group an editor files it under, or a path into a group inside one,
+    /// as its `#[meta(category = …)]` declares; none when it declares none.
+    pub category: Option<&'static str>,
     /// Its input pins, in the order the evaluate entry reads their values.
     pub input_pins: Vec<FunctionNodeInputPin>,
     /// Its output ports, in the order the evaluate entry writes their values.

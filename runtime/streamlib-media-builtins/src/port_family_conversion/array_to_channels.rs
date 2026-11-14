@@ -58,13 +58,6 @@ impl Default for ArrayToChannelsConfig {
 
 #[streamlib::sdk::processor(
     built_in_node,
-    description = "Converts one attribute of each Array frame on `array`, `attribute` \
-                  (`samples` by default), into one Channels block on `channels`. The attribute \
-                  is a CPU `[channels, samples]` tensor of `float32` or `float64`, one row per \
-                  name in `channel_names`, and its samples are copied once into the block. The \
-                  blocks are stamped at `sample_rate`, their start samples counted from the \
-                  first block. A frame without the attribute, or whose attribute is GPU-resident, \
-                  of another dtype or of another shape, is refused and writes nothing.",
     execution = reactive,
     config = crate::port_family_conversion::array_to_channels::ArrayToChannelsConfig,
     input(
@@ -80,6 +73,15 @@ impl Default for ArrayToChannelsConfig {
         names = from_config("channel_names"),
         rate = from_config("sample_rate")
     ),
+)]
+#[meta(
+    description = "Converts one attribute of each Array frame on `array`, `attribute` \
+                   (`samples` by default), into one Channels block on `channels`. The attribute \
+                   is a CPU `[channels, samples]` tensor of `float32` or `float64`, one row per \
+                   name in `channel_names`, and its samples are copied once into the block. The \
+                   blocks are stamped at `sample_rate`, their start samples counted from the \
+                   first block. A frame without the attribute, or whose attribute is GPU-resident, \
+                   of another dtype or of another shape, is refused and writes nothing."
 )]
 pub struct ArrayToChannels {
     next_start_sample: u64,

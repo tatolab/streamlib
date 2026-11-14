@@ -34,9 +34,11 @@ use streamlib::sdk::rhi::Texture;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
 #[streamlib::sdk::processor(
-    description = "Escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through escalate_begin/escalate_end and FullAccess construction",
     execution = manual,
     config = crate::test_fixture_processor_configs::EscalateSmokeTestProcessorConfig,
+)]
+#[meta(
+    description = "Escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through escalate_begin/escalate_end and FullAccess construction"
 )]
 pub struct EscalateSmokeTest {}
 

@@ -153,10 +153,10 @@ impl Default for ConfiguredProbeProcessorConfig {
 
 #[streamlib::sdk::processor(
     execution = manual,
-    description = PROBE_NODE_DESCRIPTION,
     config = crate::ConfiguredProbeProcessorConfig,
     output("video_out", family = Image, description = "Frames as *recorded*."),
 )]
+#[meta(description = PROBE_NODE_DESCRIPTION)]
 pub struct ConfiguredProbeProcessor;
 
 impl streamlib_engine::ManualProcessor for ConfiguredProbeProcessor::Processor {

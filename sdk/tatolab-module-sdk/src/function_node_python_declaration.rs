@@ -17,6 +17,10 @@ impl FunctionNodeDeclaration {
         let declaration = PyDict::new(python);
         declaration.set_item("short_name", self.short_name)?;
         declaration.set_item("description", self.description)?;
+        // `node.rust_function(...)` reads an absent `category` as none declared.
+        if let Some(category) = self.category {
+            declaration.set_item("category", category)?;
+        }
         let input_pins = PyList::empty(python);
         for input_pin in &self.input_pins {
             let python_input_pin = PyDict::new(python);

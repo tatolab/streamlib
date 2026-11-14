@@ -57,7 +57,7 @@ pub fn generate_from_parsed_processor_attr(
     let output_link_module = generate_port_marker_module(PortDirection::Output, &parsed.outputs);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
-        &ProcessorDeclaredDescriptions::of(parsed),
+        &ProcessorDeclaredMetaAndPortDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
         &config_type,
         &config_field_name,
@@ -322,7 +322,7 @@ fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> To
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
-    declared_descriptions: &ProcessorDeclaredDescriptions<'_>,
+    declared_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
@@ -570,22 +570,24 @@ fn generate_from_config_from_schema(
     }
 }
 
-/// The node's and each port's declared description, beside the schema the
-/// descriptor is emitted from: a `const` description has no text the schema
-/// could carry.
-struct ProcessorDeclaredDescriptions<'parsed> {
+/// The node's declared category and description and each port's description,
+/// beside the schema the descriptor is emitted from: the schema carries no
+/// category, and a `const` description has no text it could carry.
+struct ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
     node: Option<&'parsed DeclaredDescription>,
+    category: Option<&'parsed str>,
     inputs: Vec<Option<&'parsed DeclaredDescription>>,
     outputs: Vec<Option<&'parsed DeclaredDescription>>,
 }
 
-impl<'parsed> ProcessorDeclaredDescriptions<'parsed> {
+impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
     fn of(parsed: &'parsed ParsedProcessorAttr) -> Self {
         let of_ports = |ports: &'parsed [ParsedPort]| {
             ports.iter().map(|port| port.description.as_ref()).collect()
         };
         Self {
             node: parsed.description.as_ref(),
+            category: parsed.category.as_deref(),
             inputs: of_ports(&parsed.inputs),
             outputs: of_ports(&parsed.outputs),
         }
@@ -599,7 +601,7 @@ impl<'parsed> ProcessorDeclaredDescriptions<'parsed> {
 /// descriptor carries.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
-    declared_descriptions: &ProcessorDeclaredDescriptions<'_>,
+    declared_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
     config_type: &TokenStream,
 ) -> TokenStream {
     let description = declared_description_str_expression(declared_descriptions.node);
@@ -689,6 +691,10 @@ fn generate_descriptor_from_schema(
         .paced_by_real_time
         .then(|| quote! { .paced_by_real_time() });
 
+    let category = declared_descriptions
+        .category
+        .map(|category| quote! { .with_category(#category) });
+
     // `module_path!()` resolves here to `<author's module>::<authored type>`,
     // because this expansion lands inside the `pub mod` the macro names after
     // the author's struct — the generated module's own path *is* the type
@@ -706,6 +712,7 @@ fn generate_descriptor_from_schema(
                     #config_schema
                     #scheduling
                     #paced_by_real_time
+                    #category
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )
@@ -1442,8 +1449,12 @@ mod processor_struct_emit_tests {
     }
 
     fn expand_probe_processor(item: &ItemStruct) -> TokenStream {
-        let parsed = crate::grammar::parse2(quote! { execution = manual }, &item.ident)
-            .expect("a minimal attribute parses");
+        let parsed = crate::grammar::parse2(
+            quote! { execution = manual },
+            crate::grammar::DeclaredNodeMeta::default(),
+            &item.ident,
+        )
+        .expect("a minimal attribute parses");
         generate_from_parsed_processor_attr(item, &parsed, quote! { streamlib })
     }
 
@@ -1590,9 +1601,10 @@ mod processor_struct_emit_tests {
         }
     }
 
-    fn no_declared_descriptions() -> ProcessorDeclaredDescriptions<'static> {
-        ProcessorDeclaredDescriptions {
+    fn no_declared_descriptions() -> ProcessorDeclaredMetaAndPortDescriptions<'static> {
+        ProcessorDeclaredMetaAndPortDescriptions {
             node: None,
+            category: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
         }
@@ -1626,6 +1638,24 @@ mod processor_struct_emit_tests {
         };
         assert!(rendered_for(true).contains(".paced_by_real_time()"));
         assert!(!rendered_for(false).contains("paced_by_real_time"));
+    }
+
+    #[test]
+    fn only_a_processor_that_declares_a_category_sets_one_on_its_descriptor() {
+        let rendered_for = |category: Option<&'static str>| {
+            render_token_stream_without_whitespace(generate_descriptor_from_schema(
+                &minimal_schema(),
+                &ProcessorDeclaredMetaAndPortDescriptions {
+                    category,
+                    ..no_declared_descriptions()
+                },
+                &quote! { __streamlib_sdk::processors::EmptyConfig },
+            ))
+        };
+        assert!(
+            rendered_for(Some("Effects/Stylize")).contains(".with_category(\"Effects/Stylize\")")
+        );
+        assert!(!rendered_for(None).contains("with_category"));
     }
 
     /// The whole `impl Processor` block, which is where the identity accessor
