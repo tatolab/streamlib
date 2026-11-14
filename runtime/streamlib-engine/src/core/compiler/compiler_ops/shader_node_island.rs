@@ -8,6 +8,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use super::open_iceoryx2_service_op::{
+    close_iceoryx2_service, close_iceoryx2_service_into_the_host_of_a_shader_node_island,
+};
 use super::shader_node_island_program::{
     ShaderNodeIslandMember, ShaderNodeIslandMemberInput, ShaderNodeIslandProgram,
 };
@@ -15,10 +18,11 @@ use super::shader_node_program::ShaderNodeInputValueType;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, InputLinkPortRef, Link, LinkUniqueId,
-    ProcessorInstanceComponent, ProcessorNode, ProcessorPauseGateComponent, ProcessorUniqueId,
-    ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent,
-    StateComponent, StepProgressOfOneNodeComponent, cast_exposed_name_to_url_safe,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, Link, LinkState,
+    LinkStateComponent, LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics, ProcessorNode,
+    ProcessorPauseGateComponent, ProcessorUniqueId, ShaderNodeFusedGroupComponent,
+    ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
+    StepProgressOfOneNodeComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::processors::ProcessorState;
 
@@ -392,7 +396,7 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
             .chain(graph.traversal().v(node_id).out_e().iter())
             .collect();
         for link in links_of_the_node {
-            if links_changed.contains(&link.id) || links.contains(&link.id) {
+            if links.contains(&link.id) {
                 continue;
             }
             let (source_id, reader_id) =
@@ -424,11 +428,96 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
                     name_of(function_node_id),
                 )));
             }
-            links.push(link.id.clone());
+            if !links_changed.contains(&link.id) {
+                links.push(link.id.clone());
+            }
         }
     }
     links.sort();
     Ok(RunningShaderNodesALiveEditRestarts { nodes, links })
+}
+
+/// Close the channel of each link of the shader nodes a live edit restarts the
+/// way it was wired before the edit, keeping the link in the graph so the
+/// compile wires it again: a call inside an island has no channel, and a link
+/// into a fused node was read at its island's host.
+pub(crate) fn unwire_each_link_of_the_shader_nodes_restarted(
+    graph: &mut Graph,
+    restarted: &RunningShaderNodesALiveEditRestarts,
+) -> Result<()> {
+    for link_id in &restarted.links {
+        let Some((source_id, reader_id, reader_port)) =
+            graph.traversal().e(link_id).first().map(|link| {
+                (
+                    link.source().processor_id().clone(),
+                    link.to_port().processor_id().clone(),
+                    link.to_port().port_name().to_string(),
+                )
+            })
+        else {
+            continue;
+        };
+        let was_placed_fused_into_another =
+            |node_id: &ProcessorUniqueId| {
+                graph.traversal().v(node_id).first().is_some_and(|node| {
+                    node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
+                })
+            };
+        if was_placed_fused_into_another(&source_id) {
+            if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+                link.insert(LinkStateComponent(LinkState::Disconnected));
+            }
+            continue;
+        }
+        let host_it_was_read_at = was_placed_fused_into_another(&reader_id)
+            .then(|| the_host_the_island_of_a_fused_node_was_placed_on(graph, &reader_id))
+            .flatten();
+        match host_it_was_read_at {
+            Some(host_id) => close_iceoryx2_service_into_the_host_of_a_shader_node_island(
+                graph,
+                link_id,
+                &the_host_input_port_a_fused_shader_node_input_is_read_at(
+                    &host_id,
+                    &reader_id,
+                    &reader_port,
+                ),
+            )?,
+            None => close_iceoryx2_service(graph, link_id)?,
+        }
+    }
+    Ok(())
+}
+
+/// The node evaluating the island fused shader node `node_id` was placed in at
+/// its start, read off the fused group they share.
+fn the_host_the_island_of_a_fused_node_was_placed_on(
+    graph: &Graph,
+    node_id: &ProcessorUniqueId,
+) -> Option<ProcessorUniqueId> {
+    let fused_group = Arc::clone(
+        &graph
+            .traversal()
+            .v(node_id)
+            .first()?
+            .get::<ShaderNodeFusedGroupComponent>()?
+            .0,
+    );
+    graph
+        .traversal()
+        .v(())
+        .ids()
+        .into_iter()
+        .find(|candidate_id| {
+            graph
+                .traversal()
+                .v(candidate_id)
+                .first()
+                .is_some_and(|candidate| {
+                    candidate
+                        .get::<ShaderNodeIslandHostedHereComponent>()
+                        .is_some_and(|hosted| Arc::ptr_eq(&hosted.fused_group, &fused_group))
+                })
+        })
 }
 
 /// Take each node of `nodes` back to how a node not yet built stands, its
@@ -443,6 +532,7 @@ pub(crate) fn forget_the_build_of_each_shader_node_restarted(
             continue;
         };
         node.remove::<ProcessorInstanceComponent>();
+        node.remove::<ProcessorMetrics>();
         node.remove::<ShutdownChannelComponent>();
         node.remove::<ProcessorPauseGateComponent>();
         node.remove::<StepProgressOfOneNodeComponent>();
@@ -911,6 +1001,73 @@ mod tests {
         .to_string();
         assert!(refusal.contains("joins function node"), "{refusal}");
         assert!(refusal.contains("stop the stream"), "{refusal}");
+    }
+
+    #[test]
+    fn a_live_link_from_a_function_node_into_a_running_island_is_refused_naming_it() {
+        let mut stream = source_into_tint_into_blur_into_tint_into_sink();
+        let every_node = [
+            stream.source.clone(),
+            stream.tint.clone(),
+            stream.blur.clone(),
+            stream.tint_again.clone(),
+            stream.sink.clone(),
+        ];
+        place_each_shader_node_island_on_its_host(&mut stream.graph, &every_node).unwrap();
+        let lfo = add(&mut stream.graph, "test_ops:lfo");
+        let into_a_fused_node = link(
+            &mut stream.graph,
+            (&lfo, "result"),
+            (&stream.tint, "amount"),
+        );
+        let refusal = the_running_shader_nodes_a_live_edit_restarts(
+            &stream.graph,
+            std::slice::from_ref(&lfo),
+            &[],
+            std::slice::from_ref(&into_a_fused_node),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(refusal.contains("joins function node"), "{refusal}");
+    }
+
+    #[test]
+    fn a_restarted_island_reads_its_old_host_and_forgets_every_part_of_its_build() {
+        let mut stream = source_into_tint_into_blur_into_tint_into_sink();
+        let every_node = [
+            stream.source.clone(),
+            stream.tint.clone(),
+            stream.blur.clone(),
+            stream.tint_again.clone(),
+            stream.sink.clone(),
+        ];
+        place_each_shader_node_island_on_its_host(&mut stream.graph, &every_node).unwrap();
+        assert_eq!(
+            the_host_the_island_of_a_fused_node_was_placed_on(&stream.graph, &stream.tint),
+            Some(stream.tint_again.clone())
+        );
+        let island = [
+            stream.tint.clone(),
+            stream.blur.clone(),
+            stream.tint_again.clone(),
+        ];
+        for node_id in &island {
+            stream
+                .graph
+                .traversal_mut()
+                .v(node_id)
+                .first_mut()
+                .unwrap()
+                .insert(ProcessorMetrics::default());
+        }
+        forget_the_build_of_each_shader_node_restarted(&mut stream.graph, &island);
+        for node_id in &island {
+            let node = stream.graph.traversal().v(node_id).first().unwrap();
+            assert!(!node.has::<ProcessorMetrics>());
+            assert!(!node.has::<ShaderNodeIslandHostedHereComponent>());
+            assert!(!node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>());
+            assert!(!node.has::<ShaderNodeFusedGroupComponent>());
+        }
     }
 
     #[test]

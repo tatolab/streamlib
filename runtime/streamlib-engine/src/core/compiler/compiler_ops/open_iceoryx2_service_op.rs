@@ -128,38 +128,6 @@ pub(crate) fn close_iceoryx2_service_into_the_host_of_a_shader_node_island(
     Ok(())
 }
 
-/// Release both ends of `link_id`'s channel and mark it disconnected, keeping
-/// the link in the graph, so a compile wires it again to the nodes it restarts.
-pub(crate) fn unwire_a_link_kept_for_the_restart_of_its_nodes(
-    graph: &mut Graph,
-    link_id: &LinkUniqueId,
-) {
-    let Some((source, to_port)) = graph
-        .traversal()
-        .e(link_id)
-        .first()
-        .map(|link| (link.source().clone(), link.to_port().clone()))
-    else {
-        return;
-    };
-    release_the_source_side_of_a_link(graph, source.processor_id(), source.port_name(), link_id);
-    release_the_destination_side_of_a_link(
-        graph,
-        to_port.processor_id(),
-        to_port.port_name(),
-        link_id,
-    );
-    if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-        link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
-        link.remove::<OutOfProcessLinkWireRepliesComponent>();
-        link.insert(LinkStateComponent(LinkState::Disconnected));
-    }
-    tracing::info!(
-        "Unwired {} to wire it again to its restarted nodes",
-        link_id
-    );
-}
-
 /// The identity the read of `link_id` by the reader of `island_link_id` is
 /// wired under on both ends of the channel.
 pub(crate) fn the_wiring_link_id_of_a_read_by_the_reader_of_an_island(
@@ -891,7 +859,7 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
 /// Drop link `link_id`'s notifier off output port `source_port` of
 /// `source_proc_id`, and the port's publisher when the link was its last.
-pub(crate) fn release_the_source_side_of_a_link(
+fn release_the_source_side_of_a_link(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,

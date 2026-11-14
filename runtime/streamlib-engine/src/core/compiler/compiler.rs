@@ -39,6 +39,7 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
 use crate::core::compiler::compiler_ops::shader_node_island::{
     RunningShaderNodesALiveEditRestarts, forget_the_build_of_each_shader_node_restarted,
     place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
+    unwire_each_link_of_the_shader_nodes_restarted,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
@@ -339,7 +340,8 @@ impl Compiler {
                 runtime_ctx,
                 abandoned_processor_threads,
                 &shader_nodes_restarted,
-            ),
+                &mut plan,
+            )?,
         ]
         .concat();
 
@@ -520,28 +522,24 @@ impl Compiler {
 
 /// Unwire every link of the shader nodes a live edit restarts, stop their
 /// threads, and forget their builds, so the compile builds them again with
-/// their islands placed anew; the threads abandoned.
+/// their islands placed anew; the threads abandoned. A node whose thread was
+/// abandoned is left unbuilt, its links with it, since that thread still
+/// writes the node's state.
 fn stop_each_shader_node_restarted(
     graph_arc: &Arc<RwLock<Graph>>,
     runtime_ctx: &Arc<RuntimeContext>,
     abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     shader_nodes_restarted: &RunningShaderNodesALiveEditRestarts,
-) -> Vec<ProcessorDisplayNameAndId> {
+    plan: &mut CompilationPlan,
+) -> Result<Vec<ProcessorDisplayNameAndId>> {
     if shader_nodes_restarted.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     tracing::info!(
         "Restarting {} running shader node(s) so their islands are placed again",
         shader_nodes_restarted.nodes.len()
     );
-    {
-        let mut graph = graph_arc.write();
-        for link_id in &shader_nodes_restarted.links {
-            super::compiler_ops::unwire_a_link_kept_for_the_restart_of_its_nodes(
-                &mut graph, link_id,
-            );
-        }
-    }
+    unwire_each_link_of_the_shader_nodes_restarted(&mut graph_arc.write(), shader_nodes_restarted)?;
     let abandoned = stop_processor_threads_signalling_every_thread_before_joining_any(
         graph_arc,
         runtime_ctx.loaded_stream_identity(),
@@ -551,11 +549,20 @@ fn stop_each_shader_node_restarted(
         runtime_ctx.this_streams_teardown_progress_note(),
         abandoned_processor_threads,
     );
-    forget_the_build_of_each_shader_node_restarted(
-        &mut graph_arc.write(),
-        &shader_nodes_restarted.nodes,
-    );
-    abandoned
+    let abandoned_node_ids: Vec<ProcessorUniqueId> = abandoned
+        .iter()
+        .map(|processor| processor.processor_id.clone())
+        .collect();
+    let mut graph = graph_arc.write();
+    plan.leave_unbuilt_each_node_whose_thread_was_abandoned(&graph, &abandoned_node_ids);
+    let rebuilt_node_ids: Vec<ProcessorUniqueId> = shader_nodes_restarted
+        .nodes
+        .iter()
+        .filter(|node_id| !abandoned_node_ids.contains(node_id))
+        .cloned()
+        .collect();
+    forget_the_build_of_each_shader_node_restarted(&mut graph, &rebuilt_node_ids);
+    Ok(abandoned)
 }
 
 /// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic

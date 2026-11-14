@@ -60,6 +60,26 @@ impl CompilationPlan {
         }
     }
 
+    /// Take each of `node_ids` out of the processors to build, with every link
+    /// into or out of it out of the links to wire.
+    pub(super) fn leave_unbuilt_each_node_whose_thread_was_abandoned(
+        &mut self,
+        graph: &Graph,
+        node_ids: &[ProcessorUniqueId],
+    ) {
+        if node_ids.is_empty() {
+            return;
+        }
+        self.processors_to_add
+            .retain(|processor_id| !node_ids.contains(processor_id));
+        self.links_to_add.retain(|link_id| {
+            graph.traversal().e(link_id).first().is_none_or(|link| {
+                !node_ids.contains(link.source().processor_id())
+                    && !node_ids.contains(link.to_port().processor_id())
+            })
+        });
+    }
+
     /// Record each config update for a processor this same batch constructs on
     /// that processor's graph node, and take it out of `config_updates`.
     ///
