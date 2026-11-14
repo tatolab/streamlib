@@ -8,6 +8,8 @@ Never suggest another licence for it. Every new Rust and Python file carries:
     // Copyright (c) 2025 Jonathan Fontanez
     // SPDX-License-Identifier: GPL-3.0-only
 
+with `#` in place of `//` in Python, on lines 2-3 after a shebang.
+
 Exception — vendored third-party trees keep the licence they arrived under. Never add a GPL
 header to one, and never reformat or "improve" those sources — a change to one is a
 recorded patch against its upstream, never a drive-by edit:
