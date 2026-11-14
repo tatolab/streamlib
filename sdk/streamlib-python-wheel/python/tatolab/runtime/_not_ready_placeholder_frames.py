@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from tatolab.stream import ColorInfo, ImageFrameToWrite, NodeOutputTextureRing
+from tatolab.stream import ColorInfo, Image, ImageFrameToWrite, NodeOutputTextureRing, Output
 
 #: The texture formats in which every channel zero is a transparent pixel.
 TEXTURE_FORMATS_TRANSPARENT_WHEN_ZEROED = (
@@ -54,6 +54,14 @@ def the_placeholder_texture_format_of_an_image_output(
     return None
 
 
+def image_output_attribute_naming_the_port(port_name: str) -> "Output[Any]":
+    """An `Output(Image)` attribute naming `port_name`, the way `ctx.outputs.write`
+    takes an Image frame; written by name it takes only a buffer."""
+    image_output_attribute: "Output[Any]" = Output(Image)
+    image_output_attribute.__set_name__(TransparentFramesOnTheImageOutputsOfANodeNotReady, port_name)
+    return image_output_attribute
+
+
 class TransparentFramesOnTheImageOutputsOfANodeNotReady:
     """Sends one transparent frame on each Image output of a node, per call."""
 
@@ -63,6 +71,7 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
         warn_once: Callable[[str, "dict[str, Any]"], None],
     ) -> None:
         self._texture_ring_by_image_output: "dict[str, NodeOutputTextureRing]" = {}
+        self._output_attribute_by_image_output: "dict[str, Output[Any]]" = {}
         for port in declared_output_ports:
             family_declaration = port.get("family") or {}
             if family_declaration.get("family") != "image":
@@ -79,6 +88,9 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
                 continue
             self._texture_ring_by_image_output[port["name"]] = NodeOutputTextureRing(
                 texture_format, ["texture_binding"], depth=PLACEHOLDER_OUTPUT_RING_DEPTH
+            )
+            self._output_attribute_by_image_output[port["name"]] = (
+                image_output_attribute_naming_the_port(port["name"])
             )
         self._warn_once = warn_once
 
@@ -101,7 +113,8 @@ class TransparentFramesOnTheImageOutputsOfANodeNotReady:
                 finally:
                     slot.unlock()
                 context.outputs.write(
-                    port_name, ImageFrameToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR)
+                    self._output_attribute_by_image_output[port_name],
+                    ImageFrameToWrite.of_texture(slot, PLACEHOLDER_FRAME_COLOUR),
                 )
             except Exception as refusal:
                 self._warn_once(
