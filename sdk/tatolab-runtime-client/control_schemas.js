@@ -1269,6 +1269,9 @@ const OpenViewerRequest = z.strictObject({
   viewer_process_id: z.number().int().min(0).nullable().optional(),
 });
 
+/** @type {z.ZodType<ControlContract.OutputPortViewerReads>} */
+const OutputPortViewerReads = z.union([z.literal("latest_message"), z.literal("every_message")]);
+
 /** @type {z.ZodType<ControlContract.OpenViewerToolResult>} */
 const OpenViewerToolResult = z.looseObject({
   viewer: z.string(),
@@ -1279,6 +1282,7 @@ const OpenViewerToolResult = z.looseObject({
   iceoryx2_domain_root: z.string(),
   channel: z.string(),
   wake_service: z.string(),
+  viewer_reads: OutputPortViewerReads,
   surface_share_address: z.string().nullable().optional(),
 });
 
@@ -1625,6 +1629,7 @@ export const ControlSchemas = Object.freeze({
     LogsToolResult,
     OpenViewerRequest,
     OpenViewerToolResult,
+    OutputPortViewerReads,
     CloseViewerRequest,
     CloseViewerToolResult,
     SetStreamClockScaleRequest,

@@ -43,7 +43,7 @@ number node can drive.
 - `spotlight`: a circle swinging over a gradient.
 
 `views/program/` is the Program view: a node with a `video` input, drawn full frame, and an
-`audio` input, drawn as one level meter per channel.
+`audio` input, played on the default output device and drawn as one level meter per channel.
 
 ## What a shader node cannot do yet
 

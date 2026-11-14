@@ -81,6 +81,24 @@ impl ProjectHistoryRecordingFirstPartyPackageMoves
             Err(refusal) => Err(refusal.to_string()),
         }
     }
+
+    fn move_each_tatolab_ops_node_to_core_nodes(
+        &self,
+        project_directory: &Path,
+    ) -> Result<(), String> {
+        let open_projects = self.the_open_projects()?;
+        let project_repository = open_projects
+            .the_project_repository_at(project_directory)
+            .map_err(|refusal| refusal.to_string())?;
+        let mut project_repository = project_repository.lock();
+        let moved = project_repository
+            .move_each_tatolab_ops_node_to_core_nodes()
+            .map_err(|refusal| refusal.to_string())?;
+        if let Some(outcome) = moved {
+            open_projects.announce_the_transaction_if_applied_now(&project_repository, &outcome);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -227,5 +245,96 @@ mod tests {
 
         assert!(refusal.contains("the local API"), "{refusal}");
         assert_eq!(project.uv_lock(), "the lock at 0.68.27\n");
+    }
+
+    #[test]
+    fn a_projects_tatolab_ops_nodes_move_to_core_nodes_once_announced_on_the_change_feed() {
+        use streamlib_project_repository::{
+            ProjectAssetAction, ProjectOperation, ProjectStreamDocumentOperation,
+            ProjectTransactionLineage, StreamGraphDocumentNode, StreamGraphOperation,
+            StreamGraphOperationOnAStream,
+        };
+
+        let project = AnOpenProjectLockingItsPackages::new();
+        let project_repository = project
+            .open_projects
+            .the_project_repository_at(&project.project_directory)
+            .expect("the open project");
+        let stream = {
+            let mut project_repository = project_repository.lock();
+            let created = project_repository
+                .apply_asset_changes(
+                    &ProjectTransactionAuthor::the_runtime(),
+                    None,
+                    vec![ProjectAssetAction::CreateStream {
+                        path: "streams/main.graph.json".to_owned(),
+                        display_name: "main".to_owned(),
+                    }],
+                )
+                .expect("the stream")
+                .into_applied_transaction();
+            let [
+                ProjectOperation::StreamDocument(
+                    ProjectStreamDocumentOperation::CreateStreamDocument { stream, .. },
+                ),
+            ] = &created.transaction.operations[..]
+            else {
+                panic!("a create records one created document");
+            };
+            let lfo: StreamGraphDocumentNode = serde_json::from_value(serde_json::json!({
+                "id": uuid::Uuid::from_u128(1),
+                "name": "lfo",
+                "type": "tatolab.ops:Lfo",
+                "config": {},
+            }))
+            .expect("the node");
+            project_repository
+                .apply_project_operations(
+                    &ProjectTransactionAuthor::the_runtime(),
+                    None,
+                    Vec::new(),
+                    vec![ProjectOperation::StreamGraph(
+                        StreamGraphOperationOnAStream {
+                            stream: *stream,
+                            graph_operation: StreamGraphOperation::AddNode {
+                                node: lfo,
+                                links: Vec::new(),
+                            },
+                        },
+                    )],
+                    ProjectTransactionLineage::NewEdit,
+                )
+                .expect("the lfo placed");
+            *stream
+        };
+        let mut change_feed = project.open_projects.subscribe_to_the_change_feed();
+
+        project
+            .recorder
+            .move_each_tatolab_ops_node_to_core_nodes(&project.project_directory)
+            .expect("the move recorded");
+        project
+            .recorder
+            .move_each_tatolab_ops_node_to_core_nodes(&project.project_directory)
+            .expect("a second call records nothing");
+
+        let lfo_type = project_repository
+            .lock()
+            .stream_graph_document(stream)
+            .expect("the document")
+            .node_named("lfo")
+            .expect("the lfo")
+            .node_type;
+        assert_eq!(lfo_type, "imports/core-nodes/core_nodes.animation:Lfo");
+        let ProjectChangeOnTheFeed::Applied(applied) =
+            change_feed.try_recv().expect("an announcement").change
+        else {
+            panic!("the move was announced as applied");
+        };
+        assert_eq!(
+            applied.transaction.author,
+            ProjectTransactionAuthor::the_runtime()
+        );
+        assert!(change_feed.try_recv().is_err(), "the move is made once");
     }
 }

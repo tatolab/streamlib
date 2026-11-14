@@ -2073,7 +2073,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `ImageFile`, a `@node.process` that loads a project image asset by UUID and resends its slot
   to a reader that connects late. `Gate` passes or blocks a message of any family, so a reactive
   node behind a closed gate does not run; it is the graph's if/else. `tatolab.ops:Feedback` is
-  the one `tatolab-ops` name the engine knows. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: Core Nodes, a first-party project the unit carries and every project imports, replaces `tatolab-ops`, and the engine knows no node by name]
+  the one `tatolab-ops` name the engine knows. Owner, 2026-11-06 and 2026-11-08. [lightweight-node-kinds — SHIPPED #3242, #3276, #3277, #3278, #3279, #3280, #3281, #3282, #3283, #3292, #3297, #3305, #3310, #3324, #3333, #3338, #3339, #3409, #3421; amended by core-nodes-in-every-project: Core Nodes, a first-party project the unit carries and every project imports, replaces `tatolab-ops`, and the engine knows no node by name but to move a project's `tatolab-ops` nodes to Core Nodes once]
   Rejected: rewriting `tatolab-ops` in Rust — it stops showing how a user writes a function node
   (owner, 2026-11-08).
 - **DECIDED** — Evaluation islands. The compiler groups each connected run of shader and
@@ -4151,7 +4151,11 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   allocates, publishes or links changes, and neither does a CUDA consumer's import. Whoever may open the local
   API's socket may open a viewer: the owning user. Owner, 2026-11-07. Assumed unless overruled: a
   viewer reads the latest value and skips what it falls behind on, so it never slows the stream it
-  reads.
+  reads. A viewer of a Channels port reads every block instead, in order, on a ring as deep as the
+  channel holds for a reader, `open_viewer` answering `viewer_reads: every_message`, so Studio
+  hands a view the samples and Program plays the sound; the channel still overwrites what the
+  viewer has not read, so it never slows the stream either (session, 2026-11-13, after the owner
+  found Program silent).
   [gateway-nodes — SHIPPED #3244, #3245, #3248, #3249, #3250, #3251, #3252, #3255, #3262; display-importable-viewer-frames — SHIPPED #3524, #3530]
   Rejected: the runtime downscaling frames to thumbnails sent over the local API; thumbnail tiles
   beside a zero-copy full view (owner, 2026-11-07).

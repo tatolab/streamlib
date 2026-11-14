@@ -177,6 +177,7 @@ impl ControlOperationDispatcher {
             iceoryx2_domain_root: hand_off.iceoryx2_domain_root.display().to_string(),
             channel: hand_off.channel_service_name,
             wake_service: hand_off.wake_service_name,
+            viewer_reads: hand_off.viewer_reads,
             surface_share_address: hand_off.surface_share_address,
         })
     }

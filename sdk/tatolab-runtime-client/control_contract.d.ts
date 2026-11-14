@@ -3548,7 +3548,7 @@ export interface OpenViewerRequest {
 
 /**
  * The `open_viewer` tool's result: what a viewer subscribes to, from its own process, to read
- * the latest message an output port's node wrote.
+ * the messages an output port's node writes.
  */
 export interface OpenViewerToolResult {
   /**
@@ -3585,12 +3585,21 @@ export interface OpenViewerToolResult {
    */
   wake_service: string;
   /**
+   * Which of the port's messages the viewer reads, by the port's family.
+   */
+  viewer_reads: OutputPortViewerReads;
+  /**
    * Where the viewer imports an Image frame's surface: the surface-sharing socket's path on
    * Linux, the surface-sharing Mach service's name on macOS. Absent on macOS when the open
    * named no `viewer_process_id`, since the service admits only a named process.
    */
   surface_share_address?: string | null;
 }
+
+/**
+ * Which messages of an output port a viewer reads off the channel's reserved slot.
+ */
+export type OutputPortViewerReads = "latest_message" | "every_message";
 
 /**
  * `close_viewer`'s params.
@@ -4835,7 +4844,7 @@ export interface ControlOperations {
   /**
    * Open a viewer of a node's output port, held open for the connection that opened it.
    *
-   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. A viewer reads the latest message the node wrote and skips what it falls behind on, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Open a viewer of any output port of a running node, adding no node and changing no graph: the runtime holds the port's channel open and answers the `viewer` id, the `iceoryx2_domain_root`, the `channel` whose reserved subscriber slot the viewer takes from its own process, and the `wake_service` the node notifies on each write, whose one listener the viewer takes so it waits for a message rather than reading on a timer. The answer's `viewer_reads` says which messages the viewer reads: `every_message` for a Channels port, in order as far back as the channel holds them for it, so a viewer can play the sound, and `latest_message` for every other family, skipping what it falls behind on; either way the channel overwrites what the viewer has not read, so it never slows the stream; an Image message names a pooled frame rather than carrying its pixels, and the viewer imports that frame's surface from the `surface_share_address` the way a helper process does. The viewer stays open until `close_viewer` or the end of the connection that opened it, so it is opened only over a connection that stays open: `/mcp/stdio` or `/control/ws`. Refused for a node that is not running, with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
    *
    * Since contract version 1, stable.
    */

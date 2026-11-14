@@ -40,6 +40,14 @@ pub trait ProjectHistoryRecordingFirstPartyPackageMoves: Send + Sync {
         move_key: &str,
         uv_lock: &[u8],
     ) -> std::result::Result<(), String>;
+
+    /// Move each node of a `tatolab-ops` type in the stream documents of the project in
+    /// `project_directory` to the Core Nodes type that replaced it, as one transaction by the
+    /// runtime made once in the project's history; the error says why it was not recorded.
+    fn move_each_tatolab_ops_node_to_core_nodes(
+        &self,
+        project_directory: &Path,
+    ) -> std::result::Result<(), String>;
 }
 
 /// A first-party package a project's `uv.lock` takes from an index at a release below the
@@ -467,6 +475,13 @@ mod tests {
                 String::from_utf8_lossy(uv_lock).into_owned(),
             ));
             Ok(())
+        }
+
+        fn move_each_tatolab_ops_node_to_core_nodes(
+            &self,
+            _project_directory: &Path,
+        ) -> std::result::Result<(), String> {
+            unreachable!("a first-party package move never moves a project's nodes")
         }
     }
 

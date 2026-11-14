@@ -53,6 +53,7 @@ pub use reserved_slot_reader::{
     OutputPortViewerReader, OutputPortViewerSubscribeRefusal, OutputPortViewerWake,
     SAMPLES_ONE_VIEWER_READ_TAKES_AT_MOST,
 };
+pub use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
 /// A claim table's rows in memory every interpreter handed the table maps:
 /// a sealed memfd on Linux.
