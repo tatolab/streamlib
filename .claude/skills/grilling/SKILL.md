@@ -24,4 +24,5 @@ owner only the one or two that are theirs to decide. Look facts up while the rou
 recompute from the answers and repeat until nothing is open.
 
 Done when the owner confirms your restatement of the decisions taken, numbered. A decision that
-should outlive the session goes on the Linear issue or project document it settles.
+should outlive the session goes in the agreed record the repo's CLAUDE.md names; the work that
+follows from it goes on the Linear issue or project it affects.

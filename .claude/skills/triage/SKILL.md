@@ -29,7 +29,7 @@ blockers that are Done or Canceled, milestones with no issues, and milestones wh
 all Done.
 
 Present **one batch**: item, action, one-line reason. Execute the clear-cut lines — prefixes,
-labels, placement, removing dead blockers, rewriting a drifted description to what is wanted
+labels, placement, removing Done blockers, rewriting a drifted description to what is wanted
 now while keeping everything its comments established. Leave for the owner anything that
-cancels work, changes what a milestone promises, or reorders a project. Report what you
-executed and what is waiting.
+cancels work, removes a Canceled blocker, changes what a milestone promises, or reorders a
+project. Report what you executed and what is waiting.

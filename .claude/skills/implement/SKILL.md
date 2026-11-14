@@ -8,9 +8,9 @@ description: Build one Linear issue to an open pull request. Use when given a TA
 Input: a `TAT-n` id.
 
 1. **Load** the issue from Linear with its relations, every comment, its parent, and its project
-   and milestone descriptions. A comment is newer than the description and wins where they
-   conflict. If the issue is a parent, build the sub-issue whose prefix names this repo; if its
-   prefix names another repo, stop and say so.
+   and milestone descriptions. A comment wins over the description where they conflict. If the
+   issue is a parent, build the sub-issue whose prefix names this repo; if its prefix names
+   another repo, stop and say so.
 2. **Check what it waits on.** Every issue blocking this one must be Done, and where the blocker
    is another repo's work, present in the version this repo builds against. If not, say which
    one and stop; never work around a missing dependency.

@@ -5,7 +5,8 @@ description: Fold a completed change into the plan and prove its removals happen
 
 # Ship change
 
-Run once every issue of the change's Linear project is Done. It makes sure the change is
+Run once every issue of the change's Linear project is Done, or Canceled with its scope
+moved elsewhere or dropped by the owner. It makes sure the change is
 really finished: the old shape gone, the plan describing what shipped.
 
 1. **Check the removals:** `bash .claude/scripts/ship-change-removed-gate.sh

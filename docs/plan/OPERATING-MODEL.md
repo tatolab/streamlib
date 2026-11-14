@@ -223,7 +223,7 @@ orchestrator running many.
 ### Guidance, not gates
 
 Nothing in the operating model blocks or pauses an agent, with one exception: `permissions.deny`
-refuses a write to a GitHub issue, because work is tracked in Linear. Blocking hooks, skills locked
+refuses `gh issue` writes and the GitHub MCP issue-write tools, because work is tracked in Linear. Blocking hooks, skills locked
 against model invocation, and "hard stop" steps strand work under an orchestrator, where
 nobody is at a prompt, and teach sessions to route around the wall. What carries the
 model instead:

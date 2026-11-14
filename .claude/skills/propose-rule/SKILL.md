@@ -11,7 +11,8 @@ enforces costs none.
 1. **Bring the evidence**: the recurring review finding, the repeated owner correction, or the
    shipped defect. Two occurrences or one shipped incident is the bar.
 2. **Check for overlap.** If an existing rule or check already covers it, extend or fix that one.
-3. **Try a mechanical check first**: a CI step, a lint rule, a hook, a permission setting. Propose
+3. **Try a mechanical check first**: a CI step, a lint rule, a permission setting, or a
+   hook that adds context or cleans up (a hook never blocks a tool call). Propose
    the check, a planted violation that proves it fires, and the deletion of any prose it replaces.
 4. **Write prose only when no check can carry it** — a judgment the session makes before it opens
    a file. One invariant, one concern, positive phrasing, scoped to the paths it governs unless

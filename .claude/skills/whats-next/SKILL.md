@@ -9,7 +9,8 @@ Read-only. It suggests; the owner decides.
 
 1. **Linear**, team Tatolab: the projects with work under way (started, or holding any Todo, In
    Progress or In Review issue), each one's milestones and their progress, the Todo and In
-   Progress issues, and the blocking relations between them. Check Triage for unanswered public
+   Progress issues, and the blocking relations between them. List open issues with no project or milestone too;
+   they are reported, not picked. Check Triage for unanswered public
    reports.
 2. **Pull requests**: `gh pr list -R tatolab/streamlib`, `-R tatolab/tatolab-app` and
    `-R tatolab/main-website`. Match each to its issue by the `TAT-n` in the branch or title; note

@@ -33,7 +33,8 @@ topic; `CLAUDE.md` holds only what every session must load.
   a substitute. A parity issue inventories the old surface first (owner, 2026-08-03).
 - **An issue's convenience spelling loses to the naming rule.** When an issue's API bullet is
   shorter than its own naming bullet or the layer below, the explicit spelling wins. Raise it once,
-  then record the ruling in the issue's description (owner, 2026-09-03).
+  then record the ruling in the issue's description and in a comment, so it outranks an earlier
+  comment (owner, 2026-09-03).
 - **Question the shape before adding an opt-in.** When a design shows a gap, first ask whether the
   shape that made the gap is right. Never cite the audio-window contract as precedent for another
   payload-reading carve-out (owner, 2026-10-16).
@@ -77,7 +78,8 @@ topic; `CLAUDE.md` holds only what every session must load.
   (owner, 2026-10-05 and 2026-10-17).
 - **An `/implement` PR finishes its issue.** Do the work that stands between the fix and the exit
   criteria in the session, say what cannot be proven, and let the merge move the issue to Done. It
-  stays open only when the owner scopes the PR as partial (owner, 2026-09-13).
+  stays open only when the owner scopes the PR as partial; such a PR keeps the id out of its branch
+  and title and writes `Part of TAT-n` in its body, which links without closing (owner, 2026-09-13).
 - **A scope note does not shield a bug.** "Do not touch X" forbids redesigning X, not fixing a
   defect the issue's own fix also cures. Fix it and say so in the PR body (owner, 2026-09-06).
 - **Big issues are split.** At `/plan-project`, split where a clean seam exists, and make work

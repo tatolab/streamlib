@@ -27,7 +27,7 @@ ONE core system per concern — extend the existing system, never build a parall
 
 Skills describe how the owner likes work reasoned about; adapt or skip them as needed.
 
-- **Work is tracked in Linear, never in GitHub issues** (permissions refuse a write to one):
+- **Work is tracked in Linear, never in GitHub issues** (settings deny `gh issue` writes and the GitHub MCP issue tools):
   team Tatolab, issues `TAT-n`, structured project → milestone → issue → sub-issue. An issue
   that lands here is titled `streamlib: …`; a change spanning repos is a parent with one
   sub-issue per repo.

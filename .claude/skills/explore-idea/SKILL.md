@@ -26,7 +26,7 @@ fastest way to answer a question. The owner brings a fuzzy want; give it a shape
 6. **Exit one of three ways**:
    - **Graduate** — `file-issue` for one piece of work, `plan-project` for more, scoped to the
      recommended start.
-   - **Park** — a document on the Linear project it belongs to: the idea, the shapes, the
+   - **Park** — a document on the Linear project it belongs to (if none fits, ask the owner which project, or whether to start one): the idea, the shapes, the
      recommended start, and the unknown that must resolve before it revives.
    - **Kill** — the same document, with the reason, so the idea is not explored again by accident.
 

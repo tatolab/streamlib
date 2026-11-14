@@ -37,7 +37,7 @@ open_issue_id="$(linear_graphql \
      issues(first: 1, filter: {
        team: { key: { eq: $teamKey } },
        title: { eq: $title },
-       state: { type: { nin: ["completed", "canceled"] } }
+       state: { type: { nin: ["completed", "canceled", "duplicate"] } }
      }) { nodes { id } }
    }' \
   "$(jq --null-input --arg teamKey "$linear_team_key" --arg title "$failed_nightly_issue_title" \
@@ -56,8 +56,9 @@ fi
 
 team_and_bug_label="$(linear_graphql \
   'query($teamKey: String!) {
-     teams(filter: { key: { eq: $teamKey } }) { nodes { id } }
-     issueLabels(filter: { name: { eq: "Bug" } }) { nodes { id } }
+     teams(filter: { key: { eq: $teamKey } }) {
+       nodes { id labels(filter: { name: { eq: "Bug" } }) { nodes { id } } }
+     }
    }' \
   "$(jq --null-input --arg teamKey "$linear_team_key" '{teamKey: $teamKey}')")"
 
@@ -69,5 +70,5 @@ linear_graphql \
     --arg teamId "$(jq --raw-output '.data.teams.nodes[0].id' <<<"$team_and_bug_label")" \
     --arg title "$failed_nightly_issue_title" \
     --arg description "$failed_nightly_report_body" \
-    --argjson labelIds "$(jq '[.data.issueLabels.nodes[0].id // empty]' <<<"$team_and_bug_label")" \
+    --argjson labelIds "$(jq '[.data.teams.nodes[0].labels.nodes[0].id // empty]' <<<"$team_and_bug_label")" \
     '{teamId: $teamId, title: $title, description: $description, labelIds: $labelIds}')" >/dev/null
