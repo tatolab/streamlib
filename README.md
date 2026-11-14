@@ -6,12 +6,11 @@
 Wire cameras, models and your own code into a stream. Send an output to a MoQ relay, and apps, agents and your other machines read it there.
 
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
-[![license](https://img.shields.io/badge/license-GPL--3.0-0ea5e9)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.12%20%E2%80%93%203.13-0ea5e9)](#install)
 [![platform](https://img.shields.io/badge/platform-linux%20x86__64%20%7C%20macOS%20apple%20silicon-64748b)](#what-ships-today)
 [![gpu](https://img.shields.io/badge/GPU-Vulkan-64748b)](#gpu-without-the-vendor-lock)
 
-[Install](#install) · [Quickstart](#quickstart) · [Writing a stream](#writing-a-stream) · [The `tatolab` CLI](#the-tatolab-cli) · [Inspect a running stream](#inspect-a-running-stream) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [Troubleshooting](#troubleshooting) · [License](#license)
+[Install](#install) · [Quickstart](#quickstart) · [Writing a stream](#writing-a-stream) · [The `tatolab` CLI](#the-tatolab-cli) · [Inspect a running stream](#inspect-a-running-stream) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [Troubleshooting](#troubleshooting)
 
 </div>
 
@@ -37,9 +36,6 @@ Wire cameras, models and your own code into a stream. Send an output to a MoQ re
 > **Alpha.** APIs will change. On Linux one command installs the runtime; on macOS you build it
 > from a checkout of this repository for now. One runtime per machine runs every stream on it. See
 > [what ships today](#what-ships-today).
-
-> **License.** Free software under the [GNU GPL, version 3](LICENSE) (GPL-3.0-only). See
-> [License](#license).
 
 ## Built for
 
@@ -739,19 +735,9 @@ Not built yet: the macOS app and Windows.
   once. It needs the `v4l2loopback` module for your kernel (`v4l2loopback-dkms` on Debian and
   Ubuntu). Until then the sink refuses at setup, naming the command.
 
-## License
-
-Licensed under the [GNU General Public License, version 3 only](LICENSE) (GPL-3.0-only).
-You may use, study, change and share Tatolab, commercially included; a copy you distribute,
-changed or not, goes with its source under the same licence. The vendored vulkanalia fork
-under `vendor/` keeps its Apache-2.0 licence.
+## Contributing
 
 Contributors sign the [Tatolab Contributor License Agreement](https://github.com/tatolab/tatolab-cla/blob/main/CLA.md) once, when the CLA Assistant bot asks on their first pull request.
-
-Tatolab also distributes third-party code. Each dependency's copyright notice and licence
-text, as of that file's last regeneration, is reproduced in
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), which the runtime carries beside
-`tatolab.runtime` in its lend's `.dist-info/licenses/`.
 
 ---
 
