@@ -522,9 +522,9 @@ impl Compiler {
 
 /// Unwire every link of the shader nodes a live edit restarts, stop their
 /// threads, and forget their builds, so the compile builds them again with
-/// their islands placed anew; the threads abandoned. A node whose thread was
-/// abandoned is left unbuilt, its links with it, since that thread still
-/// writes the node's state.
+/// their islands placed anew; the nodes an abandoned thread still runs. Such a
+/// node, abandoned by this stop or an earlier one, is left unbuilt, its links
+/// with it, since that thread still writes the node's state.
 fn stop_each_shader_node_restarted(
     graph_arc: &Arc<RwLock<Graph>>,
     runtime_ctx: &Arc<RuntimeContext>,
@@ -540,7 +540,7 @@ fn stop_each_shader_node_restarted(
         shader_nodes_restarted.nodes.len()
     );
     unwire_each_link_of_the_shader_nodes_restarted(&mut graph_arc.write(), shader_nodes_restarted)?;
-    let abandoned = stop_processor_threads_signalling_every_thread_before_joining_any(
+    stop_processor_threads_signalling_every_thread_before_joining_any(
         graph_arc,
         runtime_ctx.loaded_stream_identity(),
         &shader_nodes_restarted.nodes,
@@ -549,7 +549,11 @@ fn stop_each_shader_node_restarted(
         runtime_ctx.this_streams_teardown_progress_note(),
         abandoned_processor_threads,
     );
-    let abandoned_node_ids: Vec<ProcessorUniqueId> = abandoned
+    let still_held_by_an_abandoned_thread = the_restarted_nodes_an_abandoned_thread_still_runs(
+        abandoned_processor_threads,
+        &shader_nodes_restarted.nodes,
+    );
+    let abandoned_node_ids: Vec<ProcessorUniqueId> = still_held_by_an_abandoned_thread
         .iter()
         .map(|processor| processor.processor_id.clone())
         .collect();
@@ -562,7 +566,27 @@ fn stop_each_shader_node_restarted(
         .cloned()
         .collect();
     forget_the_build_of_each_shader_node_restarted(&mut graph, &rebuilt_node_ids);
-    Ok(abandoned)
+    Ok(still_held_by_an_abandoned_thread)
+}
+
+/// Each of `node_ids` whose thread, abandoned by this compile or an earlier
+/// one, has not returned. Such a node keeps no thread handle, so a stop finds
+/// nothing to abandon, yet its old thread still writes its state.
+fn the_restarted_nodes_an_abandoned_thread_still_runs(
+    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    node_ids: &[ProcessorUniqueId],
+) -> Vec<ProcessorDisplayNameAndId> {
+    let mut abandoned = abandoned_processor_threads.lock();
+    abandoned.retain(|thread| !thread.join_handle.is_finished());
+    let mut still_running: Vec<ProcessorDisplayNameAndId> = Vec::new();
+    for thread in abandoned.iter() {
+        if node_ids.contains(&thread.processor.processor_id)
+            && !still_running.contains(&thread.processor)
+        {
+            still_running.push(thread.processor.clone());
+        }
+    }
+    still_running
 }
 
 /// Wire each of `links_to_add` in `graph_arc`, telling the stream's topic
@@ -1027,5 +1051,66 @@ mod already_wired_tests {
             plan.links_to_add,
             vec![link_into_the_first_reader, link_into_the_second_reader]
         );
+    }
+}
+
+#[cfg(test)]
+mod abandoned_shader_node_restart_tests {
+    use super::*;
+
+    fn abandoned_thread_of(
+        processor_id: &str,
+        until_released: std::sync::mpsc::Receiver<()>,
+    ) -> AbandonedProcessorThreadStillRunning {
+        AbandonedProcessorThreadStillRunning {
+            processor: ProcessorDisplayNameAndId {
+                processor_id: ProcessorUniqueId::from(processor_id),
+                processor_display_name: processor_id.to_string(),
+            },
+            join_handle: std::thread::spawn(move || {
+                let _ = until_released.recv();
+            }),
+        }
+    }
+
+    #[test]
+    fn a_restarted_node_an_earlier_compile_abandoned_is_still_held_until_its_thread_returns() {
+        let (release_kaleidoscope, kaleidoscope_waits) = std::sync::mpsc::channel();
+        let (release_other, other_waits) = std::sync::mpsc::channel();
+        let abandoned_processor_threads = Mutex::new(vec![
+            abandoned_thread_of("Pkaleidoscope", kaleidoscope_waits),
+            abandoned_thread_of("Pnot_restarted", other_waits),
+        ]);
+        let restarted = [
+            ProcessorUniqueId::from("Pmix"),
+            ProcessorUniqueId::from("Pkaleidoscope"),
+        ];
+
+        let held = the_restarted_nodes_an_abandoned_thread_still_runs(
+            &abandoned_processor_threads,
+            &restarted,
+        );
+        assert_eq!(
+            held.iter()
+                .map(|processor| processor.processor_id.clone())
+                .collect::<Vec<_>>(),
+            vec![ProcessorUniqueId::from("Pkaleidoscope")]
+        );
+
+        release_kaleidoscope.send(()).unwrap();
+        while abandoned_processor_threads.lock().iter().any(|thread| {
+            thread.processor.processor_id == ProcessorUniqueId::from("Pkaleidoscope")
+                && !thread.join_handle.is_finished()
+        }) {
+            std::thread::yield_now();
+        }
+        assert!(
+            the_restarted_nodes_an_abandoned_thread_still_runs(
+                &abandoned_processor_threads,
+                &restarted,
+            )
+            .is_empty()
+        );
+        release_other.send(()).unwrap();
     }
 }
