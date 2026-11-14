@@ -106,8 +106,8 @@ pub mod processor_interpreter {
         LEND_DIRECTORY_RELATIVE_TO_THE_APP_BUNDLE_CONTENTS,
         LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
         app_bundle_contents_directory_holding_the_executable_directory,
-        browser_host_executable_beside_the_lend, bundled_vulkan_driver_directory_in_the_lend,
-        first_party_modules_directory_beside_the_lend, lend_directory_in_the_app_bundle_contents,
-        lend_directory_in_the_runtime_unit,
+        browser_host_executable_beside_the_lend, browser_host_executable_for_the_lend,
+        bundled_vulkan_driver_directory_in_the_lend, first_party_modules_directory_beside_the_lend,
+        lend_directory_in_the_app_bundle_contents, lend_directory_in_the_runtime_unit,
     };
 }

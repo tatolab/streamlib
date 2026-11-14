@@ -34,22 +34,22 @@ use crate::refusal_on_standard_error::{EXIT_STATUS_OF_A_REFUSAL, write_refusal_t
 /// what it started.
 const STREAM_ACTIONS_IN_FLIGHT_RETURN_BUDGET: Duration = Duration::from_secs(10);
 
-/// Offer every node the browser host staged beside the lend, which a
-/// `BrowserSource` opens its tabs in; a unit built without it offers none.
+/// Offer every node the browser host the runtime unit or its app bundle
+/// carries, which a `BrowserSource` opens its tabs in; one built without it
+/// offers none.
 fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     engine: &Runner,
     lend_directory: &std::path::Path,
     tatolab_state_directory: &TatolabStateDirectory,
 ) {
     use streamlib::sdk::processor_interpreter::{
-        BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME, browser_host_executable_beside_the_lend,
+        BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME, browser_host_executable_for_the_lend,
     };
-    let Some(browser_host_executable) = browser_host_executable_beside_the_lend(lend_directory)
+    let Some(browser_host_executable) = browser_host_executable_for_the_lend(lend_directory)
         .and_then(|executable| executable.canonicalize().ok())
     else {
         tracing::info!(
-            "the runtime unit carries no browser host beside its lend, so no BrowserSource can \
-             open a page"
+            "the runtime unit carries no browser host, so no BrowserSource can open a page"
         );
         return;
     };
