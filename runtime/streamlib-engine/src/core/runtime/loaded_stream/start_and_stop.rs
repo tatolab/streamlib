@@ -11,12 +11,13 @@ use uuid::Uuid;
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
 use crate::core::context::{
-    GpuContext, RuntimeContext, StreamClockReading, platform_audio_clock_for_one_stream,
+    GpuContext, RuntimeContext, StreamClock, StreamClockReading,
+    platform_audio_clock_for_one_stream,
 };
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, ObservableGraphReadiness, ProcessorPauseGateComponent,
-    ProcessorUniqueId, StateComponent,
+    ProcessorUniqueId, StateComponent, StepProgressOfOneNodeComponent,
 };
 use crate::core::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::media_clock::MediaClock;
@@ -26,11 +27,35 @@ use crate::core::runtime::live_graph_reconciled_to_a_graph_document::{
     LiveLinkAsGiven, LiveNodeAsTheGraphHoldsIt, the_live_links_as_given_by_node_uuid_of,
     the_live_nodes_as_given_of,
 };
+use crate::core::runtime::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::runtime::stream_step_coordinator::StreamStepCoordinatorOfOneStream;
 use crate::core::runtime::{RuntimeOperations, RuntimeStatus};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
+    /// The clock this stream's graph names, started now — published on a board
+    /// its helpers read when it is not the machine's own clock.
+    fn this_streams_clock_starting_now(
+        &self,
+        engine: &EngineResourcesSharedByEveryStream,
+    ) -> Result<StreamClock> {
+        let stream_clock_spec = self.compiler.scope(|graph, _tx| graph.stream_clock_spec());
+        stream_clock_spec.refusal_unless_this_runtime_runs_it(self.stream_id())?;
+        let stream_clock = StreamClock::starting_now(stream_clock_spec);
+        if stream_clock_spec.is_real() {
+            return Ok(stream_clock);
+        }
+        let board_service_name = format!(
+            "streamlib/{}/stream-clock/{}",
+            self.stream_id(),
+            crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix()
+        );
+        let board = engine
+            .iceoryx2_node
+            .create_stream_clock_board(&board_service_name, stream_clock.published())?;
+        Ok(stream_clock.published_on(board))
+    }
+
     /// The runtime context made at this stream's start, `None` before it and
     /// after its stop.
     #[cfg(test)]
@@ -66,6 +91,28 @@ impl LoadedStreamInThisRuntime {
             self.stream_id()
         );
         Ok(rescaled)
+    }
+
+    /// The display name of a node in this stream that runs its own callbacks
+    /// inside the step barrier and has not stopped or failed, when one does.
+    fn a_node_that_paces_its_own_callbacks(&self) -> Option<String> {
+        self.compiler.scope_reading(|graph| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .find(|node| {
+                    node.get::<StepProgressOfOneNodeComponent>()
+                        .is_some_and(|step_progress| step_progress.0.paces_its_own_callbacks())
+                        && !node.get::<StateComponent>().is_some_and(|state| {
+                            matches!(
+                                state.current(),
+                                ProcessorState::Stopped | ProcessorState::Error
+                            )
+                        })
+                })
+                .map(|node| node.display_name.clone())
+        })
     }
 
     // =========================================================================
