@@ -4,7 +4,7 @@
 //! CI gate keeping the module host table data-plane only.
 //!
 //! Every `#[repr(C)]` field and every type alias in
-//! `sdk/tatolab-module-sdk/src/module_host_table_abi.rs` is built from plain
+//! `sdk/tatolab-module-sdk/src/module_host_table_abi/mod.rs` is built from plain
 //! data alone: integers, `c_void`, raw pointers and arrays of those, the
 //! table's own `ModuleHostTable*` types, and `extern "C"` function pointers
 //! over them. An engine or RHI type — a device, a texture, a kernel, anything
@@ -16,7 +16,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-const MODULE_HOST_TABLE_ABI_SOURCE: &str = "sdk/tatolab-module-sdk/src/module_host_table_abi.rs";
+const MODULE_HOST_TABLE_ABI_SOURCE: &str =
+    "sdk/tatolab-module-sdk/src/module_host_table_abi/mod.rs";
 const MODULE_SDK_MANIFEST: &str = "sdk/tatolab-module-sdk/Cargo.toml";
 
 /// The scalar types a table field may be built from.
