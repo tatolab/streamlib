@@ -27,7 +27,7 @@
 //! What the blit reads is the surface's own pooled backing whenever it
 //! has one — a producer's registered texture is a frames-in-flight
 //! transient it keeps overwriting, and a published surface id names an
-//! immutable frame (`docs/decisions/surface-id-lifetime-contract.md`).
+//! immutable frame.
 //! The source is still resolved **per refill**, never cached: a rotating
 //! producer re-registers under the same surface id, so a handle resolved
 //! at creation can name an allocation that has since rotated out. The
@@ -214,7 +214,7 @@ pub struct SurfaceExportStaging {
     /// where the device exports a timeline semaphore as an OPAQUE_FD.
     refill_done_timeline_crosses_processes: bool,
     /// One recorder, reused: per-refill pool creation is the exact churn
-    /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` warns about.
+    /// NVIDIA's OPAQUE_FD export cap after a swapchain causes.
     refill_submission: Mutex<RefillSubmission>,
     staging_byte_size: u64,
     surface_width: u32,

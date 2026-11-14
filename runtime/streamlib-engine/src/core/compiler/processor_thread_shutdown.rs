@@ -4,7 +4,7 @@
 //! Removing processors: every thread told to stop before any is waited on, each
 //! wait bounded, and a thread that outlives its budget abandoned and named.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Processor model and §Language SDKs: the engine
+//! The engine
 //! stops every helper at once, never one after another, and a native processor
 //! thread that ignores shutdown past its budget is abandoned rather than
 //! joined. A second interrupt abandons a native thread still inside its callback,

@@ -6,7 +6,7 @@
 //! drop and that downstream observers see the post-release value.
 //!
 //! Single-writer-per-edge per
-//! `docs/architecture/adapter-timeline-single-writer.md`: dropping a
+//! the single-writer-per-edge timeline rule: dropping a
 //! write guard signals `produce_done`; dropping the last read guard
 //! signals `consume_done`. Each timeline carries the shared
 //! `current_signal_value` counter, so signals across the two timelines

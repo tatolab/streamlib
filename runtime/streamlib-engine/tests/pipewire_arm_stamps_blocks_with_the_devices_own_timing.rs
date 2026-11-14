@@ -26,7 +26,7 @@ use rig_only_capability_skip::{RigOnlyCapability, skip_because_this_machine_lack
 ///
 /// `None` rather than a panic, so the tier stays well-behaved when the feature
 /// is on but the runner has no audio session — the same shape
-/// `try_vulkan_device()` gives the GPU tier (`docs/testing-hardware.md`). A
+/// `try_vulkan_device()` gives the GPU tier. A
 /// machine with no audio is a supported environment; it just cannot answer the
 /// question these tests ask.
 fn pipewire_arm() -> Option<SharedAudioDeviceBackend> {
@@ -46,7 +46,7 @@ fn pipewire_arm_or_skip() -> Option<SharedAudioDeviceBackend> {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests"
 )]
 fn a_real_session_stamps_its_blocks_with_the_devices_own_timing() {
     let Some(backend) = pipewire_arm_or_skip() else {
@@ -60,7 +60,7 @@ fn a_real_session_stamps_its_blocks_with_the_devices_own_timing() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests"
 )]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     let Some(backend) = pipewire_arm_or_skip() else {
@@ -74,7 +74,7 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs a reachable PipeWire session with a capture endpoint. Run with --features streamlib/hardware-tests"
 )]
 fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) = pipewire_arm_or_skip() else {

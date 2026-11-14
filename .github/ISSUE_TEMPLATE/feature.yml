@@ -13,7 +13,7 @@ body:
     id: design
     attributes:
       label: Design
-      description: "trade-offs + decisions, as the change file states them; architecture is decided in docs/plan/ via /propose-change, never in the ticket"
+      description: "trade-offs + decisions"
     validations:
       required: false
   - type: textarea

@@ -22,9 +22,7 @@
 //! and never reaches the customer; the deliberate
 //! `VulkanWritable::vk_image_layout()` escape hatch from
 //! `streamlib-surface-adapter` lives on a capability trait that public
-//! consumers of `SurfaceAdapter` cannot reach. See
-//! `docs/architecture/surface-adapter.md` for the full architecture
-//! brief.
+//! consumers of `SurfaceAdapter` cannot reach.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 

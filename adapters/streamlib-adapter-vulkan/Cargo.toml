@@ -41,8 +41,7 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
 streamlib = { path = "../../sdk/streamlib-sdk" }
 serde = { workspace = true }
 # Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
-# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
-# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+# `VkInstance` creation on NVIDIA Linux trips a driver SIGSEGV.
 serial_test = "3.2"
 
 [[test]]

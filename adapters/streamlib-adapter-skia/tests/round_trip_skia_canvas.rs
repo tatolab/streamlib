@@ -69,7 +69,7 @@ fn round_trip_skia_canvas() {
             .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`: only
+    // the single-writer-per-edge timeline rule: only
     // `acquire_write` is exercised below, so `produce_done` tracks
     // the assertion.
     let produce_done = Arc::new(

@@ -7,8 +7,7 @@
 //! Construction is privileged (allocates `count` DEVICE_LOCAL textures and
 //! registers each in [`crate::core::context::GpuContext`]'s same-process
 //! texture cache); per-frame rotation via [`TextureRing::acquire_next`]
-//! is Limited-safe and never escalates. See
-//! `docs/architecture/texture-ring.md` for the recipe.
+//! is Limited-safe and never escalates.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -153,7 +152,7 @@ impl std::fmt::Debug for TextureRingSlot {
 /// via the host RHI's `create_texture_local` path (skips the DMA-BUF
 /// export pool — decode-output textures stay in-process, no
 /// NVIDIA DMA-BUF cap pressure per
-/// `docs/learnings/nvidia-dma-buf-after-swapchain.md`), mints a stable
+/// NVIDIA's DMA-BUF export cap after a swapchain), mints a stable
 /// UUID per slot, and registers each slot in [`GpuContext`]'s texture
 /// cache with `current_layout = UNDEFINED` (spec-correct for a
 /// freshly-allocated `VkImage`). After the first per-frame
@@ -165,7 +164,7 @@ impl std::fmt::Debug for TextureRingSlot {
 /// Steady-state rotation via [`Self::acquire_next`] does no allocation
 /// and does not escalate. Slot reuse semantics are the caller's
 /// responsibility — sizing `count` to `MAX_FRAMES_IN_FLIGHT = 2`
-/// (`docs/learnings/vulkan-frames-in-flight.md`) keeps GPU work on
+/// keeps GPU work on
 /// the previous use of a slot retired by the time the slot rotates
 /// back.
 ///
@@ -679,7 +678,7 @@ mod tests {
 
         // Pre-copy: registration claim is UNDEFINED (freshly-allocated
         // VkImage, no upload yet) — spec-correct per
-        // docs/architecture/texture-registration.md Producer Rule 2.
+        // texture registration's second producer rule.
         let slot0 = ring.acquire_next();
         let reg_pre = gpu
             .resolve_texture_registration_by_surface_id(slot0.surface_id(), None, 32, 32)

@@ -9,7 +9,7 @@
 //! owns the privileged state — VMA allocator + DMA-BUF export pools,
 //! DRM modifier probe, transfer / encode / decode / compute queues,
 //! the per-queue submit-mutex matrix — the consumer device holds only what the carve-out in
-//! `docs/architecture/subprocess-rhi-parity.md` permits:
+//! the subprocess RHI parity rule permits:
 //!
 //! - DMA-BUF FD import (`vkAllocateMemory` with `VkImportMemoryFdInfoKHR`).
 //! - Tiled-image import via `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`

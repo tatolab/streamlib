@@ -470,7 +470,7 @@ fn handle_register(
     // presence via a JSON boolean (`has_produce_done_fd`,
     // `has_consume_done_fd`); the SCM_RIGHTS slot count matches the sum.
     // The single-writer-per-edge model is documented in
-    // `docs/architecture/adapter-timeline-single-writer.md`.
+    // the single-writer-per-edge timeline rule.
     let has_produce_done_fd = request
         .get("has_produce_done_fd")
         .and_then(|v| v.as_bool())
@@ -1942,7 +1942,7 @@ mod tests {
 
         let send_fd = make_memfd_with(b"rt-render-target-payload");
         // An NVIDIA-tiled modifier from the live probe (one of the values
-        // documented in docs/learnings/nvidia-egl-dmabuf-render-target.md).
+        // NVIDIA EGL samples linear DMA-BUFs only).
         // The wire treats it opaquely — no need to validate the exact bits.
         let chosen_modifier: u64 = 0x0300_0000_0060_6014;
         let pitch: u64 = 1920 * 4;

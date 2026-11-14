@@ -4,7 +4,7 @@
 //! A native processor thread that ignores shutdown past its budget, against a
 //! real `Runner`.
 //!
-//! `docs/plan/ARCHITECTURE.md` §Language SDKs: such a thread is abandoned rather
+//! Such a thread is abandoned rather
 //! than joined, the engine stays alive beneath it, and the caller is told which
 //! processor it was. What it locks:
 //! - `LoadedStreamInThisRuntime::stop()` finishes the teardown and fails naming

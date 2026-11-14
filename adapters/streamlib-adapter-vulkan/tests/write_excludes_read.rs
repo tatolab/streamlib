@@ -62,7 +62,7 @@ fn live_write_guard_blocks_acquire_read_until_dropped() {
     .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`.
+    // the single-writer-per-edge timeline rule.
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)
             .expect("produce_done timeline"),

@@ -180,7 +180,7 @@ impl ConsumerVulkanTimelineSemaphore {
     /// Host-side signal: advance the counter to `value` from the CPU.
     ///
     /// Single-writer-per-edge per
-    /// `docs/architecture/adapter-timeline-single-writer.md`: only
+    /// the single-writer-per-edge timeline rule: only
     /// one process ever signals a given timeline, so `value` is
     /// strictly greater than the current value by construction and
     /// VUID-VkSemaphoreSignalInfo-value-03258 holds without runtime

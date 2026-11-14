@@ -111,7 +111,7 @@ fn skia_animated_stress() {
             .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
-    // `docs/architecture/adapter-timeline-single-writer.md`: the test
+    // the single-writer-per-edge timeline rule: the test
     // only exercises `acquire_write` so `produce_done` is the
     // timeline whose counter tracks frames.
     let produce_done = Arc::new(

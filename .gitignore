@@ -50,8 +50,6 @@ __internal__/
 
 # Internal documentation (secret sauce)
 docs/internal/
-docs/research/ai_embodiment_vision.md
-docs/research/SESSION_RESTORE.md
 
 # Rust
 target/
@@ -123,7 +121,6 @@ TASK-*.md
 # Generated bindings — each consuming package/crate regenerates from its
 # own streamlib.yaml at build time (build.rs for Rust crates; setup.py
 # build hook for the Python SDK; `deno task setup` for Deno projects).
-# See docs/architecture/schema-identity-and-packaging.md.
 _generated_/
 
 # Generated Rust crate root — the mechanical projection of a folder-backed
@@ -136,8 +133,8 @@ _generated_/
 # sitting next to a committed generic <name>.<ext>. Never part of a PR.
 *.local.sh
 *.local.md
-# Per-machine rig profile (copied from docs/rig-profile.example.md). Already
-# covered by *.local.md above; listed explicitly so it's greppable.
+# Per-machine rig profile the verify skills read. Already covered by
+# *.local.md above; listed explicitly so it's greppable.
 docs/rig-profile.local.md
 
 # Per-developer amos focus state (machine-local, set by /amos:focus).

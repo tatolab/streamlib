@@ -1,10 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans wall-clock reads outside the surfaces the plan permits them on: the
-//! observability surfaces and a project change feed's `refused_at`
-//! (`docs/plan/ARCHITECTURE.md` §Media I/O `[one-monotonic-clock]`; rationale in
-//! `docs/decisions/one-monotonic-clock.md`).
+//! Bans wall-clock reads outside the surfaces permitted them: the
+//! observability surfaces and a project change feed's `refused_at`.
 //!
 //! Monotonic is the only legal clock on the data plane. A wall-clock value and a
 //! media timestamp share a unit and are different quantities, so a subtraction
@@ -42,8 +40,7 @@ use std::path::{Path, PathBuf};
 ///
 /// `packages/test-fixtures` is in because it is engine-side test infrastructure
 /// compiled into the engine's own runs, not a consumer. The rest of `packages/`
-/// and all of `examples/` are downstream consumers, dispositioned by
-/// `docs/plan/ARCHITECTURE.md` §Consumers and never gated here. A root that
+/// and all of `examples/` are downstream consumers, never gated here. A root that
 /// contributes no files fails [`ensure_every_arm_read_source`], so a tree
 /// holding nothing this gate reads cannot be listed either.
 const SCAN_ROOTS: &[&str] = &[
@@ -229,8 +226,8 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         "\nWall clock is permitted on exactly {} surfaces — {} — and nowhere else. \
          A wall-clock value never enters the data plane and is never compared against, subtracted \
          from, or substituted for a media timestamp: the two share a unit and are different \
-         quantities. Use {}. Widening the list is a plan change \
-         (`docs/plan/ARCHITECTURE.md` §Media I/O), not a judgement call.",
+         quantities. Use {}. Widening the list is an \
+         owner decision, not a judgement call.",
         PermittedWallClockSurfaceKind::ALL.len(),
         PermittedWallClockSurfaceKind::ALL
             .iter()

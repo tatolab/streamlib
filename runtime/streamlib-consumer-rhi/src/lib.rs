@@ -14,7 +14,7 @@
 //!
 //! - [`ConsumerVulkanDevice`] — own `VkInstance` + `VkDevice` for the
 //!   subprocess; only the carve-out methods listed in
-//!   `docs/architecture/subprocess-rhi-parity.md` (DMA-BUF AND OPAQUE_FD
+//!   the subprocess RHI parity rule (DMA-BUF AND OPAQUE_FD
 //!   FD import + bind + map on Linux, an IOSurface's pages imported as
 //!   host memory on macOS, single-shot layout transitions, sync
 //!   wait/signal on imported timeline semaphores). DMA-BUF imports back

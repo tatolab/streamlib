@@ -55,7 +55,7 @@ pub struct SurfaceMetadata {
     /// DRM format modifier of the underlying VkImage, meaningful only when
     /// [`Self::vk_image_tiling`] is `DRM_FORMAT_MODIFIER_EXT` (1000158000).
     /// Zero under that tiling is `DRM_FORMAT_MOD_LINEAR` (sampler-only on
-    /// NVIDIA — see `docs/learnings/nvidia-egl-dmabuf-render-target.md`);
+    /// NVIDIA);
     /// zero under any other tiling is "not set", the legacy
     /// `VkBuffer`-backed shape (CPU-readable pixel buffers). Render-target
     /// adapters MUST receive a non-zero modifier picked from the EGL
@@ -73,7 +73,7 @@ pub struct SurfaceMetadata {
     /// `VkBuffer` pixel buffers without dual-timeline coordination).
     ///
     /// Half of the single-writer-per-edge pair documented in
-    /// `docs/architecture/adapter-timeline-single-writer.md`; the
+    /// the single-writer-per-edge timeline rule; the
     /// consumer-side companion lives in [`Self::consume_done_fd`].
     pub produce_done_fd: Option<RawFd>,
     /// Optional OPAQUE_FD timeline-semaphore handle for the `consume_done`

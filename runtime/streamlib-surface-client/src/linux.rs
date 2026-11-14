@@ -20,7 +20,7 @@ pub const MAX_DMA_BUF_PLANES: usize = 4;
 /// [`MAX_DMA_BUF_PLANES`] plane fds + 2 trailing slots for the optional
 /// `produce_done` and `consume_done` timeline-semaphore OPAQUE_FDs (the
 /// single-writer-per-edge model in
-/// `docs/architecture/adapter-timeline-single-writer.md`). Wire helpers
+/// the single-writer-per-edge timeline rule). Wire helpers
 /// validate against this ceiling; senders that aren't passing both
 /// timelines simply leave the trailing slots unused.
 pub const MAX_SCM_RIGHTS_FDS: usize = MAX_DMA_BUF_PLANES + 2;

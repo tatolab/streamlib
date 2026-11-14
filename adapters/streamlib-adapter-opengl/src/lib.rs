@@ -9,7 +9,7 @@
 //! `EGLImage` via `glEGLImageTargetTexture2DOES`. The customer sees only
 //! a `gl_texture_id: u32` and uses it as both a sampler and an FBO color
 //! attachment — the NVIDIA `external_only=TRUE` quirk for linear
-//! DMA-BUFs (see `docs/learnings/nvidia-egl-dmabuf-render-target.md`)
+//! DMA-BUFs
 //! never reaches them because the host allocator already picked a
 //! tiled, render-target-capable modifier.
 //!
@@ -20,10 +20,6 @@
 //! consumer sees an upside-down image (#621). See [`OpenGlWriteView`]
 //! for the full convention and the `pose_overlay_renderer.py` example
 //! for an in-tree reference.
-//!
-//! See `docs/architecture/surface-adapter.md` for the architecture brief
-//! and `docs/architecture/adapter-authoring.md` for the 3rd-party
-//! authoring guide.
 //!
 //! **Absent on macOS.** The seam is EGL and DMA-BUF, and OpenGL is
 //! deprecated there; a native macOS consumer takes

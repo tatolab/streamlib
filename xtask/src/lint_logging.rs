@@ -3,7 +3,7 @@
 
 //! Lints ad-hoc logging patterns in the Rust workspace and in the Python /
 //! Python polyglot SDKs. The only sanctioned pathway is `tracing::*` /
-//! `tatolab.stream.log.*` — see `docs/logging.md`.
+//! `tatolab.stream.log.*`.
 //!
 //! Python uses a ripgrep-style substring scan. Rust uses a `syn`
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
@@ -94,7 +94,7 @@ pub fn run(project_root: &Path) -> Result<()> {
     let report = scan_all(project_root)?;
     for v in &report.violations {
         eprintln!(
-            "{}:{}: [{}] banned `{}` — use tracing::* / tatolab.stream.log.* / see docs/logging.md\n    {}",
+            "{}:{}: [{}] banned `{}` — use tracing::* / tatolab.stream.log.*\n    {}",
             v.path.display(),
             v.line_no,
             v.target,

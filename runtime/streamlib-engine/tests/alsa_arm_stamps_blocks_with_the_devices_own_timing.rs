@@ -37,7 +37,7 @@ use rig_only_capability_skip::{RigOnlyCapability, skip_because_this_machine_lack
 ///
 /// `None` rather than a panic, so the tier stays well-behaved when the feature
 /// is on but the runner has no sound card — the same shape `try_vulkan_device()`
-/// gives the GPU tier (`docs/testing-hardware.md`). A machine with no audio is
+/// gives the GPU tier. A machine with no audio is
 /// a supported environment; it just cannot answer the question these tests ask.
 ///
 /// A machine that *does* have capture hardware is a different case, and it is
@@ -127,7 +127,7 @@ fn a_raw_capture_device_this_machine_will_open(backend: &AlsaAudioDeviceBackend)
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
     let Some(backend) = alsa_arm_or_skip() else {
@@ -143,7 +143,7 @@ fn the_default_device_stamps_its_blocks_with_the_devices_own_timing() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
     let Some(backend) = alsa_arm_or_skip() else {
@@ -162,7 +162,7 @@ fn a_raw_hardware_device_stamps_its_blocks_with_the_drivers_own_timing() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
     let Some(backend) = alsa_arm_or_skip() else {
@@ -176,7 +176,7 @@ fn a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off() {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — needs /dev/snd and a capture device ALSA can open. Run with --features streamlib/hardware-tests"
 )]
 fn a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one() {
     let Some(backend) = alsa_arm_or_skip() else {
