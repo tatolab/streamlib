@@ -1,16 +1,17 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use super::pixel_buffer_pool_manager::POOL_PRE_ALLOCATE_COUNT;
 use super::*;
 
 #[cfg(target_os = "linux")]
 use crate::core::test_support::wait_for_every_gpu_submission_made_so_far;
 
-mod texture_cache_and_pixel_buffer_registration;
 mod access_tiers_and_escalation;
 mod cross_process_leases;
-mod native_node_output_pools;
 mod freed_pool_entries;
+mod native_node_output_pools;
+mod texture_cache_and_pixel_buffer_registration;
 
 #[cfg(target_os = "linux")]
 const LEASE_TEST_SURFACE_WIDTH: u32 = 32;
@@ -53,9 +54,7 @@ fn acquire_one_pool_slot_id(gpu: &GpuContext) -> Result<String> {
         LEASE_TEST_SURFACE_HEIGHT,
         PixelFormat::Rgba32,
     )
-    .map(|(published_frame_id, _returned_to_the_pool_immediately)| {
-        published_frame_id.to_string()
-    })
+    .map(|(published_frame_id, _returned_to_the_pool_immediately)| published_frame_id.to_string())
 }
 
 /// Slot-key equality: ids of *different frames* of one slot must count

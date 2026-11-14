@@ -27,11 +27,7 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
     let mut second_native_node =
         gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("second-native-node");
 
-    lease_every_frame_a_native_node_may_hold(
-        &mut first_native_node,
-        &check_out_leases,
-        consumer,
-    );
+    lease_every_frame_a_native_node_may_hold(&mut first_native_node, &check_out_leases, consumer);
     assert!(
         matches!(
             acquire_one_native_node_frame_id(&mut first_native_node),
@@ -56,9 +52,8 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
         crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
         "the second node reaches its own cap, untouched by the first's"
     );
-    acquire_one_pool_slot_id(&gpu).expect(
-        "the shared pool serves a frame of the same shape while both nodes hold theirs",
-    );
+    acquire_one_pool_slot_id(&gpu)
+        .expect("the shared pool serves a frame of the same shape while both nodes hold theirs");
 }
 
 /// A node at its cap is refused at once by the processor output pool's
@@ -138,8 +133,7 @@ fn a_native_nodes_frame_names_its_slots_claim_table_row_at_the_generation_it_pub
         tracing::warn!("no GPU device, so the native node claim-table row test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let mut native_node =
         gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-described-node");
     for _ in 0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD + 1 {
@@ -205,9 +199,7 @@ fn the_shared_pixel_buffer_pool_grows_when_native_nodes_have_borrowed_every_slot
         .iter_mut()
         .flat_map(|native_node| {
             (0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD)
-                .map(|_| {
-                    acquire_one_native_node_frame_id(native_node).expect("the node's frame")
-                })
+                .map(|_| acquire_one_native_node_frame_id(native_node).expect("the node's frame"))
                 .collect::<Vec<String>>()
         })
         .collect();

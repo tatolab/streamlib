@@ -44,8 +44,7 @@ fn a_leased_slot_is_never_rehanded_to_its_producer() {
         .release_one_check_out_lease(&held_by_a_child, child)
         .expect("the child releases the frame");
     let comes_back = (0..(POOL_PRE_ALLOCATE_COUNT * 4)).any(|_| {
-        acquire_one_pool_slot_id(&gpu)
-            .is_ok_and(|handed| same_pool_slot(&handed, &held_by_a_child))
+        acquire_one_pool_slot_id(&gpu).is_ok_and(|handed| same_pool_slot(&handed, &held_by_a_child))
     });
     assert!(
         comes_back,
@@ -325,8 +324,7 @@ fn a_returned_slot_is_never_rehanded_while_its_last_frame_is_leased_and_is_freed
     assert!(
         !shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE)
             .iter()
-            .any(|(pool_slot_key, _)| pool_slot_key
-                == pool_slot_key_of_surface_id(&leased_frame)),
+            .any(|(pool_slot_key, _)| pool_slot_key == pool_slot_key_of_surface_id(&leased_frame)),
         "a returned slot let go of stayed in the shared ring"
     );
     assert!(is_refused_as_recycled_everywhere(

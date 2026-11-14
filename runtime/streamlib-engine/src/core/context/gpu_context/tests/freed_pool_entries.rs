@@ -10,14 +10,12 @@ use super::*;
 /// GPU-gated: skips when no device is present.
 #[test]
 #[cfg(target_os = "linux")]
-fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back_until_let_go()
-{
+fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back_until_let_go() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the native node teardown freeing test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let check_out_leases = live_service.check_out_leases();
     let mut native_node =
         gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-torn-down-node");
@@ -38,8 +36,7 @@ fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back
         buffer_held_in_this_process.get_or_insert(buffer);
         frames_the_node_published.push(published_frame_id.to_string());
     }
-    let [held_in_this_process, leased, unheld @ ..] = frames_the_node_published.as_slice()
-    else {
+    let [held_in_this_process, leased, unheld @ ..] = frames_the_node_published.as_slice() else {
         panic!("the node published from one borrowed slot per frame of its rotation");
     };
     let consumer = check_out_leases.mint_holder_id();
@@ -121,8 +118,7 @@ fn a_stopped_streams_pool_entries_are_freed_and_their_ids_retired() {
         tracing::warn!("no GPU device, so the stopped stream freeing test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let check_out_leases = live_service.check_out_leases();
     let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
     let stopped_streams_view =
@@ -245,8 +241,7 @@ fn a_stopped_streams_entry_leased_until_its_helpers_connection_closes_is_freed_b
         tracing::warn!("no GPU device, so the leased stopped stream freeing test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let check_out_leases = live_service.check_out_leases();
     let stopped_stream = crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1);
     let stopped_streams_view =
@@ -397,8 +392,8 @@ fn a_freed_entry_is_destroyed_only_once_the_gpu_work_submitted_before_its_releas
         shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE).len();
     wait_for_every_gpu_submission_made_so_far(&gpu);
 
-    let host_signalled_gate = HostVulkanTimelineSemaphore::new(gpu.device().inner.device(), 0)
-        .expect("gate timeline");
+    let host_signalled_gate =
+        HostVulkanTimelineSemaphore::new(gpu.device().inner.device(), 0).expect("gate timeline");
     let mut recorder = gpu
         .create_command_recorder("gpu-work-naming-freed-entries-test")
         .expect("recorder");
@@ -435,8 +430,7 @@ fn a_freed_entry_is_destroyed_only_once_the_gpu_work_submitted_before_its_releas
     gpu.free_every_unheld_shared_pool_entry_the_stream_last_acquired(stopped_stream);
     // Read while the gate is shut, asserted once it is open: a failed
     // assertion must not leave the gated submission pending forever.
-    let ring_slots_while_gated =
-        shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+    let ring_slots_while_gated = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
     let texture_slots_while_gated = gpu
         .texture_pool()
         .slot_count_of_the_shape_of(&streams_texture_shape);
@@ -567,8 +561,7 @@ fn an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration()
         tracing::warn!("no GPU device, so the idle window freeing test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let check_out_leases = live_service.check_out_leases();
     let acquire_and_hold = || {
         gpu.acquire_pixel_buffer(
@@ -582,8 +575,7 @@ fn an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration()
     let unused_frame = acquire_and_hold().0.to_string();
     wait_for_every_gpu_submission_made_so_far(&gpu);
     let held_inside_the_window = acquire_and_hold();
-    let slots_inside_the_window =
-        shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+    let slots_inside_the_window = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
     assert_eq!(
         slots_inside_the_window.len(),
         POOL_PRE_ALLOCATE_COUNT,
@@ -601,8 +593,7 @@ fn an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration()
             < device_memory_held_inside_the_window,
         "the slot freed past the idle window gave no device memory back"
     );
-    let slots_past_the_window =
-        shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
+    let slots_past_the_window = shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE);
     assert_eq!(
         slots_past_the_window.len(),
         POOL_PRE_ALLOCATE_COUNT - 1,

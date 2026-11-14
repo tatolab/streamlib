@@ -249,11 +249,7 @@ fn test_register_texture_with_layout_round_trip() {
         .expect("texture creation failed");
     let surface_id = "test-surface-with-layout";
 
-    gpu.register_texture_with_layout(
-        surface_id,
-        texture,
-        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-    );
+    gpu.register_texture_with_layout(surface_id, texture, VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
 
     let registration = gpu
         .resolve_texture_registration_by_surface_id(surface_id, None, 640, 480)
@@ -282,12 +278,7 @@ fn test_register_texture_with_layout_round_trip() {
         .expect("second texture creation failed");
     gpu.register_texture("test-surface-default-layout", texture2);
     let registration3 = gpu
-        .resolve_texture_registration_by_surface_id(
-            "test-surface-default-layout",
-            None,
-            640,
-            480,
-        )
+        .resolve_texture_registration_by_surface_id("test-surface-default-layout", None, 640, 480)
         .expect("default-layout resolve");
     assert_eq!(
         registration3.current_layout(),
@@ -331,8 +322,7 @@ fn a_pixel_buffer_registers_as_opaque_fd_with_its_memory_type_index_where_dma_bu
         tracing::warn!("no GPU device, so the pixel-buffer registration flavour test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let (published_frame_id, pixel_buffer) = gpu
         .acquire_pixel_buffer(
             LEASE_TEST_SURFACE_WIDTH,
@@ -390,8 +380,7 @@ fn a_pooled_pixel_buffer_reads_back_through_lookup_buffer_with_its_bytes_intact(
         tracing::warn!("no GPU device, so the lookup_buffer read-back test skips");
         return;
     };
-    let live_service =
-        crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let slot_bytes = (LEASE_TEST_SURFACE_WIDTH * LEASE_TEST_SURFACE_HEIGHT * 4) as usize;
     let producer_pattern_byte = |index: usize| (index.wrapping_mul(31).wrapping_add(7)) as u8;
 
@@ -469,9 +458,7 @@ fn an_upload_publishes_the_terminal_layout_its_destinations_usage_allows() {
         ),
         (
             "colour-attachment-only — a scissored-draw target being seeded",
-            TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::COPY_DST
-                | TextureUsages::COPY_SRC,
+            TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_DST | TextureUsages::COPY_SRC,
             VulkanLayout::GENERAL,
         ),
         (
@@ -480,9 +467,8 @@ fn an_upload_publishes_the_terminal_layout_its_destinations_usage_allows() {
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         ),
     ] {
-        let desc =
-            TextureDescriptor::new(UPLOAD_EXTENT, UPLOAD_EXTENT, TextureFormat::Rgba8Unorm)
-                .with_usage(usage);
+        let desc = TextureDescriptor::new(UPLOAD_EXTENT, UPLOAD_EXTENT, TextureFormat::Rgba8Unorm)
+            .with_usage(usage);
         let texture = gpu
             .device()
             .create_texture_local(&desc)
@@ -576,12 +562,7 @@ fn seeding_a_non_sampled_destination_and_consuming_it_raises_no_validation_findi
     .expect("seed the storage-only destination");
 
     let registration = gpu
-        .resolve_texture_registration_by_surface_id(
-            &surface_id,
-            None,
-            UPLOAD_EXTENT,
-            UPLOAD_EXTENT,
-        )
+        .resolve_texture_registration_by_surface_id(&surface_id, None, UPLOAD_EXTENT, UPLOAD_EXTENT)
         .expect("the seeded destination resolves its registration");
     let published_layout = registration.current_layout();
 
