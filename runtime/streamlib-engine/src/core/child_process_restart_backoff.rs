@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one restart policy every child process the runtime keeps alive runs
 //! under: how long to wait before starting it again, and when a child running

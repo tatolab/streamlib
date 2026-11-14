@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The part of Slang's C++ ABI (`slang.h`, release 2026.12) the compiler
 //! calls: COM vtable slots, counted from `ISlangUnknown`'s three, and the

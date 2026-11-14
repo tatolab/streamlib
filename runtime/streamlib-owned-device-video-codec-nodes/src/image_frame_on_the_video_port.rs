@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The Image frames on a `video` port: read by an encoder off a message's
 //! descriptor, with the pooled frame it names lent and claimed, and written

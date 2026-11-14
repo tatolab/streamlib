@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The module host table's binary layout, as the lent `tatolab.runtime` builds
 //! it and a module's native half reads it.

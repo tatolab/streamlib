@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A pool slot as a viewer holds it, a pixel buffer or a texture: its IOSurface, handed on to
 //! whatever displays the frame.

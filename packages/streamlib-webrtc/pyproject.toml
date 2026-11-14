@@ -8,12 +8,12 @@ version = "0.68.82"
 description = "WHIP publish and WHEP play nodes for Tatolab streams."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "BUSL-1.1" }
+license = { text = "GPL-3.0-only" }
 # PEP 639. What lands in `.dist-info/licenses/`, which is the only way a wheel
 # discharges the reproduce-the-notice terms it ships under: `LICENSE` for our
-# own, `THIRD-PARTY-NOTICES.md` for every dependency's. The SPDX id above says
-# BUSL-1.1 and nothing about who the Licensor is or when the Change Date falls
-# — the parameters are the licence, so the text has to travel too.
+# own, `THIRD-PARTY-NOTICES.md` for every dependency's. GPL-3.0 §4 conveys each
+# copy with the licence text and the copyright notice, which the SPDX id above
+# does not carry, so the text has to travel too.
 #
 # `LICENSE` is a symlink to the repo root, which maturin follows; the notices
 # are this project's own, generated over its own closure by `cargo xtask

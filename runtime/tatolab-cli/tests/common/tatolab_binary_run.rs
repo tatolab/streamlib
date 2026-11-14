@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The `tatolab` binary run as a user runs it. Integration tests only: the binary's path is
 //! known to them alone.

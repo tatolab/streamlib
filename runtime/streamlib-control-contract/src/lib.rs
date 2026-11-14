@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Every operation a StreamLib runtime's control plane serves, each declared once by an
 //! [`ControlOperation`] impl, and the contract file every adapter, SDK and reference page is

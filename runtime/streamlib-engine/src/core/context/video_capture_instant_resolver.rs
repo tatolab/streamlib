@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The rule every video capture arm stamps its frames under: a frame carries
 //! the instant its device captured it, on the machine's monotonic clock, and a

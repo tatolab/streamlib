@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `WhepPlayer`'s reading thread: connect, drain each received access unit and
 //! Opus packet onto the node's output ports, and reconnect for as long as the

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What a WHIP publish and a WHEP play share: the codecs they negotiate, the
 //! peer connection they build, and the offer/answer exchange they make.

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 //
 // Sampled RGBA or BGRA texture source → RGBA storage-image dest, texel for
 // texel. A sampled BGRA image reads back in RGBA order, so the swizzle is

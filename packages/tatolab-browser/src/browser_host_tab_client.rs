@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! One node's page as a tab in the machine's browser host: leased through the
 //! module host table, opened over the tab protocol, and published through the

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The sample projects a runtime unit carries, each a project directory in its samples
 //! directory, listed by name, title and summary, and copied whole into a new project.

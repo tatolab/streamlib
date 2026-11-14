@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A GPU pool claim table's rows in a Mach memory entry, mapped shared so
 //! every interpreter handed a send right to the entry claims in the same

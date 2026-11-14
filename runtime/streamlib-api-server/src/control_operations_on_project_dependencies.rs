@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The operations on a project's imports of other projects: added, updated, listed and removed,
 //! and an imported project's stream placed in a graph.

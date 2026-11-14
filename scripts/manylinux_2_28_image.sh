@@ -1,6 +1,6 @@
 # shellcheck shell=bash disable=SC2034
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # Sourced by every script that builds inside manylinux_2_28. A `docker run` of
 # this image sets STREAMLIB_RUNNING_IN_MANYLINUX_2_28_IMAGE to it, which is how a

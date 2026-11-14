@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `skia_animated_stress` — `#[ignore]`-by-default stress test that
 //! drives the Skia adapter through 1800 acquire/draw/flush/release

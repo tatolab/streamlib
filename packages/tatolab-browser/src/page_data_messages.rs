@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The two message shapes that cross the page boundary: a msgpack map on
 //! `data` becomes the JSON detail of a DOM event, and the JSON text a page

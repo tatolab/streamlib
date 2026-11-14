@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Moving a project's first-party packages up to this runtime's version before it loads. A
 //! package the project's `uv.lock` takes from an index — `tatolab-stream` or a `tatolab-*`

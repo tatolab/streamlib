@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The decoder on a device a codec module owns: the checked-in clips a Mac's
 //! VideoToolbox encoder wrote decode, one access unit at a time, to one RGBA

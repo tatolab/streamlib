@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A verb's standard output and standard error: written whole and flushed, a reader that closed
 //! the output pipe ending the verb quietly rather than panicking it (Rust ignores SIGPIPE, so a

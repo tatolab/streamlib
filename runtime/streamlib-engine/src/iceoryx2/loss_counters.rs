@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What a processor's ports lost, counted where `graph` reads them: bags per
 //! inbound link at a destination, samples a windowed port's flush discarded per

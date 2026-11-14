@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 // Three-layer Porter-Duff "over" compositor with animated picture-in-picture
 // chrome, plus the finishing pass that makes the UI belong to the same broken

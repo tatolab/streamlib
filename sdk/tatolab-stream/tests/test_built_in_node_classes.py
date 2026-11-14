@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The built-in node classes `tatolab.stream` publishes, generated from the
 runtime's own descriptors: each named by the type the runtime registers, each

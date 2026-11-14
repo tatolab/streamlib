@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! H.264 and H.265 on the devices the codec modules own, scored as the rig
 //! scores them: each checked-in PSNR reference is written into memory the

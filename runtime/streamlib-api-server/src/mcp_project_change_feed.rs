@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Each open project's change feed: the resource `streamlib://project/<project>/transactions`
 //! holds its newest transactions and the actions refused since the runtime started, and a

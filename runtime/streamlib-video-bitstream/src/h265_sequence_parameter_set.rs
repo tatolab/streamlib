@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The H.265 sequence parameter set, read from its RBSP (ITU-T H.265 §7.3.2.2).
 //!

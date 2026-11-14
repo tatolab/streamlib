@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Drain worker. Pops [`LogRecord`]s from a bounded MPMC queue, stamps each
 //! with the `runtime_id`, `stream` and `action` its route entry names and its

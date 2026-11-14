@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A viewer's read of any output port on the machine: the runtime holds the
 //! port's channel open and hands the viewer what it needs to subscribe to the

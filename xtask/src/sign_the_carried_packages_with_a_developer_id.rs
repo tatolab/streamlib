@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Signs every Mach-O inside the macOS unit's carried wheels and carried Python archive with a
 //! Developer ID, so a bundle that carries them passes Apple's notary, which opens both kinds of

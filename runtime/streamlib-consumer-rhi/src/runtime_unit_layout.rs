@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Where a runtime unit lays out what it carries: `bin/` beside the lend, the
 //! browser host and the sample projects beside the lend, and on macOS and Linux the bundled Vulkan

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `round_trip_skia_canvas_gl` — Skia (GL backend) draws a known shape
 //! into a WRITE-acquired surface, then the host reads back the

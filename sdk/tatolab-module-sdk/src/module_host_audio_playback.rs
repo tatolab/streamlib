@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Safe Rust over the table's audio playback verbs: a device stream the
 //! engine's audio backend opens for the module in the format it asks for,

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! CUDA surface adapter — imports a host-allocated, OPAQUE_FD-exportable
 //! Vulkan resource into a CUDA context via `VK_KHR_external_memory_fd` ↔

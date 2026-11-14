@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tracing` layer that captures events, stamps each with the stream route of
 //! the thread it was emitted on, and pushes [`LogRecord`]s onto the drain

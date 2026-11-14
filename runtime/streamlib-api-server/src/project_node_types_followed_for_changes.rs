@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The node types each project offered when this runtime last listed it, and the follower that
 //! lists a project again after a change that can alter them, or after a stream action when its

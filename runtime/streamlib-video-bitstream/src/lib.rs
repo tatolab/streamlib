@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! H.264 and H.265 bitstream reading with no GPU: Annex-B access units and
 //! their length-prefixed samples, start codes, RBSP emulation prevention, and

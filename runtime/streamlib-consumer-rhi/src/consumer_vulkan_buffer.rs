@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Consumer-side generic Vulkan `VkBuffer` — imports a host-allocated
 //! DMA-BUF or OPAQUE_FD on Linux, or an IOSurface's pages on macOS, and

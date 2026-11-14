@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 // Connects to the local API socket named by argv[2], calls over the connection and over a POST,
 // subscribes to the project named by argv[3], and prints one JSON line per step for the

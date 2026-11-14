@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """`node.rust_function(...)` reads a `#[function_node]` declaration into the
 same stamps `@node.function` writes, with `language` `rust`, and calls the node

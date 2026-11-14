@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The lock that makes one runtime the machine's runtime, held for that
 //! process's life, and the probe a client uses to name whoever holds it.

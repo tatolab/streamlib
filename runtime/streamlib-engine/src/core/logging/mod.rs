@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Unified logging pathway: `tracing` → bounded lossy channel → drain
 //! worker → line-buffered pretty mirror + the batched JSONL log of the

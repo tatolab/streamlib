@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The local API's listener: a Unix socket in the runtime directory that only
 //! the runtime's own user can open, and the only listener a runtime's control

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab --help` lists the served verbs, and `tatolab new` is one `create_project` call on
 //! the machine's runtime: the directory it sends, the lines it prints, and how a refusal reads.

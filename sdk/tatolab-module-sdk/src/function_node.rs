@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Rust function nodes: a `#[function_node]` function exports the evaluate entry
 //! the read seam calls, beside the declaration its module's Python half hands

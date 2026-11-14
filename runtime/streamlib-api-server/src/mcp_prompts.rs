@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The MCP prompts the runtime serves: recipes an agent follows with the operations
 //! it already serves, rendered against the live graph and node catalog of the

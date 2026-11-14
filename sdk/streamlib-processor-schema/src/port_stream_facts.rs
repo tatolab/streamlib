@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! An output port's stream facts: what its family states about the stream it
 //! carries, as typed fields of that family. `connect` never compares them.

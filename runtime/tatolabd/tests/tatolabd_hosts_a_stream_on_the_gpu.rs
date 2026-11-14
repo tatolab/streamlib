@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolabd` hosting a started native-only stream on the GPU: a recorded stream
 //! re-loaded and started at the runtime's start, the engine's signal ladder

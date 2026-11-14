@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What every CoreAudio audio-tier test settles before it measures: that the
 //! arm under test is the one the chain chose, which device it will measure,

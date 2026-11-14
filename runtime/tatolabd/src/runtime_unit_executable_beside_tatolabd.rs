@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The executables the runtime unit carries beside `tatolabd` — the local
 //! relay and uv — as the unit lays them out in `bin/` and the macOS app bundle

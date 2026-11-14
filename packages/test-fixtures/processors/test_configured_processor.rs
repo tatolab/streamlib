@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Attribute-macro test fixture verifying that
 //! `#[streamlib::sdk::processor("...")]` emits the right config-binding

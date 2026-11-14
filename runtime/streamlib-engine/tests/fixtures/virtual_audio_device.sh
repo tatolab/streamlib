@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # Virtual audio device fixture for E2E tests. Sister to virtual_camera.sh:
 # where that one gives the rig a camera with no camera, this one gives it an

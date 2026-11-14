@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The CoreAudio arm's samples, proven digitally: a tone the arm plays to the
 //! default output comes back, sample for sample, through a muted process tap

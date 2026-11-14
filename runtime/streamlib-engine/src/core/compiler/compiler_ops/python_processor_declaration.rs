@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Reading one described node type — the `@node.process` stamps a processor
 //! interpreter printed for a class — into what the engine registers.

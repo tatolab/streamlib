@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! An axum router served on an engine's tokio runtime until it is stopped, and
 //! the wait for the router — which holds the engine — to be dropped, so the

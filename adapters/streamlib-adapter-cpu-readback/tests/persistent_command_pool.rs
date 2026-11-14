@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `streamlib_adapter_cpu_readback::tests::persistent_command_pool` —
 //! locks the #620 amortisation invariant.

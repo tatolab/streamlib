@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # Prints one digest of everything a runtime unit is built from, for `ci.yml` to
 # key the unit's cache on. A pull request that changes none of it — an extension,
@@ -38,8 +38,7 @@ sha256_of_standard_input() {
     ':(exclude)sdk/tatolab-pypi-placeholder/**' \
     ':(exclude)sdk/tatolab-stream/**' \
     ':(exclude).github/ISSUE_TEMPLATE/**' \
-    ':(exclude)*.md' \
-    ':(exclude)LICENSES/**'
+    ':(exclude)*.md'
   # The runtime compiles the scaffold `tatolab new` writes, the wheel ships the
   # notices, and the unit carries the stream package and its core modules as
   # wheels and the Core Nodes project as a folder; each sits under an exclusion

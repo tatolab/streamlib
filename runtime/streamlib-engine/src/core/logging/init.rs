@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Install the unified logging pathway: one tracing subscriber per process
 //! (env filter + the layer that routes each record to the stream that

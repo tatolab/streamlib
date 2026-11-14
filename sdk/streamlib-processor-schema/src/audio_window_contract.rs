@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The window contract an audio input port may declare beside its delivery
 //! profile — the rate, dtype, window size and hop it wants, and the channel

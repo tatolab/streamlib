@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A stream's clock as `run_on_clock` names it and the graph document carries it."""
 

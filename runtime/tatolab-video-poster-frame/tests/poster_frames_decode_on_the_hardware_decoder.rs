@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The helper decodes on the machine's hardware decoder: the checked-in clips' first access
 //! units decode to their 320×180 picture, and an MP4 ffmpeg writes becomes a 512 px poster.

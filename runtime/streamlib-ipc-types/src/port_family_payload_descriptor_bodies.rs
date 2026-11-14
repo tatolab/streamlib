@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The descriptor bodies of the port families: an Image frame, an Array
 //! frame and its attribute table, a Channels block and a Packets unit; a

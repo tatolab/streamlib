@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
-# Every Rust and Python source file carries the BUSL header. Run from the
+# Every Rust and Python source file carries the GPL-3.0-only header. Run from the
 # workspace root, by `.github/workflows/ci.yml`'s repo gates and by
 # `cargo xtask run-local-ci-gates` alike — one implementation, so a green local
 # run means a green CI run.
@@ -29,7 +29,7 @@ list_repo_files() {
 # licence scanner actually reads.
 report_files_missing_header() {
   local expected_header="$1"
-  local expected_spdx="${expected_header%%Copyright*}SPDX-License-Identifier: BUSL-1.1"
+  local expected_spdx="${expected_header%%Copyright*}SPDX-License-Identifier: GPL-3.0-only"
   local language="$2"
   shift 2
 
@@ -69,7 +69,7 @@ failed_language_checks=()
 # zones silently exempts every zone nobody remembered to add to it.
 #
 # The vendored trees are verbatim third-party copies under their own licence
-# and deliberately carry NO BUSL headers — the vulkanalia fork is Apache-2.0
+# and deliberately carry NO GPL headers — the vulkanalia fork is Apache-2.0
 # (docs/architecture/vendored-vulkanalia.md). One exception, listed by path;
 # see CLAUDE.md's licensing section.
 #

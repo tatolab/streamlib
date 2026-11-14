@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A graph's interface: each `GraphInput` and `GraphOutput` node declares one
 //! port the graph offers, named and of one family.

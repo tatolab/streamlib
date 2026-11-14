@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The surface-share verbs that hand an interpreter a GPU pool's claim table
 //! and its slots, once, so each later frame of the pool is claimed in shared

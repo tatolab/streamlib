@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The published frame id grammar, `<pool slot>#<frame generation>`: one id
 //! per publish over a pool slot, keyed back to the slot by caches that import

@@ -2,25 +2,26 @@
 
 ## Licensing (load-bearing — do not modify)
 
-StreamLib is licensed under the Business Source License 1.1 (BUSL-1.1). Never suggest MIT / Apache
-or relax the commercial-use restriction. Every new Rust file carries:
+StreamLib is licensed under the GNU General Public License, version 3 only (GPL-3.0-only).
+Never suggest another licence for it. Every new Rust and Python file carries:
 
     // Copyright (c) 2025 Jonathan Fontanez
-    // SPDX-License-Identifier: BUSL-1.1
+    // SPDX-License-Identifier: GPL-3.0-only
 
-Exception — vendored third-party trees keep the licence they arrived under. Never add a BUSL
+Exception — vendored third-party trees keep the licence they arrived under. Never add a GPL
 header to one, and never reformat or "improve" those sources — a change to one is a
 recorded patch against its upstream, never a drive-by edit:
 
 - `vendor/tatolab-vulkanalia`, `-sys` and `-vma` — the vulkanalia fork, Apache-2.0. See
   `docs/architecture/vendored-vulkanalia.md`.
 
-The exception is those paths and nothing else; BUSL is not relaxed anywhere a path is not
-listed. Do not modify `LICENSE`, `LICENSES/`, or `docs/license/` without explicit approval.
+The exception is those paths and nothing else; GPL-3.0-only holds everywhere a path is not
+listed. A dependency must be GPL-3.0-compatible (`deny.toml` holds the allow list). Do not modify
+`LICENSE` without explicit approval.
 
 ---
 
-StreamLib is a BUSL-1.1-licensed real-time streaming processing runtime like Nvidia holoscan.It is built like a game engine:
+StreamLib is a GPL-3.0-licensed real-time streaming processing runtime like Nvidia holoscan.It is built like a game engine:
 ONE core system per concern — extend the existing system, never build a parallel one. Search first.
 
 ## How work usually flows
@@ -154,7 +155,7 @@ built-in publishes on means you skipped it.
   or anything lower, in this repo or in Tato Studio. A third-party binary's own `minos` and a
   dated research note stay as recorded.
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
-- New Rust files carry the BUSL header, except in the vendored trees §Licensing lists, where
+- New Rust and Python files carry the GPL-3.0-only header, except in the vendored trees §Licensing lists, where
   a change is a recorded patch against upstream and never a drive-by edit. Never touch the
   licence files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.

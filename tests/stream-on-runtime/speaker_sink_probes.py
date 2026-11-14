@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A probe that says when enough audio has flowed to judge a playback run by.
 

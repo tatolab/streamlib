@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The virtual camera's PipeWire door: a `Video/Source` node with
 //! `media.role = Camera` that any portal-based application can select.

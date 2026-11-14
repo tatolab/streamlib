@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The harness runs only a runtime unit whose binaries keep the machine's
 directories under a test root, so no test can take this machine's real lock."""

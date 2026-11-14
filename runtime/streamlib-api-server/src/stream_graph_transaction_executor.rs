@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one executor of a stream graph transaction: each operation staged, applied whole or
 //! refused whole, written to the graph documents and committed to the project's history, or

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A helper process's run loop: the engine's own scheduling loop, calling the
 //! Python instance's callbacks in this process and taking the parent's

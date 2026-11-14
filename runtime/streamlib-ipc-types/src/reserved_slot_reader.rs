@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A reader on a channel's reserved slot from any process, engine or not: each
 //! bag's payload, stamp and group flag, with every message lost ahead of it.

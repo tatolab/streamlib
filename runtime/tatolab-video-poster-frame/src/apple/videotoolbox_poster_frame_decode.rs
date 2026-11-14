@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! One access unit decoded by the codec modules' VideoToolbox decompression session, its NV12
 //! pixel buffer read on the CPU and converted to RGBA.

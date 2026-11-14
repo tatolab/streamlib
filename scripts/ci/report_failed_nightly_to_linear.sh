@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # Reports a failed scheduled run to Linear: comments on the open Tatolab issue
 # with this title, or opens one labelled Bug.

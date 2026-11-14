@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Resolve sparse per-axis engine-ID inputs into a [`ResolvedColorInfo`]
 //! by filling missing axes from the V4L2 / libplacebo default table.

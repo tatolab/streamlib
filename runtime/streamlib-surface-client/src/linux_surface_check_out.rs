@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A surface-share `check_out` answer, read into typed fields: which fds are
 //! plane memory and which are timeline semaphores, what resource the surface

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Per-surface staging for handing engine frames to a consumer one hop
 //! away — the "one GPU blit into an exportable staging buffer" the plan

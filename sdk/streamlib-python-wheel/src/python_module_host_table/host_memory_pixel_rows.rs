@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The CPU half of `surface_write_from_host_memory`: a module's four-byte
 //! pixel rows copied into the engine's staging rows, channel order swapped

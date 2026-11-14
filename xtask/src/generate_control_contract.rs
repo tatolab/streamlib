@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `cargo xtask generate-control-contract`: writes the control contract file from the
 //! operation registry. `--check` is the CI gate that fails when the checked-in file differs

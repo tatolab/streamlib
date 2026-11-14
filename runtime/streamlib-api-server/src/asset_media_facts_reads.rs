@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The reads of assets' media facts this runtime queues, one at a time off the async runtime:
 //! each answered from its project's cache when kept there, queued on a miss, and announced on

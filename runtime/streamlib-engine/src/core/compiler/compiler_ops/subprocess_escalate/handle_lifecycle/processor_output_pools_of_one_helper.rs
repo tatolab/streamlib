@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The processor output pools one helper process publishes kernel outputs
 //! from — textures and tensor storage buffers alike — each under the pool key

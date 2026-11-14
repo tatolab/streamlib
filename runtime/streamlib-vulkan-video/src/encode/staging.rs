@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! NV12 staging upload, image layout transitions, and GPU-resident RGBA
 //! encode path (RGB→NV12 compute shader).

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Intermediate record pushed onto the drain channel. Two producers enqueue
 //! records here: the [`JsonlSinkLayer`] (tracing events from local call

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! How a stream's MoQ nodes reach one another: each runs in its own helper
 //! process, and the gateway holds the one relay session, so the track, send and

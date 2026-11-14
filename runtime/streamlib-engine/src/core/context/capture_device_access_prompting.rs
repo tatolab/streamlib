@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 /// Whether opening a privacy-gated capture device may put the platform's
 /// access prompt in front of the user when nobody has answered it yet.

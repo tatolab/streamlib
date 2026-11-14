@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 //
 // Cdylib graphics-kernel smoke test — fragment stage.
 // Single Rgba8Unorm color attachment. The push-constant variant gates

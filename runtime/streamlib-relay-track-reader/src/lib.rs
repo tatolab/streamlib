@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one relay-track reader: a track's groups received in the order they
 //! land and released in sequence order, holding at a missing sequence.

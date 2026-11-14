@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Polyglot escalate-on-behalf IPC for Python subprocess host
 //! processors. The subprocess can only see a `GpuContextLimitedAccess`

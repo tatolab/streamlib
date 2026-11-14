@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A project's store: the one embedded database the runtime keeps what it holds for a project
 //! in, outside the project's history. Every concern is a named table in it. A write lands in

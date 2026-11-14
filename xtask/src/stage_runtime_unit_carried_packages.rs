@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The third-party packages the runtime unit carries so a new project syncs with no network:
 //! a wheel of every package the core modules require, and the CPython build the unit's uv

@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 # `tatolab.runtime`'s native half: a processor interpreter imports this cdylib
 # for the bindings its node's calls go through. No engine is hosted here.
@@ -12,7 +12,7 @@ authors.workspace = true
 # The SPDX identifier rather than the workspace's `license-file`: maturin
 # refuses a license file outside the project root, and the repo LICENSE sits
 # four levels up. Same license, declared inline.
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 repository.workspace = true
 description = "tatolab.runtime — the bindings a processor interpreter's node calls go through"
 publish = false

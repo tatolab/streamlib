@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Removing processors: every thread told to stop before any is waited on, each
 //! wait bounded, and a thread that outlives its budget abandoned and named.

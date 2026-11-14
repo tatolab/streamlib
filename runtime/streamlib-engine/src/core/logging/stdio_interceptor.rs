@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Fd-level interceptor for stdio. Redirects fds 1 and 2 through pipes
 //! so raw `println!` / `printf` / `libc::write(1, …)` output surfaces

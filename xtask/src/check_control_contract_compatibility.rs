@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `cargo xtask check-control-contract-compatibility`: the CI gate that fails a change to the
 //! control contract file which breaks a client built against the earlier file without bumping

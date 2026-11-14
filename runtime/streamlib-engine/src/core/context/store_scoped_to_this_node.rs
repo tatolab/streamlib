@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What a node keeps in its project's store, under its own UUID: values that outlive its run, a
 //! Stop and a restart of the runtime, readable at once and committed by the store's one debounced

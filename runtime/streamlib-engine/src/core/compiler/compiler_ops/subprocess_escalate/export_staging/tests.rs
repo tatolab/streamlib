@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The readback ops answer from `GpuContext` with nothing installed:
 //! no bridge, no application glue, no runtime-absent case.

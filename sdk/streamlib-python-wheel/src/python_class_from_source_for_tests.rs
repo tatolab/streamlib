@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Building a class the way a user's module would, for tests that read
 //! attributes CPython assigns rather than attributes a test set by hand.

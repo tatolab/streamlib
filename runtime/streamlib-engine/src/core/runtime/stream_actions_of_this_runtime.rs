@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The stream actions a runtime takes for its owner: run a project's stream assets, each
 //! loaded from its graph document and recorded under the id its project and stream asset

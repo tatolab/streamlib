@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A node type led by an import's folder imports its module from that folder, and one interpreter refuses a top-level module from two places."""
 

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The human-readable layout of one [`RuntimeLogEvent`]: what the runtime's pretty
 //! mirror writes live, and what the native `tatolab logs` renders a replayed record

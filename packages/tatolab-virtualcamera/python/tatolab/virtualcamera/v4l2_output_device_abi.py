@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The kernel ABI the sink writes a camera through: `<linux/videodev2.h>` and `v4l2loopback.h` 0.15.
 

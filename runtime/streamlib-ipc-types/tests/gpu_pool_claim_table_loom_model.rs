@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Every interleaving of claims and a rehand of one claim table row, explored
 //! by loom: no reader is left holding a claim on a slot the engine rehanded.

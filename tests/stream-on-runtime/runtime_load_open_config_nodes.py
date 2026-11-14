@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A `@node.process` whose config takes any key, for `test_stream_graph_load_on_tatolabd.py`.
 

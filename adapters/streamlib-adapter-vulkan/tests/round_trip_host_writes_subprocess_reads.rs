@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Cross-process round-trip: host writes a known clear color via the
 //! adapter's `acquire_write` scope, releases, subprocess imports the

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A stream verb's stream argument resolved to the one stream id it means, through `list_streams`:
 //! a stream id, a display name exactly one stream holds, or — omitted — the one stream recorded

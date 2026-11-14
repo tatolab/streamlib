@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The local API over a real engine loading two streams: each call reaches the
 //! stream it names, a stream not loaded is refused naming the loaded ones,

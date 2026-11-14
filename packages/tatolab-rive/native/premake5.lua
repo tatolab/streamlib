@@ -1,5 +1,5 @@
 -- Copyright (c) 2025 Jonathan Fontanez
--- SPDX-License-Identifier: BUSL-1.1
+-- SPDX-License-Identifier: GPL-3.0-only
 
 -- rive-runtime's runtime and Vulkan renderer, and this wheel's bridge, in one
 -- workspace so the bridge compiles against the same class layouts the

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The shutdown-request handshake end-to-end: a processor inside a stream
 //! asks for its stream's shutdown, and the host waiting on that stream sees

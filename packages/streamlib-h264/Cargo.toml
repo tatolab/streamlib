@@ -6,7 +6,7 @@ rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "H.264 encode and decode for StreamLib on Vulkan Video or VideoToolbox, as the tatolab-h264 extension wheel."
 repository = "https://github.com/tato123/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 
 # `_native` is the module `tatolab.h264.processors` imports. cdylib only:

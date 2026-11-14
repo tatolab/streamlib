@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The TLS provider and the tokio runtime this wheel's sessions share, brought
 //! up on first use in whichever process the sessions run in.

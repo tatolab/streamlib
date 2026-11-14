@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab-read-track <relay-url> <broadcast> <track> --count N --out <dir>`:
 //! subscribe to one track at a relay as any MoQ client does, and write its

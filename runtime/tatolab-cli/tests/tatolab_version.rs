@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab --version` run as a user runs it, against a stub local API at an isolated machine's
 //! fixed socket and against none: the CLI's version, then the runtime's line.

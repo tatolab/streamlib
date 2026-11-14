@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A stepped stream of native nodes runs behind its step barrier: a continuous
 //! source, a slow reactive middle and a sink run exactly the steps the clock

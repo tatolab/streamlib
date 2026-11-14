@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Consumer-side Vulkan texture — imports a host-allocated DMA-BUF
 //! into the consumer's `VkDevice` and exposes the resulting `VkImage`.

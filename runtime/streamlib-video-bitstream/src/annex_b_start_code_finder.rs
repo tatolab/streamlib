@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The Annex-B start-code scan: the three-byte prefix `0x00 0x00 0x01` that
 //! opens every NAL unit of an H.264 / H.265 byte stream.

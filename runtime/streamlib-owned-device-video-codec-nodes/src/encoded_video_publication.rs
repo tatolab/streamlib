@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Publishing encoded access units on `encoded_video`: the Packets stream
 //! facts a session's first sync point states, set ahead of the access unit

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The AVFoundation arm of the video device seam: enumeration, open, 4:2:0
 //! biplanar negotiation, and the capture session whose every frame lands in a

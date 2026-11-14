@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The module host table a Tatolab module's native half reaches its node
 //! through: the node's lent ports, its log, the engine's monotonic clock, its

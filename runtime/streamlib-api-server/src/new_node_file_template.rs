@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A new node file's starting content, rendered from the template the SDK carries beside the
 //! new project scaffold.
@@ -13,7 +13,7 @@ const NEW_NODE_FILE_TEMPLATE_CLASS_STATEMENT: &str = "class NewNode:";
 
 /// The repository's licence header the template carries, which a person's file never does.
 const NEW_NODE_FILE_TEMPLATE_LICENCE_HEADER: &str =
-    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n";
+    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: GPL-3.0-only\n\n";
 
 /// The names the template imports from `tatolab.stream`, which the node's class cannot take.
 const NAMES_THE_NEW_NODE_FILE_TEMPLATE_IMPORTS: &[&str] = &[

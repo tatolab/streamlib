@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The surface-share verbs' platform-neutral half, shared by the Unix-socket
 //! arm and the raw-Mach arm: what a request names, the checkout lease a claim

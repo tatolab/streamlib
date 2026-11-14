@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The stream actions as resources a client follows live: `streamlib://stream-actions` holds
 //! every action queued or under way, and `streamlib://stream-action/<action>` one action as

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Shared test scaffolding for the cpu-readback adapter integration
 //! tests. Pulled in via `#[path = "common.rs"] mod common;` from each

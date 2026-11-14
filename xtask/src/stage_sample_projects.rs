@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The sample projects the runtime unit carries: every converted example in `examples/`,
 //! copied beside the lend into `lib/tatolab/samples/<name>/` as a project that stands on its

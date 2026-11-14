@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What one open control connection subscribed to: projects' change feeds, loaded streams' live
 //! graphs, read from `PUBSUB` on each stream's topic, and the stream actions.

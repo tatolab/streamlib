@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A viewer's process admitted to the surface-sharing Mach service: a running
 //! process of the user this runtime runs as, named by whoever opened the

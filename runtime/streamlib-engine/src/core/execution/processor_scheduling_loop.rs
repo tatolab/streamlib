@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The scheduling of a reactive or continuous processor: when it waits, when
 //! its input listener is drained, and when it is called.

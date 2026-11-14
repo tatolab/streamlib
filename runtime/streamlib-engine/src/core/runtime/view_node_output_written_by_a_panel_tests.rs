@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! View nodes in a loaded stream read as running without the GPU context a real start takes:
 //! each running node holds the processor instance a start leaves it with, and nothing compiles.

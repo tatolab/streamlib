@@ -3217,9 +3217,8 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   Slang libraries from their pinned tag on Linux rather than linking whatever sits on the builder.
   MIT-licensed PipeWire and SPA headers land under `vendor/`, untouched and
   unreformatted, and the licence obligations are met by the machinery that already
-  reproduces every vendored C/C++ project's own licence text out of the tree. `LICENSE`,
-  `LICENSES/` and `docs/license/` are not edited; the shim is our code and carries the
-  BUSL header. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
+  reproduces every vendored C/C++ project's own licence text out of the tree. `LICENSE`
+  is not edited; the shim is our code and carries the repository's licence header. [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990]
 - **DECIDED** — The portability gate is the design's pass/fail: the shipped
   `_engine.abi3.so` names five host libraries, every one on the permitted-host-library list,
   and audio adds none. No name is added to the permitted-host-library list — an audio

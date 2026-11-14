@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The clock of the stream this helper's node runs in, as `ctx.time`, the
 //! implicit write stamp and `ctx.stream_clock` read it.

@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 # pyright: reportUnnecessaryTypeIgnoreComment=true
 
 """A read through a port attribute is typed by the port's family, as pyright reads it.

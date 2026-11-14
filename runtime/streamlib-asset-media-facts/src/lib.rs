@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! What a project asset's bytes hold — duration, picture size, frame rate, codec, sample rate,
 //! a LUT's size — and its preview picture, read from its file by one reader per file family and

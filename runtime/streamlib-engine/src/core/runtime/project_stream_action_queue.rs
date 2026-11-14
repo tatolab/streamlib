@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Each project's serial queue of stream actions: an action runs after the
 //! project's earlier ones, one at a time, on a worker the engine's tokio

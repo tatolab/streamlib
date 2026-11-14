@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A muted, private Core Audio process tap of this test process's own output,
 //! inside a private aggregate device that carries only the tap: the capture

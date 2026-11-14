@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A gateway's read of one track at its relay for one receive node: each object
 //! and each run of given-up groups handed to the node over shared memory, with

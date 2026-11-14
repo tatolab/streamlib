@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Every `EglRuntime` and the engine's DRM modifier probe share the
 //! process's one `EGL_DEFAULT_DISPLAY`, so no holder may tear it down

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! [`raw_handles`] and [`crate::VulkanContext::raw_handles`] — escape hatch
 //! for power-user customers that need direct Vulkan handle access (custom

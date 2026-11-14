@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """The cross-floor check: each finding kind over a fixture source, the warning
 block it renders, and the gate over `tatolab.stream`'s own Python.

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The built-in nodes a person or an agent places between two port families,
 //! so every conversion, and what it costs, is a node in the graph.

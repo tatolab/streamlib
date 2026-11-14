@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `LoadedStreamInThisRuntime::wait_until_every_processor_is_running` — the
 //! signal an app process polls to know the stream's graph is up.

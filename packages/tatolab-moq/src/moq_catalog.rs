@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A broadcast's catalog in hang's layout, as the gateway merges it from its
 //! tracks' entries and a receive node reads one track's entry back out, and the

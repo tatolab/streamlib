@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A `data` message: one msgpack map from view-model property path to value,
 //! each entry assigned to the property of that path by the property's own type.

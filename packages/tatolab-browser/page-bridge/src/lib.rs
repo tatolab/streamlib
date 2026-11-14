@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The renderer half of `tatolab-browser`: the `window.tatolab` bridge every
 //! page is given before its own scripts run, and the CEF application its child

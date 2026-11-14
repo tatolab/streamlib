@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! How a source channel count resolves to an Opus stream layout, shared by
 //! the encoder and the decoder so both mint the same shape from the same

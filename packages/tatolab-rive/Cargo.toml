@@ -6,7 +6,7 @@ rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "A Rive animation as a stream source, as an extension wheel: rive-runtime draws each frame straight into the node's output texture, with no copy."
 repository = "https://github.com/tatolab/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 build = "build.rs"
 

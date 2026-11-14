@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The uv the runtime unit carries, which the runtime makes every project's
 //! `.venv` with: uv's own release archive for the host's target, at one pinned

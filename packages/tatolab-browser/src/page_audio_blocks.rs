@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A page's audio as Channels blocks: CEF's float packets, planar f32, placed
 //! on one unbroken timeline per stream.

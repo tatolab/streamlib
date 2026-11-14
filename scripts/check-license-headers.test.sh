@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Unit tests for scripts/check-license-headers.sh.
 #
-# The gate holds BUSL over every first-party source file while leaving a
+# The gate holds GPL-3.0-only over every first-party source file while leaving a
 # vendored tree's own licence headers alone, and those two pull against each
 # other. The exemption is the side that fails silently: an over-wide pathspec
 # stops covering first-party code and nothing goes red. So every exempt path is
@@ -56,8 +56,8 @@ plant_untracked() {
   cat >"$repo/$1"
 }
 
-busl_rust() { printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: BUSL-1.1\n\npub fn f() {}\n'; }
-busl_python() { printf '# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\ndef f(): ...\n'; }
+gpl_rust() { printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: GPL-3.0-only\n\npub fn f() {}\n'; }
+gpl_python() { printf '# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: GPL-3.0-only\n\ndef f(): ...\n'; }
 
 apache_rust() { printf '// SPDX-License-Identifier: Apache-2.0\n\npub fn f() {}\n'; }
 
@@ -96,9 +96,9 @@ expect_fail_naming() {
 echo "scripts/check-license-headers.sh"
 
 new_repo
-busl_rust | plant runtime/streamlib-engine/src/lib.rs
-busl_python | plant sdk/tatolab-stream/tatolab/stream/__init__.py
-expect_pass "first-party Rust and Python carrying the BUSL header pass"
+gpl_rust | plant runtime/streamlib-engine/src/lib.rs
+gpl_python | plant sdk/tatolab-stream/tatolab/stream/__init__.py
+expect_pass "first-party Rust and Python carrying the GPL header pass"
 
 new_repo
 printf 'pub fn f() {}\n' | plant runtime/streamlib-engine/src/lib.rs
@@ -116,22 +116,22 @@ expect_fail_naming "the copyright line without the SPDX line fails" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2024 Someone Else\n// SPDX-License-Identifier: BUSL-1.1\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2024 Someone Else\n// SPDX-License-Identifier: GPL-3.0-only\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "the SPDX line without the copyright line fails" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2025 Jonathan Fontanez, All Rights Reserved\n// SPDX-License-Identifier: BUSL-1.1\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2025 Jonathan Fontanez, All Rights Reserved\n// SPDX-License-Identifier: GPL-3.0-only\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "a copyright line with trailing text fails — it is matched whole" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: BUSL-1.1 AND MIT\n' | plant runtime/streamlib-engine/src/lib.rs
+printf '// Copyright (c) 2025 Jonathan Fontanez\n// SPDX-License-Identifier: GPL-3.0-only AND MIT\n' | plant runtime/streamlib-engine/src/lib.rs
 expect_fail_naming "an SPDX line with trailing text fails — so is that one" Rust \
   "runtime/streamlib-engine/src/lib.rs"
 
 new_repo
-{ printf '#!/usr/bin/env python3\n'; busl_python; } | plant tools/thing.py
+{ printf '#!/usr/bin/env python3\n'; gpl_python; } | plant tools/thing.py
 expect_pass "a shebang moves the Python header to lines 2-3"
 
 new_repo

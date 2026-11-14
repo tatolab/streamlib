@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `skia_animated_stress_gl` — GL-backed companion of
 //! `skia_animated_stress`. Drives `SkiaGlSurfaceAdapter` through 1800

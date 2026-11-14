@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! An `add_node` applied to a stream's live graph and refused leaves no node behind: the
 //! graph a client reads after the refusal is the graph it read before.

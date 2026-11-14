@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 // Test shader for the multi-input compute-kernel RHI: reads INPUT_COUNT
 // storage buffers, writes their per-element sum into an output storage

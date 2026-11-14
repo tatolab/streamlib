@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The contract a running StreamLib runtime offers the clients on its machine:
 //! the files it leaves on disk and the names its local API speaks, defined once

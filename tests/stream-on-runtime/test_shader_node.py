@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """A `@node.shader` on `tatolabd`: its Slang runs on the GPU in the runtime, with no process of its own.
 

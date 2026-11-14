@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A gateway's one session at its relay: the broadcast it publishes, with its
 //! catalog and a track per declared track node, and the origin its receive

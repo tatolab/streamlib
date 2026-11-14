@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Output ports' stream facts: the facts a node's output ports carry now, and
 //! the upstream facts its inbound links reach.

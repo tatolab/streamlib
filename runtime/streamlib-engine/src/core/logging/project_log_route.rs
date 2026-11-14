@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Where the records a project's streams and stream actions emit go: the
 //! project's one JSONL log, `<project>/.tatolab/logs/project.jsonl`, each

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The table's audio playback verbs: playback streams the engine's audio
 //! device backend opens in this helper for one node's native code, in the

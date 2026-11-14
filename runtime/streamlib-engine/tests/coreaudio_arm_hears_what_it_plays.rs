@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The CoreAudio arm through the air: a tone played through the built-in
 //! speaker reaches the built-in microphone, both opened through the seam by

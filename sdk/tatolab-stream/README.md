@@ -74,4 +74,4 @@ Supports CPython 3.12 to 3.13 (not the free-threaded builds).
 - [Python API reference](https://tatolab.com/docs/reference/python-api)
 - [Source](https://github.com/tatolab/streamlib)
 
-Licensed under the [Business Source License 1.1](https://github.com/tatolab/streamlib/blob/main/LICENSE).
+Licensed under the [GNU General Public License, version 3 only](https://github.com/tatolab/streamlib/blob/main/LICENSE) (GPL-3.0-only).

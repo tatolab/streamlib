@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A helper's leases on the runtime's shared native services: acquired, read
 //! and released over its bridge, and every one it still holds given back when

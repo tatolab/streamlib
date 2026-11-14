@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Wire helpers for the per-runtime surface-sharing service: a Unix socket
 //! with SCM_RIGHTS fd passing on Linux, a raw Mach channel carrying port

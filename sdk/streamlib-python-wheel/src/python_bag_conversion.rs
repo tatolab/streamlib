@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Python data across the boundary: msgpack decoded into ordinary Python data,
 //! config and graph JSON both ways, and the cast a typed read hands a message's

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! `layout_never_leaks` — internal-only assertion that the Skia
 //! adapter's public API surface never returns a `GrVkImageInfo` (or

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A project's log records as the runtime reads them from the project's log on disk: paged
 //! through the local API's `logs` tool by an opaque cursor, and rendered as the runtime mirrors

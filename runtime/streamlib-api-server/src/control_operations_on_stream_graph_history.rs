@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The operations that reverse a project's transactions and refresh its generated fragments:
 //! undo, redo, and the fragments a changed module defines built again.

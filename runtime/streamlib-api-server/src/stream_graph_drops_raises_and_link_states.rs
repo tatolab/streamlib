@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The parts of a stream's live graph that change without a graph event — each node's drop and
 //! refusal counts, the raise its `process()` keeps and why it is not ready, and each link's

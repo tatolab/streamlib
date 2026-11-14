@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The one `libpipewire-0.3.so.0` this process loads, and the one resolved
 //! entry-point table every PipeWire arm calls through.

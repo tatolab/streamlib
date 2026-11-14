@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! H.264 or H.265 encode on Apple's media engine: the host converts each
 //! published frame on the GPU into an NV12 IOSurface from the session's own

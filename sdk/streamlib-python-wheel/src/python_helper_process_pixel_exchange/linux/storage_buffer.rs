@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A tensor storage buffer as a helper process holds it: engine-owned
 //! DEVICE_LOCAL memory of a declared shape and dtype, imported into CUDA as

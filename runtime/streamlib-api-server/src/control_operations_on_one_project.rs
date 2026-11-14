@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The operations on a project as a whole: renamed, described and given a cover, each one
 //! transaction on its history, and duplicated or deleted whole.

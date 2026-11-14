@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The payload of one message read off an input port: the channel sample it
 //! arrived in, borrowed in place, or bytes the engine owns.

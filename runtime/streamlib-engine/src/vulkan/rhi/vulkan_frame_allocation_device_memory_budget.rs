@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The device-memory bound every frame allocation is weighed against before it
 //! allocates: its heap's budget less a fixed headroom (on macOS, Metal's

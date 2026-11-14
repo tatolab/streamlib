@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 //
 // Cdylib ray-tracing-kernel smoke test — ray-generation stage.
 // Traces a single ray per pixel against the bound TLAS and writes

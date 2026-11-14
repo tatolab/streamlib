@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A tensor storage buffer as a macOS helper holds it: the engine's
 //! byte-shaped IOSurface of a declared shape and dtype, its pages imported on

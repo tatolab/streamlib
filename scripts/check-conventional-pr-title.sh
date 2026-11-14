@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 #
 # Exits non-zero unless the title given is a conventional-commit title, the form
 # a PR title takes for its readers; run this on a title before opening the PR.

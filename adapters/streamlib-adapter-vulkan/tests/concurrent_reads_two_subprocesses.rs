@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Two subprocesses simultaneously hold read access on the same surface
 //! (each via its own imported VkImage + timeline). Exercises the

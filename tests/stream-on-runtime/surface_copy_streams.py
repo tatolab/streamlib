@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Jonathan Fontanez
-# SPDX-License-Identifier: BUSL-1.1
+# SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per surface-copy scenario: a test-pattern frame fed to one probe,
 which runs in a processor interpreter of its own."""

@@ -15,9 +15,7 @@
       "Bash(docker info *)"
     ],
     "ask": [
-      "Edit(LICENSE)",
-      "Edit(LICENSES/**)",
-      "Edit(docs/license/**)"
+      "Edit(LICENSE)"
     ],
     "deny": [
       "Bash(gh issue create*)",

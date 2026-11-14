@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Entering a grouped stream and surviving its losses: a reader whose messages
 //! only decode from the start of a group — an encoded video link, where a

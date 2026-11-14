@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! Built-in `ChannelsToRecords`: each Channels block's latest value per
 //! channel, as one Records message keyed by channel name.

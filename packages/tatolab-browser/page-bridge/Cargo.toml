@@ -6,7 +6,7 @@ rust-version = "1.88"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
 description = "The renderer half of tatolab-browser: the `window.tatolab` bridge a page publishes through, and the `tatolab-browser-subprocess` binary CEF re-executes for its child processes."
 repository = "https://github.com/tatolab/streamlib"
-license = "BUSL-1.1"
+license = "GPL-3.0-only"
 publish = false
 
 [lib]

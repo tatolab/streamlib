@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The first-party packages the runtime unit carries, `tatolab-stream` and the core
 //! modules, each built from its package in the workspace into one wheel in the unit's

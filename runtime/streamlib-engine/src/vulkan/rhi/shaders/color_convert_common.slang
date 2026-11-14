@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 //
 // Shared math for color conversion compute shaders. Mirrored CPU-side
 // in `runtime/streamlib-engine/src/core/color/transfer.rs` — the round-

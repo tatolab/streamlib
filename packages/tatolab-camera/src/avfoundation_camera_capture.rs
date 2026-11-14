@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! AVFoundation capture with no CPU copy: each IOSurface the capture session
 //! delivers is adopted once through the module host table and converted on the

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The MCP tools, generated from the control operation registry's agent surface: each listed
 //! operation as a tool of its own, and the discovery tools that reach every other one.

@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! The compatibility record of graph documents: every golden document in
 //! `golden_graph_documents/` reads on this build, holds a UUID for its stream

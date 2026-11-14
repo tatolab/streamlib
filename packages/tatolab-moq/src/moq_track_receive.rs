@@ -1,5 +1,5 @@
 // Copyright (c) 2025 Jonathan Fontanez
-// SPDX-License-Identifier: BUSL-1.1
+// SPDX-License-Identifier: GPL-3.0-only
 
 //! A receive node's thread: it asks its gateway for a track every second and
 //! writes what the gateway reads onto the node's `content` output, each object
