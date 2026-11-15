@@ -1,10 +1,44 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Delivering each sample buffer into a pooled pixel buffer, stamped on the device's own clock, through the sample buffer delegate.
+//! Delivering each sample buffer into a pooled pixel buffer, stamped on the
+//! device's own clock, through the sample buffer delegate.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
+
+use dispatch2::{DispatchQueue, DispatchRetained};
+use objc2::rc::Retained;
+use objc2::{AnyThread, DefinedClass, define_class, msg_send, sel};
+use objc2_av_foundation::{
+    AVCaptureConnection, AVCaptureOutput, AVCaptureSession,
+    AVCaptureVideoDataOutputSampleBufferDelegate,
+};
+use objc2_core_foundation::CFRetained;
+use objc2_core_media::{CMClock, CMSampleBuffer, CMSyncConvertTime, CMTimeFlags};
+use objc2_core_video::{
+    CVPixelBuffer, CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth,
+};
+use objc2_foundation::{NSObject, NSObjectProtocol};
+use parking_lot::Mutex;
+
+use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
+use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
+use crate::core::color::{ColorSpaceKind, H273ColorVui, ResolveH273ColorVuiDefaults};
+use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
+use crate::core::context::{
+    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
+    GpuContextLimitedAccess, VideoCaptureInstantResolver, VideoCaptureStreamFormat,
+};
+use crate::core::logging::{
+    ProjectLogRouteEntry, run_in_the_project_log_route_entry_when_there_is_one,
+};
+use crate::core::media_clock::MediaClock;
+use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
+use crate::core::{Error, Result};
+
+use super::DELIVERY_DRAIN_TIMEOUT;
 use super::avfoundation_capture_session_request::AvFoundationConfiguredCaptureSession;
-use super::*;
 
 /// One delivery: the frame delivery its hand-off rides on, the queue it runs
 /// on, and the session the control queue configures for it — absent until the

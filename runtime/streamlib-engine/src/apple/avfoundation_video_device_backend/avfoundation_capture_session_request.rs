@@ -1,12 +1,45 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Configuring and starting a capture session on its control queue, watching the ways it ends, and stopping it.
+//! Configuring and starting a capture session on its control queue, watching
+//! the ways it ends, and stopping it.
 
+use std::ptr::NonNull;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use dispatch2::{DispatchQueue, DispatchRetained};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2_av_foundation::{
+    AVCaptureDevice, AVCaptureDeviceInput, AVCaptureDeviceWasDisconnectedNotification,
+    AVCaptureSession, AVCaptureSessionRuntimeErrorNotification, AVCaptureVideoDataOutput,
+};
+use objc2_core_foundation::CFString;
+use objc2_core_video::{
+    kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
+    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
+};
+use objc2_foundation::{
+    NSDictionary, NSNotification, NSNotificationCenter, NSNotificationName, NSNumber,
+    NSObjectProtocol, NSString,
+};
+
+use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
+use crate::core::context::{
+    DeviceStreamFailureReason, DeviceStreamFailureRecorder, VideoCaptureStreamFormat,
+};
+use crate::core::logging::{
+    run_in_the_project_log_route_entry_when_there_is_one,
+    the_project_log_route_entry_of_this_thread,
+};
+use crate::core::rhi::PixelFormat;
+use crate::core::{Error, Result};
+
+use super::CaptureDeviceConfiguredOnItsControlQueue;
 use super::avfoundation_frame_delivery::{
     AvFoundationFrameDelivery, AvFoundationSampleBufferDelegate, CaptureSessionReadForItsClock,
 };
-use super::*;
 
 /// What the control queue needs to configure and start one session.
 pub(super) struct AvFoundationCaptureSessionRequest {

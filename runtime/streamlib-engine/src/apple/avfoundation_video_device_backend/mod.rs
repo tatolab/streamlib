@@ -8,62 +8,35 @@
 //! Camera→GPU transport is [`Biplanar420IOSurfaceToPooledRgbaConversion`]'s.
 
 use std::collections::HashMap;
-use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, Weak, mpsc};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{AnyThread, DefinedClass, define_class, msg_send, sel};
 use objc2_av_foundation::{
-    AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession, AVCaptureDeviceFormat,
-    AVCaptureDeviceInput, AVCaptureDevicePosition, AVCaptureDeviceTypeBuiltInWideAngleCamera,
-    AVCaptureDeviceWasDisconnectedNotification, AVCaptureOutput, AVCaptureSession,
-    AVCaptureSessionRuntimeErrorNotification, AVCaptureVideoDataOutput,
-    AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
+    AVCaptureDevice, AVCaptureDeviceDiscoverySession, AVCaptureDeviceFormat,
+    AVCaptureDevicePosition, AVCaptureDeviceTypeBuiltInWideAngleCamera, AVMediaTypeVideo,
 };
-use objc2_core_foundation::{CFRetained, CFString};
-use objc2_core_media::{
-    CMClock, CMFormatDescription, CMSampleBuffer, CMSyncConvertTime, CMTime, CMTimeFlags,
-    CMVideoFormatDescriptionGetDimensions,
-};
-use objc2_core_video::{
-    CVPixelBuffer, CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth,
-    kCVPixelBufferHeightKey, kCVPixelBufferIOSurfacePropertiesKey,
-    kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
-};
-use objc2_foundation::{
-    NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNotificationName, NSNumber,
-    NSObject, NSObjectProtocol, NSString,
-};
+use objc2_core_media::{CMFormatDescription, CMTime, CMVideoFormatDescriptionGetDimensions};
+use objc2_foundation::NSArray;
 use parking_lot::Mutex;
 
-use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
-use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
-use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
 use crate::apple::permissions::{
     AvFoundationCaptureDeviceAuthorizationAuthority, CaptureDeviceAuthorizationAtOpen,
     CaptureDeviceAuthorizationAuthority, CaptureDeviceRefusal, PrivacyGatedCaptureDevice,
     authorize_the_capture_device_without_waiting_for_the_user, capture_device_refusal_for_the_user,
 };
-use crate::core::color::{ColorSpaceKind, H273ColorVui, ResolveH273ColorVuiDefaults};
-use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
 use crate::core::context::{
-    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
-    DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
-    GpuContextLimitedAccess, VideoCaptureDevice, VideoCaptureInstantResolver, VideoCaptureStream,
-    VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
-    refusal_for_a_named_camera_that_is_not_attached,
+    CapturedVideoFrameHandOff, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
+    DeviceStreamLivenessReport, GpuContextLimitedAccess, VideoCaptureDevice,
+    VideoCaptureInstantResolver, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
+    VideoDeviceStreamRequest, refusal_for_a_named_camera_that_is_not_attached,
 };
 use crate::core::logging::{
-    ProjectLogRouteEntry, carrying_this_threads_project_log_route_entry,
-    run_in_the_project_log_route_entry_when_there_is_one,
-    the_project_log_route_entry_of_this_thread,
+    carrying_this_threads_project_log_route_entry, the_project_log_route_entry_of_this_thread,
 };
-use crate::core::media_clock::MediaClock;
-use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
+use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 use avfoundation_capture_session_request::AvFoundationCaptureSessionRequest;
 use avfoundation_frame_delivery::{
