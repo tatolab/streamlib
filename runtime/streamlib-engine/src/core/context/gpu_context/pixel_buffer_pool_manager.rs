@@ -5,19 +5,19 @@ use super::pixel_buffer_pool_slot::{
     PixelBufferPoolKey, PixelBufferPoolSlot, published_pixel_buffer_frame_id,
 };
 use crate::core::Result;
-use crate::core::context::gpu_pool_claim_table::{
+use crate::core::context::surfaces_and_their_stores::surface_store::SurfaceStore;
+use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::{
     GpuPoolClaimTablesOfOnePool, gpu_pool_claim_table_row_for_a_shared_slot,
 };
-use crate::core::context::lease_aware_pool_slot_ring::{
+use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
     ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot,
     LeaseAwarePoolSlotRing, PoolSlotReuse,
 };
-use crate::core::context::shared_pool_entry_freeing::{
+use crate::core::context::texture_pools_and_rings::shared_pool_entry_freeing::{
     LONGEST_A_STOPPING_STREAM_WAITS_FOR_ITS_POOL_ENTRIES_GPU_WORK,
     SharedPoolEntriesAwaitingDestruction, SharedPoolEntryFreeingScan, SharedPoolEntryIdleWindow,
     SharedPoolEntryObservationCursor, SharedPoolEntryTakenOutOfItsPool,
 };
-use crate::core::context::surface_store::SurfaceStore;
 use crate::core::rhi::{
     GpuDevice, PixelBuffer, PixelBufferPoolSlotId, PixelFormat, PublishedPixelBufferFrameId,
     RhiPixelBufferPool, Texture, pool_slot_key_of_surface_id,

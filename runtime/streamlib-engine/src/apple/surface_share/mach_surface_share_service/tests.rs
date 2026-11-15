@@ -4,7 +4,7 @@
 use super::surface_share_request_dispatch_and_gpu_pool_handlers::answer_surface_share_request;
 use super::*;
 use crate::apple::iosurface::create_private_iosurface_with_packed_rows;
-use crate::core::context::surface_share_wire_verbs::{
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::{
     VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
     VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
 };

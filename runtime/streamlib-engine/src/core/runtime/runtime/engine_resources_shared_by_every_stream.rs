@@ -234,7 +234,7 @@ impl EngineResourcesSharedByEveryStream {
     /// stream's — from the engine's surface-sharing service.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn release_every_surface_registered_by(&self, owner_key: &str) {
-        crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by(
+        crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::release_every_surface_registered_by(
             self.surface_share_registrations_by_owner.as_ref(),
             owner_key,
         );

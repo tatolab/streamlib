@@ -65,10 +65,10 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::context::GpuContext;
-use crate::core::context::surface_backing_resolution::{
+use crate::core::context::surfaces_and_their_stores::surface_backing_resolution::{
     ResolvedSurfaceBacking, export_bytes_per_pixel_for_pixel_format, export_pixel_shape_for_texture,
 };
-use crate::core::context::texture_registration::TextureLayoutSettledByThisCopy;
+use crate::core::context::texture_pools_and_rings::texture_registration::TextureLayoutSettledByThisCopy;
 use crate::core::error::{Error, Result};
 use crate::core::rhi::Texture;
 use crate::host_rhi::HostGpuDeviceExt as _;

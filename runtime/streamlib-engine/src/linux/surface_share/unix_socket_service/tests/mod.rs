@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
-use crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by;
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::release_every_surface_registered_by;
 use crate::linux::surface_share::ViewedFrameSource;
 use std::os::unix::io::FromRawFd;
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};

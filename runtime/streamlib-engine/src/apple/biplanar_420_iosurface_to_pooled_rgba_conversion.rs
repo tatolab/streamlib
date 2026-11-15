@@ -15,7 +15,7 @@ use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 use crate::apple::imported_iosurface_storage_buffers_kept_for_recycling::ImportedIOSurfaceStorageBuffersKeptForRecycling;
 
 use crate::core::color::ResolvedColorInfo;
-use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
+use crate::core::context::capture_and_playback_devices::captured_video_frame_to_pooled_rgba_conversion_stage::{
     CapturedVideoFrameBytesInAStorageBuffer, CapturedVideoFrameToPooledRgbaConversionStage,
 };
 use crate::core::context::{

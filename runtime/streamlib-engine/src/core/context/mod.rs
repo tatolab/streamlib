@@ -1,60 +1,34 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-mod audio_clock;
-mod audio_device_backend;
-mod capture_device_access_prompting;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) mod captured_video_frame_to_pooled_rgba_conversion_stage;
-mod device_backend_probe_chain;
-mod device_stream_liveness_report;
+pub(crate) mod capture_and_playback_devices;
+mod clocks;
 pub(crate) mod escalate_gate;
 mod gpu_context;
-pub(crate) mod gpu_pool_claim_table;
 pub(crate) mod isolation;
-pub(crate) mod lease_aware_pool_slot_ring;
-mod one_off_acquisitions_counted_for_one_native_node;
-pub(crate) mod one_off_acquisitions_held_for_one_node;
-mod processor_output_pixel_buffer_pool_of_one_native_node;
-pub(crate) mod processor_output_surface_pool;
-mod refusing_null_video_device_backend;
 mod runtime_context;
-pub(crate) mod shared_pool_entry_freeing;
-pub(crate) mod silent_null_audio_device_backend;
 mod store_scoped_to_this_node;
-mod stream_clock;
-pub(crate) mod surface_backing_resolution;
-pub(crate) mod surface_check_out_lease_registry;
-mod surface_claimed_against_producer_reuse;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) mod surface_color_conversion;
-pub(crate) mod surface_share_wire_verbs;
-pub(crate) mod surface_store;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod surface_to_surface_copy;
-pub mod texture_pool;
-pub(crate) mod texture_registration;
-mod texture_ring;
-mod video_capture_instant_resolver;
-mod video_device_backend;
+pub(crate) mod surfaces_and_their_stores;
+pub(crate) mod texture_pools_and_rings;
+pub use texture_pools_and_rings::texture_pool;
 
-pub use audio_clock::{
-    AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
-    SoftwareAudioClock, platform_audio_clock_for_one_stream,
-};
-pub use audio_device_backend::{
+pub use capture_and_playback_devices::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
     AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
     RequestedAudioStreamFormat, SharedAudioDeviceBackend, open_capture_stream_in_requested_format,
     open_playback_stream_in_requested_format, probe_audio_device_backend,
 };
-pub use capture_device_access_prompting::{
+pub use capture_and_playback_devices::capture_device_access_prompting::{
     CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
 };
-pub use device_backend_probe_chain::DeviceBackendArmUnavailableReason;
-pub use device_stream_liveness_report::{
+pub use capture_and_playback_devices::device_backend_probe_chain::DeviceBackendArmUnavailableReason;
+pub use capture_and_playback_devices::device_stream_liveness_report::{
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
+};
+pub use clocks::audio_clock::{
+    AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
+    SoftwareAudioClock, platform_audio_clock_for_one_stream,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::GpuCapabilitiesSnapshot;
@@ -73,35 +47,39 @@ pub use gpu_context::{
 pub use gpu_context::{SurfaceExportStaging, SurfaceExportStagingResidency};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
-pub use one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;
-pub(crate) use one_off_acquisitions_counted_for_one_native_node::{
-    OneOffAcquisitionsCountedForOneNativeNode, acquire_a_one_off_counted_against_its_node,
-};
-pub(crate) use one_off_acquisitions_held_for_one_node::{
-    OneOffAcquisitionShape, OneOffAcquisitionsHeldForOneNode,
-};
-pub use processor_output_pixel_buffer_pool_of_one_native_node::{
-    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
-};
 pub(crate) use runtime_context::{
     LoadedStreamARuntimeContextBelongsTo, StoreOfOneNodeOpenedOnFirstUse,
 };
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use store_scoped_to_this_node::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
+pub use texture_pools_and_rings::one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;
+pub(crate) use texture_pools_and_rings::one_off_acquisitions_counted_for_one_native_node::{
+    OneOffAcquisitionsCountedForOneNativeNode, acquire_a_one_off_counted_against_its_node,
+};
+pub(crate) use texture_pools_and_rings::one_off_acquisitions_held_for_one_node::{
+    OneOffAcquisitionShape, OneOffAcquisitionsHeldForOneNode,
+};
+pub use texture_pools_and_rings::processor_output_pixel_buffer_pool_of_one_native_node::{
+    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
+};
 // Exported rather than crate-private so a test about deviceless pacing can open
 // the arm it means. The chain's probe takes the first arm that opens, so a test
 // that went through it would exercise whatever audio server the machine running
 // it happens to have.
-pub(crate) use gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
-pub use gpu_pool_claim_table::{
-    GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
-    GpuPoolClaimantProcessId,
+pub use capture_and_playback_devices::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
+pub(crate) use capture_and_playback_devices::video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
+pub use capture_and_playback_devices::video_device_backend::{
+    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, SharedVideoDeviceBackend,
+    VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
+    VideoDeviceStreamRequest, probe_video_device_backend,
 };
-pub use silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
-pub use stream_clock::{
+pub use clocks::stream_clock::{
     DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClock, StreamClockReading, StreamClockSpec,
     machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,
     stream_time_ns_on_a_published_clock,
+};
+pub(crate) use clocks::video_capture_instant_resolver::{
+    DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use streamlib_ipc_types::GpuPoolClaimTableSharedRows;
@@ -109,23 +87,19 @@ pub use streamlib_ipc_types::{
     GpuPoolClaimTableRow, GpuPoolClaimantColumn, GpuPoolFrameRecycled,
     GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest,
 };
-pub use surface_check_out_lease_registry::{
+pub use surfaces_and_their_stores::surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };
-pub use surface_claimed_against_producer_reuse::SurfaceClaimedAgainstProducerReuse;
-pub(crate) use surface_share_wire_verbs::SurfaceShareRegistrationsByRuntime;
-pub use surface_store::SurfaceStore;
-pub use texture_pool::*;
-pub use texture_registration::TextureRegistration;
-pub use texture_ring::{
+pub use surfaces_and_their_stores::surface_claimed_against_producer_reuse::SurfaceClaimedAgainstProducerReuse;
+pub(crate) use surfaces_and_their_stores::surface_share_wire_verbs::SurfaceShareRegistrationsByRuntime;
+pub use surfaces_and_their_stores::surface_store::SurfaceStore;
+pub(crate) use texture_pools_and_rings::gpu_pool_claim_table::gpu_pool_claim_table_row_for_a_shared_slot;
+pub use texture_pools_and_rings::gpu_pool_claim_table::{
+    GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
+    GpuPoolClaimantProcessId,
+};
+pub use texture_pools_and_rings::texture_pool::*;
+pub use texture_pools_and_rings::texture_registration::TextureRegistration;
+pub use texture_pools_and_rings::texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
-};
-pub(crate) use video_capture_instant_resolver::{
-    DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
-};
-pub(crate) use video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
-pub use video_device_backend::{
-    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, SharedVideoDeviceBackend,
-    VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
-    VideoDeviceStreamRequest, probe_video_device_backend,
 };
