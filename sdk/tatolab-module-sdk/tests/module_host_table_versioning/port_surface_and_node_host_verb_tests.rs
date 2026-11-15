@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The port, message, surface, host memory, lease, clock and log verbs a
-//! module calls through a table it loaded.
+//! The verbs a module calls through a table it loaded: ports, messages,
+//! surfaces, host memory and leases, and the node host's clock, stop flag,
+//! wait, log, capabilities and the node's own failure.
 
 use super::*;
 

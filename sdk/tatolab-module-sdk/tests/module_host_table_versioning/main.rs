@@ -38,7 +38,7 @@ use tatolab_module_sdk::{
 };
 
 mod audio_and_virtual_camera_stream_tests;
-mod port_and_surface_verb_tests;
+mod port_surface_and_node_host_verb_tests;
 mod stood_up_audio_and_virtual_camera_streams;
 mod table_loading_tests;
 
