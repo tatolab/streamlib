@@ -1,0 +1,51 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Fixtures shared by the graph snapshot's tests.
+
+use super::*;
+use std::collections::HashSet;
+
+use uuid::Uuid;
+
+use crate::core::Error;
+use crate::core::context::StreamClockSpec;
+use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::json_schema::LinkPortRefOutput;
+use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::processors::PROCESSOR_REGISTRY;
+
+mod graph_document_reading_and_writing_tests;
+mod references_interfaces_variables_and_groups_tests;
+
+const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
+
+/// A camera class registered descriptor-only, with an `frames_in` input and
+/// a `video` output. Idempotent across tests.
+fn a_registered_camera_class() -> &'static str {
+    const REGISTERED_CAMERA_CLASS: &str = "graph_snapshot_tests:RegisteredCamera";
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        crate::core::descriptors::ProcessorDescriptor::new(
+            crate::core::descriptors::ProcessorClassShortName::new("RegisteredCamera").unwrap(),
+            ProcessorClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
+            "graph snapshot test",
+        )
+        .with_input(crate::core::descriptors::PortDescriptor::new(
+            "frames_in",
+            "",
+            false,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        ))
+        .with_output(crate::core::descriptors::PortDescriptor::new(
+            "video",
+            "",
+            false,
+            crate::core::descriptors::PortFamilyDeclaration::of_family(
+                crate::core::descriptors::PortFamily::Image,
+            ),
+        )),
+    );
+    REGISTERED_CAMERA_CLASS
+}
