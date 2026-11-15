@@ -87,7 +87,26 @@ pub use helper_process_loss_count_board::{
     HelperProcessStepProgressBoardEntry, InboundLinkLossCountBoardSlot,
     OutputPortBagCountBoardEntry, STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS,
 };
-pub use port_family_payload_descriptor_bodies::*;
+pub use port_family_payload_descriptor_bodies::{
+    ARRAY_FRAME_ATTRIBUTE_DTYPE_BYTES, ARRAY_FRAME_ATTRIBUTE_MAX_DIMENSIONS,
+    ARRAY_FRAME_ATTRIBUTE_NAME_BYTES, ARRAY_FRAME_ATTRIBUTE_ROW_BYTES,
+    ARRAY_FRAME_ATTRIBUTE_ROW_CPU_DATA_BYTE_LEN_OFFSET,
+    ARRAY_FRAME_ATTRIBUTE_ROW_CPU_DATA_OFFSET_OFFSET,
+    ARRAY_FRAME_ATTRIBUTE_ROW_DIMENSION_COUNT_OFFSET, ARRAY_FRAME_ATTRIBUTE_ROW_DTYPE_OFFSET,
+    ARRAY_FRAME_ATTRIBUTE_ROW_GPU_POOL_SLOT_OFFSET, ARRAY_FRAME_ATTRIBUTE_ROW_RESIDENCY_OFFSET,
+    ARRAY_FRAME_ATTRIBUTE_ROW_SHAPE_OFFSET, ARRAY_FRAME_CPU_DATA_ALIGNMENT_BYTES,
+    ArrayFrameAttributeResidency, ArrayFrameAttributeRow, ArrayFrameAttributeTableRefusal,
+    ArrayFrameCpuAttributeToPack, ArrayFrameDescriptorBody,
+    CHANNELS_BLOCK_BODY_CHANNEL_COUNT_OFFSET, CHANNELS_BLOCK_BODY_SAMPLE_RATE_OFFSET,
+    CHANNELS_BLOCK_BODY_SAMPLE_TYPE_OFFSET, CHANNELS_BLOCK_BODY_SAMPLES_PER_CHANNEL_OFFSET,
+    CHANNELS_BLOCK_BODY_START_SAMPLE_OFFSET, CHANNELS_BLOCK_BODY_USED_BYTES,
+    ChannelsBlockDescriptorBody, ChannelsBlockSampleType, IMAGE_FRAME_BODY_COLOUR_OFFSET,
+    IMAGE_FRAME_BODY_FORMAT_OFFSET, IMAGE_FRAME_BODY_HEIGHT_OFFSET, IMAGE_FRAME_BODY_USED_BYTES,
+    IMAGE_FRAME_BODY_WIDTH_OFFSET, ImageFrameDescriptorBody, ImageFrameH273Colour,
+    PACKETS_UNIT_BODY_CODEC_BYTES, PacketsUnitCodecNameDoesNotFit, PacketsUnitDescriptorBody,
+    RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES, array_frame_attribute_table_of,
+    array_frame_cpu_data_offsets, array_frame_payload_of_cpu_attributes,
+};
 pub use port_key::{MAX_PORT_KEY_SIZE, PortKey, PortKeyError};
 pub use reserved_slot_reader::{
     LossTallyOfAReservedSlotReader, MessageReadFromAReservedSlot, OUTPUT_PORT_VIEWER_RING_DEPTH,

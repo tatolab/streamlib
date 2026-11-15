@@ -20,7 +20,10 @@ mod vui_patch;
 #[cfg(test)]
 mod tests;
 
-pub use config::*;
+pub use config::{
+    Codec, EncodePacket, EncodedOutput, FrameType, Preset, RateControlMode, SimpleEncoderConfig,
+    default_effort_level,
+};
 pub use session_parameters::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
 
 use std::ptr;

@@ -45,18 +45,152 @@ pub mod texture;
 pub mod unix_socket_path_cleared_for_bind;
 pub mod utils;
 
-// Customer-facing modules (wildcard re-exports stay).
-pub use context::*;
-pub use descriptors::*;
-pub use error::*;
-pub use execution::*;
-pub use graph::graph_snapshot::*;
-pub use graph::*;
-pub use processors::*;
+// Customer-facing modules.
+pub use context::{
+    AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream, AudioClock,
+    AudioClockConfig, AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream,
+    AudioSampleFormat, AudioStreamFormat, AudioTickCallback, AudioTickContext,
+    CAPTURE_DEVICE_ACCESS_PROMPTING_ENVIRONMENT_VARIABLE, CaptureDeviceAccessPrompting,
+    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff, CapturedVideoFrameFromDevice,
+    CapturedVideoFrameHandOff, DEFAULT_SCALED_STREAM_CLOCK_STEP_NS,
+    DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
+    DeviceStreamLivenessReport, GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
+    GpuPoolClaimTable, GpuPoolClaimTableRow, GpuPoolClaimTableRowLease, GpuPoolClaimTables,
+    GpuPoolClaimTablesOfOnePool, GpuPoolClaimantColumn, GpuPoolClaimantProcessId,
+    GpuPoolFrameRecycled, GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest, IsolationTier,
+    NativeNodeOutputPixelBufferFrame, OneOffAcquisitionCountedForItsNode,
+    OutputTextureRegisteredUntilDropped, PoolSlotId, PooledTextureHandle,
+    ProcessorOutputPixelBufferPoolOfOneNativeNode, ProjectStoresOpenInThisRuntime,
+    RequestedAudioStreamFormat, RuntimeContext, RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess, SharedAudioClock, SharedAudioDeviceBackend,
+    SharedVideoDeviceBackend, SilentNullAudioDeviceBackend, SoftwareAudioClock,
+    StoreScopedToThisNode, StreamClock, StreamClockReading, StreamClockSpec,
+    SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
+    SurfaceClaimedAgainstProducerReuse, SurfaceStore, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
+    TextureCrossProcessImportability, TexturePool, TexturePoolDescriptor, TexturePoolKey,
+    TexturePoolStats, TextureRegistration, TextureRing, TextureRingInner, TextureRingSlot,
+    VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
+    VideoDeviceStreamRequest, machine_time_ns_a_published_clock_reaches,
+    open_capture_stream_in_requested_format, open_playback_stream_in_requested_format,
+    platform_audio_clock_for_one_stream, probe_audio_device_backend, probe_video_device_backend,
+    stream_clock_reading_of_a_published_clock, stream_time_ns_on_a_published_clock, texture_pool,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use context::{
+    BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuCapabilitiesSnapshot,
+    GpuPoolClaimTableSharedRows, GraphicsKernelHeldForOneDraw, RayTracingKernelHeldForOneTrace,
+    SurfaceBoundKernelBindingResource,
+};
+#[cfg(target_os = "linux")]
+pub use context::{SurfaceExportStaging, SurfaceExportStagingResidency};
+pub use descriptors::{
+    AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,
+    ArrayOutputPortResidency, AudioWindowContract, AudioWindowContractDeclaredValues,
+    ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType, CodeExamples, DescribedDeclaration,
+    DescriptionLintFinding, DescriptionLintProblem, FunctionNodeLanguage,
+    IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, ImageStreamContentLightLevel,
+    ImageStreamFacts, ImageStreamFrameRate, ImageStreamMasteringDisplayColourVolume,
+    NODE_REFERENCE_SCHEMA_KEYWORD, NodeKind, NodeReferenceInConfig, NodeReferenceToNodeType,
+    NodeTypeANodeReferenceNames, NodeValueLifetime, OutputPortDeclaredNames, PacketsStreamFacts,
+    PortDescriptor, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
+    PortFamilyLinkEndpoint, PortStreamFacts, ProcessorClassImportPath, ProcessorClassShortName,
+    ProcessorConfigFilledFromItsDefault, ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy,
+    ProcessorConfigKeyDescription, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    lint_the_descriptions_of_a_node_type, output_port_codec_resolved_against_config,
+    output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
+    output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
+    refusal_of_required_names, refuse_audio_window_beside_a_skipping_delivery_profile,
+    refuse_stream_facts_of_another_family, schema_carrying_the_declared_description,
+};
+pub use error::{
+    ChannelTrustTierLabel, DeviceMemoryHeapBudgetSource, DeviceMemoryHeapLocality, Error,
+    OutputPortNotExposedToTheReader, PortDirection, PrivacyGatedCaptureDevice, Result,
+    WhyANodeOfAStreamIsNotRunning,
+};
+pub use execution::{
+    ExecutionConfig, ProcessExecution, ThreadPriority, processor_scheduling_loop,
+    run_processor_loop, thread_runner,
+};
+pub use graph::graph_snapshot::{
+    GraphFragment, GraphOnlyNodesAsDrawn, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
+    GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAsideByTheGraphsValidation,
+    NodeChangeADrawnLinkBlocks,
+};
+pub use graph::{
+    Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
+    EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, FunctionNodeHostComponent,
+    FunctionNodePromotedToItsOwnProcessComponent, FunctionNodePromotionOutOfItsReadersIslands,
+    FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
+    GraphState, GraphWeight, HelperProcessRestartRecord, HelperProcessRestartsComponent,
+    HowItsHelpersRanAFunctionNode, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef,
+    InputPortMarker, JsonSerializableComponent, Link, LinkCapacity,
+    LinkCarriedThroughTheFunctionNodePoolComponent, LinkDirection,
+    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
+    LinkTraversal, LinkTraversalMut, LinkTypeInfoComponent, LinkUniqueId,
+    LossCountsOfPortsInThisProcess, NodeNotReadyBecauseComponent, ObservableGraphReadiness,
+    ObservableProcessorState, OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
+    OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortMarker, PendingDeletionComponent,
+    PortInfo, PortKind, PortMarker, ProcessRaisingBecauseComponent,
+    ProcessorFailureReasonComponent, ProcessorInstanceComponent, ProcessorLossCounts,
+    ProcessorMetrics, ProcessorNode, ProcessorNodePorts, ProcessorPauseGateComponent,
+    ProcessorReadyBarrierComponent, ProcessorReadyBarrierHandle, ProcessorState,
+    ProcessorStateComponent, ProcessorTraversal, ProcessorTraversalMut, ProcessorUniqueId,
+    ReadOfALinkByTheReaderOfAFunctionNodeIsland, ShaderNodeFusedGroupComponent,
+    ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
+    StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,
+    StepProgressReadingOfOneNode, StorableComponent, ThreadHandleComponent, TraversalSource,
+    TraversalSourceMut, cast_exposed_name_to_url_safe, default_component_serializers,
+    default_components, graph_fragment_flattening, graph_interface_resolution, graph_snapshot,
+    graph_variable_resolution, input, output, validate_graph,
+};
+pub use processors::{
+    __generated_private, Config, ConfigValidationError, ContinuousProcessor, DynGeneratedProcessor,
+    DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor, InstalledModuleOfANodeType,
+    ManualProcessor, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
+    OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
+    PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec,
+    ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+};
 pub use rhi::NativeTextureHandle;
-pub use runtime::*;
-pub use texture::*;
-pub use utils::*;
+#[cfg(test)]
+pub(crate) use runtime::TheMachinesShutdownEscalationClearedOnDrop;
+#[cfg(any(test, feature = "test-support"))]
+pub use runtime::a_project_on_disk_for_a_test;
+pub use runtime::{
+    ArmedEngineTeardownWatchdog, BoxFuture, CrashOfThePreviousRuntimeRun, CreateProjectRequest,
+    CreatedProjectFirstCommit, DescriptionOfTheAbandonedProcessorThreads,
+    EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EveryStreamEndedDuringTheWait,
+    FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, FunctionNodeState,
+    FunctionNodeStatesCarriedForEveryStream, FunctionNodeStatesCarriedForOneStream,
+    HowALoadedStreamEnded, HowThePreviousRuntimeRunEnded, ImportedProjectPythonSources,
+    LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag, MachineName, NodeInTheGraph,
+    OpenDescriptorSoftLimitRaise, OperationsOnTheStreamsLoadedInThisRuntime,
+    OptionsForLoadingOneStream, OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
+    PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE, PendingStreamActionKind,
+    PendingStreamActionOnTheRecord, ProcessorDisplayNameAndId, ProjectCreationQueued,
+    ProjectHistoryRecordingFirstPartyPackageMoves, ProjectOpenOrReloadRequest,
+    ProjectPausedOrResumed, ProjectVenvSyncPackage, ProjectVenvSyncPackageKind,
+    ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress,
+    RUNTIME_CRASHES_IN_A_ROW_THAT_FAIL_A_STREAM,
+    RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL, Runner, RunnerConstructionOptions,
+    RuntimeOperations, RuntimeRunInProgressRecord, RuntimeShutdownEscalation, RuntimeStatus,
+    RuntimeUniqueId, STREAM_RECORD_SCHEMA_VERSION, ShutdownEscalationOfOneStream, StreamAction,
+    StreamActionKind, StreamActionQueued, StreamActionState, StreamActionStep,
+    StreamActionWorkingOnAStream, StreamEnvironment, StreamListing, StreamListingState,
+    StreamLoadObservingInterrupts, StreamLocation, StreamOfAStreamAction, StreamRecord,
+    StreamRecordAsRead, StreamRecordOfAnEarlierRuntime, StreamRecordReadFailure,
+    StreamRecordsInTheStateDirectory, StreamReloadAtTheStart, TeardownProgressNoteOfOneStream,
+    TheStoreOfEachNodeOfAStream, deregister_a_helper_process_group,
+    is_the_machines_shutdown_requested,
+    list_a_projects_node_types_and_graph_generators_from_source,
+    note_what_the_engine_teardown_is_waiting_on,
+    pin_the_runtimes_crash_on_the_panic_that_escaped_the_main_thread,
+    raise_the_open_descriptor_soft_limit_to_its_ceiling, register_a_helper_process_group,
+    request_the_shutdown_of_every_loaded_stream, take_the_machines_shutdown_escalation,
+    the_machines_shutdown_escalation, what_one_address_chunk_may_be,
+};
+pub use texture::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
+pub use utils::{checksum, compute_json_checksum};
 
 // Narrow re-exports of engine-internal items that have sanctioned
 // external consumers. Each line below is a deliberate boundary

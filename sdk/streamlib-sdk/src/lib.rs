@@ -110,7 +110,16 @@ pub mod sdk {
 
     // ---- Processors namespace ----
     pub mod processors {
-        pub use streamlib_engine::core::processors::*;
+        pub use streamlib_engine::core::processors::{
+            __generated_private, Config, ConfigValidationError, ContinuousProcessor,
+            DynGeneratedProcessor, DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor,
+            InstalledModuleOfANodeType, ManualProcessor, NodeTypesOneStreamResolves,
+            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
+            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, PROCESSOR_REGISTRY,
+            ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec, ProcessorState,
+            ProcessorStateComponent, ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
+            traits,
+        };
 
         // Port markers + input/output helpers — semantically processor-
         // related; physically live in `core::graph::edges::link_port_markers`
@@ -276,5 +285,61 @@ pub mod sdk {
 /// `cargo xtask check-boundaries` Check 6 — `engine_internal` is the
 /// allowed escape hatch for the very rare cases that need it.
 pub mod engine_internal {
-    pub use streamlib_engine::*;
+    #[cfg(doctest)]
+    pub use streamlib_engine::ProcessorAttributeAcceptsNoIdentity;
+    pub use streamlib_engine::{
+        ContinuousProcessor,
+        Error,
+        GpuContext,
+        GraphSnapshot,
+        InputPortMarker,
+        ManualProcessor,
+        MediaClock,
+        NativeTextureHandle,
+        OutputPortMarker,
+        PROCESSOR_REGISTRY,
+        PooledTextureHandle,
+        ProcessorSpec,
+        ReactiveProcessor,
+        Result,
+        Runner,
+        RuntimeContext,
+        RuntimeContextFullAccess,
+        RuntimeContextLimitedAccess,
+        StreamClock,
+        StreamClockSpec,
+        Texture,
+        TextureDescriptor,
+        TextureFormat,
+        TexturePool,
+        TexturePoolDescriptor,
+        TextureUsages, // Port marker traits and helpers for compile-time safe connections
+        core,
+        crossbeam_channel,
+        iceoryx2,
+        input,
+        logging,
+        output,
+        platform,
+        processor,
+        processor_config, // Processor traits (mode-specific)
+        schemars,
+        sdk,
+        serde_json,
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub use streamlib_engine::{
+        HostGpuDeviceExt, HostPixelBufferRefExt, HostSurfaceStoreExt, HostTextureExt, host_rhi,
+    };
+    #[cfg(target_os = "macos")]
+    pub use streamlib_engine::{apple_coreaudio_audio_tier, apple_surface_share};
+    #[cfg(target_os = "linux")]
+    pub use streamlib_engine::{
+        linux_alsa_audio_device_backend, linux_pipewire_camera, linux_surface_share,
+        linux_v4l2_color,
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub use streamlib_engine::{permissions, request_audio_permission, request_camera_permission};
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub use streamlib_engine::{request_audio_permission, request_camera_permission};
 }

@@ -28,7 +28,18 @@ pub mod iceoryx2;
 /// `streamlib_engine::core::logging` module path stays
 /// engine-private.
 pub mod logging {
-    pub use crate::core::logging::*;
+    pub use crate::core::logging::{
+        ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES, EngineLogRecordForTheParentProcess,
+        EngineLogRecordsDrainedForTheParentProcess, HelperProcessEngineLogRecordRing,
+        LoggingTunables, PrettyLogMirrorStandardStream, ProcessLoggingPathwayHold, ProjectLogRoute,
+        ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread,
+        RUNTIME_OWN_LOG_INSTANCE_NAME, StreamlibLoggingConfig, StreamlibLoggingGuard,
+        capture_this_helper_processes_engine_log_records,
+        carrying_this_threads_project_log_route_entry, hold_the_process_logging_pathway,
+        init_for_tests, listen_for_each_project_log_written,
+        run_in_the_project_log_route_entry_when_there_is_one,
+        the_project_log_route_entry_of_this_thread,
+    };
 }
 
 // Re-export the attribute macro for processor syntax:
@@ -291,10 +302,19 @@ pub mod sdk {
     pub use crate::core::texture;
     pub use crate::core::utils;
 
-    /// Processors namespace: combines `core::processors::*` with
+    /// Processors namespace: combines `core::processors`'s items with
     /// platform-aliased processor types from the engine root.
     pub mod processors {
-        pub use crate::core::processors::*;
+        pub use crate::core::processors::{
+            __generated_private, Config, ConfigValidationError, ContinuousProcessor,
+            DynGeneratedProcessor, DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor,
+            InstalledModuleOfANodeType, ManualProcessor, NodeTypesOneStreamResolves,
+            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
+            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, PROCESSOR_REGISTRY,
+            ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec, ProcessorState,
+            ProcessorStateComponent, ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
+            traits,
+        };
 
         // Port markers + input/output helpers — semantically processor-
         // related; live in `core::graph::edges::link_port_markers`.
