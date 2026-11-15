@@ -9,7 +9,7 @@
 //! concurrent `vkQueueSubmit2` / `vkQueuePresentKHR` during multi-processor
 //! setup and crashes the NVIDIA driver (the validation layer reports
 //! `UNASSIGNED-Threading-Info: vkDeviceWaitIdle(): Couldn't find VkQueue
-//! Object`). `HostVulkanDevice::wait_idle` (in `vulkan_device.rs`) acquires all
+//! Object`). `HostVulkanDevice::wait_idle` (in `vulkan_device/queue_submission.rs`) acquires all
 //! five per-queue mutexes + the device mutex first; every consumer must route
 //! through it.
 //!
@@ -27,7 +27,7 @@ const BANNED: &str = ".device_wait_idle(";
 
 /// Path (engine-`src`-relative, forward-slash) of the single file allowed to
 /// call it raw — `HostVulkanDevice::wait_idle` is the guarded gateway.
-const ALLOW_FILE: &str = "vulkan/rhi/vulkan_device.rs";
+const ALLOW_FILE: &str = "vulkan/rhi/vulkan_device/queue_submission.rs";
 
 /// Per-line escape hatch for a deliberate, reviewed raw call.
 const ALLOW_LINE_PRAGMA: &str = "streamlib:allow-raw-device-wait-idle";
@@ -209,10 +209,14 @@ mod tests {
     fn accepts_the_helper_file() {
         // The helper's own file is the single allowed raw call site.
         let v = scan_one(
-            "vulkan/rhi/vulkan_device.rs",
+            "vulkan/rhi/vulkan_device/queue_submission.rs",
             "pub fn wait_idle(&self) { let _ = self.device.device_wait_idle(); }\n",
         );
-        assert!(v.is_empty(), "vulkan_device.rs is exempt: {:?}", v);
+        assert!(
+            v.is_empty(),
+            "vulkan_device/queue_submission.rs is exempt: {:?}",
+            v
+        );
     }
 
     #[test]
