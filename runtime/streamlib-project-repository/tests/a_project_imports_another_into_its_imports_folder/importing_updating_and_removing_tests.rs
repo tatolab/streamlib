@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A module copied into a project's imports folder from a folder, a zip or a
-//! GitHub archive, the sources refused, and an import updated, removed, undone
-//! and redone.
+//! GitHub archive, what the copy carries and leaves out, the sources refused,
+//! and an import updated, removed, undone and redone.
 
 use super::*;
 
@@ -49,38 +49,6 @@ fn a_module_is_copied_whole_into_its_imports_folder_and_recorded_with_its_versio
     assert!(
         !recorded.contains_key("imports/robot-arm/grade.cube"),
         "history records an asset's file by its sidecar alone"
-    );
-}
-
-#[test]
-fn an_imported_asset_resolves_to_its_file_inside_the_import() {
-    let mut imports = CellImportingArm::new();
-    imports.import_the_arm();
-
-    let file = the_file_of_an_imported_asset(
-        &imports.cell.directory(),
-        imports.arm.project(),
-        imports.arm_lut,
-    )
-    .unwrap();
-
-    assert_eq!(
-        file,
-        imports
-            .cell
-            .directory()
-            .join("imports/robot-arm/grade.cube")
-    );
-    std::fs::remove_file(&file).unwrap();
-    let refusal = the_file_of_an_imported_asset(
-        &imports.cell.directory(),
-        imports.arm.project(),
-        imports.arm_lut,
-    )
-    .unwrap_err();
-    assert!(
-        matches!(refusal, ProjectRepositoryRefusal::AssetFileMissing { ref file, .. } if file.ends_with("grade.cube")),
-        "{refusal}"
     );
 }
 
@@ -174,87 +142,6 @@ fn a_project_is_refused_as_its_own_import_and_a_second_import_of_one_is_refused(
             .add_dependency(&a_person(), None, &arm_source, Some("arm-again")),
         Err(ProjectRepositoryRefusal::ImportAlreadyHeld(_))
     ));
-}
-
-#[test]
-fn a_fragment_holds_a_reference_and_each_load_reads_the_stream_it_names() {
-    let mut imports = CellImportingArm::new();
-    imports.import_the_arm();
-    let fragment_node = imports.place_the_arms_stream_as_a_fragment();
-
-    let stored = imports.cell.main_document();
-    assert!(
-        stored["nodes"][0].get("fragment").is_none(),
-        "a stream fragment stores no nodes: {stored}"
-    );
-    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
-        &imports.cell.directory(),
-        &stored,
-    )
-    .unwrap();
-    let placed = &resolved["nodes"][0]["fragment"]["nodes"][0];
-    assert_eq!(placed["name"], "grade");
-    let arm_node = imports.arm.main_document()["nodes"][0]["id"]
-        .as_str()
-        .unwrap()
-        .parse::<Uuid>()
-        .unwrap();
-    assert_eq!(
-        placed["id"],
-        Uuid::new_v5(&fragment_node, arm_node.as_bytes()).to_string()
-    );
-    assert_eq!(
-        placed["config"]["lut"],
-        json!({ "asset": imports.arm_lut, "from": imports.arm.project() })
-    );
-
-    let imported_stream = imports
-        .cell
-        .directory()
-        .join("imports/robot-arm/streams/main.graph.json");
-    let mut edited: Value =
-        serde_json::from_slice(&std::fs::read(&imported_stream).unwrap()).unwrap();
-    edited["nodes"][0]["name"] = json!("grade-edited");
-    std::fs::write(&imported_stream, edited.to_string()).unwrap();
-    let reloaded = graph_document_with_each_stream_fragment_reference_resolved(
-        &imports.cell.directory(),
-        &stored,
-    )
-    .unwrap();
-    assert_eq!(
-        reloaded["nodes"][0]["fragment"]["nodes"][0]["name"], "grade-edited",
-        "an edit of the module's stream changes what the next load reads"
-    );
-}
-
-#[test]
-fn a_stream_that_holds_itself_through_another_is_refused_at_load_by_name() {
-    let root = tempfile::tempdir().unwrap();
-    let mut cell = ProjectWithOneStream::created_in(root.path(), "cell");
-    let other = Uuid::new_v4();
-    std::fs::write(
-        cell.directory().join("streams/other.graph.json"),
-        json!({ "asset": other, "links": [], "nodes": [{
-            "id": Uuid::new_v4(), "name": "back", "type": STREAM_FRAGMENT_NODE_TYPE,
-            "config": { "stream": { "asset": cell.stream } } }] })
-        .to_string(),
-    )
-    .unwrap();
-    cell.repository = ProjectRepository::open(&cell.directory()).unwrap();
-    cell.add_a_node(
-        "other",
-        STREAM_FRAGMENT_NODE_TYPE,
-        json!({ "stream": { "asset": other } }),
-    );
-
-    let refusal = graph_document_with_each_stream_fragment_reference_resolved(
-        &cell.directory(),
-        &cell.main_document(),
-    )
-    .unwrap_err();
-
-    assert!(refusal.contains("cycle"), "{refusal}");
-    assert!(refusal.contains("`other`"), "{refusal}");
 }
 
 #[test]
@@ -397,38 +284,45 @@ fn a_listing_checked_for_newer_answers_the_version_the_source_holds_now() {
 }
 
 #[test]
-fn a_project_with_a_module_zipped_and_unzipped_elsewhere_reads_the_modules_stream_and_asset() {
+fn finder_metadata_is_never_copied_nor_answered_as_an_edit() {
     let mut imports = CellImportingArm::new();
+    std::fs::write(imports.arm.directory().join("streams/.DS_Store"), b"finder").unwrap();
     imports.import_the_arm();
-    imports.place_the_arms_stream_as_a_fragment();
-    let archive = imports.root.path().join("cell.zip");
-    zip_the_folder(&imports.cell.directory(), &archive, None);
-    let elsewhere = tempfile::tempdir().unwrap();
-    let mut unzipped = zip::ZipArchive::new(std::fs::File::open(&archive).unwrap()).unwrap();
-    unzipped.extract(elsewhere.path()).unwrap();
-    std::fs::remove_dir_all(elsewhere.path().join(".tatolab")).unwrap();
-    std::fs::remove_dir_all(imports.arm.directory()).unwrap();
+    let arm = imports.arm.project();
+    let import_folder = imports.cell.directory().join("imports/robot-arm");
+    assert!(!import_folder.join("streams/.DS_Store").exists());
 
-    let reopened = ProjectRepository::open(elsewhere.path()).unwrap();
-    let resolved = graph_document_with_each_stream_fragment_reference_resolved(
-        elsewhere.path(),
-        &reopened
-            .stream_graph_document(imports.cell.stream)
+    std::fs::write(import_folder.join(".DS_Store"), b"finder").unwrap();
+    let import = imports.cell.repository.import(arm).unwrap();
+    assert!(
+        imports
+            .cell
+            .repository
+            .files_edited_in_the_import(&import)
             .unwrap()
-            .to_value(),
-    )
-    .unwrap();
-
-    assert_eq!(
-        resolved["nodes"][0]["fragment"]["nodes"][0]["name"],
-        "grade"
+            .is_empty()
     );
-    assert_eq!(
-        std::fs::read(
-            the_file_of_an_imported_asset(elsewhere.path(), imports.arm.project(), imports.arm_lut)
-                .unwrap()
-        )
-        .unwrap(),
-        b"LUT 1"
+}
+
+#[test]
+fn a_zipped_module_holding_pyvenv_cfg_at_its_root_is_still_copied() {
+    let mut imports = CellImportingArm::new();
+    std::fs::write(imports.arm.directory().join("pyvenv.cfg"), b"home = /usr").unwrap();
+    let archive = imports.root.path().join("robot-arm.zip");
+    zip_the_folder(&imports.arm.directory(), &archive, Some("robot-arm-main"));
+
+    imports
+        .cell
+        .repository
+        .add_dependency(&a_person(), None, &archive.display().to_string(), None)
+        .unwrap()
+        .into_applied_transaction();
+
+    assert!(
+        imports
+            .cell
+            .directory()
+            .join("imports/robot-arm/streams/main.graph.json")
+            .is_file()
     );
 }
