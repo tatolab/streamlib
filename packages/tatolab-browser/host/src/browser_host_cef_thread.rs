@@ -195,11 +195,37 @@ fn cef_runtime_settings_of(cef_runtime_directory: &Path) -> Result<Settings, Str
     })
 }
 
-/// CEF finds its helpers in the app bundle's `Frameworks/`, named after the
-/// host's executable, and its resources in the framework.
+/// The host's own app bundle and its CEF framework, named outright: left
+/// empty, CEF takes the outermost `.app` in the executable's path as its main
+/// bundle, and a host nested in another app (Tato Studio carries it in its
+/// runtime's `Frameworks/`) dies in `cef_initialize`. CEF finds its helpers in
+/// that bundle's `Frameworks/`, named after the host's executable.
 #[cfg(target_os = "macos")]
-fn cef_runtime_settings_of(_cef_runtime_directory: &Path) -> Result<Settings, String> {
-    Ok(Settings::default())
+fn cef_runtime_settings_of(cef_runtime_directory: &Path) -> Result<Settings, String> {
+    let host_app_bundle = cef_runtime_directory
+        .parent()
+        .and_then(Path::parent)
+        .filter(|bundle| {
+            bundle
+                .extension()
+                .is_some_and(|extension| extension == "app")
+        })
+        .ok_or_else(|| {
+            format!(
+                "{} is not an app bundle's Contents/MacOS; the runtime unit stages the host as \
+                 tatolab-browser-host.app",
+                cef_runtime_directory.display()
+            )
+        })?;
+    let cef_framework = host_app_bundle
+        .join("Contents")
+        .join("Frameworks")
+        .join(crate::browser_host_macos_application::CEF_FRAMEWORK_DIRECTORY_NAME);
+    Ok(Settings {
+        main_bundle_path: path_text(host_app_bundle),
+        framework_dir_path: path_text(&cef_framework),
+        ..Default::default()
+    })
 }
 
 /// How long a new stream profile has to finish initializing before its first
