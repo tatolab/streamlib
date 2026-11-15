@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Real-World Scenario Tests.
-
 use super::*;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
 
