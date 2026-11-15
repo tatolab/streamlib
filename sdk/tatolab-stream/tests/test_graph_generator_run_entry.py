@@ -133,6 +133,16 @@ def test_a_generator_that_places_no_fragment_answers_why(
     assert failure_names in document["failed_because"]
 
 
+def test_a_generator_failure_starts_at_the_projects_own_frame(project_directory: Path) -> None:
+    failed_because = run_entry(project_directory, "generators.looks:raises")["failed_because"]
+
+    frame_lines = [
+        line for line in failed_because.splitlines() if line.lstrip().startswith('File "')
+    ]
+    assert frame_lines
+    assert all("tatolab/stream/" not in frame_line for frame_line in frame_lines), failed_because
+
+
 def test_what_the_generator_prints_never_reaches_the_document(project_directory: Path) -> None:
     (project_directory / "generators" / "loud.py").write_text(
         "from tatolab.stream import StreamBuilder, graph_generator\n"
