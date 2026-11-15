@@ -23,14 +23,8 @@
 //! timeline value to wait for. The host's own wait after a refill orders
 //! nothing for this process; the timeline does.
 
-#[cfg(target_os = "linux")]
-use std::path::PathBuf;
-
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use pyo3::exceptions::PyRuntimeError;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
@@ -39,8 +33,8 @@ use parking_lot::Mutex;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
-use streamlib::sdk::rhi::PixelFormat;
-
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod checked_out_surface;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod foreign_surface_adoption;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -50,12 +44,31 @@ mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod parent_and_surface_share_round_trips;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod pooled_gpu_frame_claims;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod storage_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_color_conversion;
 mod surface_copy;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vk_image_creation_recipe_wire_parse;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use checked_out_surface::{
+    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperSurfaceCheckOutLeaseDebt,
+    HelperSurfaceHeldAgainstProducerReuse, HelperSurfaceReleaseDebt,
+    a_tensor_surface_is_not_a_pixel_surface,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use parent_and_surface_share_round_trips::{
+    escalate_round_trip_to_parent, hand_a_release_handle_to_the_release_worker,
+    refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
+    response_field,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use vk_image_creation_recipe_wire_parse::vk_image_creation_recipe_of_check_out;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use gpu_kernels::{
@@ -71,7 +84,10 @@ pub(crate) use linux::{
     OpaqueFdAllocationExportDescription, foreign_dma_buf_plane_layout,
 };
 #[cfg(target_os = "linux")]
-use linux::{HelperPixelBufferPoolSlotImport, HelperPoolSlotImport};
+use linux::{
+    HelperPixelBufferPoolSlotImport, HelperPoolSlotImport,
+    surface_share_connection_over_the_channel_named,
+};
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{
     HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
@@ -80,14 +96,13 @@ pub(crate) use macos::{
 #[cfg(target_os = "macos")]
 use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfacePixelBufferPoolSlotImport, HelperIOSurfaceUseCountClaim,
-    HelperPoolSlotImport,
+    HelperPoolSlotImport, surface_share_connection_over_the_channel_named,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use streamlib_gpu_frame_import_client::GpuPoolSlotFrameClaimOfThisImporter;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_gpu_frame_import_client::{
     GpuPoolClaimTablesOfThisImporter, SurfaceShareConnectionOfThisImporter,
-    SurfaceShareTransferredHandle,
 };
 
 /// The width, height and format a pixel surface carries.
@@ -107,48 +122,6 @@ pub(crate) enum GpuSurfaceGeometry {
     TensorStorageBuffer(streamlib::sdk::rhi::TensorStorageBufferLayout),
 }
 
-/// The refusal every pixel-shaped door gives a tensor surface.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
-    pyo3::exceptions::PyRuntimeError::new_err(
-        "this surface is a tensor storage buffer, not pixels: it has a shape and a dtype, no \
-         width, height, format or CPU mapping, and its one door is `__dlpack__` \
-         (`torch.from_dlpack`)",
-    )
-}
-
-/// One field of an escalate response, named in the failure so a parent
-/// that answered a shape this child does not understand says which part.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn response_field<'py>(response: &Bound<'py, PyAny>, field: &str) -> PyResult<Bound<'py, PyAny>> {
-    response.get_item(field).map_err(|_| {
-        crate::python_processor_context::gpu_operation_error(format!(
-            "the parent's response carried no {field}"
-        ))
-    })
-}
-
-/// One escalate round trip to the parent, called with the GIL attached.
-///
-/// The callable is the bridge's `request_from_parent`, whose wait on the
-/// response releases the GIL — a slow parent parks this thread, never the
-/// interpreter's others.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn escalate_round_trip_to_parent<'py>(
-    python: Python<'py>,
-    escalate_request_to_parent: &Py<PyAny>,
-    op: &Bound<'py, PyDict>,
-) -> PyResult<Bound<'py, PyAny>> {
-    escalate_request_to_parent
-        .bind(python)
-        .call1((op,))
-        .map_err(|request_failure| {
-            crate::python_processor_context::gpu_operation_error(format!(
-                "the parent refused or failed the GPU request: {request_failure}"
-            ))
-        })
-}
-
 /// Which processor output pool a texture or tensor storage buffer acquire
 /// hands its slot out of.
 #[derive(Clone, Copy)]
@@ -156,408 +129,6 @@ pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
     pub(crate) pool_key: &'pool_key str,
     pub(crate) rotation_depth: u32,
 }
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ProcessorOutputPoolRequest<'_> {
-    /// Name the pool on an acquire's escalate op; a one-off acquire carries
-    /// no `processor_output_pool` field.
-    fn write_onto_escalate_op(
-        processor_output_pool: Option<Self>,
-        python: Python<'_>,
-        op: &Bound<'_, PyDict>,
-    ) -> PyResult<()> {
-        let Some(processor_output_pool) = processor_output_pool else {
-            return Ok(());
-        };
-        let field = PyDict::new(python);
-        field.set_item("pool_key", processor_output_pool.pool_key)?;
-        field.set_item("rotation_depth", processor_output_pool.rotation_depth)?;
-        op.set_item("processor_output_pool", field)
-    }
-}
-
-/// Hand the parent's `release_handle` for `handle_id` to the bridge's release
-/// worker and return without waiting on its answer.
-///
-/// The callable is the bridge's `release_to_parent_without_waiting`. Every
-/// release a drop owes goes this way: the drop can be a garbage-collector
-/// finalizer on the bridge's reader, which a round trip would stall for the
-/// whole escalate timeout, since only that thread delivers the answer.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn hand_a_release_handle_to_the_release_worker(
-    python: Python<'_>,
-    release_to_parent_without_waiting: &Py<PyAny>,
-    handle_id: &str,
-) -> PyResult<()> {
-    let release_op = PyDict::new(python);
-    release_op.set_item("op", "release_handle")?;
-    release_op.set_item("handle_id", handle_id)?;
-    release_to_parent_without_waiting
-        .bind(python)
-        .call1((release_op,))?;
-    Ok(())
-}
-
-/// One `u32` field of a checkout's registration metadata, present and
-/// positive or refused naming the field.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn required_positive_u32_check_out_metadata_field(
-    response: &serde_json::Value,
-    surface_id: &str,
-    field: &str,
-) -> PyResult<u32> {
-    response
-        .get(field)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 0)
-        .ok_or_else(|| {
-            PyRuntimeError::new_err(format!(
-                "check_out of {surface_id:?} carried no usable {field}"
-            ))
-        })
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use vk_image_creation_recipe_wire_parse::vk_image_creation_recipe_of_check_out;
-
-/// The `VkImageCreateInfo` recipe a texture checkout carries, parsed the
-/// same way on both floors.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vk_image_creation_recipe_wire_parse {
-    /// Absent-defaults for the `vk_image_*` recipe fields, mirroring the
-    /// surface-share wire's documented defaults
-    /// (`core/context/surfaces_and_their_stores/surface_share_wire_verbs.rs`).
-    pub(super) const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
-    pub(super) const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
-    pub(super) const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
-    pub(super) const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
-    /// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
-    pub(super) const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
-
-    /// One `i32` recipe field of a checkout's registration metadata,
-    /// absent-or-unrepresentable defaulting to the service's documented value.
-    fn defaulted_i32_check_out_metadata_field(
-        response: &serde_json::Value,
-        field: &str,
-        default: i32,
-    ) -> i32 {
-        response
-            .get(field)
-            .and_then(|value| value.as_i64())
-            .and_then(|value| i32::try_from(value).ok())
-            .unwrap_or(default)
-    }
-
-    /// The `u32` twin of [`defaulted_i32_check_out_metadata_field`].
-    fn defaulted_u32_check_out_metadata_field(
-        response: &serde_json::Value,
-        field: &str,
-        default: u32,
-    ) -> u32 {
-        response
-            .get(field)
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(default)
-    }
-
-    /// The `VkImageCreateInfo` recipe a texture checkout's registration carries,
-    /// each field absent-defaulting to the service's documented value.
-    pub(super) fn vk_image_creation_recipe_of_check_out(
-        response: &serde_json::Value,
-    ) -> crate::python_processor_context::ExportedVkImageCreationRecipe {
-        crate::python_processor_context::ExportedVkImageCreationRecipe {
-            vk_image_tiling: defaulted_i32_check_out_metadata_field(
-                response,
-                "vk_image_tiling",
-                VK_IMAGE_TILING_DEFAULT,
-            ),
-            vk_image_usage_flags: defaulted_u32_check_out_metadata_field(
-                response,
-                "vk_image_usage",
-                VK_IMAGE_USAGE_DEFAULT,
-            ),
-            vk_image_mip_levels: defaulted_u32_check_out_metadata_field(
-                response,
-                "vk_image_mip_levels",
-                VK_IMAGE_MIP_LEVELS_DEFAULT,
-            ),
-            vk_image_array_layers: defaulted_u32_check_out_metadata_field(
-                response,
-                "vk_image_array_layers",
-                VK_IMAGE_ARRAY_LAYERS_DEFAULT,
-            ),
-            vk_image_samples: defaulted_i32_check_out_metadata_field(
-                response,
-                "vk_image_samples",
-                VK_IMAGE_SAMPLES_DEFAULT,
-            ),
-        }
-    }
-}
-
-/// Raise the service's own refusal of a checkout, if it refused one.
-///
-/// `checked_out_subject` names what was being checked out, because the caller
-/// knows whether it asked for a published surface or the staging behind one and
-/// the response does not. Taken as `format_args!` so the happy path — every
-/// frame a consumer claims or resolves — formats nothing.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn refuse_check_out_the_service_declined(
-    checked_out_subject: std::fmt::Arguments<'_>,
-    response: &serde_json::Value,
-) -> PyResult<()> {
-    match response.get("error").and_then(|value| value.as_str()) {
-        Some(checkout_error) => Err(PyRuntimeError::new_err(format!(
-            "the surface-share service refused check_out of {checked_out_subject}: \
-             {checkout_error}"
-        ))),
-        None => Ok(()),
-    }
-}
-
-/// What a checkout turned into once its memory was imported: mapped memory
-/// plus the layout facts every view derives from.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) struct HelperCheckedOutPixelSurface {
-    /// The id this surface travels under — what a downstream processor
-    /// resolves, and what keys the parent's registry entry.
-    pub(crate) surface_id: String,
-    /// The pool slot's import, shared with this helper's per-slot cache and
-    /// every other frame checked out over the slot.
-    #[cfg(target_os = "linux")]
-    pub(crate) pixel_buffer_pool_slot_import: Arc<HelperPixelBufferPoolSlotImport>,
-    /// The pool slot's IOSurface and its import, shared with this helper's
-    /// per-slot cache and every other frame checked out over the slot.
-    #[cfg(target_os = "macos")]
-    pub(crate) iosurface_pool_slot_import: Arc<HelperIOSurfacePixelBufferPoolSlotImport>,
-    /// This frame's claim on the IOSurface's use count — the claim the kernel
-    /// keeps truthful across processes, and drops if this process dies.
-    #[cfg(target_os = "macos")]
-    #[expect(
-        dead_code,
-        reason = "settled by its own Drop; nothing reads it, and that is the point"
-    )]
-    pub(crate) iosurface_use_count_claim: HelperIOSurfaceUseCountClaim,
-    /// The IOSurface lock this surface's CPU access holds, if any.
-    #[cfg(target_os = "macos")]
-    pub(crate) iosurface_cpu_lock: HelperIOSurfaceCpuLock,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) format: PixelFormat,
-    pub(crate) bytes_per_row: u64,
-    /// Present only on an acquired surface — a resolved one belongs to its
-    /// acquirer, and releasing it here would evict somebody else's frame.
-    pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
-    /// Present only on an adopted foreign DMA-BUF — the registration this
-    /// import created is this surface's to remove; settled by its own Drop.
-    #[cfg(target_os = "linux")]
-    pub(crate) unregister_foreign_from_surface_share: Option<HelperForeignSurfaceUnregisterDebt>,
-    /// What holds this surface against producer reuse, whoever owns the
-    /// surface itself.
-    #[expect(
-        dead_code,
-        reason = "settled by its own Drop; nothing reads it, and that is the point"
-    )]
-    pub(crate) held_against_producer_reuse: HelperSurfaceHeldAgainstProducerReuse,
-    /// The client this surface was checked out through, and the one its
-    /// device export goes back to.
-    #[cfg(target_os = "linux")]
-    pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl HelperCheckedOutPixelSurface {
-    /// The host view of this surface's own mapping; null where the import
-    /// has no host mapping.
-    pub(crate) fn host_visible_pixel_plane_view(
-        &self,
-    ) -> crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
-        crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
-            base_address: self.host_mapped_base_address(),
-            bytes_per_row: self.bytes_per_row,
-            width: self.width,
-            height: self.height,
-            format: self.format,
-        }
-    }
-
-    /// Where the CPU addresses this surface's pixels in this process, or
-    /// null when its import has no host mapping.
-    pub(crate) fn host_mapped_base_address(&self) -> *mut u8 {
-        #[cfg(target_os = "linux")]
-        return self
-            .pixel_buffer_pool_slot_import
-            .consumer_buffer
-            .mapped_ptr();
-        #[cfg(target_os = "macos")]
-        return self.iosurface_pool_slot_import.consumer_buffer.mapped_ptr();
-    }
-}
-
-/// The backings one surface id can stand for, behind one lifetime story:
-/// the pixel buffer, texture and tensor storage buffer a checkout imports,
-/// and the acquired device texture that was never checked out at all — a
-/// name whose memory stays engine-side.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) enum HelperCheckedOutSurface {
-    PixelBuffer(HelperCheckedOutPixelSurface),
-    Texture(HelperCheckedOutTextureSurface),
-    #[cfg(target_os = "linux")]
-    AcquiredDeviceTexture(HelperAcquiredTexture),
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    StorageBuffer(HelperCheckedOutStorageBuffer),
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl HelperCheckedOutSurface {
-    pub(crate) fn surface_id(&self) -> &str {
-        match self {
-            Self::PixelBuffer(pixel_surface) => &pixel_surface.surface_id,
-            Self::Texture(texture_surface) => &texture_surface.surface_id,
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            Self::StorageBuffer(storage_buffer) => &storage_buffer.surface_id,
-        }
-    }
-
-    /// Whether this surface is pixels or a tensor, and its geometry.
-    pub(crate) fn geometry(&self) -> GpuSurfaceGeometry {
-        let pixels = |width, height, format_wire_name| {
-            GpuSurfaceGeometry::Pixels(PixelSurfaceGeometry {
-                width,
-                height,
-                format_wire_name,
-            })
-        };
-        match self {
-            Self::PixelBuffer(pixel_surface) => pixels(
-                pixel_surface.width,
-                pixel_surface.height,
-                pixel_surface.format.wire_name(),
-            ),
-            Self::Texture(texture_surface) => pixels(
-                texture_surface.width,
-                texture_surface.height,
-                texture_surface.format.wire_name(),
-            ),
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => pixels(
-                acquired_texture.width,
-                acquired_texture.height,
-                acquired_texture.format.wire_name(),
-            ),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            Self::StorageBuffer(storage_buffer) => {
-                GpuSurfaceGeometry::TensorStorageBuffer(storage_buffer.tensor_layout.clone())
-            }
-        }
-    }
-
-    /// The tensor storage buffer this surface is, if it is one.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn tensor_storage_buffer(&self) -> Option<&HelperCheckedOutStorageBuffer> {
-        match self {
-            Self::StorageBuffer(storage_buffer) => Some(storage_buffer),
-            _ => None,
-        }
-    }
-}
-
-/// The release an acquired surface owes its parent: one `release_handle`
-/// escalate op, which drops the parent registry's strong reference and the
-/// surface-share service entry together.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) struct HelperSurfaceReleaseDebt {
-    release_to_parent_without_waiting: Py<PyAny>,
-    handle_id: String,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl Drop for HelperSurfaceReleaseDebt {
-    /// Best-effort: a parent that is already gone has released everything
-    /// with the connection, so a failure here is logged, never raised.
-    fn drop(&mut self) {
-        Python::attach(|python| {
-            if let Err(release_failure) = hand_a_release_handle_to_the_release_worker(
-                python,
-                &self.release_to_parent_without_waiting,
-                &self.handle_id,
-            ) {
-                tracing::warn!(
-                    "releasing surface {} to the parent failed ({release_failure}); its pool \
-                     slot returns at teardown",
-                    self.handle_id
-                );
-            }
-        });
-    }
-}
-
-/// The checkout lease a surface owes the surface-share service: one
-/// `release_check_out`, over this helper's current connection. The service
-/// frees only a lease the asking connection took, so a lease taken on a
-/// connection set aside after a timeout is freed by nothing until this helper
-/// stops.
-///
-/// Unlike [`HelperSurfaceReleaseDebt`] this unregisters nothing — it says only
-/// "I am done reading". Owned by the surface, so it settles when the surface's
-/// `GpuSurfaceOwnedMemory` loses its last share, handle *and* every exported
-/// view: paying it at `close()` would return the slot under a live tensor.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) struct HelperSurfaceCheckOutLeaseDebt {
-    exchange_client: Arc<HelperProcessGpuExchangeClient>,
-    surface_id: String,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl Drop for HelperSurfaceCheckOutLeaseDebt {
-    /// Best-effort: a parent that is already gone dropped this connection, and
-    /// the service reclaims every lease on a connection's socket closing — so
-    /// a failure here is logged, never raised.
-    fn drop(&mut self) {
-        Python::attach(|python| {
-            // The round trip blocks, so it runs detached — this can be a
-            // capsule deleter running under the child's GIL.
-            let released =
-                python.detach(|| self.exchange_client.release_check_out(&self.surface_id));
-            if let Err(release_failure) = released {
-                tracing::warn!(
-                    "releasing the checkout of surface {} failed ({release_failure}); its pool \
-                     slot returns when the connection it was claimed on closes, at the latest \
-                     when this helper stops",
-                    self.surface_id
-                );
-            }
-        });
-    }
-}
-
-/// What holds a surface still against producer reuse: a checkout lease, or —
-/// for a pooled frame its pool's claim table covers — a claim in that table.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) enum HelperSurfaceHeldAgainstProducerReuse {
-    CheckOutLease(
-        #[expect(
-            dead_code,
-            reason = "settled by its own Drop; nothing reads it, and that is the point"
-        )]
-        HelperSurfaceCheckOutLeaseDebt,
-    ),
-    GpuPoolClaim(
-        #[expect(
-            dead_code,
-            reason = "the claim is released by its own Drop; nothing reads it, and that is the point"
-        )]
-        Arc<GpuPoolSlotFrameClaimOfThisImporter>,
-    ),
-}
-
-/// A surface-share answer and the handles it carried.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>);
 
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
 /// crossing to the parent: escalate for allocation, surface-share for the
@@ -631,26 +202,6 @@ pub(crate) struct HelperProcessGpuExchangeClient {
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// The release an acquire owes its parent from the moment the parent
-    /// allocated: a one-off's own `release_handle`; a processor output pool's
-    /// frame owes none, since the pool owns the slot.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn release_debt_unless_pooled(
-        &self,
-        python: Python<'_>,
-        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
-        handle_id: &str,
-    ) -> Option<HelperSurfaceReleaseDebt> {
-        processor_output_pool
-            .is_none()
-            .then(|| HelperSurfaceReleaseDebt {
-                release_to_parent_without_waiting: self
-                    .release_to_parent_without_waiting
-                    .clone_ref(python),
-                handle_id: handle_id.to_owned(),
-            })
-    }
-
     /// `surface_share_channel_name` is the socket path on Linux and the
     /// Mach service name on macOS, and `vulkan_device_uuid_the_runtime_named_at_spawn`
     /// the runtime's device — what the parent put in the helper's environment.
@@ -670,12 +221,8 @@ impl HelperProcessGpuExchangeClient {
         Self {
             escalate_request_to_parent,
             release_to_parent_without_waiting,
-            #[cfg(target_os = "linux")]
-            surface_share_connection: SurfaceShareConnectionOfThisImporter::new(PathBuf::from(
-                surface_share_channel_name,
-            )),
-            #[cfg(target_os = "macos")]
-            surface_share_connection: SurfaceShareConnectionOfThisImporter::new(
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            surface_share_connection: surface_share_connection_over_the_channel_named(
                 surface_share_channel_name,
             ),
             foreign_surface_registration_runtime_id,
@@ -695,189 +242,6 @@ impl HelperProcessGpuExchangeClient {
                 std::collections::HashMap::new(),
             ),
         }
-    }
-
-    /// Ask the parent to allocate, then check the result out and import it.
-    ///
-    /// Called attached; the escalate wait releases the GIL, and the checkout
-    /// and Vulkan import run detached.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn acquire_pixel_buffer(
-        self: &Arc<Self>,
-        python: Python<'_>,
-        width: u32,
-        height: u32,
-        wire_format_name: &str,
-    ) -> PyResult<HelperCheckedOutPixelSurface> {
-        let op = PyDict::new(python);
-        op.set_item("op", "acquire_pixel_buffer")?;
-        op.set_item("width", width)?;
-        op.set_item("height", height)?;
-        op.set_item("format", wire_format_name)?;
-        let response =
-            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        let handle_id: String = response
-            .get_item("handle_id")
-            .map_err(|_| {
-                PyRuntimeError::new_err(
-                    "the parent's acquire_pixel_buffer response carried no handle_id",
-                )
-            })?
-            .extract()?;
-        // The debt exists from the moment the parent allocated: if the
-        // checkout or the Vulkan import below fails, this drops on the error
-        // path and pays the `release_handle`, instead of stranding the
-        // parent's pool slot and surface-share entry until teardown.
-        let release_to_parent = HelperSurfaceReleaseDebt {
-            release_to_parent_without_waiting: self
-                .release_to_parent_without_waiting
-                .clone_ref(python),
-            handle_id: handle_id.clone(),
-        };
-        let checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
-        let HelperCheckedOutSurface::PixelBuffer(mut checked_out_pixel_surface) = checked_out
-        else {
-            return Err(PyRuntimeError::new_err(format!(
-                "acquire_pixel_buffer's allocation {handle_id:?} resolved to a texture \
-                 registration; a pool cannot answer a buffer acquire with an image"
-            )));
-        };
-        checked_out_pixel_surface.release_to_parent = Some(release_to_parent);
-        Ok(checked_out_pixel_surface)
-    }
-
-    /// Check out a surface another processor published — pixel buffer or
-    /// texture, whichever its registration names. No release debt: the
-    /// surface belongs to its acquirer.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn resolve_surface(
-        self: &Arc<Self>,
-        python: Python<'_>,
-        surface_id: &str,
-    ) -> PyResult<HelperCheckedOutSurface> {
-        python.detach(|| self.check_out_and_import(surface_id))
-    }
-
-    /// Claim a published surface against producer reuse, without importing
-    /// its memory.
-    ///
-    /// The cheap half of [`Self::resolve_surface`]: the checkout is what mints
-    /// the lease, and a holder that only needs the frame to hold still owes no
-    /// Vulkan import for it. A pooled frame its pool's claim table covers is
-    /// claimed in that table with no request; any other is checked out, and the
-    /// plane fds the service delivers alongside the claim close with this call.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn claim_surface_against_producer_reuse(
-        self: &Arc<Self>,
-        surface_id: &str,
-    ) -> PyResult<HelperSurfaceHeldAgainstProducerReuse> {
-        if let Some(claimed) = self.claim_in_its_pool_claim_table(surface_id)? {
-            return Ok(HelperSurfaceHeldAgainstProducerReuse::GpuPoolClaim(claimed));
-        }
-        let (response, _transferred_handles_released_by_scope) =
-            self.check_out_surface(surface_id)?;
-        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
-        Ok(HelperSurfaceHeldAgainstProducerReuse::CheckOutLease(
-            HelperSurfaceCheckOutLeaseDebt {
-                exchange_client: Arc::clone(self),
-                surface_id: surface_id.to_string(),
-            },
-        ))
-    }
-
-    /// Wait for the parent's GPU device to go idle.
-    ///
-    /// A real wait, not an acknowledgement: the parent runs it inside its
-    /// escalate scope, so the reply means the device was idle on that
-    /// side — which is the only side there is.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
-        let op = PyDict::new(python);
-        op.set_item("op", "wait_device_idle")?;
-        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        Ok(())
-    }
-
-    /// Claim a surface against producer reuse and take the handles its
-    /// memory crosses as.
-    ///
-    /// The one place this op is spelled: a checkout is what pins the frame,
-    /// and every caller owes the matching [`Self::release_check_out`].
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn check_out_surface(&self, surface_id: &str) -> PyResult<SurfaceShareAnswer> {
-        self.surface_share_request(&serde_json::json!({
-            "op": "check_out",
-            "surface_id": surface_id,
-        }))
-    }
-
-    /// Let go of one claim on a surface, freeing its slot for its producer.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn release_check_out(&self, surface_id: &str) -> PyResult<SurfaceShareAnswer> {
-        self.surface_share_request(&serde_json::json!({
-            "op": "release_check_out",
-            "surface_id": surface_id,
-        }))
-    }
-
-    /// Publish the layout this side left a texture in, so the next
-    /// consumer's acquire barrier names the right source layout.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn publish_image_layout_to_surface_share(
-        &self,
-        surface_id: &str,
-        current_image_layout_raw: i32,
-    ) -> PyResult<()> {
-        let (response, _no_handles) = self.surface_share_request(&serde_json::json!({
-            "op": "update_layout",
-            "surface_id": surface_id,
-            "current_image_layout": current_image_layout_raw,
-        }))?;
-        if let Some(publish_error) = response.get("error").and_then(|value| value.as_str()) {
-            return Err(PyRuntimeError::new_err(format!(
-                "the surface-share service refused the layout publish for {surface_id:?}: \
-                 {publish_error}"
-            )));
-        }
-        match response.get("success").and_then(|value| value.as_bool()) {
-            Some(true) => Ok(()),
-            Some(false) => Err(PyRuntimeError::new_err(format!(
-                "the surface-share service did not record the layout publish for \
-                 {surface_id:?} — it knows no such registration"
-            ))),
-            None => Err(PyRuntimeError::new_err(format!(
-                "the surface-share service's layout-publish answer for {surface_id:?} \
-                 carried no success field"
-            ))),
-        }
-    }
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    fn consumer_vulkan_device(&self) -> PyResult<Arc<ConsumerVulkanDevice>> {
-        let mut device = self.consumer_vulkan_device.lock();
-        if let Some(existing_device) = device.as_ref() {
-            return Ok(Arc::clone(existing_device));
-        }
-        let could_not_create_the_import_device = |device_failure: &dyn std::fmt::Display| {
-            PyRuntimeError::new_err(format!(
-                "this helper process could not create its Vulkan import device: {device_failure}"
-            ))
-        };
-        let vulkan_device_uuid_the_runtime_named =
-            match &self.vulkan_device_uuid_the_runtime_named_at_spawn {
-                Ok(vulkan_device_uuid_the_runtime_named) => *vulkan_device_uuid_the_runtime_named,
-                Err(absent_or_malformed) => {
-                    return Err(could_not_create_the_import_device(absent_or_malformed));
-                }
-            };
-        let created = Arc::new(
-            ConsumerVulkanDevice::new_on_the_device_the_runtime_named(
-                vulkan_device_uuid_the_runtime_named,
-            )
-            .map_err(|device_failure| could_not_create_the_import_device(&device_failure))?,
-        );
-        *device = Some(Arc::clone(&created));
-        Ok(created)
     }
 }
 

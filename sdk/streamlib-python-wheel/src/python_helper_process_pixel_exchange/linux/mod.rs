@@ -20,7 +20,8 @@ use super::{
     HelperSurfaceHeldAgainstProducerReuse, refuse_check_out_the_service_declined, response_field,
 };
 use streamlib_gpu_frame_import_client::{
-    pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
+    SurfaceShareConnectionOfThisImporter, pool_slot_of_a_published_frame_id,
+    pool_slots_a_reply_lists_as_retired,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
@@ -411,7 +412,7 @@ impl HelperProcessGpuExchangeClient {
 
     /// The one exchange every surface-share request makes, over this
     /// helper's connection; see
-    /// [`SurfaceShareConnectionOfThisImporter::exchange`](streamlib_gpu_frame_import_client::SurfaceShareConnectionOfThisImporter::exchange).
+    /// [`SurfaceShareConnectionOfThisImporter::exchange`].
     fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
         &self,
         request: &serde_json::Value,
@@ -763,6 +764,24 @@ impl HelperProcessGpuExchangeClient {
 enum ProducerImageLayoutOfAFrame<'reply> {
     StatedByTheCheckOut(&'reply serde_json::Value),
     StatedByItsDescriptor(VulkanLayout),
+}
+
+/// The connection to the surface-share service over the socket path the
+/// parent named.
+pub(super) fn surface_share_connection_over_the_channel_named(
+    surface_share_channel_name: std::ffi::OsString,
+) -> SurfaceShareConnectionOfThisImporter<HelperPoolSlotImport> {
+    SurfaceShareConnectionOfThisImporter::new(std::path::PathBuf::from(surface_share_channel_name))
+}
+
+impl HelperCheckedOutPixelSurface {
+    /// Where the CPU addresses this surface's pixels in this process, or
+    /// null when its import has no host mapping.
+    pub(crate) fn host_mapped_base_address(&self) -> *mut u8 {
+        self.pixel_buffer_pool_slot_import
+            .consumer_buffer
+            .mapped_ptr()
+    }
 }
 
 /// The OPAQUE_FD pixel-buffer arm against an engine-exported allocation. Needs
