@@ -766,9 +766,6 @@ enum ProducerImageLayoutOfAFrame<'reply> {
     StatedByItsDescriptor(VulkanLayout),
 }
 
-/// The OPAQUE_FD pixel-buffer arm against an engine-exported allocation. Needs
-/// a Vulkan device and skips where none comes up — the rig runs it on NVIDIA
-/// and on lavapipe.
 /// The connection to the surface-share service over the socket path the
 /// parent named.
 pub(super) fn surface_share_connection_over_the_channel_named(
@@ -787,6 +784,9 @@ impl HelperCheckedOutPixelSurface {
     }
 }
 
+/// The OPAQUE_FD pixel-buffer arm against an engine-exported allocation. Needs
+/// a Vulkan device and skips where none comes up — the rig runs it on NVIDIA
+/// and on lavapipe.
 #[cfg(test)]
 mod opaque_fd_pixel_buffer_import_tests;
 

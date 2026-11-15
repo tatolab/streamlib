@@ -13,12 +13,11 @@ use pyo3::prelude::*;
 use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 use streamlib::sdk::rhi::TensorStorageBufferLayout;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
+use streamlib_gpu_frame_import_client::SurfaceShareTransferredHandle;
 
 use super::super::HelperProcessGpuExchangeClient;
 use super::super::storage_buffer::tensor_layout_of_a_check_out;
-use super::super::{
-    HelperSurfaceHeldAgainstProducerReuse, HelperSurfaceReleaseDebt, SurfaceShareTransferredHandle,
-};
+use super::super::{HelperSurfaceHeldAgainstProducerReuse, HelperSurfaceReleaseDebt};
 use super::{HelperIOSurfaceUseCountClaim, HelperPoolSlotImport};
 
 /// A tensor pool slot as this helper imported it, shared by every frame over

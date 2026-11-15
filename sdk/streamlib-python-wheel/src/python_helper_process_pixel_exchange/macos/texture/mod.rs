@@ -10,12 +10,12 @@ use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
     ConsumerVulkanTimelineSemaphore, TextureFormat, VulkanImageUsage, VulkanLayout,
 };
+use streamlib_gpu_frame_import_client::SurfaceShareTransferredHandle;
 
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse,
-    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, SurfaceShareTransferredHandle,
-    escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
-    vk_image_creation_recipe_of_check_out,
+    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
+    required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
 use super::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceUseCountClaim, HelperPoolSlotImport,
