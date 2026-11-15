@@ -13,6 +13,7 @@ use crate::core::test_support::rig_only_capability_skip::{
 mod one_off_acquisition_count_and_memory_budget_tests;
 mod processor_output_pool_slot_tests;
 mod tensor_storage_buffer_tests;
+#[cfg(target_os = "linux")]
 mod texture_export_flavour_tests;
 
 /// The handle id an escalate acquire answered, or its refusal's message.
