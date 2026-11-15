@@ -46,9 +46,9 @@ mod counters_and_diagnostics;
 mod dma_buf_opaque_fd_and_host_mapping_acquisition;
 mod full_access;
 #[cfg(target_os = "linux")]
-mod full_access_dma_buf_and_opaque_fd_exports;
+mod full_access_dma_buf_and_opaque_fd_acquisition;
 #[cfg(target_os = "macos")]
-mod full_access_iosurface_imports;
+mod full_access_iosurface_acquisition;
 #[cfg(target_os = "macos")]
 mod iosurface_acquisition;
 #[cfg(target_os = "macos")]

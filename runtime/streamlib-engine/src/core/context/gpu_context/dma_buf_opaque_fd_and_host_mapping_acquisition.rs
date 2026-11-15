@@ -46,6 +46,10 @@ impl GpuContext {
     /// - **Cross-process surface a consumer adapter renders into**:
     ///   this method (tiled DRM modifier, DMA-BUF exportable, FBO-completable
     ///   on the consumer side).
+    ///
+    /// [`HostVulkanDevice::drm_modifier_table`]: crate::vulkan::rhi::HostVulkanDevice::drm_modifier_table
+    /// [`HostVulkanTexture`]: crate::vulkan::rhi::HostVulkanTexture
+    /// [`HostVulkanTexture::chosen_drm_format_modifier`]: crate::vulkan::rhi::HostVulkanTexture::chosen_drm_format_modifier
     pub fn acquire_render_target_dma_buf_image(
         &self,
         width: u32,
