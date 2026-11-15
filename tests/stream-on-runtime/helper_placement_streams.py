@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The `@graph_generator` functions `test_helper_placement.py` runs from the suite project."""
+"""The `@graph_generator` functions the helper placement tests run from the suite project."""
 
 from typing import Any
 

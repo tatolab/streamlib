@@ -194,7 +194,7 @@ fn every_path_onto_the_ladder_asks_the_helper_to_stop_and_tear_down_exactly_once
     // is the whole of what is observable here: that every route onto the
     // ladder goes through the ask, and that a second route does not repeat
     // it. That the commands then reach the wire is the rig scenario's, in
-    // `test_helper_placement.py`.
+    // `test_helper_crashes_restarts_and_teardown.py`.
     host.ask_the_helper_to_stop_and_tear_down();
     assert!(host.shutdown_was_already_asked_of_this_helper);
 
