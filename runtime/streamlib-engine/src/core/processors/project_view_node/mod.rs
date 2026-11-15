@@ -809,5 +809,4 @@ impl DynGeneratedProcessor for NodeWhoseOutputsAClientWritesProcessor {
 }
 
 #[cfg(test)]
-#[path = "project_view_node_tests.rs"]
-mod project_view_node_tests;
+mod tests;
