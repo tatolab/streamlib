@@ -751,3 +751,30 @@ fn a_contract_less_ports_projection_carries_no_audio_window_key() {
         })
     );
 }
+
+#[test]
+fn a_positional_port_schema_is_an_error() {
+    // A port declares a name and keyed options only. The old
+    // `input("name", family = Image, <schema>, ...)` form must fail to parse, not be
+    // silently accepted and dropped.
+    let msg = parse_err(quote! {
+        execution = manual,
+        input("in1", family = Image, "@tatolab/core/VideoFrame", delivery_profile = "newest"),
+    });
+    assert!(
+        msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
+        "the error must name the removal and the offending port: {msg}"
+    );
+}
+
+#[test]
+fn a_bare_any_port_schema_is_an_error() {
+    let msg = parse_err(quote! {
+        execution = manual,
+        output("out1", family = Image, any),
+    });
+    assert!(
+        msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),
+        "the error must name the removal and the offending port: {msg}"
+    );
+}
