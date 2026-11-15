@@ -12,7 +12,7 @@
 //!
 //! H.264 timing rides in the SPS VUI, which the session-parameter creation
 //! path now chains directly via `pSequenceParameterSetVui` (see
-//! `session.rs::create_session_parameters`). No post-write H.264 patching
+//! `session_parameters.rs::create_session_parameters`). No post-write H.264 patching
 //! is required.
 
 use vulkanalia::vk;
@@ -401,7 +401,7 @@ fn patch_h265_vps_nal(nal_bytes: &[u8], fps_num: u32, fps_den: u32) -> Vec<u8> {
 ///
 /// Only the H.265 VPS is rewritten — `vps_num_units_in_tick` /
 /// `vps_time_scale`. H.264 SPS VUI timing is now produced directly by the
-/// session-parameter creation path (`session.rs::create_session_parameters`
+/// session-parameter creation path (`session_parameters.rs::create_session_parameters`
 /// chains `pSequenceParameterSetVui`), so calls with
 /// `codec_flag = ENCODE_H264` are a no-op and return the input unchanged.
 ///
