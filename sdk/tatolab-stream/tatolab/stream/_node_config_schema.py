@@ -447,12 +447,12 @@ _NODE_REFERENCE_ONE_REFERRER_PER_REFERENCED_NODE_KEY = "one_referrer_per_referen
 def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | None":
     # Imported here: the builder imports node declaration, which imports this
     # module, and every annotation is read after the package has loaded.
-    from ._stream_graph_builder import (
+    from ._stream_builder import (
         NodeReference,
         NodeReferenceToNodeType,
         SoleReferrerNodeReferenceToNodeType,
+        _node_type_of,
     )
-    from ._stream_builder import _node_type_of
 
     if annotation is NodeReference or annotation is NodeReferenceToNodeType:
         keyword: "dict[str, Any]" = {}

@@ -448,7 +448,7 @@ def test_the_builder_is_not_importable_as_stream() -> None:
         exec("from tatolab.stream import Stream", {})
 
 
-def test_the_builder_module_imports_nothing_native() -> None:
+def test_the_builder_modules_import_nothing_native() -> None:
     imported: "list[tuple[int, str]]" = []
     for builder_source in STREAM_GRAPH_BUILDER_SOURCES:
         module = ast.parse(builder_source.read_text(encoding="utf-8"))
