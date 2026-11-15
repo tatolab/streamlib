@@ -5,7 +5,7 @@
 //! entry-point table every PipeWire arm calls through.
 //!
 //! `libpipewire` is opened with `libloading` and every entry point is a
-//! `dlsym` result, the way `vulkan/rhi/drm_modifier_probe.rs` reaches
+//! `dlsym` result, the way `vulkan/rhi/device/drm_modifier_probe.rs` reaches
 //! `libEGL.so.1`. Nothing links an audio or video library, so the wheel's
 //! `DT_NEEDED` set does not grow — the invariant
 //! `sdk/streamlib-python-wheel/tests_against_the_runtime_unit_lend/test_wheel_portability.py` holds.

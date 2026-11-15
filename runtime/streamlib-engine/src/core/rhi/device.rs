@@ -68,7 +68,7 @@ impl GpuDevice {
                 RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
 
-            if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            if crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .set(std::sync::Arc::clone(&device_arc))
                 .is_err()
             {
