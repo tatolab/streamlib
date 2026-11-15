@@ -25,10 +25,11 @@ from mcp.client.stdio import StdioServerParameters
 from mcp.types import TextContent, TextResourceContents
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
+from cli_launch_projects import NODE_READY_TIMEOUT_SECONDS
 from conftest import PrivateMachineDirectories, TatolabdUnderTest
 from runtime_unit_under_test import REPOSITORY_ROOT, RuntimeUnitUnderTest
 from stream_runs_on_tatolabd import TatolabRunOfAProject
-from test_cli_launch import NODE_READY_TIMEOUT_SECONDS, STREAM_WITH_ONE_TEST_PATTERN_SOURCE
+from test_cli_launch import STREAM_WITH_ONE_TEST_PATTERN_SOURCE
 
 pytestmark = pytest.mark.requires_gpu
 

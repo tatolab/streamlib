@@ -25,11 +25,11 @@ from typing import Any, TypeVar
 
 import pytest
 
+from cli_launch_projects import NODE_READY_TIMEOUT_SECONDS
 from conftest import TatolabdUnderTest, TatolabRunOrDevOnTheRuntime
 from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
 from stream_runs_on_tatolabd import TatolabRunOfAProject
-from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
 
 # A processor interpreter's first frame is a cold spawn plus an import; anything
 # past this is a processor that never received traffic.

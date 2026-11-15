@@ -33,11 +33,11 @@ from mcp.types import TextContent, TextResourceContents
 from mcp_types import UNSUPPORTED_PROTOCOL_VERSION
 from mcp_types.version import LATEST_PROTOCOL_VERSION
 
+from cli_launch_projects import NODE_READY_TIMEOUT_SECONDS
 from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient, call_operation_tool_call, mcp_error_raised_in
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
 from stream_runs_on_tatolabd import TatolabRunOfAProject
-from test_cli_launch import NODE_READY_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.requires_gpu
 
