@@ -542,4 +542,16 @@ impl SimpleDecoder {
 
         Ok(prev_frame)
     }
+
+    /// Find a free DPB slot, or evict the oldest one.
+    fn find_free_dpb_slot(&self) -> usize {
+        // First, find an unused slot
+        for (i, in_use) in self.dpb_slot_in_use.iter().enumerate() {
+            if !in_use {
+                return i;
+            }
+        }
+        // All slots in use — evict slot 0 (simplistic sliding window)
+        0
+    }
 }

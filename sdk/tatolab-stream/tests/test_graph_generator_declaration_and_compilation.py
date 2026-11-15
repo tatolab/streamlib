@@ -42,8 +42,13 @@ from stream_graph_builder_streams import (
 )
 
 
-STREAM_GRAPH_BUILDER_SOURCE = (
-    Path(tatolab.stream.__file__).resolve().parent / "_stream_graph_builder.py"
+STREAM_GRAPH_BUILDER_SOURCES = tuple(
+    Path(tatolab.stream.__file__).resolve().parent / module_file_name
+    for module_file_name in (
+        "_stream_graph_builder.py",
+        "_stream_builder.py",
+        "_graph_generator_detection.py",
+    )
 )
 
 
@@ -443,14 +448,15 @@ def test_the_builder_is_not_importable_as_stream() -> None:
         exec("from tatolab.stream import Stream", {})
 
 
-def test_the_builder_module_imports_nothing_native() -> None:
-    module = ast.parse(STREAM_GRAPH_BUILDER_SOURCE.read_text(encoding="utf-8"))
+def test_the_builder_modules_import_nothing_native() -> None:
     imported: "list[tuple[int, str]]" = []
-    for statement in ast.walk(module):
-        if isinstance(statement, ast.Import):
-            imported.extend((0, alias.name) for alias in statement.names)
-        elif isinstance(statement, ast.ImportFrom):
-            imported.append((statement.level, statement.module or ""))
+    for builder_source in STREAM_GRAPH_BUILDER_SOURCES:
+        module = ast.parse(builder_source.read_text(encoding="utf-8"))
+        for statement in ast.walk(module):
+            if isinstance(statement, ast.Import):
+                imported.extend((0, alias.name) for alias in statement.names)
+            elif isinstance(statement, ast.ImportFrom):
+                imported.append((statement.level, statement.module or ""))
 
     assert imported
     for level, module_name in imported:
@@ -464,6 +470,8 @@ def test_the_builder_module_imports_nothing_native() -> None:
                 (1, "_function_node_declaration"),
                 (1, "_stream_clock_spec"),
                 (1, "_port_family_declaration"),
+                (1, "_stream_builder"),
+                (1, "_graph_generator_detection"),
             }, module_name
 
 
@@ -546,7 +554,7 @@ def test_a_variable_holding_a_node_compiles_its_reference_and_a_get_passes_as_on
 
 
 def test_a_node_reference_in_the_deepest_container_a_config_nests_is_refused_as_too_deep() -> None:
-    from tatolab.stream._stream_graph_builder import (
+    from tatolab.stream._stream_builder import (
         _MOST_CONTAINERS_A_CONFIG_NESTS_COUNTING_ITSELF,
     )
 

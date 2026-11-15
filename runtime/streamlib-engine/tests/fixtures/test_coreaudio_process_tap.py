@@ -21,6 +21,7 @@ from unittest import mock
 
 import numpy
 
+import coreaudio_hal_devices
 import coreaudio_process_tap as helper
 
 
@@ -37,7 +38,7 @@ def a_device(**overrides):
         "nominal_sample_rate": 48_000.0,
     }
     fields.update(overrides)
-    return helper.CoreAudioDevice(**fields)
+    return coreaudio_hal_devices.CoreAudioDevice(**fields)
 
 
 BUILT_IN_SPEAKER = a_device(
@@ -69,19 +70,21 @@ VIRTUAL_DEVICE_WITH_BOTH_DIRECTIONS = a_device(
 class DevicePinning(unittest.TestCase):
     def test_the_built_in_speaker_is_pinned_over_everything_else(self):
         devices = [VIRTUAL_DEVICE_WITH_BOTH_DIRECTIONS, HEADPHONES_ON_THE_JACK, BUILT_IN_SPEAKER]
-        self.assertEqual(helper.built_in_speaker_among(devices), BUILT_IN_SPEAKER)
+        self.assertEqual(coreaudio_hal_devices.built_in_speaker_among(devices), BUILT_IN_SPEAKER)
 
     def test_headphones_are_never_taken_for_the_speaker(self):
         """Headphones on the jack are built in too; only the data source tells them apart."""
-        self.assertIsNone(helper.built_in_speaker_among([HEADPHONES_ON_THE_JACK]))
+        self.assertIsNone(coreaudio_hal_devices.built_in_speaker_among([HEADPHONES_ON_THE_JACK]))
 
     def test_the_built_in_microphone_is_pinned_over_a_continuity_iphone(self):
         devices = [CONTINUITY_IPHONE_MICROPHONE, VIRTUAL_DEVICE_WITH_BOTH_DIRECTIONS, BUILT_IN_MICROPHONE]
-        self.assertEqual(helper.built_in_microphone_among(devices), BUILT_IN_MICROPHONE)
+        self.assertEqual(
+            coreaudio_hal_devices.built_in_microphone_among(devices), BUILT_IN_MICROPHONE
+        )
 
     def test_a_mac_with_no_built_in_microphone_pins_none(self):
         self.assertIsNone(
-            helper.built_in_microphone_among(
+            coreaudio_hal_devices.built_in_microphone_among(
                 [CONTINUITY_IPHONE_MICROPHONE, VIRTUAL_DEVICE_WITH_BOTH_DIRECTIONS]
             )
         )
@@ -120,10 +123,11 @@ class AggregateDeviceDescription(unittest.TestCase):
 
 class FourCharacterCodes(unittest.TestCase):
     def test_a_code_round_trips(self):
-        self.assertEqual(helper.four_char_code_text(helper.four_char_code("bltn")), "bltn")
+        code = coreaudio_hal_devices.four_char_code("bltn")
+        self.assertEqual(coreaudio_hal_devices.four_char_code_text(code), "bltn")
 
     def test_a_status_that_spells_nothing_reads_as_its_number(self):
-        self.assertEqual(helper.four_char_code_text(-50), str(-50))
+        self.assertEqual(coreaudio_hal_devices.four_char_code_text(-50), str(-50))
 
 
 EVERY_TCC_ANSWER_BUT_A_GRANT = ("denied", "not-determined", "unknown", "", "restricted")
@@ -222,13 +226,15 @@ def an_audio_buffer_list(channel_counts, frames):
     class AudioBufferListOfThisMany(ctypes.Structure):
         _fields_ = [
             ("number_of_buffers", ctypes.c_uint32),
-            ("buffers", helper.AudioBuffer * len(channel_counts)),
+            ("buffers", coreaudio_hal_devices.AudioBuffer * len(channel_counts)),
         ]
 
     buffer_list = AudioBufferListOfThisMany()
     buffer_list.number_of_buffers = len(channel_counts)
     for index, (channels, array) in enumerate(zip(channel_counts, arrays)):
-        buffer_list.buffers[index] = helper.AudioBuffer(channels, array.nbytes, array.ctypes.data)
+        buffer_list.buffers[index] = coreaudio_hal_devices.AudioBuffer(
+            channels, array.nbytes, array.ctypes.data
+        )
     return buffer_list, arrays
 
 
@@ -236,38 +242,39 @@ def an_audio_time_stamp(sample_time, sample_time_is_valid=True):
     """An AudioTimeStamp's 64 bytes with only the sample time and its flag set."""
     stamp = (ctypes.c_uint8 * 64)()
     ctypes.c_double.from_buffer(stamp, 0).value = sample_time
-    ctypes.c_uint32.from_buffer(stamp, helper.AUDIO_TIME_STAMP_FLAGS_OFFSET).value = (
-        helper.AUDIO_TIME_STAMP_SAMPLE_TIME_VALID if sample_time_is_valid else 0
+    flags_offset = coreaudio_hal_devices.AUDIO_TIME_STAMP_FLAGS_OFFSET
+    ctypes.c_uint32.from_buffer(stamp, flags_offset).value = (
+        coreaudio_hal_devices.AUDIO_TIME_STAMP_SAMPLE_TIME_VALID if sample_time_is_valid else 0
     )
     return stamp
 
 
 class AudioBufferListReading(unittest.TestCase):
     def test_an_audio_buffer_is_the_sixteen_bytes_core_audio_lays_out(self):
-        self.assertEqual(ctypes.sizeof(helper.AudioBuffer), 16)
-        self.assertEqual(helper.AudioBuffer.data.offset, 8)
+        self.assertEqual(ctypes.sizeof(coreaudio_hal_devices.AudioBuffer), 16)
+        self.assertEqual(coreaudio_hal_devices.AudioBuffer.data.offset, 8)
 
     def test_every_buffer_is_read_in_place(self):
         buffer_list, arrays = an_audio_buffer_list([2, 1], frames=4)
-        buffers = helper.audio_buffers_at(ctypes.addressof(buffer_list))
+        buffers = coreaudio_hal_devices.audio_buffers_at(ctypes.addressof(buffer_list))
         self.assertEqual([buffer.number_of_channels for buffer in buffers], [2, 1])
         self.assertEqual([buffer.data_byte_size for buffer in buffers], [32, 16])
         self.assertEqual(buffers[1].data, arrays[1].ctypes.data)
 
     def test_a_null_list_holds_no_buffers(self):
-        self.assertEqual(len(helper.audio_buffers_at(None)), 0)
+        self.assertEqual(len(coreaudio_hal_devices.audio_buffers_at(None)), 0)
 
     def test_a_sample_time_is_read_only_when_flagged_valid(self):
         valid = an_audio_time_stamp(4096.0)
         not_valid = an_audio_time_stamp(4096.0, sample_time_is_valid=False)
-        self.assertEqual(helper.sample_time_at(ctypes.addressof(valid)), 4096.0)
-        self.assertIsNone(helper.sample_time_at(ctypes.addressof(not_valid)))
-        self.assertIsNone(helper.sample_time_at(None))
+        self.assertEqual(coreaudio_hal_devices.sample_time_at(ctypes.addressof(valid)), 4096.0)
+        self.assertIsNone(coreaudio_hal_devices.sample_time_at(ctypes.addressof(not_valid)))
+        self.assertIsNone(coreaudio_hal_devices.sample_time_at(None))
 
 
 class StreamFormat(unittest.TestCase):
     def test_only_32_bit_float_linear_pcm_is_copyable(self):
-        float32 = helper.AudioStreamFormat(48_000.0, "lpcm", 0b1001, 32, 2)
+        float32 = coreaudio_hal_devices.AudioStreamFormat(48_000.0, "lpcm", 0b1001, 32, 2)
         self.assertTrue(float32.is_32_bit_float)
         self.assertFalse(float32._replace(bits_per_channel=16).is_32_bit_float)
         self.assertFalse(float32._replace(format_flags=0b1100).is_32_bit_float)
@@ -305,7 +312,10 @@ class MuteBehaviour(unittest.TestCase):
 @unittest.skipUnless(sys.platform == "darwin", "Core Audio is macOS's")
 class CoreAudioShortOfATap(unittest.TestCase):
     def test_this_process_has_a_process_object_to_tap(self):
-        self.assertNotEqual(helper.process_object_of(os.getpid()), helper.AUDIO_OBJECT_UNKNOWN)
+        self.assertNotEqual(
+            coreaudio_hal_devices.process_object_of(os.getpid()),
+            coreaudio_hal_devices.AUDIO_OBJECT_UNKNOWN,
+        )
 
     def test_the_aggregate_description_reaches_core_foundation_whole(self):
         description = helper.aggregate_device_description(
@@ -320,7 +330,7 @@ class CoreAudioShortOfATap(unittest.TestCase):
 
     def test_a_tap_description_is_private_and_muted_as_asked(self):
         """Only the Objective-C object: it is never handed to the HAL."""
-        this_process = helper.process_object_of(os.getpid())
+        this_process = coreaudio_hal_devices.process_object_of(os.getpid())
         for mute_behaviour in ("muted", "unmuted"):
             with self.subTest(mute_behaviour=mute_behaviour):
                 with helper._PrivateProcessTapDescription(
@@ -348,14 +358,17 @@ class CoreAudioShortOfATap(unittest.TestCase):
         )
 
     def test_the_built_in_speakers_hand_an_io_proc_32_bit_float(self):
-        speaker = helper.built_in_speaker_among(helper.attached_devices())
+        speaker = coreaudio_hal_devices.built_in_speaker_among(
+            coreaudio_hal_devices.attached_devices()
+        )
         if speaker is None:
             self.skipTest("no built-in speakers, or headphones on the jack")
-        formats = helper.stream_virtual_formats(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)
+        scope_output = coreaudio_hal_devices.PROPERTY_SCOPE_OUTPUT
+        formats = coreaudio_hal_devices.stream_virtual_formats(speaker.object_id, scope_output)
         self.assertTrue(formats)
         self.assertTrue(all(stream_format.is_32_bit_float for stream_format in formats))
         self.assertEqual(
-            sum(helper.channels_in_each_buffer(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)),
+            sum(coreaudio_hal_devices.channels_in_each_buffer(speaker.object_id, scope_output)),
             speaker.output_channels,
         )
 

@@ -9,8 +9,10 @@
 //! from either raw NV12 pixels or GPU-resident RGBA images.
 
 pub mod config;
+mod encode_frame_reference_planning;
 mod gop;
 mod session;
+mod session_parameters;
 mod staging;
 mod submit;
 mod vui_patch;
@@ -19,7 +21,7 @@ mod vui_patch;
 mod tests;
 
 pub use config::*;
-pub use session::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
+pub use session_parameters::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;
 
 use std::ptr;
 use std::sync::Arc;

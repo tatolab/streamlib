@@ -268,5 +268,4 @@ impl ProjectStoresOpenInThisRuntime {
 }
 
 #[cfg(test)]
-#[path = "store_scoped_to_this_node_tests.rs"]
-mod store_scoped_to_this_node_tests;
+mod tests;
