@@ -1,7 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What every device exchange probe reports with, and the surface they read."""
+"""What the device exchange probes share: the surfaces they read, the constant
+fill kernel and its pixel, the OPAQUE_FD usage set, and how each reports."""
 
 import json
 import os
@@ -32,7 +33,7 @@ NATURAL_DLPACK_DEVICE = DLPACK_DEVICE_METAL if sys.platform == "darwin" else DLP
 NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
 
-def _report(probe_body) -> None:
+def report_device_exchange_probe_observation(probe_body) -> None:
     """One result line per probe, success or failure — the failure carries the
     traceback so the test fails on the cause rather than a missing marker."""
     try:
@@ -42,8 +43,8 @@ def _report(probe_body) -> None:
     log.info(RESULT_MARKER + json.dumps({"pid": os.getpid(), **observation}))
 
 
-class _FrameProbeBase:
-    """Reads exactly one Image frame, held against producer reuse while it lives, then reports through `_report`."""
+class DeviceExchangeFrameProbeBase:
+    """Reads exactly one Image frame, held against producer reuse while it lives, then reports through `report_device_exchange_probe_observation`."""
 
     video_from_upstream = Input(Image, delivery="ordered")
 
@@ -58,7 +59,7 @@ class _FrameProbeBase:
         if frame is None or self.frames_seen >= 1:
             return
         self.frames_seen += 1
-        _report(lambda: self._probe(ctx, frame))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx, frame))
 
 
 # Slang that fills its one bound texture with a constant — the smallest
@@ -76,11 +77,11 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 }
 """
 
+FILL_CONSTANT_RGBA = [64, 128, 192, 255]
 
-# The usage sets that pick each cross-process-importable allocation flavour:
-# the OPAQUE_FD constructor's fixed set, and a render-attachment set that
-# takes the explicit-DRM-modifier DMA-BUF arm (storage included so the same
-# kernel can write both flavours).
+
+# The usage set that picks the OPAQUE_FD cross-process-importable allocation
+# flavour: the OPAQUE_FD constructor's fixed set.
 OPAQUE_FD_FLAVOUR_USAGE = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
 
 

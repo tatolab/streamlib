@@ -10,7 +10,7 @@ import sys
 
 import numpy
 
-from device_exchange_probe_reporting import (
+from device_exchange_probe_shared_surfaces_and_reporting import (
     FILL_CONSTANT_SLANG,
     NATURAL_DLPACK_DEVICE,
     OPAQUE_FD_FLAVOUR_USAGE,
@@ -18,7 +18,7 @@ from device_exchange_probe_reporting import (
     PADDED_SURFACE_WIDTH,
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
-    _report,
+    report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
     RuntimeContextFullAccess,
@@ -37,7 +37,7 @@ class DmaBufExportProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(
@@ -72,13 +72,8 @@ class DmaBufExportProbe:
             return observation
 
 
-FILL_CONSTANT_RGBA = [64, 128, 192, 255]
-
-
-FILL_FLOAT_RGBA = [0.25, 0.5, 1.5, 2.0]
-DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
-
-
+# A render-attachment usage set that takes the explicit-DRM-modifier DMA-BUF
+# arm (storage included so the same kernel can write both flavours).
 RENDER_TARGET_FLAVOUR_USAGE = [
     "render_attachment",
     "storage_binding",
@@ -99,7 +94,7 @@ class TextureHandleRoundTripProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
@@ -261,7 +256,7 @@ class PrivilegedCapabilityProbe:
     """What the privileged capability answers from a helper process."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
@@ -315,7 +310,7 @@ class PooledTextureExportProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
@@ -351,7 +346,7 @@ class OpaqueFdExportHandoffProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import socket
@@ -424,7 +419,7 @@ class OpaqueFdPixelBufferExportHandoffProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import socket
@@ -638,7 +633,7 @@ class IOSurfaceExportProbe:
     IOSurface port and read back by native code in this same helper."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         shim = _NativeIOSurfaceShim()
@@ -673,7 +668,7 @@ class RawHandleOffItsPlatformRefusesProbe:
     naming its peer."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         with ctx.gpu_limited_access.acquire_pixel_buffer(

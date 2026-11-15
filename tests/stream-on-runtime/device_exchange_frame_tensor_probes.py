@@ -8,12 +8,12 @@ import traceback
 
 import numpy
 
-from device_exchange_probe_reporting import (
+from device_exchange_probe_shared_surfaces_and_reporting import (
     NATURAL_DLPACK_DEVICE,
     PADDED_SURFACE_HEIGHT,
     PADDED_SURFACE_WIDTH,
-    _FrameProbeBase,
-    _report,
+    DeviceExchangeFrameProbeBase,
+    report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
     Image,
@@ -26,7 +26,7 @@ from tatolab.stream import (
 
 
 @node.process
-class GraphFrameToTorchProbe(_FrameProbeBase):
+class GraphFrameToTorchProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -54,7 +54,7 @@ class GraphFrameToTorchProbe(_FrameProbeBase):
 
 
 @node.process
-class DeviceEditProbe(_FrameProbeBase):
+class DeviceEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -86,7 +86,7 @@ class DeviceEditProbe(_FrameProbeBase):
 
 
 @node.process
-class WithBlockEditProbe(_FrameProbeBase):
+class WithBlockEditProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -115,7 +115,7 @@ class WithBlockEditProbe(_FrameProbeBase):
 
 
 @node.process
-class TensorOutlivesHandleProbe(_FrameProbeBase):
+class TensorOutlivesHandleProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         import torch
 
@@ -140,7 +140,7 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
 
 
 @node.process
-class HostSideProbe(_FrameProbeBase):
+class HostSideProbe(DeviceExchangeFrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
@@ -210,7 +210,7 @@ class LaggedConsumerHoldsItsFrameProbe:
         except BaseException:  # noqa: BLE001 — surfaced through the marker line
             self.reported = True
             self.view_of_the_delivered_frame = None
-            _report(lambda: {"failure": traceback.format_exc()})
+            report_device_exchange_probe_observation(lambda: {"failure": traceback.format_exc()})
 
     def _observe(self, ctx: RuntimeContextLimitedAccess, frame: ImageFrame) -> None:
         import torch
@@ -222,7 +222,7 @@ class LaggedConsumerHoldsItsFrameProbe:
                 surface.unlock()
                 surface.close()
                 self.reported = True
-                _report(lambda: {"device_unavailable": "device side not reachable"})
+                report_device_exchange_probe_observation(lambda: {"device_unavailable": "device side not reachable"})
                 return
             view = numpy.from_dlpack(surface, device="cpu")
             # Copied, because this is the ground truth the view is compared
@@ -290,11 +290,11 @@ class LaggedConsumerHoldsItsFrameProbe:
             "a_later_frame_differed": self.a_later_frame_differed,
         }
         self.view_of_the_delivered_frame = None
-        _report(lambda: observation)
+        report_device_exchange_probe_observation(lambda: observation)
 
 
 @node.process
-class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
+class CopyRequestRefusedAtBothDoorsProbe(DeviceExchangeFrameProbeBase):
     """`copy=True` asks for memory the consumer owns; both doors export in
     place, so both refuse by name rather than hand back an alias."""
 
@@ -356,7 +356,7 @@ class DeviceTensorStridesFollowTheRowPitchProbe:
     row."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}

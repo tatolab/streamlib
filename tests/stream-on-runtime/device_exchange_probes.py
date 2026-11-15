@@ -31,7 +31,8 @@ from device_exchange_frame_tensor_probes import (
     TensorOutlivesHandleProbe,
     WithBlockEditProbe,
 )
-from device_exchange_probe_reporting import (
+from device_exchange_probe_shared_surfaces_and_reporting import (
+    FILL_CONSTANT_RGBA,
     NATURAL_DLPACK_DEVICE,
     NATURAL_TORCH_DEVICE_TYPE,
     SURFACE_HEIGHT,
@@ -54,7 +55,6 @@ from device_exchange_scope_and_mlx_probes import (
 )
 from device_exchange_texture_and_export_probes import (
     DmaBufExportProbe,
-    FILL_CONSTANT_RGBA,
     IOSurfaceExportProbe,
     OpaqueFdExportHandoffProbe,
     OpaqueFdPixelBufferExportHandoffProbe,

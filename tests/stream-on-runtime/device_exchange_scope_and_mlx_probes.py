@@ -4,17 +4,16 @@
 """Probes that run a scope over device memory, write through MLX or torch for the
 engine to read on the GPU, and hold an array past the texture it came from."""
 
-
 import numpy
 
-from device_exchange_probe_reporting import (
+from device_exchange_probe_shared_surfaces_and_reporting import (
     FILL_CONSTANT_SLANG,
     NATURAL_DLPACK_DEVICE,
     OPAQUE_FD_FLAVOUR_USAGE,
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
-    _FrameProbeBase,
-    _report,
+    DeviceExchangeFrameProbeBase,
+    report_device_exchange_probe_observation,
 )
 from tatolab.stream import (
     RuntimeContextFullAccess,
@@ -36,6 +35,9 @@ void main(uint3 invocation : SV_DispatchThreadID) {
 }
 """
 
+FILL_FLOAT_RGBA = [0.25, 0.5, 1.5, 2.0]
+DOUBLED_FLOAT_RGBA = [0.5, 1.0, 3.0, 4.0]
+
 
 @node.process(execution="manual")
 class DeviceTensorScopeDoublesAKernelOutputProbe:
@@ -49,7 +51,7 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
@@ -98,7 +100,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
@@ -150,7 +152,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
 
 
 @node.process
-class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
+class PixelBufferScopeDiscardsOnRaiseProbe(DeviceExchangeFrameProbeBase):
     """One rule for both scopes: the CPU pixel-buffer scope discards a pending
     device write when the block is left by a raise.
 
@@ -207,7 +209,7 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         observation = {}
@@ -266,7 +268,7 @@ class _DeviceWriteThenEngineGpuReadProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
         raise NotImplementedError
@@ -343,7 +345,7 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
 
 
 @node.process
-class MlxReadsTheFrameProbe(_FrameProbeBase):
+class MlxReadsTheFrameProbe(DeviceExchangeFrameProbeBase):
     """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
     frame's own bytes."""
 
@@ -378,7 +380,7 @@ def _frame_pixels_now(ctx, surface_id: str):
 
 
 @node.process
-class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
+class MlxWritesTheFrameThroughTheWriteDoorProbe(DeviceExchangeFrameProbeBase):
     """`with frame.writable() as t:` with MLX as the package: an in-place,
     evaluated write reaches every other holder once the block ends."""
 
@@ -406,7 +408,7 @@ class MlxWritesTheFrameThroughTheWriteDoorProbe(_FrameProbeBase):
 
 
 @node.process
-class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
+class MlxWriteWithAViewAliveMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     """The negative control the MLX write contract rests on: with a view of the
     array alive at the write, MLX cannot donate the buffer, so the scatter lands
     in a buffer of MLX's own and the frame never sees it — whatever the scope
@@ -434,7 +436,7 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_FrameProbeBase):
 
 
 @node.process
-class MlxWholeArrayAssignmentMissesTheFrameProbe(_FrameProbeBase):
+class MlxWholeArrayAssignmentMissesTheFrameProbe(DeviceExchangeFrameProbeBase):
     """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
     array to MLX, not a store into this one, so the frame never sees it even
     evaluated inside the scope."""
@@ -471,7 +473,7 @@ class TorchAndMlxScopesAlternateInOneHelperProbe:
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
         import torch
@@ -520,7 +522,7 @@ class _DeviceArrayOutlivesTextureHandleProbe:
     wedging the helper."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _report(lambda: self._probe(ctx))
+        report_device_exchange_probe_observation(lambda: self._probe(ctx))
 
     def _import(self, handle):
         raise NotImplementedError
