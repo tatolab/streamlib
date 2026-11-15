@@ -9,8 +9,6 @@ use crate::core::context::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_TEXTURE,
 };
 use crate::core::rhi::PixelBuffer;
-#[cfg(target_os = "linux")]
-use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 
