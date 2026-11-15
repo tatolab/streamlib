@@ -26,11 +26,6 @@ use super::{
     acquire_texture_through_the_helper_process_exchange,
 };
 
-/// Non-allocating GPU capability, valid for the whole processor life.
-///
-/// Every call crosses to the parent through the exchange client — the
-/// engine and its pools live one process away. `None` means this helper
-/// has no surface-share channel, and every call refuses by name.
 /// The claim a read took on the pooled GPU frame it carried, which holds the
 /// frame's slot against a rehand for as long as the read's payload is held.
 #[cfg_attr(
@@ -49,6 +44,11 @@ pub(crate) struct PooledGpuFrameClaimHeldByARead(
     Arc<crate::python_helper_process_pixel_exchange::GpuPoolSlotFrameClaimOfThisImporter>,
 );
 
+/// Non-allocating GPU capability, valid for the whole processor life.
+///
+/// Every call crosses to the parent through the exchange client — the
+/// engine and its pools live one process away. `None` means this helper
+/// has no surface-share channel, and every call refuses by name.
 #[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,

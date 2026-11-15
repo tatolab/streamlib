@@ -18,7 +18,11 @@ use super::gpu_unreachable_from_a_helper_process_error;
 
 mod gpu_context_full_access;
 mod gpu_context_full_access_kernels;
-mod gpu_context_full_access_surface_exchange;
+#[cfg(target_os = "linux")]
+mod gpu_context_full_access_surface_exchange_linux;
+#[cfg(target_os = "macos")]
+mod gpu_context_full_access_surface_exchange_macos;
+mod gpu_context_full_access_surface_exchange_platform_refusals;
 mod gpu_context_limited_access;
 
 pub(crate) use gpu_context_full_access::PythonGpuContextFullAccess;
