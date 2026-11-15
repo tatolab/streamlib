@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 
 use crate::core::Result;
 use crate::core::runtime::RuntimeShutdownEscalation;
-use crate::core::runtime::loaded_stream::LoadedStreamInThisRuntime;
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::LoadedStreamInThisRuntime;
 
 #[cfg(target_os = "linux")]
 use super::runner_linux_surface_share::stop_the_surface_share_service;

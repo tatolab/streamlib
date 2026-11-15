@@ -14,8 +14,8 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 use crate::core::context::GpuContext;
 use crate::core::runtime::MachineName;
 use crate::core::runtime::RuntimeUniqueId;
-use crate::core::runtime::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
-use crate::core::runtime::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
+use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
+use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
