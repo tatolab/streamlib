@@ -546,6 +546,37 @@ fn the_wait_for_a_machine_shutdown_returns_once_one_is_requested_and_ends_every_
     assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
 }
 
+/// A machine shutdown requested after a wait's walk of the streams but before
+/// its check is still walked to every stream: the wait sees the request and
+/// returns, and the owner clears the escalation once its run ends, so the walk
+/// must cover every level the check saw.
+///
+/// The predicate raises the request itself on its first call, landing it in
+/// exactly that window every time.
+#[test]
+#[serial]
+fn a_machine_shutdown_requested_between_the_walk_and_the_check_still_ends_every_stream() {
+    let _machine_level_cleared =
+        crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+    let project_directory = a_project_directory_this_test_owns();
+    let runner = Runner::new().expect("Runner::new");
+    let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "first");
+
+    runner
+        .run_owning_the_machine_shutdown_signals(|| {
+            runner.block_until(&|| {
+                crate::core::runtime::request_the_shutdown_of_every_loaded_stream(
+                    "the test requests the shutdown inside the wait's check",
+                )
+                .unwrap();
+                crate::core::runtime::is_the_machines_shutdown_requested()
+            });
+            Ok(())
+        })
+        .expect("the wait owned the machine's shutdown signals");
+    assert!(stream.wait_for_this_streams_end_within(A_STREAM_ENDS_WITHIN));
+}
+
 /// The wait for the last other reference returns once another holder
 /// hands the engine back.
 #[test]
