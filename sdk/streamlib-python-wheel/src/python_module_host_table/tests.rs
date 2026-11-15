@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use pyo3::types::{PyBytes, PyDict, PyList};
-use streamlib::sdk::iceoryx2::Iceoryx2Node;
+use streamlib::sdk::iceoryx2::{DataChannelPayloadDescriptor, Iceoryx2Node};
 use tatolab_module_sdk::ModuleHost;
 use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStreamHandle;
 
