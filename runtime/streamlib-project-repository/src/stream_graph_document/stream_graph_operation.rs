@@ -12,10 +12,12 @@ use crate::stream_graph_studio_contract::{
     StreamGraphDocumentNote, StreamGraphNodeStudioFields, StreamGraphNoteFields,
 };
 
+#[cfg(feature = "history")]
+use super::StreamGraphDocumentLinkEnd;
 use super::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentGroup, StreamGraphDocumentLink,
-    StreamGraphDocumentLinkEnd, StreamGraphDocumentNode, StreamGraphFragmentPlacement,
-    StreamGraphGroupFields, push_the_config_of_each_node_at_every_level,
+    StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
+    push_the_config_of_each_node_at_every_level,
     push_the_config_of_each_of_the_nodes_at_every_level,
 };
 
