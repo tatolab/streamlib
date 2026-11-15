@@ -72,8 +72,7 @@ pub mod sdk {
     // `core/mod.rs`) — those module paths are not reachable here OR
     // via `engine_internal::*` (Tier 3) by construction. Items inside
     // that ARE customer-facing are re-exported by the engine at its
-    // crate root and travel into the SDK via the top-level
-    // `pub use streamlib_engine::*` items below and the Tier-3
+    // crate root and travel into the SDK through the Tier-3
     // `engine_internal` namespace.
 
     pub use streamlib_engine::core::child_process_lifetime;
@@ -109,14 +108,7 @@ pub mod sdk {
     pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
 
     // ---- Processors namespace ----
-    pub mod processors {
-        pub use streamlib_engine::core::processors::*;
-
-        // Port markers + input/output helpers — semantically processor-
-        // related; physically live in `core::graph::edges::link_port_markers`
-        // in engine source.
-        pub use streamlib_engine::core::graph::{InputPortMarker, OutputPortMarker, input, output};
-    }
+    pub use streamlib_engine::sdk::processors;
 
     // ---- Runtime-control requests ----
     /// `request_the_shutdown_of_every_loaded_stream` — ask whoever owns the
@@ -276,5 +268,27 @@ pub mod sdk {
 /// `cargo xtask check-boundaries` Check 6 — `engine_internal` is the
 /// allowed escape hatch for the very rare cases that need it.
 pub mod engine_internal {
-    pub use streamlib_engine::*;
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub use streamlib_engine::permissions;
+    pub use streamlib_engine::{
+        ContinuousProcessor, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualProcessor,
+        MediaClock, NativeTextureHandle, OutputPortMarker, PROCESSOR_REGISTRY, PooledTextureHandle,
+        ProcessorSpec, ReactiveProcessor, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
+        RuntimeContextLimitedAccess, StreamClock, StreamClockSpec, Texture, TextureDescriptor,
+        TextureFormat, TexturePool, TexturePoolDescriptor, TextureUsages, core, crossbeam_channel,
+        iceoryx2, input, logging, output, platform, processor, processor_config, schemars, sdk,
+        serde_json,
+    };
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub use streamlib_engine::{
+        HostGpuDeviceExt, HostPixelBufferRefExt, HostSurfaceStoreExt, HostTextureExt, host_rhi,
+    };
+    #[cfg(target_os = "macos")]
+    pub use streamlib_engine::{apple_coreaudio_audio_tier, apple_surface_share};
+    #[cfg(target_os = "linux")]
+    pub use streamlib_engine::{
+        linux_alsa_audio_device_backend, linux_pipewire_camera, linux_surface_share,
+        linux_v4l2_color,
+    };
+    pub use streamlib_engine::{request_audio_permission, request_camera_permission};
 }

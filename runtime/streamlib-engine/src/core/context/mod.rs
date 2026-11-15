@@ -98,7 +98,10 @@ pub use texture_pools_and_rings::gpu_pool_claim_table::{
     GpuPoolClaimTable, GpuPoolClaimTableRowLease, GpuPoolClaimTables, GpuPoolClaimTablesOfOnePool,
     GpuPoolClaimantProcessId,
 };
-pub use texture_pools_and_rings::texture_pool::*;
+pub use texture_pools_and_rings::texture_pool::{
+    PoolSlotId, PooledTextureHandle, TextureCrossProcessImportability, TexturePool,
+    TexturePoolDescriptor, TexturePoolKey, TexturePoolStats,
+};
 pub use texture_pools_and_rings::texture_registration::TextureRegistration;
 pub use texture_pools_and_rings::texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,

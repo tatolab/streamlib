@@ -23,7 +23,11 @@ mod owned_device_decode_tests;
 #[cfg(test)]
 mod tests;
 
-pub use types::*;
+pub use types::{
+    DecodeSubmitInfo, DecodedFrame, DecodedPictureDelivery, DpbOutputMode, H264DecodeInfo,
+    H264RefPicInfo, H265DecodeInfo, H265RefPicInfo, ReferenceSlot, SimpleDecodedFrame,
+    SimpleDecoderConfig, StagingBuffer, align_up, memory_type_matches, select_picture_format,
+};
 
 use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;

@@ -28,7 +28,18 @@ pub mod iceoryx2;
 /// `streamlib_engine::core::logging` module path stays
 /// engine-private.
 pub mod logging {
-    pub use crate::core::logging::*;
+    pub use crate::core::logging::{
+        ENGINE_DEFAULT_TRACING_FILTER_DIRECTIVES, EngineLogRecordForTheParentProcess,
+        EngineLogRecordsDrainedForTheParentProcess, HelperProcessEngineLogRecordRing,
+        LoggingTunables, PrettyLogMirrorStandardStream, ProcessLoggingPathwayHold, ProjectLogRoute,
+        ProjectLogRouteEntry, ProjectLogRouteEntryEnteredOnThisThread,
+        RUNTIME_OWN_LOG_INSTANCE_NAME, StreamlibLoggingConfig, StreamlibLoggingGuard,
+        capture_this_helper_processes_engine_log_records,
+        carrying_this_threads_project_log_route_entry, hold_the_process_logging_pathway,
+        init_for_tests, listen_for_each_project_log_written,
+        run_in_the_project_log_route_entry_when_there_is_one,
+        the_project_log_route_entry_of_this_thread,
+    };
 }
 
 // Re-export the attribute macro for processor syntax:
@@ -272,9 +283,9 @@ pub mod platform {
 // so the same emit-paths work in both compilation contexts.
 //
 // External consumers see this crate's items as `streamlib::engine_internal::*`
-// (passthrough re-export from the SDK). They never reach for `streamlib::sdk::*`
-// in this crate directly — that namespace exists only for in-engine macro
-// path resolution.
+// (passthrough re-export from the SDK). The SDK re-exports this mirror's
+// `processors` module as its public `streamlib::sdk::processors`; the rest of
+// this namespace exists only for in-engine macro path resolution.
 
 pub mod sdk {
     pub use crate::core::context;
@@ -291,10 +302,19 @@ pub mod sdk {
     pub use crate::core::texture;
     pub use crate::core::utils;
 
-    /// Processors namespace: combines `core::processors::*` with
-    /// platform-aliased processor types from the engine root.
+    /// Processor traits and specs from `core::processors`, with the port
+    /// markers and the `input`/`output` helpers from `core::graph`.
     pub mod processors {
-        pub use crate::core::processors::*;
+        pub use crate::core::processors::{
+            __generated_private, Config, ConfigValidationError, ContinuousProcessor,
+            DynGeneratedProcessor, DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor,
+            InstalledModuleOfANodeType, ManualProcessor, NodeTypesOneStreamResolves,
+            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
+            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, PROCESSOR_REGISTRY,
+            ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec, ProcessorState,
+            ProcessorStateComponent, ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
+            traits,
+        };
 
         // Port markers + input/output helpers — semantically processor-
         // related; live in `core::graph::edges::link_port_markers`.
