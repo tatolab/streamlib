@@ -7,7 +7,7 @@ use super::*;
 /// it as soon as its turn comes round.
 struct PoolSlotNothingInThisProcessHolds;
 
-impl crate::core::context::lease_aware_pool_slot_ring::LeaseAwarePoolSlotResource
+impl crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::LeaseAwarePoolSlotResource
     for PoolSlotNothingInThisProcessHolds
 {
     fn is_held_in_this_process(&self) -> bool {
@@ -24,7 +24,7 @@ impl crate::core::context::lease_aware_pool_slot_ring::LeaseAwarePoolSlotResourc
 /// with the link reporting no drops and the next read told of none.
 #[test]
 fn a_frame_its_producer_recycled_before_the_read_is_counted_lost_on_its_link() {
-    use crate::core::context::lease_aware_pool_slot_ring::{
+    use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
         ANY_ONE_UNHELD_SLOT_IS_REUSABLE, LeaseAwarePoolMintedFrameGenerations,
         LeaseAwarePoolSlotRing,
     };

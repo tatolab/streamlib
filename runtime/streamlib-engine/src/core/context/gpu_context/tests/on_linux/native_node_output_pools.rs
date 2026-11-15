@@ -36,7 +36,7 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
     );
 
     let second_nodes_frames: Vec<String> = (0
-        ..crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+        ..crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
         .map(|_| {
             let frame = acquire_one_native_node_frame_id(&mut second_native_node)
                 .expect("another node's frames of the same shape are served");
@@ -48,7 +48,7 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
         .collect();
     assert_eq!(
         second_nodes_frames.len(),
-        crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
         "the second node reaches its own cap, untouched by the first's"
     );
     acquire_one_pool_slot_id(&gpu)
@@ -89,7 +89,7 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
             assert_eq!(pool_key, &expected_pool_key);
             assert_eq!(
                 *pool_capacity,
-                crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+                crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
             );
         }
         other => panic!("expected the node output pool's refusal, got {other:?}"),
@@ -104,7 +104,7 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
     );
     assert_eq!(
         native_node.slot_count(),
-        crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
     );
     assert_eq!(
         shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE),

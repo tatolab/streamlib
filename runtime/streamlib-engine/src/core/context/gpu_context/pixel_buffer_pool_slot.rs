@@ -1,11 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTableRowLease;
-use crate::core::context::lease_aware_pool_slot_ring::{
+use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::GpuPoolClaimTableRowLease;
+use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
     LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
 };
-use crate::core::context::shared_pool_entry_freeing::SharedPoolEntryFreeingRecord;
+use crate::core::context::texture_pools_and_rings::shared_pool_entry_freeing::SharedPoolEntryFreeingRecord;
 use crate::core::rhi::{
     PixelBuffer, PixelBufferPoolSlotId, PixelFormat, PublishedPixelBufferFrameId,
 };

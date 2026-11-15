@@ -150,7 +150,7 @@ pub(crate) struct EscalateHandleRegistry {
     /// resolved, which go away with the helper.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     surface_color_conversion_session:
-        Mutex<crate::core::context::surface_color_conversion::SurfaceColorConversionSession>,
+        Mutex<crate::core::context::surfaces_and_their_stores::surface_color_conversion::SurfaceColorConversionSession>,
 }
 
 impl EscalateHandleRegistry {
@@ -163,7 +163,7 @@ impl EscalateHandleRegistry {
     /// `output_frames_kept_by_its_output_links` records.
     pub(crate) fn for_a_helper_whose_output_links_keep(
         output_frames_kept_by_its_output_links: Arc<
-            crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor,
+            crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor,
         >,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -183,8 +183,8 @@ impl EscalateHandleRegistry {
         &self,
     ) -> std::sync::MutexGuard<
         '_,
-        crate::core::context::surface_color_conversion::SurfaceColorConversionSession,
-    > {
+        crate::core::context::surfaces_and_their_stores::surface_color_conversion::SurfaceColorConversionSession,
+    >{
         self.surface_color_conversion_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

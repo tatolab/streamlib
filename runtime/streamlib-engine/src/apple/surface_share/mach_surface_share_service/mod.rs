@@ -37,7 +37,7 @@ use streamlib_surface_client::{
 use crate::apple::iosurface::{
     RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
 };
-use crate::core::context::surface_share_wire_verbs::{
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
     answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
     latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,

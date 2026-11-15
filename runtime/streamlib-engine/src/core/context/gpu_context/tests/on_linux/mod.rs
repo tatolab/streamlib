@@ -79,7 +79,7 @@ const LEASE_TEST_SURFACE_SHAPE: PixelBufferPoolKey = PixelBufferPoolKey {
 /// The slots of a shape one native node borrows from the shared ring while
 /// nothing holds its frames: one per frame of its rotation.
 const SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD: usize =
-    crate::core::context::processor_output_pixel_buffer_pool_of_one_native_node::NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH;
+    crate::core::context::texture_pools_and_rings::processor_output_pixel_buffer_pool_of_one_native_node::NATIVE_NODE_OUTPUT_PIXEL_BUFFER_POOL_ROTATION_DEPTH;
 
 /// The pre-allocated slots a shape's shared ring keeps once one native
 /// node has borrowed a slot per frame of its rotation.
@@ -133,7 +133,7 @@ fn lease_every_frame_a_native_node_may_hold(
     check_out_leases: &crate::core::context::SurfaceCheckOutLeaseRegistry,
     holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
 ) -> Vec<String> {
-    (0..crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+    (0..crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
         .map(|_| {
             let frame = acquire_one_native_node_frame_id(native_node_output_pool)
                 .expect("a node under its cap is served");

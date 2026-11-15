@@ -8,7 +8,7 @@
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 use crate::core::Result;
-use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameToPooledRgbaConversionStage;
+use crate::core::context::capture_and_playback_devices::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameToPooledRgbaConversionStage;
 use crate::core::context::{
     GpuCapabilitiesSnapshot, GpuContextFullAccess, OneOffAcquisitionCountedForItsNode,
 };
