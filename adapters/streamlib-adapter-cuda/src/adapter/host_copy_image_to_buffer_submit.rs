@@ -92,7 +92,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
         // closure (the trait doesn't expose it), so we use the buffer
         // size in bytes vs. width*height*4 — Bgra32 is the only
         // OPAQUE_FD format the host allocator emits today
-        // (vulkan_buffer.rs::new_opaque_fd_export_device_local
+        // (HostVulkanBuffer::new_opaque_fd_export_device_local
         // hardcodes bytes_per_pixel=4 in the example caller). If a
         // future caller uses a non-4-bpp format, extend this check.
         let required_bytes = (image_extent.width as u64)
