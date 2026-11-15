@@ -6,7 +6,6 @@
 
 use std::time::Duration;
 
-use tatolab_module_sdk::ModuleHost;
 use tatolab_module_sdk::module_host_table_abi::ModuleHostTableVirtualCameraStreamHandle;
 
 use super::*;

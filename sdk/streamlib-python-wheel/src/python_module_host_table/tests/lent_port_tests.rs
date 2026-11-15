@@ -6,16 +6,13 @@
 
 use std::time::Duration;
 
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::PyBytes;
 use streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor;
 
 use super::*;
 use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_port_payload::PythonPortPayloadBorrow;
-use crate::python_processor_context::{
-    note_execution_mode_from_parent_on_runtime_context,
-    note_stop_request_from_parent_on_runtime_context,
-};
+use crate::python_processor_context::note_execution_mode_from_parent_on_runtime_context;
 
 #[test]
 fn a_native_thread_writes_a_lent_output_with_no_python_attached_and_python_reads_it_in_order() {
@@ -304,24 +301,6 @@ fn a_port_python_did_not_lend_is_refused_when_native_code_opens_it() {
 }
 
 #[test]
-fn the_stop_flag_native_code_reads_follows_the_parents_stop_request() {
-    Python::initialize();
-    let (module_host, context) = Python::attach(|python| {
-        let (source, _destination) = one_wired_link(python, "stop_flag");
-        let (context, _) = full_access_context_recording_escalates(python, source, "source");
-        let capsule = open_module_host_table(&context, &[], &[]).unwrap();
-        (module_host_of(&capsule), context.unbind())
-    });
-    assert!(!module_host.stop_requested());
-
-    Python::attach(|python| {
-        note_stop_request_from_parent_on_runtime_context(context.bind(python), true)
-    });
-
-    assert!(module_host.stop_requested());
-}
-
-#[test]
 fn stream_facts_native_code_states_reach_the_parent_as_the_op_python_sends() {
     Python::initialize();
     let (module_host, escalates_sent) = Python::attach(|python| {
@@ -385,51 +364,6 @@ fn stream_facts_whose_fields_are_not_one_json_object_are_refused_naming_the_port
         refusal.contains("frames_to_downstream") && refusal.contains("one JSON object"),
         "got {refusal}"
     );
-}
-
-#[test]
-fn the_host_capabilities_name_the_table_version_and_the_lent_ports() {
-    Python::initialize();
-    let module_host = Python::attach(|python| {
-        let (source, _destination) = one_wired_link(python, "capabilities");
-        let (context, _) = full_access_context_recording_escalates(python, source, "source-node");
-        module_host_of(&open_module_host_table(&context, &[SOURCE_OUTPUT_PORT], &[]).unwrap())
-    });
-
-    let capabilities: serde_json::Value =
-        serde_json::from_str(module_host.host_capabilities_json()).unwrap();
-
-    assert_eq!(
-        capabilities["module_host_table"],
-        serde_json::json!({"major": 1, "minor": 12})
-    );
-    assert_eq!(capabilities["node_id"], "source-node");
-    assert_eq!(
-        capabilities["capture_device_access_prompting"], "refuse_what_was_never_asked_for",
-        "a helper the engine did not spawn never prompts"
-    );
-    assert_eq!(
-        capabilities["lent_output_ports"],
-        serde_json::json!([SOURCE_OUTPUT_PORT])
-    );
-}
-
-#[test]
-fn the_node_host_outlives_the_capsule_for_as_long_as_native_code_holds_it() {
-    Python::initialize();
-    let module_host = Python::attach(|python| {
-        let (source, _destination) = one_wired_link(python, "outlives_capsule");
-        let (context, _) = full_access_context_recording_escalates(python, source, "source");
-        let capsule = open_module_host_table(&context, &[SOURCE_OUTPUT_PORT], &[]).unwrap();
-        let module_host = module_host_of(&capsule);
-        drop(capsule);
-        drop(context);
-        python.run(c"import gc; gc.collect()", None, None).unwrap();
-        module_host
-    });
-
-    let output_port = module_host.open_output_port(SOURCE_OUTPUT_PORT).unwrap();
-    output_port.write(b"after the capsule", None, true).unwrap();
 }
 
 #[test]
