@@ -1,22 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Compile `@node.function` bodies to their evaluate entry and feed each island to its port.
-
-A body is compiled by Numba in nopython mode. Its dataclasses (its state
-record, its config, a several-output return) are lowered as named tuples of the
-same fields, so the body constructs and reads them unchanged. A wrapper with the
-evaluate entry's C signature unpacks the f64 values the island hands it into the
-body's parameters and packs its outputs and new state back. The body is cached
-on disk by Numba; the wrapper is compiled at each load.
-
-A body that does not compile, or that takes or gives a `dict`, runs as Python in
-its reader's interpreter, called at the read with the interpreter's lock held.
-
-An `UnreadMessage` reaches a compiled body as a token, the index of the input
-that holds it plus one, and an output the body may hand out nothing on carries,
-past every output, a slot saying whether it handed one out.
-"""
+"""Compile `@node.function` bodies to their evaluate entry and feed each island to its port."""
 
 from __future__ import annotations
 

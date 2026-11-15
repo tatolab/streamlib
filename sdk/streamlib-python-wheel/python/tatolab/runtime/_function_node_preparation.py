@@ -1,7 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Prepare a function node to evaluate, compiled or run as Python, and how one is called."""
+"""Prepare a function node to evaluate, compiled or run as Python, and how one is called.
+
+A body that does not compile, or that takes or gives a `dict`, runs as Python in
+its reader's interpreter, called at the read with the interpreter's lock held.
+"""
 
 from __future__ import annotations
 

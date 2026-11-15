@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The values a function node signature carries, its prepared forms, and the refusal when it does not compile."""
+"""The values a function node's signature carries, its prepared forms, and the refusal when it does not compile."""
 
 from __future__ import annotations
 
