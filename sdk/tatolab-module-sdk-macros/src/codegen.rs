@@ -5,13 +5,12 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::{ToTokens, quote};
 use syn::ext::IdentExt;
 use syn::spanned::Spanned;
-use syn::{
-    Attribute, Expr, FnArg, GenericArgument, Ident, ItemFn, Pat, PathArguments, ReturnType, Type,
+use syn::{Data, DeriveInput, Expr, Fields, FnArg, Ident, ItemFn, Pat, Type};
+
+use crate::grammar::{
+    DeclaredNodeMeta, is_the_bare_type_named, refuse_a_signature_that_is_not_a_plain_function,
+    take_the_pin_default, the_one_type_argument_of, the_output_type,
 };
-
-use crate::declared_node_meta::DeclaredNodeMeta;
-
-const PIN_DEFAULT_ATTRIBUTE: &str = "pin_default";
 
 enum FunctionNodeParameterRole {
     InputPin { input_index: usize },
@@ -24,18 +23,6 @@ struct FunctionNodeInputPinDeclared {
     port: String,
     value_type: Type,
     pin_default: Option<Expr>,
-}
-
-pub(crate) fn refuse_an_argument_to_function_node(attribute: TokenStream2) -> syn::Result<()> {
-    if attribute.is_empty() {
-        return Ok(());
-    }
-    Err(syn::Error::new(
-        attribute.span(),
-        "#[function_node] takes no argument: the node's name is its function's, in \
-         UpperCamelCase, and what describes it goes in the `#[meta(...)]` under it, \
-         `#[meta(category = \"Effects/Stylize\", description = \"…\")]`",
-    ))
 }
 
 pub(crate) fn expand_function_node(
@@ -315,149 +302,6 @@ pub(crate) fn expand_function_node(
     })
 }
 
-fn refuse_a_signature_that_is_not_a_plain_function(function: &ItemFn) -> syn::Result<()> {
-    let signature = &function.sig;
-    if let Some(asyncness) = signature.asyncness {
-        return Err(syn::Error::new(
-            asyncness.span(),
-            "a function node computes its outputs and returns; it is not `async`",
-        ));
-    }
-    if let Some(constness) = signature.constness {
-        return Err(syn::Error::new(
-            constness.span(),
-            "a function node is called through its evaluate entry, so it is not `const`",
-        ));
-    }
-    if let Some(unsafety) = signature.unsafety {
-        return Err(syn::Error::new(
-            unsafety.span(),
-            "a function node's body is safe Rust; it is not `unsafe`",
-        ));
-    }
-    if let Some(abi) = &signature.abi {
-        return Err(syn::Error::new(
-            abi.span(),
-            "#[function_node] writes the C entry itself; the function takes no ABI",
-        ));
-    }
-    if !signature.generics.params.is_empty() || signature.generics.where_clause.is_some() {
-        return Err(syn::Error::new(
-            signature.generics.span(),
-            "a function node is one concrete function; it takes no generics",
-        ));
-    }
-    if let Some(variadic) = &signature.variadic {
-        return Err(syn::Error::new(
-            variadic.span(),
-            "every input of a function node is a named pin",
-        ));
-    }
-    Ok(())
-}
-
-fn the_output_type(function: &ItemFn, state_record: Option<&Type>) -> syn::Result<Type> {
-    let ReturnType::Type(_, returned_type) = &function.sig.output else {
-        return Err(syn::Error::new(
-            function.sig.span(),
-            "a function node returns its output: `-> f64`, `-> Option<f64>` when it may hand \
-             out nothing, or a `FunctionNodeRecord` for several outputs",
-        ));
-    };
-    match (stateful_output_and_state(returned_type), state_record) {
-        (Some((output_type, returned_state_record)), Some(state_record)) => {
-            if returned_state_record.to_token_stream().to_string()
-                != state_record.to_token_stream().to_string()
-            {
-                return Err(syn::Error::new(
-                    returned_state_record.span(),
-                    "the state a function node returns is the one its next call takes; name \
-                     one record in `State<...>` and `Stateful<..., ...>`",
-                ));
-            }
-            Ok(output_type)
-        }
-        (Some(_), None) => Err(syn::Error::new(
-            returned_type.span(),
-            "a function node returning `Stateful<...>` takes `previous: State<Record>`, or the \
-             state it returns never reaches its next call",
-        )),
-        (None, Some(_)) => Err(syn::Error::new(
-            returned_type.span(),
-            "a function node taking `State<Record>` returns `Stateful<Output, Record>`, or its \
-             next call never sees a new state",
-        )),
-        (None, None) => Ok(returned_type.as_ref().clone()),
-    }
-}
-
-fn stateful_output_and_state(returned_type: &Type) -> Option<(Type, Type)> {
-    let segment = the_last_path_segment(returned_type, "Stateful")?;
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    let mut type_arguments = arguments.args.iter().filter_map(|argument| match argument {
-        GenericArgument::Type(type_argument) => Some(type_argument.clone()),
-        _ => None,
-    });
-    let output_type = type_arguments.next()?;
-    let state_record = type_arguments.next()?;
-    Some((output_type, state_record))
-}
-
-fn the_last_path_segment<'parsed>(
-    parsed_type: &'parsed Type,
-    name: &str,
-) -> Option<&'parsed syn::PathSegment> {
-    let Type::Path(type_path) = parsed_type else {
-        return None;
-    };
-    if type_path.qself.is_some() {
-        return None;
-    }
-    let segment = type_path.path.segments.last()?;
-    (segment.ident == name).then_some(segment)
-}
-
-pub(crate) fn is_the_bare_type_named(parsed_type: &Type, name: &str) -> bool {
-    the_last_path_segment(parsed_type, name)
-        .is_some_and(|segment| matches!(segment.arguments, PathArguments::None))
-}
-
-pub(crate) fn the_one_type_argument_of(parsed_type: &Type, name: &str) -> Option<Type> {
-    let segment = the_last_path_segment(parsed_type, name)?;
-    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
-        return None;
-    };
-    if arguments.args.len() != 1 {
-        return None;
-    }
-    match arguments.args.first()? {
-        GenericArgument::Type(type_argument) => Some(type_argument.clone()),
-        _ => None,
-    }
-}
-
-fn take_the_pin_default(attributes: &mut Vec<Attribute>) -> syn::Result<Option<Expr>> {
-    let mut pin_default: Option<Expr> = None;
-    let mut kept_attributes = Vec::with_capacity(attributes.len());
-    for attribute in attributes.drain(..) {
-        if attribute.path().is_ident(PIN_DEFAULT_ATTRIBUTE) {
-            if pin_default.is_some() {
-                return Err(syn::Error::new(
-                    attribute.span(),
-                    "an input pin takes one `#[pin_default(...)]`",
-                ));
-            }
-            pin_default = Some(attribute.parse_args::<Expr>()?);
-        } else {
-            kept_attributes.push(attribute);
-        }
-    }
-    *attributes = kept_attributes;
-    Ok(pin_default)
-}
-
 fn upper_camel_case(snake_case_name: &str) -> String {
     snake_case_name
         .split('_')
@@ -470,4 +314,116 @@ fn upper_camel_case(snake_case_name: &str) -> String {
             }
         })
         .collect()
+}
+
+pub(crate) fn expand_function_node_record(record: DeriveInput) -> syn::Result<TokenStream2> {
+    if !record.generics.params.is_empty() {
+        return Err(syn::Error::new(
+            record.generics.span(),
+            "a function node record is one concrete struct; it takes no generics",
+        ));
+    }
+    let Data::Struct(record_struct) = &record.data else {
+        return Err(syn::Error::new(
+            record.ident.span(),
+            "a function node record is a struct of `f64`, `i64` and `bool` fields, or of outputs \
+             that may also be `Option`s and `UnreadMessage`s",
+        ));
+    };
+    let Fields::Named(named_fields) = &record_struct.fields else {
+        return Err(syn::Error::new(
+            record.ident.span(),
+            "a function node record names its fields, since each name is a field or an output port",
+        ));
+    };
+    if named_fields.named.is_empty() {
+        return Err(syn::Error::new(
+            record.ident.span(),
+            "a function node record carries at least one field",
+        ));
+    }
+    let record_name = &record.ident;
+    let fields: Vec<(&Ident, &Type)> = named_fields
+        .named
+        .iter()
+        .filter_map(|field| field.ident.as_ref().map(|name| (name, &field.ty)))
+        .collect();
+    let output_port_declarations = fields.iter().map(|(name, value_type)| {
+        let port_name = name.unraw().to_string();
+        quote! {
+            ::tatolab_module_sdk::function_node::FunctionNodeOutputPort::handing_out::<#value_type>(#port_name)
+        }
+    });
+    let output_port_writes = fields.iter().enumerate().map(|(index, (name, _))| {
+        quote! {
+            ::tatolab_module_sdk::function_node::write_one_function_node_output_value(
+                Self::OUTPUT_PORTS,
+                #index,
+                self.#name,
+                output_values,
+            );
+        }
+    });
+    let function_node_output_implementation = quote! {
+        impl ::tatolab_module_sdk::function_node::FunctionNodeOutput for #record_name {
+            const OUTPUT_PORTS: &'static [::tatolab_module_sdk::function_node::FunctionNodeOutputPort] =
+                &[#(#output_port_declarations),*];
+
+            fn write_function_node_output_values(&self, output_values: &mut [f64]) {
+                #(#output_port_writes)*
+            }
+        }
+    };
+    let is_a_record_of_outputs_only = fields
+        .iter()
+        .any(|(_, value_type)| hands_out_nothing_or_an_unread_message(value_type));
+    if is_a_record_of_outputs_only {
+        return Ok(function_node_output_implementation);
+    }
+
+    let field_declarations = fields.iter().map(|(name, value_type)| {
+        let field_name = name.unraw().to_string();
+        quote! {
+            ::tatolab_module_sdk::function_node::FunctionNodeNamedValue {
+                name: #field_name,
+                value_type:
+                    <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeValue>::VALUE_TYPE,
+            }
+        }
+    });
+    let field_writes = fields.iter().enumerate().map(|(index, (name, _))| {
+        quote! {
+            values[#index] =
+                ::tatolab_module_sdk::function_node::FunctionNodeValue::to_function_node_f64(self.#name);
+        }
+    });
+    let field_reads = fields.iter().enumerate().map(|(index, (name, value_type))| {
+        quote! {
+            #name: <#value_type as ::tatolab_module_sdk::function_node::FunctionNodeValue>::from_function_node_f64(
+                values[#index],
+            )
+        }
+    });
+    Ok(quote! {
+        impl ::tatolab_module_sdk::function_node::FunctionNodeRecord for #record_name {
+            const FIELDS: &'static [::tatolab_module_sdk::function_node::FunctionNodeNamedValue] =
+                &[#(#field_declarations),*];
+
+            fn write_function_node_values(&self, values: &mut [f64]) {
+                #(#field_writes)*
+            }
+
+            fn from_function_node_values(values: &[f64]) -> Self {
+                Self { #(#field_reads),* }
+            }
+        }
+
+        #function_node_output_implementation
+    })
+}
+
+/// Whether a field is typed `Option<...>` or `UnreadMessage`, which only a record of outputs carries.
+fn hands_out_nothing_or_an_unread_message(field_type: &Type) -> bool {
+    the_one_type_argument_of(field_type, "Option").is_some()
+        || is_the_bare_type_named(field_type, "UnreadMessage")
 }

@@ -5,20 +5,15 @@
 //! `tatolab-module-sdk`'s `function-node` feature, whose `function_node` module
 //! carries the grammar.
 
-mod declared_node_meta;
-mod function_node_expansion;
-mod function_node_record_expansion;
-
-#[cfg(test)]
-mod tests;
+mod codegen;
+mod grammar;
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use syn::{DeriveInput, ItemFn, parse_macro_input};
 
-use crate::declared_node_meta::DeclaredNodeMeta;
-use crate::function_node_expansion::{expand_function_node, refuse_an_argument_to_function_node};
-use crate::function_node_record_expansion::expand_function_node_record;
+use crate::codegen::{expand_function_node, expand_function_node_record};
+use crate::grammar::{DeclaredNodeMeta, refuse_an_argument_to_function_node};
 
 /// Export a function as a function node: its evaluate entry and a
 /// `<function>_function_node_declaration()` its module's Python half hands

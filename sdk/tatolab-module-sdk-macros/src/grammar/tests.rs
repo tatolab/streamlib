@@ -1,12 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use proc_macro2::TokenStream as TokenStream2;
-use quote::{ToTokens, quote};
-use syn::ItemFn;
-
-use crate::declared_node_meta::DeclaredNodeMeta;
-use crate::function_node_expansion::refuse_an_argument_to_function_node;
+use super::*;
 
 fn function_with(attributes: TokenStream2) -> ItemFn {
     syn::parse_quote! {
