@@ -63,7 +63,7 @@ mod tests {
     /// [`LoadedStreamInThisRuntime::add_local`]: crate::core::runtime::LoadedStreamInThisRuntime::add_local
     #[crate::processor(
         execution = manual,
-        config = crate::core::runtime::processor_interpreters::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
+        config = crate::core::runtime::streams_loaded_in_this_runtime::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
         output("video", family = Image),
     )]
     pub struct AddLocalSourceTakingOneSetting;
