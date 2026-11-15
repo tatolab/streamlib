@@ -121,8 +121,13 @@ impl Runner {
     /// Poll until `has_ended` holds — while this engine owns the machine's
     /// shutdown signals, walking every loaded stream to the machine's shutdown
     /// level on the way.
+    ///
+    /// `has_ended` is read before the walk: the machine's level only rises
+    /// until the owner takes it, so the walk reaches every level the read saw
+    /// and no request the wait sees is left unwalked.
     pub(super) fn block_until(&self, has_ended: &dyn Fn() -> bool) {
         let observe = || {
+            let ended = has_ended();
             if self
                 .engine_resources_shared_by_every_stream
                 .owns_the_machine_shutdown_signals
@@ -130,7 +135,7 @@ impl Runner {
             {
                 self.walk_every_loaded_stream_to_the_machines_shutdown_level();
             }
-            if has_ended() {
+            if ended {
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
