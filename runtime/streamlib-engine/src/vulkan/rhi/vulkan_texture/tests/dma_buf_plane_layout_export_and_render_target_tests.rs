@@ -5,6 +5,13 @@
 
 use super::*;
 
+use crate::core::test_support::rig_only_capability_skip::{
+    RigOnlyCapability, skip_because_this_machine_lacks_naming_the_refusal,
+    skip_unless_this_machine_has,
+};
+use crate::vulkan::rhi::dma_buf_export_test_device_fixture::a_device_that_exports_dma_buf_or_skip;
+use crate::vulkan::rhi::vulkan_texture::linux_dma_buf_export_and_import::dma_buf_plane_layout_query_aspect_mask;
+
 fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {
     let mut file_status = std::mem::MaybeUninit::<libc::stat>::uninit();
     if unsafe { libc::fstat(fd, file_status.as_mut_ptr()) } != 0 {
@@ -233,7 +240,7 @@ fn every_dma_buf_export_mints_a_fresh_fd_the_caller_owns() {
     }
 }
 
-/// The fd teardown corruption, reproduced without the wire: the
+/// A double close at teardown, reproduced without the wire: the
 /// registration path closes the fd it was handed, an unrelated owner
 /// lands on that descriptor number, and the texture's own drop closes
 /// it a second time — out from under whoever holds it now.
