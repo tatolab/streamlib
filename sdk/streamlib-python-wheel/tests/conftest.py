@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The suite's platform markers, and the iceoryx2 domain and log route a test standing in for a helper is handed."""
+"""The suite's platform markers, the iceoryx2 domain and log route a test standing in for a helper is handed, and the stand-in parent a helper process test speaks to."""
 
 import os
 import shutil
@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
+from helper_process_stand_in_parent import StandInParent
 from tatolab.stream import log
 
 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE = "STREAMLIB_ICEORYX2_DOMAIN_ROOT"
@@ -138,3 +139,12 @@ def private_iceoryx2_domain_for_this_test_process() -> "Iterator[Path]":
             os.environ.pop(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, None)
         else:
             os.environ[ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE] = previous_domain_root
+
+
+@pytest.fixture
+def stand_in_parent():
+    parent = StandInParent()
+    try:
+        yield parent
+    finally:
+        parent.close()
