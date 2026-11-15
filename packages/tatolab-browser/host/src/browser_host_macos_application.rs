@@ -18,6 +18,9 @@ const BROWSER_HOST_APPLICATION_CLASS_NAME: &std::ffi::CStr = c"TatolabBrowserHos
 const CEF_APPLICATION_PROTOCOL_NAMES: [&std::ffi::CStr; 3] =
     [c"CrAppProtocol", c"CrAppControlProtocol", c"CefAppProtocol"];
 
+/// The CEF framework's directory in the host's app bundle's `Contents/Frameworks/`.
+pub const CEF_FRAMEWORK_DIRECTORY_NAME: &str = "Chromium Embedded Framework.framework";
+
 /// `NSApplicationActivationPolicyAccessory`: no Dock icon and no menu bar.
 const NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY: isize = 1;
 
@@ -32,7 +35,9 @@ pub fn load_the_cef_framework_of_this_bundle() -> Result<LibraryLoader, String> 
     let framework = executable
         .parent()
         .map(|macos_directory| {
-            macos_directory.join("../Frameworks/Chromium Embedded Framework.framework")
+            macos_directory
+                .join("../Frameworks")
+                .join(CEF_FRAMEWORK_DIRECTORY_NAME)
         })
         .filter(|framework| framework.is_dir())
         .ok_or_else(|| {
