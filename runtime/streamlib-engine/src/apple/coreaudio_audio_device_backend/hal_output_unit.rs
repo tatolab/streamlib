@@ -4,23 +4,37 @@
 use std::ptr::NonNull;
 
 use objc2_audio_toolbox::{
-    AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioOutputUnitStart,
-    AudioOutputUnitStop, AudioUnit, AudioUnitGetProperty, AudioUnitInitialize,
-    AudioUnitSetProperty, AudioUnitUninitialize, kAudioOutputUnitProperty_CurrentDevice,
-    kAudioOutputUnitProperty_EnableIO, kAudioUnitProperty_MaximumFramesPerSlice,
+    AudioComponentDescription, AudioComponentFindNext, AudioComponentInstanceDispose,
+    AudioComponentInstanceNew, AudioOutputUnitStart, AudioOutputUnitStop, AudioUnit,
+    AudioUnitGetProperty, AudioUnitInitialize, AudioUnitSetProperty, AudioUnitUninitialize,
+    kAudioOutputUnitProperty_CurrentDevice, kAudioOutputUnitProperty_EnableIO,
+    kAudioUnitManufacturer_Apple, kAudioUnitProperty_MaximumFramesPerSlice,
     kAudioUnitProperty_StreamFormat, kAudioUnitScope_Global, kAudioUnitScope_Input,
-    kAudioUnitScope_Output,
+    kAudioUnitScope_Output, kAudioUnitSubType_HALOutput, kAudioUnitType_Output,
 };
 
 use crate::core::context::AudioStreamFormat;
 use crate::core::{Error, Result};
 
 use super::audio_objects_and_device_discovery::{
-    CoreAudioDevice, CoreAudioStreamDirection, hal_output_component,
-    interleaved_f32_description_of, largest_io_cycle_in_frames_of, osstatus_as_result,
-    rate_and_channels_of,
+    CoreAudioDevice, CoreAudioStreamDirection, interleaved_f32_description_of,
+    largest_io_cycle_in_frames_of, osstatus_as_result, rate_and_channels_of,
 };
 use super::{AUHAL_INPUT_ELEMENT, AUHAL_OUTPUT_ELEMENT, NO_AUHAL_OUTPUT_UNIT, NO_ERR};
+
+pub(super) fn hal_output_component() -> Option<objc2_audio_toolbox::AudioComponent> {
+    let description = AudioComponentDescription {
+        componentType: kAudioUnitType_Output,
+        componentSubType: kAudioUnitSubType_HALOutput,
+        componentManufacturer: kAudioUnitManufacturer_Apple,
+        componentFlags: 0,
+        componentFlagsMask: 0,
+    };
+    // SAFETY: a lookup over a valid description, from the start of the list.
+    let component =
+        unsafe { AudioComponentFindNext(std::ptr::null_mut(), NonNull::from(&description)) };
+    (!component.is_null()).then_some(component)
+}
 
 /// An AUHAL unit with I/O enabled in one direction. Dropping it stops,
 /// uninitialises and disposes the unit, after which no callback runs.

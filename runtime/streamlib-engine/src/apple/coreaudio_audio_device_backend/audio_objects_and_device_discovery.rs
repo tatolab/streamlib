@@ -3,11 +3,7 @@
 
 use std::ptr::NonNull;
 
-use objc2_audio_toolbox::{
-    AudioComponentDescription, AudioComponentFindNext, kAudioUnitManufacturer_Apple,
-    kAudioUnitScope_Input, kAudioUnitScope_Output, kAudioUnitSubType_HALOutput,
-    kAudioUnitType_Output,
-};
+use objc2_audio_toolbox::{kAudioUnitScope_Input, kAudioUnitScope_Output};
 use objc2_core_audio::{
     AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
     AudioObjectPropertyAddress, AudioObjectPropertyScope, AudioObjectPropertySelector,
@@ -534,18 +530,4 @@ pub(super) fn osstatus_as_result(status: i32) -> std::result::Result<(), i32> {
 /// "48000 Hz, 2 ch" — a format as a refusal or a rebind line names it.
 pub(super) fn rate_and_channels_of(format: AudioStreamFormat) -> String {
     format!("{} Hz, {} ch", format.sample_rate, format.channels)
-}
-
-pub(super) fn hal_output_component() -> Option<objc2_audio_toolbox::AudioComponent> {
-    let description = AudioComponentDescription {
-        componentType: kAudioUnitType_Output,
-        componentSubType: kAudioUnitSubType_HALOutput,
-        componentManufacturer: kAudioUnitManufacturer_Apple,
-        componentFlags: 0,
-        componentFlagsMask: 0,
-    };
-    // SAFETY: a lookup over a valid description, from the start of the list.
-    let component =
-        unsafe { AudioComponentFindNext(std::ptr::null_mut(), NonNull::from(&description)) };
-    (!component.is_null()).then_some(component)
 }

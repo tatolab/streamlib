@@ -51,7 +51,8 @@ use crate::core::context::{
     DeviceBackendArmUnavailableReason,
 };
 
-use audio_objects_and_device_discovery::{default_device_object_id, hal_output_component};
+use audio_objects_and_device_discovery::default_device_object_id;
+use hal_output_unit::hal_output_component;
 
 /// `noErr`.
 const NO_ERR: i32 = 0;
