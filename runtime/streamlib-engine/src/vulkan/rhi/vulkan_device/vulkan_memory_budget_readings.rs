@@ -28,6 +28,16 @@ impl HostVulkanDevice {
         Ok(self.memory_properties.memory_types[memory_type_index as usize].heap_index)
     }
 
+    /// The property flags of the memory type at `memory_type_index`, or
+    /// `None` past the device's memory type count.
+    pub(crate) fn property_flags_of_memory_type_index(
+        &self,
+        memory_type_index: u32,
+    ) -> Option<vk::MemoryPropertyFlags> {
+        (memory_type_index < self.memory_properties.memory_type_count)
+            .then(|| self.memory_properties.memory_types[memory_type_index as usize].property_flags)
+    }
+
     /// Every heap's budget, usage and allocator holdings, with the budget
     /// fetched from the driver for this call: VMA otherwise serves a budget
     /// it refreshes only every 30 of its own operations.

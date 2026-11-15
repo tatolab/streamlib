@@ -9,12 +9,11 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 
 use crate::core::{Error, Result};
-use crate::vulkan::rhi::drm_modifier_probe;
+use crate::vulkan::rhi::drm_modifier_probe::{self, DrmModifierTable};
 
 use super::HostVulkanDevice;
 use super::VmaFrameAllocationSource;
 use super::memory_type_index_is_host_cached;
-use crate::vulkan::rhi::drm_modifier_probe::DrmModifierTable;
 
 /// A VMA export pool and the one memory type it allocates from.
 pub(crate) struct VmaExportPoolPinnedToOneMemoryType {
@@ -88,7 +87,7 @@ impl MappedOpaqueFdBufferHostAccessPattern {
 /// plane aspect for multi-plane modifiers), so we create a real probe
 /// image, query its memory requirements, and find a matching DEVICE_LOCAL
 /// type ourselves. The probe image is destroyed before the function returns.
-pub(super) fn probe_tiled_dma_buf_memory_type(
+fn probe_tiled_dma_buf_memory_type(
     device: &vulkanalia::Device,
     memory_properties: &vk::PhysicalDeviceMemoryProperties,
     tiled_modifiers: &[u64],
@@ -697,7 +696,7 @@ impl HostVulkanDevice {
     /// Returns `None` when external memory isn't supported on this device,
     /// or when the pool's memory-type probe failed at construction.
     /// Used by CUDA / OpenCL interop — see
-    /// [`super::HostVulkanBuffer::new_opaque_fd_export`].
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export`].
     pub fn opaque_fd_buffer_pool(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool
             .as_ref()
@@ -713,7 +712,7 @@ impl HostVulkanDevice {
     /// when external memory is unsupported.
     ///
     /// `None` is not a refusal:
-    /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
     /// degrades to [`Self::opaque_fd_buffer_pool`].
     pub fn opaque_fd_buffer_pool_host_cached(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool_host_cached
@@ -727,7 +726,7 @@ impl HostVulkanDevice {
     /// Returns `None` when external memory isn't supported or the
     /// DEVICE_LOCAL probe failed at construction. Used by GPU-resident
     /// CUDA interop paths — see
-    /// [`super::HostVulkanBuffer::new_opaque_fd_export_device_local`].
+    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export_device_local`].
     pub fn opaque_fd_buffer_pool_device_local(&self) -> Option<&vma::Pool> {
         self.opaque_fd_buffer_pool_device_local
             .as_ref()
@@ -741,7 +740,7 @@ impl HostVulkanDevice {
     /// Returns `None` when external memory isn't supported or the
     /// image-side probe failed at construction. Used by CUDA's
     /// `cudaExternalMemoryGetMappedMipmappedArray` import path — see
-    /// [`super::HostVulkanTexture::new_opaque_fd_export`].
+    /// [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`].
     pub fn opaque_fd_image_pool(&self) -> Option<&vma::Pool> {
         self.opaque_fd_image_pool
             .as_ref()
@@ -800,7 +799,7 @@ impl HostVulkanDevice {
     /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
     /// EGL probe at device init. Empty when the probe failed. Callers
     /// pass [`DrmModifierTable::rt_modifiers`] into
-    /// [`HostVulkanTexture::new_render_target_dma_buf`](super::HostVulkanTexture::new_render_target_dma_buf).
+    /// [`HostVulkanTexture::new_render_target_dma_buf`](crate::vulkan::rhi::HostVulkanTexture::new_render_target_dma_buf).
     pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
         &self.drm_modifier_table
     }

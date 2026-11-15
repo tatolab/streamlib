@@ -3,11 +3,10 @@
 
 use std::sync::Arc;
 
-use crate::core::{Error, Result};
-use crate::vulkan::rhi::drm_modifier_probe;
-
 use crate::core::rhi::TextureDescriptor;
+use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanTexture;
+use crate::vulkan::rhi::drm_modifier_probe;
 
 use super::HostVulkanDevice;
 

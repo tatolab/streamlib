@@ -9,7 +9,7 @@ use vulkanalia::vk;
 use crate::core::{Error, Result};
 
 #[cfg(target_os = "linux")]
-use super::file_descriptor_memory_import::refuse_a_file_descriptor_that_is_not_a_dma_buf;
+use super::opaque_fd_memory_import_and_dma_buf_fd_refusal::refuse_a_file_descriptor_that_is_not_a_dma_buf;
 use super::{HostVulkanDevice, memory_type_index_is_host_cached};
 
 impl HostVulkanDevice {

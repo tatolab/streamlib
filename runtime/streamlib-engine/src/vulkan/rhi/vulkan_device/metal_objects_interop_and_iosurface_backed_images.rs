@@ -7,9 +7,8 @@ use std::sync::atomic::Ordering;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::{Error, Result};
-
 use crate::core::rhi::TextureDescriptor;
+use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanTexture;
 
 use super::HostVulkanDevice;

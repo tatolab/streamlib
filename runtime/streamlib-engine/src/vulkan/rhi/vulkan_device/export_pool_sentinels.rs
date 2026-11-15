@@ -35,20 +35,20 @@ pub(super) struct ExportPoolSentinel {
 }
 
 /// Width and height of every image-backed [`ExportPoolSentinel`].
-pub(super) const EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS: u32 = 8;
+const EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS: u32 = 8;
 
 /// Bytes every [`ExportPoolSentinel`] asks for: an 8×8 four-byte-per-pixel
 /// image's worth. Kept tiny on purpose: a consumer-sized OPAQUE_FD sentinel
 /// deterministically blocked the consumer's own allocation on NVIDIA.
-pub(super) const EXPORT_POOL_SENTINEL_BYTES: vk::DeviceSize =
-    (EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS as vk::DeviceSize)
-        * (EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS as vk::DeviceSize)
-        * 4;
+const EXPORT_POOL_SENTINEL_BYTES: vk::DeviceSize = (EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS
+    as vk::DeviceSize)
+    * (EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS as vk::DeviceSize)
+    * 4;
 
 /// How an image-backed [`ExportPoolSentinel`] is tiled — the same tiling the
 /// pool's real frames use, so its memory-type bits admit the pool's type.
 #[derive(Clone, Copy)]
-pub(super) enum ExportPoolSentinelImageTiling<'a> {
+enum ExportPoolSentinelImageTiling<'a> {
     /// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier.
     Optimal,
     /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`, the driver picking one of
@@ -134,7 +134,7 @@ pub(super) fn make_export_pool_buffer_sentinel(
 /// The image-backed counterpart of [`make_export_pool_buffer_sentinel`].
 /// `format`, `tiling` and `usage` must be the pool's real frames', or the
 /// sentinel's memory-type bits can miss the type the pool is pinned to.
-pub(super) fn make_export_pool_image_sentinel(
+fn make_export_pool_image_sentinel(
     device: &HostVulkanDevice,
     pinned_pool: &VmaExportPoolPinnedToOneMemoryType,
     label: &'static str,

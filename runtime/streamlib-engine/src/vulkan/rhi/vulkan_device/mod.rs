@@ -36,14 +36,14 @@ mod drm_and_opaque_fd_physical_device_probes;
 mod export_memory_pools;
 #[cfg(target_os = "linux")]
 mod export_pool_sentinels;
-#[cfg(target_os = "linux")]
-mod file_descriptor_memory_import;
 mod frame_allocation_within_the_device_memory_budget;
-#[cfg(target_os = "macos")]
-mod iosurface_backed_images;
 mod memory_import;
 #[cfg(target_os = "macos")]
+mod metal_objects_interop_and_iosurface_backed_images;
+#[cfg(target_os = "macos")]
 mod metal_working_set_readings;
+#[cfg(target_os = "linux")]
+mod opaque_fd_memory_import_and_dma_buf_fd_refusal;
 mod ownership_transfer_and_uploads;
 #[cfg(target_os = "linux")]
 mod pipeline_prewarm;
