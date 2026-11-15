@@ -18,6 +18,7 @@ import unittest
 
 import numpy
 
+import coreaudio_hal_devices
 import coreaudio_process_tap as helper
 import known_audio_signal
 import process_tap_loopback_without_the_engine as peer
@@ -128,12 +129,15 @@ class AnIOProcOnTheBuiltInSpeakers(unittest.TestCase):
     """Plays zeros only: the IOProc glue on the real HAL, silent and prompt-free."""
 
     def test_a_player_of_zeros_runs_to_its_end(self):
-        speaker = helper.built_in_speaker_among(helper.attached_devices())
+        speaker = coreaudio_hal_devices.built_in_speaker_among(
+            coreaudio_hal_devices.attached_devices()
+        )
         if speaker is None:
             self.skipTest("no built-in speakers, or headphones on the jack")
         zeros = numpy.zeros(int(0.25 * speaker.nominal_sample_rate))
+        scope_output = coreaudio_hal_devices.PROPERTY_SCOPE_OUTPUT
         player = peer.KnownSignalPlayer(
-            zeros, helper.channels_in_each_buffer(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)
+            zeros, coreaudio_hal_devices.channels_in_each_buffer(speaker.object_id, scope_output)
         )
         with helper.RunningAudioDeviceIOProc(speaker.object_id, player.on_io_cycle) as io_proc:
             self.assertTrue(player.finished.wait(5.0))

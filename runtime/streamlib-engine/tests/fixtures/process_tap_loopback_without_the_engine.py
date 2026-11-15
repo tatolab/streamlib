@@ -32,6 +32,7 @@ import threading
 
 import numpy
 
+import coreaudio_hal_devices
 import coreaudio_process_tap
 import known_audio_signal
 
@@ -67,7 +68,7 @@ class KnownSignalPlayer:
 
     def on_io_cycle(self, _input_buffer_list, _input_time_stamp, output_buffer_list) -> None:
         frames_this_cycle = 0
-        for buffer in coreaudio_process_tap.audio_buffers_at(output_buffer_list):
+        for buffer in coreaudio_hal_devices.audio_buffers_at(output_buffer_list):
             interleaved = self._interleaved_by_channel_count.get(buffer.number_of_channels)
             if interleaved is None or not buffer.data:
                 self.buffers_of_an_unexpected_layout += 1
@@ -114,11 +115,11 @@ class TappedAudioRecorder:
     def on_io_cycle(self, input_buffer_list, input_time_stamp, _output_buffer_list) -> None:
         self.io_cycles += 1
         self.first_io_cycle.set()
-        buffers = coreaudio_process_tap.audio_buffers_at(input_buffer_list)
+        buffers = coreaudio_hal_devices.audio_buffers_at(input_buffer_list)
         if len(buffers) != len(self._channels_in_each_buffer) or not buffers:
             self.buffers_of_an_unexpected_layout += max(len(buffers), 1)
             return
-        sample_time = coreaudio_process_tap.sample_time_at(input_time_stamp)
+        sample_time = coreaudio_hal_devices.sample_time_at(input_time_stamp)
         if sample_time is None:
             at = self.frames_recorded_through
         else:
@@ -157,10 +158,10 @@ class TappedAudioRecorder:
 
 def _require_32_bit_float(stream_formats, what: str) -> None:
     if not stream_formats:
-        raise coreaudio_process_tap.CoreAudioFixtureError(f"{what} reports no streams")
+        raise coreaudio_hal_devices.CoreAudioFixtureError(f"{what} reports no streams")
     for stream_format in stream_formats:
         if not stream_format.is_32_bit_float:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"{what} is {stream_format}, and this peer copies 32-bit float only"
             )
 
@@ -170,13 +171,13 @@ def _raise_for_what_went_wrong_on_the_io_threads(
 ) -> None:
     for role, io_proc in (("player", player_io_proc), ("recorder", recorder_io_proc)):
         if io_proc.exceptions_on_the_io_thread:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the {role}'s IOProc raised {io_proc.exceptions_on_the_io_thread} times, "
                 f"first {io_proc.first_exception_on_the_io_thread}"
             )
     for role, counted in (("player", player), ("recorder", recorder)):
         if counted.buffers_of_an_unexpected_layout:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the {role} met {counted.buffers_of_an_unexpected_layout} buffers laid out "
                 "unlike the device's stream configuration"
             )
@@ -187,17 +188,17 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
 
     Returns the mono capture, its rate, and a line of evidence.
     """
-    scope_output = coreaudio_process_tap.PROPERTY_SCOPE_OUTPUT
-    scope_input = coreaudio_process_tap.PROPERTY_SCOPE_INPUT
+    scope_output = coreaudio_hal_devices.PROPERTY_SCOPE_OUTPUT
+    scope_input = coreaudio_hal_devices.PROPERTY_SCOPE_INPUT
     _require_32_bit_float(
-        coreaudio_process_tap.stream_virtual_formats(speaker.object_id, scope_output),
+        coreaudio_hal_devices.stream_virtual_formats(speaker.object_id, scope_output),
         f"{speaker.uid}'s output",
     )
     played = numpy.concatenate(
         [signal, numpy.zeros(int(TRAILING_SILENCE_SECONDS * rate), dtype="<f8")]
     )
     player = KnownSignalPlayer(
-        played, coreaudio_process_tap.channels_in_each_buffer(speaker.object_id, scope_output)
+        played, coreaudio_hal_devices.channels_in_each_buffer(speaker.object_id, scope_output)
     )
     played_seconds = len(played) / rate
     aggregate_device_uid = f"streamlib-fixture-process-tap-{os.getpid()}"
@@ -207,24 +208,24 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
     ) as process_tap:
         # By UID, as `MicrophoneSource` resolves a device_id: a private
         # aggregate its creator cannot list is one the engine could never open.
-        aggregate = coreaudio_process_tap.device_with_uid(aggregate_device_uid)
+        aggregate = coreaudio_hal_devices.device_with_uid(aggregate_device_uid)
         if aggregate is None:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the private aggregate {aggregate_device_uid} is not listed to the process "
                 "that made it"
             )
         if aggregate.input_channels == 0:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the private aggregate {aggregate_device_uid} has no input channels to "
                 "read the tap through"
             )
         _require_32_bit_float(
-            coreaudio_process_tap.stream_virtual_formats(aggregate.object_id, scope_input),
+            coreaudio_hal_devices.stream_virtual_formats(aggregate.object_id, scope_input),
             f"{aggregate_device_uid}'s input",
         )
         capture_rate = int(aggregate.nominal_sample_rate)
         recorder = TappedAudioRecorder(
-            coreaudio_process_tap.channels_in_each_buffer(aggregate.object_id, scope_input),
+            coreaudio_hal_devices.channels_in_each_buffer(aggregate.object_id, scope_input),
             int((played_seconds + PLAYBACK_TIMEOUT_MARGIN_SECONDS + 1.0) * capture_rate),
         )
         evidence = process_tap.evidence()
@@ -233,7 +234,7 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
             aggregate.object_id, recorder.on_io_cycle
         ) as recorder_io_proc:
             if not recorder.first_io_cycle.wait(FIRST_IO_CYCLE_TIMEOUT_SECONDS):
-                raise coreaudio_process_tap.CoreAudioFixtureError(
+                raise coreaudio_hal_devices.CoreAudioFixtureError(
                     f"the private aggregate ran no IO cycle within "
                     f"{FIRST_IO_CYCLE_TIMEOUT_SECONDS:.0f} s of starting"
                 )
@@ -242,7 +243,7 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
             ) as player_io_proc:
                 playback_timeout_seconds = played_seconds + PLAYBACK_TIMEOUT_MARGIN_SECONDS
                 if not player.finished.wait(playback_timeout_seconds):
-                    raise coreaudio_process_tap.CoreAudioFixtureError(
+                    raise coreaudio_hal_devices.CoreAudioFixtureError(
                         f"the speaker's IOProc played {player.frames_played} of "
                         f"{player.frames_to_play} frames in {playback_timeout_seconds:.1f} s"
                     )
@@ -284,7 +285,7 @@ def main(argv) -> int:
         print(f"SKIP: {refusal}", file=sys.stderr)
         return 77
 
-    speaker = coreaudio_process_tap.device_with_uid(speaker_device_uid)
+    speaker = coreaudio_hal_devices.device_with_uid(speaker_device_uid)
     if speaker is None or speaker.output_channels == 0:
         print(f"ERROR: no output device has the UID {speaker_device_uid}", file=sys.stderr)
         return 1
@@ -302,7 +303,7 @@ def main(argv) -> int:
         captured, capture_rate, evidence = play_and_record_through_a_process_tap(
             signal, rate, speaker, mute_behaviour
         )
-    except coreaudio_process_tap.CoreAudioFixtureError as error:
+    except coreaudio_hal_devices.CoreAudioFixtureError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print(evidence)
