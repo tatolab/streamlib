@@ -336,5 +336,4 @@ fn the_running_view_node_of_the_id(
 }
 
 #[cfg(test)]
-#[path = "view_node_output_written_by_a_panel_tests.rs"]
-mod view_node_output_written_by_a_panel_tests;
+mod tests;
