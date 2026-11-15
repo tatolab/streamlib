@@ -111,7 +111,7 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         reason: "stamps host receipt for records relayed from a helper process",
     },
     PermittedWallClockSurface {
-        path: "sdk/streamlib-python-wheel/python/tatolab/runtime/_processor_interpreter_bootstrap.py",
+        path: "sdk/streamlib-python-wheel/python/tatolab/runtime/_helper_process_log_forwarding.py",
         surface: PermittedWallClockSurfaceKind::LogRecordSourceTimestamp,
         reason: "stamps the record at its Python origin, before the relay hop",
     },
