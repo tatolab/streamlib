@@ -1,0 +1,3 @@
+# 1 <path>: each foo.rs beside a foo/ directory, not moved to foo/mod.rs yet.
+# scripts/run-structure-lints.sh checks it; an entry only goes down or away.
+1 packages/streamlib-webrtc/src/whep_player.rs
