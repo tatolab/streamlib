@@ -63,7 +63,7 @@ pub use crate::vulkan::rhi::{
 /// The EGL/DRM modifier probe. Linux-bound by its mechanism, not by its
 /// caller: Apple has no DRM format modifiers to enumerate.
 #[cfg(target_os = "linux")]
-pub use crate::vulkan::rhi::drm_modifier_probe;
+pub use crate::vulkan::rhi::device::drm_modifier_probe;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use crate::vulkan::rhi::PixelBufferUploadFinalTextureLayout;

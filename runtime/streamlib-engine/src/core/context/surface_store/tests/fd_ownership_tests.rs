@@ -140,10 +140,11 @@ fn a_texture_lookup_of_a_pixel_buffer_slot_is_refused_and_closes_the_plane_it_re
 #[test]
 fn a_buffer_lookup_that_cannot_import_closes_the_planes_it_received() {
     const PLANE: &str = "fd-ownership-test-plane-for-buffer-lookup";
-    let import_device_is_up = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
-        .get()
-        .is_some()
-        || crate::core::rhi::GpuDevice::new().is_ok();
+    let import_device_is_up =
+        crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .is_some()
+            || crate::core::rhi::GpuDevice::new().is_ok();
     if !import_device_is_up {
         tracing::warn!(
             "no Vulkan device — this run proves the no-device refusal, not the DMA-BUF check"
