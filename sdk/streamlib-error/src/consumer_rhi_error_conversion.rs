@@ -3,7 +3,6 @@
 
 use crate::Error;
 
-#[cfg(target_os = "linux")]
 impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
     fn from(e: streamlib_consumer_rhi::ConsumerRhiError) -> Self {
         match e {
