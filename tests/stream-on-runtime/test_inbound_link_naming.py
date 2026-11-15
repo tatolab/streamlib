@@ -9,7 +9,7 @@ sent what. This drives that read over real links, from a real child
 interpreter: two Python feeders into the one port, and a reporter on its output.
 
 The same contract is gated at the engine seam by
-`iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on`
+`iceoryx2::input::tests::inbound_link_named_on_each_read::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on`
 and its four neighbours.
 """
 
