@@ -28,6 +28,7 @@ from typing import Callable, cast
 import pytest
 
 from tatolab.runtime import _engine
+from tatolab.runtime import _parent_process_bridge as parent_process_bridge
 from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
 from tatolab.runtime._function_node_run_as_its_helpers_processor import (
@@ -779,7 +780,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     the parent's next command included — waits out the escalate timeout.
     """
     monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
-    decode_the_frame = processor_interpreter_bootstrap._decode_frame_payload
+    decode_the_frame = parent_process_bridge._decode_frame_payload
 
     def decode_the_frame_collecting_garbage_on_the_marker(payload: bytes):
         frame = decode_the_frame(payload)
@@ -788,7 +789,7 @@ def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
         return frame
 
     monkeypatch.setattr(
-        processor_interpreter_bootstrap,
+        parent_process_bridge,
         "_decode_frame_payload",
         decode_the_frame_collecting_garbage_on_the_marker,
     )
