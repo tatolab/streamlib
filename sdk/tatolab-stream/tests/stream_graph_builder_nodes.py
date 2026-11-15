@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The nodes `test_stream_graph_builder.py` adds to a stream.
+"""The nodes the stream graph builder tests add to a stream.
 
 Their own module rather than the test file because a node's type is the import
 path of its class or function, `stream_graph_builder_nodes:<qualname>` — a name a child
