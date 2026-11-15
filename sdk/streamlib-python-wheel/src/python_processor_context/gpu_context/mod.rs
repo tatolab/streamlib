@@ -17,6 +17,8 @@ use super::gpu_surface_handle::PythonGpuSurfaceHandle;
 use super::gpu_unreachable_from_a_helper_process_error;
 
 mod gpu_context_full_access;
+mod gpu_context_full_access_kernels;
+mod gpu_context_full_access_surface_exchange;
 mod gpu_context_limited_access;
 
 pub(crate) use gpu_context_full_access::PythonGpuContextFullAccess;
