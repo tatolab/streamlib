@@ -12,7 +12,6 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-
 from tatolab.runtime._engine import (
     capture_this_helper_processes_engine_log_records,
     drain_the_engine_log_records_this_helper_captured,

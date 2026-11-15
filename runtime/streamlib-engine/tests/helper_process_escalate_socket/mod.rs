@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The helper process's end of the escalate socket, framed the way
-//! `tatolab/runtime/_processor_interpreter_bootstrap.py` frames it: a
+//! `tatolab/runtime/_parent_process_bridge.py` frames it: a
 //! four-byte big-endian length, then the JSON, with one correlation id per
 //! request.
 //!

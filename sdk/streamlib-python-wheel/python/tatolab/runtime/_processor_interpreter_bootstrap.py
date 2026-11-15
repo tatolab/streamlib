@@ -176,7 +176,6 @@ from tatolab.runtime._parent_process_bridge import (
     HelperProcessProtocolError as HelperProcessProtocolError,
     ParentProcessBridge as ParentProcessBridge,
     _PendingEscalateResponse as _PendingEscalateResponse,
-    _decode_frame_payload as _decode_frame_payload,
 )
 from tatolab.runtime._processor_class_description import (
     DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE as DESCRIBED_NODE_TYPE_KEYS_AND_THE_STAMPS_AN_OLDER_TATOLAB_STREAM_DOES_NOT_WRITE,
@@ -184,6 +183,7 @@ from tatolab.runtime._processor_class_description import (
     describe_one_processor_class as describe_one_processor_class,
     load_processor_class as load_processor_class,
 )
+
 
 def _end_the_describe_without_finalizing_the_interpreter(exit_status: int) -> NoReturn:
     """Exit at once, the document already written.
@@ -332,12 +332,6 @@ def describe_installed_modules_onto_stdout() -> int:
     with os.fdopen(described_document_fd, "w", encoding="utf-8") as described_document_output:
         described_document_output.write(described_document + "\n")
     return 0
-
-
-
-# =============================================================================
-# Entry point
-# =============================================================================
 
 
 def _required_environment(name: str) -> str:
