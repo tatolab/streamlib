@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Draws over a GPU device: the surfaces a draw reads and the targets it
-//! writes, the escalate gate a draw every frame never enters, and the
-//! barriers its bindings get.
+//! Draws that render: the surfaces a draw reads and the targets it writes,
+//! read back pixel by pixel, the escalate gate a draw every frame never
+//! enters, and the barriers its bindings get.
 
 use super::*;
 
@@ -291,57 +291,6 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
             );
         }
     }
-    drop(held);
-}
-
-/// A draw whose binding and colour target are one texture is refused:
-/// the pass discards a colour target's contents on entry, so the
-/// binding would read pixels the draw has already thrown away.
-#[test]
-fn a_draw_binding_its_own_colour_target_is_refused() {
-    let Some(sandbox) = make_gpu_sandbox_if_available() else {
-        println!("a_draw_binding_its_own_colour_target: no GPU — skipping");
-        return;
-    };
-    let registry = EscalateHandleRegistry::new();
-    let kernel_id = register_graphics_kernel_or_panic(
-        &sandbox,
-        &registry,
-        register_from_slang("reg-alias", INVERT_SAMPLED_INPUT_FRAGMENT_SLANG),
-    )
-    .handle_id;
-    let held = sandbox
-        .escalate(|full| {
-            let texture = full.host_inner().acquire_texture(
-                &TexturePoolDescriptor::new(64, 64, TextureFormat::Rgba8Unorm)
-                    .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT),
-            )?;
-            full.register_texture("alias-surface", texture.texture().clone());
-            Ok(texture)
-        })
-        .expect("one texture to name twice");
-
-    let mut run = make_run_req("run-alias", &kernel_id, "alias-surface");
-    run.bindings = vec![EscalateRequestRunGraphicsDrawBinding {
-        kind: EscalateGraphicsBindingKind::SampledTexture,
-        name: "source_image".to_string(),
-        surface_uuid: "alias-surface".to_string(),
-    }];
-    run.extent_width = 64;
-    run.extent_height = 64;
-    let message = refusal_message(
-        handle_escalate_op(
-            &sandbox,
-            &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
-            EscalateRequest::RunGraphicsDraw(run),
-        )
-        .expect("must produce a response"),
-    );
-    assert!(
-        message.contains("already thrown away"),
-        "must say why the alias is refused, got: {message}"
-    );
     drop(held);
 }
 

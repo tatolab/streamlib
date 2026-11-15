@@ -57,7 +57,7 @@ use crate::core::rhi::{
 };
 
 mod binding_planner_tests;
-mod graphics_draw_over_a_device_tests;
+mod graphics_draw_rendering_and_synchronisation_tests;
 mod graphics_kernel_registration_and_refusal_tests;
 mod wire_pipeline_state_to_rhi_tests;
 
