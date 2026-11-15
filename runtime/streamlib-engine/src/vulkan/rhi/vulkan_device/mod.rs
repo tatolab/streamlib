@@ -223,7 +223,7 @@ pub struct HostVulkanDevice {
     /// Render-target-capable DRM modifiers per format from the EGL probe at
     /// device init. Empty when libEGL is unavailable or the probe failed.
     /// Callers consult this before requesting
-    /// [`HostVulkanTexture::new_render_target_dma_buf`].
+    /// [`HostVulkanTexture::new_render_target_dma_buf`](super::HostVulkanTexture::new_render_target_dma_buf).
     #[cfg(target_os = "linux")]
     drm_modifier_table: Arc<DrmModifierTable>,
     /// Live raw `vkAllocateMemory` allocations, which VMA never sees: DMA-BUF
@@ -891,7 +891,7 @@ impl HostVulkanDevice {
     /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
     /// EGL probe at device init. Empty when the probe failed. Callers
     /// pass [`DrmModifierTable::rt_modifiers`] into
-    /// [`HostVulkanTexture::new_render_target_dma_buf`].
+    /// [`HostVulkanTexture::new_render_target_dma_buf`](super::HostVulkanTexture::new_render_target_dma_buf).
     #[cfg(target_os = "linux")]
     pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
         &self.drm_modifier_table

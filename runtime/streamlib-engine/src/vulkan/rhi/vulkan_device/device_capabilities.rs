@@ -70,7 +70,7 @@ impl HostVulkanDevice {
 impl HostVulkanDevice {
     /// Whether `VK_EXT_external_memory_host` was enabled at device
     /// construction — the imported tier of
-    /// [`super::HostMappingReadByGpu`](crate::vulkan::rhi::HostMappingReadByGpu) is reachable only then.
+    /// [`HostMappingReadByGpu`](crate::vulkan::rhi::HostMappingReadByGpu) is reachable only then.
     pub fn supports_host_pointer_import(&self) -> bool {
         self.has_external_memory_host
     }

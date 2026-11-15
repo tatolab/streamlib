@@ -56,7 +56,7 @@ impl MappedOpaqueFdBufferHostAccessPattern {
 /// Allocate one [`EXPORT_POOL_SENTINEL_BYTES`] buffer exportable as
 /// `handle_type` out of `pinned_pool`, which must be one of `device`'s pools.
 ///
-/// Bypasses [`super::HostVulkanBuffer`](crate::vulkan::rhi::HostVulkanBuffer), whose `Arc<HostVulkanDevice>` would
+/// Bypasses [`HostVulkanBuffer`](crate::vulkan::rhi::HostVulkanBuffer), whose `Arc<HostVulkanDevice>` would
 /// be a reference cycle once the sentinel is stored on the device itself.
 /// `required_flags` and `allocation_create_flags` (on top of
 /// `DEDICATED_MEMORY`) must be the pool's real frames', or the sentinel's
@@ -816,7 +816,7 @@ impl HostVulkanDevice {
     /// **images** — image-flavored sibling of
     /// [`Self::create_opaque_fd_buffer_pool_device_local`].
     ///
-    /// Probe shape matches [`super::HostVulkanTexture::new_opaque_fd_export`](crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export)
+    /// Probe shape matches [`HostVulkanTexture::new_opaque_fd_export`](crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export)
     /// exactly so the pool's `memoryTypeBits` matches the real
     /// allocations' bind requirements (VUID-vkBindImageMemory-memory-01047):
     ///

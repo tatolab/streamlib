@@ -287,8 +287,8 @@ impl HostVulkanDevice {
 
     /// Free device memory allocated via raw vkAllocateMemory (import path only).
     ///
-    /// VMA-managed allocations are freed via [`vma::Allocator::destroy_image`] or
-    /// [`vma::Allocator::destroy_buffer`] — do not call this for VMA allocations.
+    /// VMA-managed allocations are freed via [`vma::Allocator::destroy_image`](vulkanalia_vma::Allocator::destroy_image) or
+    /// [`vma::Allocator::destroy_buffer`](vulkanalia_vma::Allocator::destroy_buffer) — do not call this for VMA allocations.
     pub fn free_imported_memory(&self, memory: vk::DeviceMemory) {
         unsafe { self.device.free_memory(memory, None) };
         self.live_allocation_count.fetch_sub(1, Ordering::Relaxed);
