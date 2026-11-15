@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Projects on disk: their creation, their node code, their trash and the venv the runtime syncs for them.
+//! Projects on disk: their creation, their node code, their trash and the venv the runtime syncs
+//! for them.
 
 pub(super) mod new_project_name_drawing;
 pub(super) mod new_project_scaffold;

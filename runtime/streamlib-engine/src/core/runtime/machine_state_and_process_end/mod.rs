@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What the runtime records about the machine and how the process ends: state directory, crashes, shutdown and teardown.
+//! What the runtime records about the machine and how the process ends: state directory, crashes,
+//! shutdown and teardown.
 
 pub(super) mod end_the_process_at_once;
 pub(super) mod engine_teardown_watchdog;

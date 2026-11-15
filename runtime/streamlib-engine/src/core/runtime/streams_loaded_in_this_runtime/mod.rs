@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The streams this runtime holds: their loads, actions, live graph edits, steps and what their nodes write.
+//! The streams this runtime holds: their loads, actions, live graph edits, steps and what their
+//! nodes write.
 
 pub(super) mod function_node_states_carried_across_loads;
 pub(super) mod graph_change_listener;
