@@ -10,8 +10,8 @@ use crate::core::test_support::rig_only_capability_skip::{
     RigOnlyCapability, skip_unless_this_machine_has,
 };
 
-mod one_off_acquisition_budget_tests;
-mod processor_output_pool_and_iosurface_tests;
+mod one_off_acquisition_count_and_memory_budget_tests;
+mod processor_output_pool_slot_tests;
 mod tensor_storage_buffer_tests;
 mod texture_export_flavour_tests;
 
@@ -29,54 +29,6 @@ fn handle_id_or_refusal_of(
         Some(EscalateResponse::Err(err)) => Err(err.message),
         None => Err("the escalate op got no response".to_string()),
     }
-}
-
-/// A one-off 64x32 `rgba8_unorm` `texture_binding` texture request, the
-/// shape the per-node count tests acquire.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn a_one_off_64x32_rgba8_unorm_texture_request()
--> crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest {
-    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
-    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
-
-    EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
-        request_id: "req-one-off-64x32".to_string(),
-        width: 64,
-        height: 32,
-        format: crate::core::rhi::TextureFormat::Rgba8Unorm
-            .wire_name()
-            .to_string(),
-        processor_output_pool: None,
-        usage: vec!["texture_binding".to_string()],
-    })
-}
-
-/// The shape a one-off 64x32 `rgba8_unorm` `texture_binding` texture is
-/// counted under, the wire's implied copy bits included.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn the_64x32_rgba8_unorm_one_off_texture_shape() -> super::OneOffAcquisitionShape {
-    super::OneOffAcquisitionShape::Texture {
-        width: 64,
-        height: 32,
-        format: crate::core::rhi::TextureFormat::Rgba8Unorm,
-        usage: super::super::acquisition::parse_texture_usages(&["texture_binding".to_string()])
-            .expect("a known usage"),
-    }
-}
-
-/// Acquire a one-off 64x32 `rgba8_unorm` texture over the real escalate op,
-/// answering its handle id or the refusal.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
-    sandbox: &crate::core::context::GpuContextLimitedAccess,
-    registry: &EscalateHandleRegistry,
-) -> std::result::Result<String, String> {
-    handle_id_or_refusal_of(super::super::handle_escalate_op(
-        sandbox,
-        registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
-        a_one_off_64x32_rgba8_unorm_texture_request(),
-    ))
 }
 
 /// Release one handle over the real escalate op, answering the refusal if
@@ -100,15 +52,6 @@ fn release_a_handle_over_the_escalate_op(
         }),
     ))
     .map(|_| ())
-}
-
-/// Run every release a helper's teardown owes, as its bridge's drop does.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn release_everything_the_helpers_teardown_owes(
-    sandbox: &crate::core::context::GpuContextLimitedAccess,
-    registry: &EscalateHandleRegistry,
-) {
-    super::release_everything_a_torn_down_helper_held(sandbox, registry);
 }
 
 /// Ask one of the helper's processor output pools for its next frame over the
@@ -149,4 +92,18 @@ fn next_processor_output_frame_over_the_escalate_op(
         Some(EscalateResponse::Err(err)) => Err(err.message),
         None => Err("the pooled acquire_texture got no response".to_string()),
     }
+}
+
+#[test]
+fn release_handle_flags_unknown_handle() {
+    // Registry-level release of an unknown handle. A full
+    // integration test that exercises [`handle_escalate_op`]
+    // against a real `GpuContextLimitedAccess` lives in the
+    // escalate root's `handle_escalate_op_end_to_end` test — it is gated
+    // on [`GpuContext::init_for_platform`] succeeding so CI
+    // machines without a GPU still build+run the rest of the
+    // suite.
+    let registry = EscalateHandleRegistry::new();
+    assert_eq!(registry.handle_count(), 0);
+    assert!(registry.remove_handle("missing").is_none());
 }

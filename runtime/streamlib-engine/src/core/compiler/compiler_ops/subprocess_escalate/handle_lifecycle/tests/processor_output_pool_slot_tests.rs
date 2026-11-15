@@ -1,25 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A helper's textures crossing to it, and the node output pool's slots: never
-//! rewritten while a consumer holds one, reused without the escalate gate, and
-//! handed back across a teardown.
+//! The node output pool's slots: a helper's texture crossing on an IOSurface
+//! and held until teardown, never rewritten while a consumer holds a frame,
+//! reused without the escalate gate, and handed back across a teardown.
 
 use super::*;
-
-#[test]
-fn release_handle_flags_unknown_handle() {
-    // Registry-level release of an unknown handle. A full
-    // integration test that exercises [`handle_escalate_op`]
-    // against a real `GpuContextLimitedAccess` lives in the
-    // escalate root's `handle_escalate_op_end_to_end` test — it is gated
-    // on [`GpuContext::init_for_platform`] succeeding so CI
-    // machines without a GPU still build+run the rest of the
-    // suite.
-    let registry = EscalateHandleRegistry::new();
-    assert_eq!(registry.handle_count(), 0);
-    assert!(registry.remove_handle("missing").is_none());
-}
 
 /// On macOS an escalate `acquire_texture` allocates over an IOSurface and
 /// registers the texture whole with the surface-share service. While the

@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! One-off acquisitions counted against each node's budget: refused at once at
-//! the budget, handed back on release or teardown, and freed without waiting
-//! out the idle window.
+//! One-off acquisitions: each node's count of one shape, refused by name at
+//! its own count and handed back on release or teardown; the device memory
+//! budget an acquisition is refused at once against; and what a released
+//! one-off leaves behind.
 
 use super::*;
 
@@ -599,4 +600,63 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
     let _node_a_reservation_in_the_room_handed_back = node_a
         .reserve_one_off_acquisition_count(a_1280x720_rgba8_unorm_texture())
         .expect("a reservation handed back unheld makes room for one more");
+}
+
+/// A one-off 64x32 `rgba8_unorm` `texture_binding` texture request, the
+/// shape the per-node count tests acquire.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_one_off_64x32_rgba8_unorm_texture_request()
+-> crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+
+    EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+        request_id: "req-one-off-64x32".to_string(),
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm
+            .wire_name()
+            .to_string(),
+        processor_output_pool: None,
+        usage: vec!["texture_binding".to_string()],
+    })
+}
+
+/// The shape a one-off 64x32 `rgba8_unorm` `texture_binding` texture is
+/// counted under, the wire's implied copy bits included.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn the_64x32_rgba8_unorm_one_off_texture_shape() -> super::super::OneOffAcquisitionShape {
+    super::super::OneOffAcquisitionShape::Texture {
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm,
+        usage: super::super::super::acquisition::parse_texture_usages(&[
+            "texture_binding".to_string()
+        ])
+        .expect("a known usage"),
+    }
+}
+
+/// Acquire a one-off 64x32 `rgba8_unorm` texture over the real escalate op,
+/// answering its handle id or the refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) -> std::result::Result<String, String> {
+    handle_id_or_refusal_of(super::super::super::handle_escalate_op(
+        sandbox,
+        registry,
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        a_one_off_64x32_rgba8_unorm_texture_request(),
+    ))
+}
+
+/// Run every release a helper's teardown owes, as its bridge's drop does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn release_everything_the_helpers_teardown_owes(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) {
+    super::super::release_everything_a_torn_down_helper_held(sandbox, registry);
 }
