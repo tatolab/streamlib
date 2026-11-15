@@ -3,6 +3,8 @@
 
 #[cfg(target_os = "linux")]
 use super::*;
+#[cfg(target_os = "linux")]
+use crate::vulkan::rhi::drm_modifier_probe;
 
 /// Set in the child process a device-selection test re-runs in; names the
 /// device the child must build on.

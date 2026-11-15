@@ -28,14 +28,14 @@ use crate::vulkan::rhi::vulkan_metal_working_set_budget::{
 use crate::vulkan::rhi::vulkan_queue_submission_completion::HostVulkanQueueSubmissionCompletionTimelines;
 use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
+#[cfg(target_os = "linux")]
+use super::drm_and_opaque_fd_physical_device_probes::{
+    drm_render_node_number_of_the_physical_device,
+    physical_device_exports_an_opaque_fd_timeline_semaphore,
+};
 use super::{
     HostVulkanDevice, HostVulkanQueueFamilySelection, RayTracingPipelineProperties,
     VulkanLogicalDeviceDestroyedUnlessTaken,
-};
-#[cfg(target_os = "linux")]
-use super::{
-    drm_render_node_number_of_the_physical_device,
-    physical_device_exports_an_opaque_fd_timeline_semaphore,
 };
 
 impl HostVulkanDevice {

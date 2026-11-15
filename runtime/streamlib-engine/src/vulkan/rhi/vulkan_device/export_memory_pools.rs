@@ -1,29 +1,59 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-#[cfg(target_os = "linux")]
 use vma::Alloc as _;
-#[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-#[cfg(target_os = "linux")]
 use vulkanalia_vma as vma;
 
 use crate::core::{Error, Result};
-#[cfg(target_os = "linux")]
 use crate::vulkan::rhi::drm_modifier_probe;
 
 use super::HostVulkanDevice;
-#[cfg(target_os = "linux")]
+use super::VmaFrameAllocationSource;
 use super::memory_type_index_is_host_cached;
-#[cfg(target_os = "linux")]
-use super::{
-    EXPORT_POOL_SENTINEL_BYTES, EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS, ExportPoolSentinel,
-    ExportPoolSentinelImageTiling, ExportPoolSentinelResource, VmaExportPoolPinnedToOneMemoryType,
-};
+use crate::vulkan::rhi::drm_modifier_probe::DrmModifierTable;
+
+/// A VMA export pool and the one memory type it allocates from.
+pub(crate) struct VmaExportPoolPinnedToOneMemoryType {
+    pub(crate) pool: vma::Pool,
+    pub(crate) memory_type_index: u32,
+}
+
+impl<'a> VmaFrameAllocationSource<'a> {
+    /// `export_pool` where the device created it, the default allocator otherwise.
+    pub(crate) fn export_pool_or_the_default_allocator(
+        export_pool: Option<&'a VmaExportPoolPinnedToOneMemoryType>,
+    ) -> Self {
+        export_pool.map_or(Self::DefaultAllocator, Self::ExportPool)
+    }
+}
+
+/// Refuse, naming the image's format and usage, an image whose
+/// `memory_type_bits` exclude the one memory type an export pool is pinned
+/// to — the pool was probed with one image shape, and an image of another
+/// may not bind its type.
+pub(super) fn refuse_an_image_the_export_pools_memory_type_cannot_bind(
+    image_memory_type_bits: u32,
+    export_pool_memory_type_index: u32,
+    image_create_info: &vk::ImageCreateInfo,
+    frame_allocation_site: &'static str,
+) -> Result<()> {
+    let export_pool_memory_type_bit = 1u32.checked_shl(export_pool_memory_type_index).unwrap_or(0);
+    if image_memory_type_bits & export_pool_memory_type_bit != 0 {
+        return Ok(());
+    }
+    Err(Error::GpuError(format!(
+        "{frame_allocation_site}: a {:?} image with usage {:?} cannot bind memory type {} its \
+         export pool is pinned to (the image's memory_type_bits are {:#x})",
+        image_create_info.format,
+        image_create_info.usage,
+        export_pool_memory_type_index,
+        image_memory_type_bits,
+    )))
+}
 
 /// How a mapped OPAQUE_FD buffer allocation is reached from the host.
 ///
@@ -32,7 +62,6 @@ use super::{
 /// must carry the same one, or the probe's `memoryTypeBits` stop matching
 /// the real buffer's and the bind trips
 /// VUID-vkBindBufferMemory-memory-01035.
-#[cfg(target_os = "linux")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MappedOpaqueFdBufferHostAccessPattern {
     /// Producer-write memory — the shared OPAQUE_FD pool's hint.
@@ -41,7 +70,6 @@ pub(crate) enum MappedOpaqueFdBufferHostAccessPattern {
     Random,
 }
 
-#[cfg(target_os = "linux")]
 impl MappedOpaqueFdBufferHostAccessPattern {
     /// `MAPPED` plus this pattern's single HOST_ACCESS bit.
     pub(crate) fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
@@ -53,133 +81,6 @@ impl MappedOpaqueFdBufferHostAccessPattern {
     }
 }
 
-/// Allocate one [`EXPORT_POOL_SENTINEL_BYTES`] buffer exportable as
-/// `handle_type` out of `pinned_pool`, which must be one of `device`'s pools.
-///
-/// Bypasses [`HostVulkanBuffer`](crate::vulkan::rhi::HostVulkanBuffer), whose `Arc<HostVulkanDevice>` would
-/// be a reference cycle once the sentinel is stored on the device itself.
-/// `required_flags` and `allocation_create_flags` (on top of
-/// `DEDICATED_MEMORY`) must be the pool's real frames', or the sentinel's
-/// memory-type bits can miss the type the pool is pinned to.
-#[cfg(target_os = "linux")]
-pub(super) fn make_export_pool_buffer_sentinel(
-    device: &HostVulkanDevice,
-    pinned_pool: &VmaExportPoolPinnedToOneMemoryType,
-    label: &'static str,
-    handle_type: vk::ExternalMemoryHandleTypeFlags,
-    required_flags: vk::MemoryPropertyFlags,
-    allocation_create_flags: vma::AllocationCreateFlags,
-) -> Result<ExportPoolSentinel> {
-    let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-        .handle_types(handle_type)
-        .build();
-
-    let buffer_info = vk::BufferCreateInfo::builder()
-        .size(EXPORT_POOL_SENTINEL_BYTES)
-        .usage(
-            vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::TRANSFER_DST
-                | vk::BufferUsageFlags::STORAGE_BUFFER,
-        )
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .push_next(&mut external_buffer_info);
-
-    let alloc_opts = vma::AllocationOptions {
-        flags: vma::AllocationCreateFlags::DEDICATED_MEMORY | allocation_create_flags,
-        required_flags,
-        ..Default::default()
-    };
-
-    let (buffer, allocation) = unsafe { pinned_pool.pool.create_buffer(buffer_info, &alloc_opts) }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "export pool '{label}' sentinel buffer allocation failed \
-                 (size={EXPORT_POOL_SENTINEL_BYTES}): {e}"
-            ))
-        })?;
-
-    Ok(ExportPoolSentinel {
-        allocator: Arc::clone(device.allocator()),
-        resource: ExportPoolSentinelResource::Buffer(buffer),
-        allocation,
-        label,
-        size: EXPORT_POOL_SENTINEL_BYTES,
-    })
-}
-
-/// Allocate one 8×8 four-byte-per-pixel image exportable as `handle_type`
-/// out of `pinned_pool`, which must be one of `device`'s pools.
-///
-/// The image-backed counterpart of [`make_export_pool_buffer_sentinel`].
-/// `format`, `tiling` and `usage` must be the pool's real frames', or the
-/// sentinel's memory-type bits can miss the type the pool is pinned to.
-#[cfg(target_os = "linux")]
-fn make_export_pool_image_sentinel(
-    device: &HostVulkanDevice,
-    pinned_pool: &VmaExportPoolPinnedToOneMemoryType,
-    label: &'static str,
-    handle_type: vk::ExternalMemoryHandleTypeFlags,
-    format: vk::Format,
-    tiling: ExportPoolSentinelImageTiling<'_>,
-    usage: vk::ImageUsageFlags,
-) -> Result<ExportPoolSentinel> {
-    let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
-        .handle_types(handle_type)
-        .build();
-    let drm_format_modifier_candidates: &[u64] = match tiling {
-        ExportPoolSentinelImageTiling::Optimal => &[],
-        ExportPoolSentinelImageTiling::DrmFormatModifierFromCandidates(candidates) => candidates,
-    };
-    let mut drm_format_modifier_list_info = vk::ImageDrmFormatModifierListCreateInfoEXT::builder()
-        .drm_format_modifiers(drm_format_modifier_candidates)
-        .build();
-
-    let image_info = vk::ImageCreateInfo::builder()
-        .image_type(vk::ImageType::_2D)
-        .format(format)
-        .extent(vk::Extent3D {
-            width: EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS,
-            height: EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS,
-            depth: 1,
-        })
-        .mip_levels(1)
-        .array_layers(1)
-        .samples(vk::SampleCountFlags::_1)
-        .usage(usage)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .initial_layout(vk::ImageLayout::UNDEFINED)
-        .push_next(&mut external_image_info);
-    let image_info = match tiling {
-        ExportPoolSentinelImageTiling::Optimal => image_info.tiling(vk::ImageTiling::OPTIMAL),
-        ExportPoolSentinelImageTiling::DrmFormatModifierFromCandidates(_) => image_info
-            .tiling(vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT)
-            .push_next(&mut drm_format_modifier_list_info),
-    };
-
-    let alloc_opts = vma::AllocationOptions {
-        flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,
-        required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        ..Default::default()
-    };
-
-    let (image, allocation) = unsafe { pinned_pool.pool.create_image(image_info, &alloc_opts) }
-        .map_err(|e| {
-            Error::GpuError(format!(
-                "export pool '{label}' sentinel image allocation failed \
-                 ({EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS}x\
-                 {EXPORT_POOL_SENTINEL_IMAGE_EXTENT_IN_PIXELS} {format:?}): {e}"
-            ))
-        })?;
-
-    Ok(ExportPoolSentinel {
-        allocator: Arc::clone(device.allocator()),
-        resource: ExportPoolSentinelResource::Image(image),
-        allocation,
-        label,
-        size: EXPORT_POOL_SENTINEL_BYTES,
-    })
-}
-
 /// Pick a DEVICE_LOCAL memory type for a tiled DMA-BUF VkImage.
 ///
 /// VMA's `find_memory_type_index_for_image_info` cannot probe images with
@@ -187,8 +88,7 @@ fn make_export_pool_image_sentinel(
 /// plane aspect for multi-plane modifiers), so we create a real probe
 /// image, query its memory requirements, and find a matching DEVICE_LOCAL
 /// type ourselves. The probe image is destroyed before the function returns.
-#[cfg(target_os = "linux")]
-fn probe_tiled_dma_buf_memory_type(
+pub(super) fn probe_tiled_dma_buf_memory_type(
     device: &vulkanalia::Device,
     memory_properties: &vk::PhysicalDeviceMemoryProperties,
     tiled_modifiers: &[u64],
@@ -250,143 +150,6 @@ fn probe_tiled_dma_buf_memory_type(
 }
 
 impl HostVulkanDevice {
-    /// Allocate one tiny sentinel out of every export pool the device
-    /// created, **before any swapchain is bound**, for the device to hold
-    /// for its life.
-    ///
-    /// On NVIDIA Linux a post-swapchain allocation of an exportable handle
-    /// type succeeds only while a live allocation of that type anchors the
-    /// driver's per-handle-type state, and nothing outside the engine is
-    /// such an anchor: the shared pools free every frame of a flavour once
-    /// it goes unused. The sentinels are that anchor, on every driver. They
-    /// stay tiny because a consumer-sized OPAQUE_FD sentinel
-    /// deterministically blocked the consumer's own allocation (#637).
-    /// Pools the device did not create are skipped.
-    #[cfg(target_os = "linux")]
-    pub(super) fn allocate_one_sentinel_per_export_pool(
-        device: &Self,
-    ) -> Result<Vec<ExportPoolSentinel>> {
-        let bgra_sampled_copyable_image_usage = vk::ImageUsageFlags::SAMPLED
-            | vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST;
-
-        let mut sentinels: Vec<ExportPoolSentinel> = Vec::new();
-
-        if let Some(pinned_pool) = device.dma_buf_buffer_pool_pinned_to_one_memory_type() {
-            sentinels.push(make_export_pool_buffer_sentinel(
-                device,
-                pinned_pool,
-                "dma_buf_host_visible",
-                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE,
-            )?);
-        }
-
-        if let Some(pinned_pool) = device.dma_buf_image_pool_pinned_to_one_memory_type() {
-            sentinels.push(make_export_pool_image_sentinel(
-                device,
-                pinned_pool,
-                "dma_buf_image",
-                vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                vk::Format::B8G8R8A8_UNORM,
-                ExportPoolSentinelImageTiling::Optimal,
-                bgra_sampled_copyable_image_usage,
-            )?);
-        }
-
-        // The tiled pool exists only when this same modifier list is non-empty.
-        if let Some(pinned_pool) = device.dma_buf_image_pool_tiled_pinned_to_one_memory_type() {
-            let render_target_modifiers = device
-                .drm_modifier_table()
-                .rt_modifiers(drm_modifier_probe::fourcc::DRM_FORMAT_ARGB8888);
-            if !render_target_modifiers.is_empty() {
-                sentinels.push(make_export_pool_image_sentinel(
-                    device,
-                    pinned_pool,
-                    "dma_buf_image_tiled",
-                    vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                    vk::Format::B8G8R8A8_UNORM,
-                    ExportPoolSentinelImageTiling::DrmFormatModifierFromCandidates(
-                        render_target_modifiers,
-                    ),
-                    bgra_sampled_copyable_image_usage | vk::ImageUsageFlags::COLOR_ATTACHMENT,
-                )?);
-            }
-        }
-
-        if let Some(pinned_pool) = device.opaque_fd_buffer_pool_pinned_to_one_memory_type() {
-            sentinels.push(make_export_pool_buffer_sentinel(
-                device,
-                pinned_pool,
-                "opaque_fd_host_visible",
-                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                MappedOpaqueFdBufferHostAccessPattern::SequentialWrite
-                    .vma_allocation_create_flags(),
-            )?);
-        }
-
-        // Its memory type differs from the write-combined pool's wherever the
-        // device has a cached exportable type, so it is anchored separately.
-        if let Some(pinned_pool) =
-            device.opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type()
-        {
-            sentinels.push(make_export_pool_buffer_sentinel(
-                device,
-                pinned_pool,
-                "opaque_fd_host_cached",
-                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-                MappedOpaqueFdBufferHostAccessPattern::Random.vma_allocation_create_flags(),
-            )?);
-        }
-
-        if let Some(pinned_pool) =
-            device.opaque_fd_buffer_pool_device_local_pinned_to_one_memory_type()
-        {
-            sentinels.push(make_export_pool_buffer_sentinel(
-                device,
-                pinned_pool,
-                "opaque_fd_device_local",
-                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
-                vk::MemoryPropertyFlags::DEVICE_LOCAL,
-                vma::AllocationCreateFlags::empty(),
-            )?);
-        }
-
-        // R8G8B8A8 is the CUDA-mappable layout the pool's real images use, so
-        // the sentinel's memory-type bits match theirs. No in-tree consumer
-        // allocates OPAQUE_FD images after a swapchain yet, so this anchor is
-        // extrapolated from the buffer evidence rather than reproduced.
-        if let Some(pinned_pool) = device.opaque_fd_image_pool_pinned_to_one_memory_type() {
-            sentinels.push(make_export_pool_image_sentinel(
-                device,
-                pinned_pool,
-                "opaque_fd_image",
-                vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD,
-                vk::Format::R8G8B8A8_UNORM,
-                ExportPoolSentinelImageTiling::Optimal,
-                vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST
-                    | vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::STORAGE,
-            )?);
-        }
-
-        for sentinel in &sentinels {
-            tracing::info!(
-                "HostVulkanDevice export pool sentinel retained: {} ({} bytes)",
-                sentinel.label,
-                sentinel.size,
-            );
-        }
-        Ok(sentinels)
-    }
-}
-
-impl HostVulkanDevice {
     /// Build VMA pools dedicated to DMA-BUF exportable allocations.
     ///
     /// Each pool is pinned to a memory type that supports the relevant property
@@ -400,7 +163,6 @@ impl HostVulkanDevice {
     /// create the probe image. When the EGL probe returned no modifiers (no
     /// libEGL, no display, extension missing) the tiled pool is `None` and
     /// callers fall back to refusing render-target allocations.
-    #[cfg(target_os = "linux")]
     #[allow(clippy::too_many_arguments)]
     pub(super) fn create_dma_buf_pools(
         allocator: &Arc<vma::Allocator>,
@@ -601,7 +363,6 @@ impl HostVulkanDevice {
     /// STORAGE_BUFFER, chained `VkExternalMemoryBufferCreateInfo::OPAQUE_FD`.
     /// The probe's `memoryTypeBits` must match the real buffer's or the
     /// bind fails with VUID-vkBindBufferMemory-memory-01035.
-    #[cfg(target_os = "linux")]
     fn probe_opaque_fd_host_visible_buffer_memory_type_index(
         allocator: &Arc<vma::Allocator>,
         host_access_pattern: MappedOpaqueFdBufferHostAccessPattern,
@@ -636,7 +397,6 @@ impl HostVulkanDevice {
     /// The export info `Box` is returned alongside the pool — callers
     /// must keep it alive for the pool's entire lifetime (VMA stores
     /// raw pointers via `pMemoryAllocateNext`).
-    #[cfg(target_os = "linux")]
     fn create_opaque_fd_buffer_pool_pinned_to_memory_type_index(
         allocator: &Arc<vma::Allocator>,
         memory_type_index: u32,
@@ -677,7 +437,6 @@ impl HostVulkanDevice {
     /// `HOST_ACCESS_SEQUENTIAL_WRITE` is the right hint for this pool's
     /// producer-write consumers; the CPU-read sibling is
     /// [`Self::create_opaque_fd_buffer_pool_host_cached`].
-    #[cfg(target_os = "linux")]
     pub(super) fn create_opaque_fd_buffer_pool(
         allocator: &Arc<vma::Allocator>,
     ) -> Result<(
@@ -716,7 +475,6 @@ impl HostVulkanDevice {
     /// HOST_COHERENT stays required: the child-side OPAQUE_FD import binds
     /// the memory as HOST_VISIBLE | HOST_COHERENT and no flush or
     /// invalidate exists anywhere on this path.
-    #[cfg(target_os = "linux")]
     pub(super) fn create_opaque_fd_buffer_pool_host_cached(
         allocator: &Arc<vma::Allocator>,
     ) -> Result<
@@ -755,7 +513,6 @@ impl HostVulkanDevice {
     /// real bottleneck (~16-32 GB/s vs ~600 GB/s on VRAM, RTX 3090).
     /// Pool storage is single-memory-type-index by VMA contract — that's
     /// why this is a separate pool from the HOST_VISIBLE one.
-    #[cfg(target_os = "linux")]
     pub(super) fn create_opaque_fd_buffer_pool_device_local(
         allocator: &Arc<vma::Allocator>,
     ) -> Result<(
@@ -839,7 +596,6 @@ impl HostVulkanDevice {
     /// tiling (unlike `DRM_FORMAT_MODIFIER_EXT`, which requires the
     /// raw `vkCreateImage` + `vkGetImageMemoryRequirements` probe used
     /// in `probe_tiled_dma_buf_memory_type`).
-    #[cfg(target_os = "linux")]
     pub(super) fn create_opaque_fd_image_pool(
         allocator: &Arc<vma::Allocator>,
     ) -> Result<(
@@ -903,53 +659,160 @@ impl HostVulkanDevice {
             export_info,
         ))
     }
+}
 
-    /// Find a memory type that satisfies both the type filter and required properties.
+impl HostVulkanDevice {
+    /// Get the VMA pool for DMA-BUF exportable HOST_VISIBLE buffers.
+    /// Returns None on a device that exports no DMA-BUF.
+    pub fn dma_buf_buffer_pool(&self) -> Option<&vma::Pool> {
+        self.dma_buf_buffer_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// Get the VMA pool for DMA-BUF exportable DEVICE_LOCAL images.
+    /// Returns None on a device that exports no DMA-BUF.
+    pub fn dma_buf_image_pool(&self) -> Option<&vma::Pool> {
+        self.dma_buf_image_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// Get the VMA pool for DMA-BUF exportable images created with
+    /// `VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`.
     ///
-    /// Used internally for DMA-BUF import (raw `vkAllocateMemory` path).
-    /// VMA handles memory type selection for all non-import allocations.
-    pub(super) fn find_memory_type(
-        &self,
-        type_filter: u32,
-        required_properties: vk::MemoryPropertyFlags,
-    ) -> Result<u32> {
-        // When DEVICE_LOCAL is requested, prefer types NOT also HOST_VISIBLE
-        // (main VRAM heap) over types that are HOST_VISIBLE (BAR aperture).
-        if required_properties.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL) {
-            // Pass 1: DEVICE_LOCAL without HOST_VISIBLE (main VRAM)
-            for i in 0..self.memory_properties.memory_type_count {
-                let flags = self.memory_properties.memory_types[i as usize].property_flags;
-                if (type_filter & (1 << i)) != 0
-                    && flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                    && !flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                {
-                    return Ok(i);
-                }
-            }
-            // Pass 2: any DEVICE_LOCAL (including BAR aperture)
-            for i in 0..self.memory_properties.memory_type_count {
-                let flags = self.memory_properties.memory_types[i as usize].property_flags;
-                if (type_filter & (1 << i)) != 0
-                    && flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
-                {
-                    return Ok(i);
-                }
-            }
-        }
+    /// Returns `None` when the EGL probe didn't find any RT-capable modifier
+    /// (no libEGL, no display, extension missing, or driver doesn't expose
+    /// `external_only=FALSE` modifiers for BGRA). Callers must refuse the
+    /// allocation in that case rather than fall back to LINEAR — LINEAR is
+    /// sampler-only on NVIDIA.
+    pub fn dma_buf_image_pool_tiled(&self) -> Option<&vma::Pool> {
+        self.dma_buf_image_pool_tiled
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
 
-        // Standard path: find first matching type
-        for i in 0..self.memory_properties.memory_type_count {
-            let type_supported = (type_filter & (1 << i)) != 0;
-            let properties_supported = self.memory_properties.memory_types[i as usize]
-                .property_flags
-                .contains(required_properties);
-            if type_supported && properties_supported {
-                return Ok(i);
-            }
-        }
-        Err(Error::GpuError(format!(
-            "No suitable memory type found (filter: 0x{:x}, required: {:?})",
-            type_filter, required_properties
-        )))
+    /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers.
+    ///
+    /// Returns `None` when external memory isn't supported on this device,
+    /// or when the pool's memory-type probe failed at construction.
+    /// Used by CUDA / OpenCL interop — see
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export`].
+    pub fn opaque_fd_buffer_pool(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// VMA pool dedicated to OPAQUE_FD-exportable HOST_VISIBLE buffers on
+    /// a HOST_CACHED memory type — the CPU-read sibling of
+    /// [`Self::opaque_fd_buffer_pool`].
+    ///
+    /// `HOST_CACHED` is a VMA *preference*, never a requirement, so this
+    /// is `None` on a device whose probe came back uncached — as well as
+    /// when external memory is unsupported.
+    ///
+    /// `None` is not a refusal:
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export_host_cached`]
+    /// degrades to [`Self::opaque_fd_buffer_pool`].
+    pub fn opaque_fd_buffer_pool_host_cached(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool_host_cached
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL buffers
+    /// (GPU-resident sibling of [`Self::opaque_fd_buffer_pool`]).
+    ///
+    /// Returns `None` when external memory isn't supported or the
+    /// DEVICE_LOCAL probe failed at construction. Used by GPU-resident
+    /// CUDA interop paths — see
+    /// [`super::HostVulkanBuffer::new_opaque_fd_export_device_local`].
+    pub fn opaque_fd_buffer_pool_device_local(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_buffer_pool_device_local
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// VMA pool dedicated to OPAQUE_FD-exportable DEVICE_LOCAL **images**
+    /// (image-flavored sibling of [`Self::opaque_fd_buffer_pool_device_local`]).
+    /// `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier.
+    ///
+    /// Returns `None` when external memory isn't supported or the
+    /// image-side probe failed at construction. Used by CUDA's
+    /// `cudaExternalMemoryGetMappedMipmappedArray` import path — see
+    /// [`super::HostVulkanTexture::new_opaque_fd_export`].
+    pub fn opaque_fd_image_pool(&self) -> Option<&vma::Pool> {
+        self.opaque_fd_image_pool
+            .as_ref()
+            .map(|pinned_pool| &pinned_pool.pool)
+    }
+
+    /// [`Self::dma_buf_buffer_pool`] with the memory type it is pinned to.
+    pub(crate) fn dma_buf_buffer_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_buffer_pool.as_ref()
+    }
+
+    /// [`Self::dma_buf_image_pool`] with the memory type it is pinned to.
+    pub(crate) fn dma_buf_image_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_image_pool.as_ref()
+    }
+
+    /// [`Self::dma_buf_image_pool_tiled`] with the memory type it is pinned to.
+    pub(crate) fn dma_buf_image_pool_tiled_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.dma_buf_image_pool_tiled.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool`] with the memory type it is pinned to.
+    pub(crate) fn opaque_fd_buffer_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool_host_cached`] with the memory type it is pinned to.
+    pub(crate) fn opaque_fd_buffer_pool_host_cached_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool_host_cached.as_ref()
+    }
+
+    /// [`Self::opaque_fd_buffer_pool_device_local`] with the memory type it is pinned to.
+    pub(crate) fn opaque_fd_buffer_pool_device_local_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_buffer_pool_device_local.as_ref()
+    }
+
+    /// [`Self::opaque_fd_image_pool`] with the memory type it is pinned to.
+    pub(crate) fn opaque_fd_image_pool_pinned_to_one_memory_type(
+        &self,
+    ) -> Option<&VmaExportPoolPinnedToOneMemoryType> {
+        self.opaque_fd_image_pool.as_ref()
+    }
+
+    /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the
+    /// EGL probe at device init. Empty when the probe failed. Callers
+    /// pass [`DrmModifierTable::rt_modifiers`] into
+    /// [`HostVulkanTexture::new_render_target_dma_buf`](super::HostVulkanTexture::new_render_target_dma_buf).
+    pub fn drm_modifier_table(&self) -> &Arc<DrmModifierTable> {
+        &self.drm_modifier_table
+    }
+
+    /// Whether this device can allocate a cross-process-importable DMA-BUF
+    /// image for `format`: the format has a DRM FOURCC and the EGL probe
+    /// advertised at least one RT-capable modifier for it.
+    pub fn has_render_target_modifier_for_texture_format(
+        &self,
+        format: crate::core::rhi::TextureFormat,
+    ) -> bool {
+        drm_modifier_probe::fourcc::drm_fourcc_for_texture_format(format)
+            .is_some_and(|fourcc| self.drm_modifier_table.has_rt_modifier(fourcc))
     }
 }
