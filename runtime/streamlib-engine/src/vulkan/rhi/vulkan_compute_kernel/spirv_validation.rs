@@ -12,8 +12,6 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 use crate::vulkan::rhi::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 
-// ---- Validation + creation helpers --------------------------------------------
-
 /// Validate the declaration against the shader and return the specs with the
 /// shader's own binding names adopted onto them.
 pub(super) fn validate_against_spirv(
