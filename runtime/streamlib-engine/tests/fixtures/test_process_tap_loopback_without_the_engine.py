@@ -18,6 +18,7 @@ import unittest
 
 import numpy
 
+import coreaudio_hal_devices
 import coreaudio_process_tap as helper
 import known_audio_signal
 import process_tap_loopback_without_the_engine as peer
@@ -133,7 +134,7 @@ class AnIOProcOnTheBuiltInSpeakers(unittest.TestCase):
             self.skipTest("no built-in speakers, or headphones on the jack")
         zeros = numpy.zeros(int(0.25 * speaker.nominal_sample_rate))
         player = peer.KnownSignalPlayer(
-            zeros, helper.channels_in_each_buffer(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)
+            zeros, coreaudio_hal_devices.channels_in_each_buffer(speaker.object_id, coreaudio_hal_devices.PROPERTY_SCOPE_OUTPUT)
         )
         with helper.RunningAudioDeviceIOProc(speaker.object_id, player.on_io_cycle) as io_proc:
             self.assertTrue(player.finished.wait(5.0))
