@@ -62,6 +62,8 @@ mod ray_tracing;
 mod resource_acquisition;
 #[cfg(not(target_os = "macos"))]
 mod surface_check_in_and_out_refused_off_macos;
+#[cfg(target_os = "linux")]
+mod surface_export_staging;
 mod surface_store_check_in_and_out;
 mod texture_registration;
 
@@ -79,6 +81,8 @@ pub(super) use pixel_buffer_pool_slot::{
     PixelBufferPoolKey, PixelBufferPoolSlot, gpu_pool_slot_frame_of_the_pixel_buffer_slot,
     published_pixel_buffer_frame_id,
 };
+#[cfg(target_os = "linux")]
+pub use surface_export_staging::{SurfaceExportStaging, SurfaceExportStagingResidency};
 
 /// Read-once GPU capability snapshot returned by
 /// [`GpuContext::gpu_capabilities`] /

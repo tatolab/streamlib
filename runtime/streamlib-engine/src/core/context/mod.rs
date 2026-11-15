@@ -28,8 +28,6 @@ pub(crate) mod surface_check_out_lease_registry;
 mod surface_claimed_against_producer_reuse;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod surface_color_conversion;
-#[cfg(target_os = "linux")]
-pub(crate) mod surface_export_staging;
 pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -71,6 +69,8 @@ pub use gpu_context::{
 pub use gpu_context::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, OutputTextureRegisteredUntilDropped,
 };
+#[cfg(target_os = "linux")]
+pub use gpu_context::{SurfaceExportStaging, SurfaceExportStagingResidency};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;
@@ -113,8 +113,6 @@ pub use surface_check_out_lease_registry::{
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
 };
 pub use surface_claimed_against_producer_reuse::SurfaceClaimedAgainstProducerReuse;
-#[cfg(target_os = "linux")]
-pub use surface_export_staging::{SurfaceExportStaging, SurfaceExportStagingResidency};
 pub(crate) use surface_share_wire_verbs::SurfaceShareRegistrationsByRuntime;
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
