@@ -1,0 +1,698 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Length-prefixed JSON escalate-IPC bridge shared by the Python and Deno
+//! subprocess host processors.
+//!
+//! Frames travel over a dedicated [`UnixStream`] pair created by
+//! [`EscalateTransport::attach`] before spawn — not over the subprocess's
+//! stdin/stdout. The parent keeps one half of the socketpair and the
+//! child inherits the other via `STREAMLIB_ESCALATE_FD`, freeing fd1/fd2
+//! to be captured as intercepted log pipes by the host.
+//!
+//! Three roles travel over the same socket:
+//! 1. Lifecycle RPC (`setup`, `run`, `stop`, `teardown`, `on_pause`,
+//!    `on_resume`, …) — initiated by the host, the subprocess replies with
+//!    `rpc: "ready" | "stopped" | "ok" | "done" | "error"`.
+//! 2. Escalate-on-behalf (`rpc: "escalate_request"`) — initiated by the
+//!    subprocess, the host replies with `rpc: "escalate_response"`.
+//! 3. Link wiring after setup (`wire_link`, `unwire_link`) — sent by
+//!    [`SubprocessBridgeLinkDelivery`]; the subprocess answers a `wire_link`
+//!    with [`OUT_OF_PROCESS_LINK_WIRED_RPC`] or
+//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`], naming the link it is about, and
+//!    leaves an `unwire_link` unanswered.
+//!
+//! A dedicated reader thread (`br-…`) owns the parent-side read half and only
+//! demultiplexes: a log record is handed to the log pipeline, a link's wire
+//! answer lands on that link's own cell, a lifecycle reply is forwarded to the
+//! main thread over an mpsc channel, and an escalate request that waits on an
+//! answer is queued for the helper's one escalate worker (`br-esc-…`), which
+//! dispatches through [`subprocess_escalate::process_bridge_message`](super::subprocess_escalate::process_bridge_message) in
+//! arrival order. Nothing the reader does waits on GPU work, so one slow
+//! escalate never delays the helper's log records or its lifecycle replies,
+//! and the helper's writes never back up behind it. The third role has its own
+//! tags for the same reason the lifecycle queue is kept clean: an answer routed
+//! there would be read as the reply to whatever command the host sends next.
+//! Every frame the parent writes goes through one writer lock, so no two
+//! threads interleave halves of a length-prefixed frame.
+
+mod subprocess_bridge_link_delivery;
+mod subprocess_bridge_reader_and_escalate_workers;
+
+pub use subprocess_bridge_link_delivery::SubprocessBridgeLinkDelivery;
+
+use std::io::{BufReader, BufWriter, Read, Write};
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use crate::core::context::GpuContextLimitedAccess;
+use crate::core::error::{Error, Result};
+use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
+use crate::core::processors::{
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome,
+};
+
+use super::subprocess_escalate::handle_lifecycle::{
+    EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
+};
+use super::subprocess_escalate::{
+    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatTheNodeOfAHelperPlacedProcessorReaches,
+    process_bridge_message, shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
+};
+use subprocess_bridge_reader_and_escalate_workers::{
+    SubprocessBridgeThreads, processor_id_shortened_for_a_thread_name,
+    refuse_every_link_this_subprocess_still_owed, spawn_the_native_escalate_worker,
+    spawn_the_reader_and_the_escalate_worker,
+};
+
+/// Env var advertising the inherited child-end fd number of the escalate
+/// socketpair. The subprocess opens this fd as a duplex UNIX socket and
+/// uses it as the framed-IPC transport.
+pub(crate) const ESCALATE_FD_ENV: &str = "STREAMLIB_ESCALATE_FD";
+
+/// This engine's build id: its crate version, the git sha it was built from
+/// (`unknown` where the build had no checkout) and a nonce minted each time the
+/// build script ran, so two builds of one sha still differ.
+pub const ENGINE_BUILD_ID: &str = env!("STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT");
+
+/// Env var carrying the parent's [`ENGINE_BUILD_ID`] to a helper process, which
+/// refuses to start unless the engine it imported was compiled with the same id.
+///
+/// The helper borrows its parent's own `tatolab.runtime` through the lend
+/// directory, so the ids match by construction; the check is the backstop for
+/// a helper that imported another build anyway, which would otherwise surface
+/// as every service open failing on a corrupted service.
+pub const ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENGINE_BUILD_ID";
+
+/// Env var advertising the inherited child-end fd number of the native
+/// escalate socketpair: the channel a helper's native code sends escalate
+/// requests over without Python, answered in order, one at a time.
+pub(crate) const NATIVE_ESCALATE_FD_ENV: &str = "STREAMLIB_NATIVE_ESCALATE_FD";
+
+/// Socketpair-backed escalate IPC transport: the bridge socket the subprocess
+/// inherits via [`ESCALATE_FD_ENV`], and the native escalate socket it
+/// inherits via [`NATIVE_ESCALATE_FD_ENV`].
+pub struct EscalateTransport {
+    parent_end: UnixStream,
+    native_escalate_parent_end: UnixStream,
+    /// Kept alive so the child fds stay open across `Command::spawn`. The
+    /// caller drops them after spawn so only the subprocess holds the child
+    /// ends.
+    child_ends: Option<(UnixStream, UnixStream)>,
+}
+
+/// The parent's halves of an [`EscalateTransport`].
+pub struct EscalateTransportParentEnds {
+    /// Lifecycle commands, log records and the helper's Python escalates.
+    pub bridge: UnixStream,
+    /// Escalate requests from the helper's native code.
+    pub native_escalate: UnixStream,
+}
+
+impl EscalateTransport {
+    /// Create both socketpairs, register `pre_exec` on `command` to clear
+    /// `FD_CLOEXEC` on each child-end fd, and name them in the command's
+    /// environment.
+    ///
+    /// After `command.spawn()`, call [`Self::release_child_end`] so only
+    /// the subprocess retains the child-side fds.
+    pub fn attach(command: &mut Command) -> Result<Self> {
+        let (parent_end, child_end) = UnixStream::pair()
+            .map_err(|e| Error::Runtime(format!("failed to create escalate socketpair: {e}")))?;
+        let (native_escalate_parent_end, native_escalate_child_end) =
+            UnixStream::pair().map_err(|e| {
+                Error::Runtime(format!("failed to create native escalate socketpair: {e}"))
+            })?;
+
+        let child_fds: [RawFd; 2] = [child_end.as_raw_fd(), native_escalate_child_end.as_raw_fd()];
+
+        // Clear FD_CLOEXEC on the child-end fds between fork and exec so
+        // the execed subprocess inherits them. `fcntl` is async-signal-safe
+        // so it's legal to call from `pre_exec`.
+        unsafe {
+            command.pre_exec(move || {
+                for child_fd in child_fds {
+                    let flags = libc::fcntl(child_fd, libc::F_GETFD);
+                    if flags < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    let rc = libc::fcntl(child_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+                    if rc < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+
+        command.env(ESCALATE_FD_ENV, child_fds[0].to_string());
+        command.env(NATIVE_ESCALATE_FD_ENV, child_fds[1].to_string());
+
+        Ok(Self {
+            parent_end,
+            native_escalate_parent_end,
+            child_ends: Some((child_end, native_escalate_child_end)),
+        })
+    }
+
+    /// Drop the parent's references to the child-end fds. Call this after
+    /// `command.spawn()` succeeds so only the subprocess keeps them open.
+    pub fn release_child_end(&mut self) {
+        self.child_ends.take();
+    }
+
+    /// Consume the transport and return the parent-side sockets.
+    pub fn into_parent_ends(mut self) -> EscalateTransportParentEnds {
+        self.child_ends.take();
+        EscalateTransportParentEnds {
+            bridge: self.parent_end,
+            native_escalate: self.native_escalate_parent_end,
+        }
+    }
+}
+
+/// The lifecycle command that runs a helper's `setup()`.
+pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
+
+/// A shutdown command the parent sends a helper, paired with the reply tag the
+/// helper answers it with.
+///
+/// The pairing lives beside [`SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS`] and
+/// the protocol this module's doc enumerates, so the two halves of one exchange
+/// cannot drift apart between the spawn host and the processor interpreter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelperProcessShutdownCommand {
+    /// Leave the execution loop and run the processor's `stop()`.
+    Stop,
+    /// Run the processor's `teardown()` and leave.
+    Teardown,
+}
+
+impl HelperProcessShutdownCommand {
+    /// Both commands, in the order the shutdown ladder sends them.
+    ///
+    /// `stop` and `teardown` are sent together.
+    pub const BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM: [Self; 2] = [Self::Stop, Self::Teardown];
+
+    /// What the parent writes as the frame's `cmd`.
+    pub fn command_tag(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Teardown => "teardown",
+        }
+    }
+
+    /// What the helper writes as the answering frame's `rpc`.
+    pub fn reply_tag(self) -> &'static str {
+        match self {
+            Self::Stop => "stopped",
+            Self::Teardown => "done",
+        }
+    }
+}
+
+/// The rpc tag a subprocess answers a late `wire_link` with once it has opened
+/// its own port for the link. Carries `link_id`.
+pub const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
+
+/// The rpc tag a subprocess answers a late `wire_link` with when it could not
+/// open its port. Carries `link_id` and `reason`.
+pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
+
+/// How many escalate requests one helper may have queued for its worker before
+/// the next is refused.
+///
+/// The shipped helper blocks each calling thread on its answer, so the queue
+/// holds one request per thread; the bound only stops a helper that writes
+/// requests without waiting from growing the app process's memory.
+const ESCALATE_REQUESTS_QUEUED_PER_HELPER: usize = 256;
+
+/// What handles an escalate request's frame and returns the frame to answer it
+/// with, or `None` for an op answered by nothing.
+///
+/// The escalate dispatch in production; a stand-in under test, so the reader
+/// and the worker are exercised without a GPU device.
+type EscalateRequestDispatch =
+    Arc<dyn Fn(&serde_json::Value) -> Option<serde_json::Value> + Send + Sync>;
+
+/// Where one frame arriving from the subprocess belongs.
+///
+/// Classified on the frame's tags alone, never on what a handler makes of the
+/// frame: the routing decision is the wire contract's, and a frame that fell
+/// through to the lifecycle queue by accident is read as the answer to the next
+/// command the host sends.
+#[derive(Debug, PartialEq, Eq)]
+enum IncomingSubprocessFrame {
+    /// An escalate request the helper waits on no answer for — a log record —
+    /// dispatched on the reader thread the moment it arrives.
+    EscalateRequestAnsweredByNothing,
+    /// An escalate request the helper waits on an answer for, queued for the
+    /// helper's escalate worker.
+    EscalateRequestAwaitingAnAnswer,
+    /// One link's answer to a `wire_link` the host sent after setup.
+    LinkWireAnswer {
+        link_id: String,
+        outcome: OutOfProcessLinkWireOutcome,
+    },
+    /// A link's answer that names no link, so nothing can be routed to.
+    LinkWireAnswerNamingNoLink,
+    /// The answer to a lifecycle command, forwarded to the main thread.
+    LifecycleReply,
+}
+
+fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSubprocessFrame {
+    let rpc = msg.get("rpc").and_then(|rpc| rpc.as_str());
+    if rpc == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC) {
+        return match msg.get("op").and_then(|op| op.as_str()) {
+            Some(ESCALATE_OP_ANSWERED_BY_NOTHING) => {
+                IncomingSubprocessFrame::EscalateRequestAnsweredByNothing
+            }
+            _ => IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer,
+        };
+    }
+    let outcome = match rpc {
+        Some(OUT_OF_PROCESS_LINK_WIRED_RPC) => OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
+        Some(OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC) => {
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: msg
+                    .get("reason")
+                    .and_then(|reason| reason.as_str())
+                    .unwrap_or("it did not say why")
+                    .to_string(),
+            }
+        }
+        _ => return IncomingSubprocessFrame::LifecycleReply,
+    };
+    match msg.get("link_id").and_then(|link_id| link_id.as_str()) {
+        Some(link_id) => IncomingSubprocessFrame::LinkWireAnswer {
+            link_id: link_id.to_string(),
+            outcome,
+        },
+        None => IncomingSubprocessFrame::LinkWireAnswerNamingNoLink,
+    }
+}
+
+/// What a link wired into a helper process that has failed is refused with.
+pub fn refusal_of_a_link_into_a_helper_process_that_failed(
+    processor_display_name: &str,
+    processor_id: &str,
+) -> String {
+    format!(
+        "processor '{processor_display_name}' ({processor_id}) has failed, so no link can be \
+         wired into it"
+    )
+}
+
+/// The parent's side of one subprocess's socket as every bridge thread shares
+/// it: the framed writer, whether the parent has given up on the subprocess,
+/// and the links the subprocess still owes an answer for — which the reader
+/// routes answers to and giving up refuses.
+///
+/// The writer's lock keeps two threads from interleaving halves of a
+/// length-prefixed frame.
+struct ParentSideOfOneSubprocessBridgeSharedByItsThreads {
+    processor_id: String,
+    framed_socket_writer: parking_lot::Mutex<BufWriter<UnixStream>>,
+    /// Shut down outside the writer's lock, so teardown never waits behind a
+    /// write the subprocess is not reading.
+    socket_for_shutting_down: UnixStream,
+    the_subprocess_was_given_up_on: AtomicBool,
+    links_awaiting_their_wire_reply: LinksAwaitingTheirOutOfProcessWireReply,
+}
+
+impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
+    fn over(parent_end: UnixStream, processor_id: String) -> Result<Self> {
+        let socket_for_shutting_down = parent_end.try_clone().map_err(|e| {
+            Error::Runtime(format!(
+                "failed to clone escalate socketpair for shutdown: {e}"
+            ))
+        })?;
+        Ok(Self {
+            processor_id,
+            framed_socket_writer: parking_lot::Mutex::new(BufWriter::new(parent_end)),
+            socket_for_shutting_down,
+            the_subprocess_was_given_up_on: AtomicBool::new(false),
+            links_awaiting_their_wire_reply: LinksAwaitingTheirOutOfProcessWireReply::default(),
+        })
+    }
+
+    fn the_subprocess_was_given_up_on(&self) -> bool {
+        self.the_subprocess_was_given_up_on.load(Ordering::SeqCst)
+    }
+
+    /// Give the subprocess up and refuse every link it still owed an answer
+    /// for: a link whose far side is gone with the answer outstanding never
+    /// reads `wired`.
+    fn give_up_on_the_subprocess(&self, how_the_subprocess_was_noticed_gone: &str) {
+        self.the_subprocess_was_given_up_on
+            .store(true, Ordering::SeqCst);
+        refuse_every_link_this_subprocess_still_owed(
+            &self.links_awaiting_their_wire_reply,
+            &self.processor_id,
+            how_the_subprocess_was_noticed_gone,
+        );
+    }
+
+    /// Write one frame whole, giving the subprocess up when it cannot be
+    /// written.
+    fn write_frame_or_give_up_on_the_subprocess(&self, frame: &serde_json::Value) -> Result<()> {
+        let written = write_frame(&mut *self.framed_socket_writer.lock(), frame);
+        if written.is_err() {
+            self.give_up_on_the_subprocess("is gone");
+        }
+        written
+    }
+
+    fn shut_the_socket_down(&self) {
+        let _ = self
+            .socket_for_shutting_down
+            .shutdown(std::net::Shutdown::Both);
+    }
+}
+
+/// Bridge for one subprocess. Drop the value to tear its threads down: the
+/// socket is shut down, the reader sees EOF, and the escalate worker leaves
+/// once the reader has.
+pub struct SubprocessBridge {
+    parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
+    lifecycle_rx: Receiver<serde_json::Value>,
+    registry: Arc<EscalateHandleRegistry>,
+    /// Held for teardown: the drop path evicts what the registry's acquires
+    /// entered into the parent's texture cache, which needs the same
+    /// capability the escalate worker dispatches against.
+    sandbox: GpuContextLimitedAccess,
+    /// The helper's shared native service leases, given back with the bridge.
+    shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
+    frame_demultiplexing_reader_thread: Option<JoinHandle<()>>,
+    escalate_worker_thread: Option<JoinHandle<()>>,
+    /// The native escalate socket, shut down with the bridge so its worker
+    /// sees EOF.
+    native_escalate_socket_for_shutting_down: Option<UnixStream>,
+    native_escalate_worker_thread: Option<JoinHandle<()>>,
+}
+
+impl SubprocessBridge {
+    /// [`Self::new`] for a helper whose node carries no catalog entries, for a
+    /// caller outside the engine that wires a bridge over its own socketpair.
+    pub fn for_a_helper_whose_node_carries_no_catalog_entries(
+        stream: UnixStream,
+        sandbox: GpuContextLimitedAccess,
+        processor_id: String,
+    ) -> Result<Self> {
+        Self::new(
+            stream,
+            None,
+            sandbox,
+            processor_id,
+            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        )
+    }
+
+    /// Wrap a socketpair parent end and spawn the reader thread and the
+    /// escalate worker, which dispatches against `sandbox` and what the
+    /// helper's node reaches; with `native_escalate_stream`, a second worker
+    /// answers the helper's native code over it, against the same registry.
+    pub(crate) fn new(
+        stream: UnixStream,
+        native_escalate_stream: Option<UnixStream>,
+        sandbox: GpuContextLimitedAccess,
+        processor_id: String,
+        what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches,
+    ) -> Result<Self> {
+        let shared_native_service_leases =
+            Arc::clone(&what_the_node_reaches.shared_native_service_leases);
+        let read_half = stream.try_clone().map_err(|e| {
+            Error::Runtime(format!(
+                "failed to clone escalate socketpair for reader: {e}"
+            ))
+        })?;
+        let parent_side = Arc::new(ParentSideOfOneSubprocessBridgeSharedByItsThreads::over(
+            stream,
+            processor_id,
+        )?);
+        let registry = EscalateHandleRegistry::for_a_helper_whose_output_links_keep(Arc::clone(
+            &what_the_node_reaches.output_frames_kept_by_its_output_links,
+        ));
+        let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
+
+        let dispatch_registry = Arc::clone(&registry);
+        let dispatch_sandbox = sandbox.clone();
+        let escalate_request_dispatch: EscalateRequestDispatch = Arc::new(move |frame| {
+            process_bridge_message(
+                &dispatch_sandbox,
+                &dispatch_registry,
+                &what_the_node_reaches,
+                frame,
+            )
+        });
+        let SubprocessBridgeThreads {
+            frame_demultiplexing_reader_thread,
+            escalate_worker_thread,
+        } = spawn_the_reader_and_the_escalate_worker(
+            BufReader::new(read_half),
+            Arc::clone(&parent_side),
+            Arc::clone(&escalate_request_dispatch),
+            lifecycle_tx,
+        )?;
+        let (native_escalate_socket_for_shutting_down, native_escalate_worker_thread) =
+            match native_escalate_stream {
+                Some(native_escalate_stream) => {
+                    let socket_for_shutting_down =
+                        native_escalate_stream.try_clone().map_err(|e| {
+                            Error::Runtime(format!(
+                                "failed to clone the native escalate socket for shutdown: {e}"
+                            ))
+                        })?;
+                    let worker = spawn_the_native_escalate_worker(
+                        native_escalate_stream,
+                        Arc::clone(&parent_side),
+                        escalate_request_dispatch,
+                    )?;
+                    (Some(socket_for_shutting_down), Some(worker))
+                }
+                None => (None, None),
+            };
+
+        Ok(Self {
+            parent_side,
+            lifecycle_rx,
+            registry,
+            sandbox,
+            shared_native_service_leases,
+            frame_demultiplexing_reader_thread: Some(frame_demultiplexing_reader_thread),
+            escalate_worker_thread: Some(escalate_worker_thread),
+            native_escalate_socket_for_shutting_down,
+            native_escalate_worker_thread,
+        })
+    }
+
+    /// Write a length-prefixed JSON lifecycle command to the subprocess. Link
+    /// wiring goes through [`SubprocessBridgeLinkDelivery`] instead.
+    pub fn send(&self, msg: &serde_json::Value) -> Result<()> {
+        if self.parent_side.the_subprocess_was_given_up_on() {
+            return Err(Error::Runtime(format!(
+                "[{}] bridge marked dead, cannot send",
+                self.parent_side.processor_id
+            )));
+        }
+        self.parent_side
+            .write_frame_or_give_up_on_the_subprocess(msg)
+    }
+
+    /// Block until the next lifecycle-tagged message arrives.
+    pub fn recv_lifecycle(&self) -> Result<serde_json::Value> {
+        self.lifecycle_rx.recv().map_err(|_| {
+            self.mark_dead();
+            Error::Runtime(format!(
+                "[{}] subprocess escalate socket closed before reply",
+                self.parent_side.processor_id
+            ))
+        })
+    }
+
+    /// Block up to `timeout` for the next lifecycle-tagged message.
+    pub fn recv_lifecycle_timeout(
+        &self,
+        timeout: Duration,
+    ) -> std::result::Result<serde_json::Value, RecvTimeoutError> {
+        self.lifecycle_rx.recv_timeout(timeout)
+    }
+
+    /// Mark the bridge dead; subsequent sends return immediately, and every
+    /// link this subprocess was still to answer for is refused.
+    pub fn mark_dead(&self) {
+        self.parent_side.give_up_on_the_subprocess("is gone");
+    }
+
+    pub fn is_dead(&self) -> bool {
+        self.parent_side.the_subprocess_was_given_up_on()
+    }
+
+    /// How a link wired after this subprocess's setup command reaches it, for
+    /// its wiring envelope to hand links over through.
+    pub fn link_delivery_to_this_subprocess(
+        &self,
+        processor_display_name: &str,
+    ) -> SubprocessBridgeLinkDelivery {
+        SubprocessBridgeLinkDelivery {
+            processor_display_name: processor_display_name.to_string(),
+            parent_side: Arc::clone(&self.parent_side),
+        }
+    }
+}
+
+impl Drop for SubprocessBridge {
+    fn drop(&mut self) {
+        self.mark_dead();
+        // Given up on and shut down before draining: the escalate worker passes
+        // over every request still queued, and the reader queues nothing past
+        // EOF, because an acquire landing after the drain would strand its
+        // cache entry. A request the worker is already executing can still slip
+        // through; closing that too would mean joining the worker, which this
+        // path deliberately never blocks on.
+        self.parent_side.shut_the_socket_down();
+        if let Some(native_escalate_socket) = &self.native_escalate_socket_for_shutting_down {
+            let _ = native_escalate_socket.shutdown(std::net::Shutdown::Both);
+        }
+        // Run the release path's kind-specific cleanup for everything the
+        // helper never released — a crashed child must not strand cache
+        // entries in a GpuContext that outlives every respawn, nor
+        // surface-share registrations and their fd dups: the host's own
+        // connection registered those on the helper's behalf, so the
+        // service's disconnect watchdog rightly never reclaims them.
+        release_everything_a_torn_down_helper_held(&self.sandbox, &self.registry);
+        self.shared_native_service_leases.release_every_lease();
+        // Detached, never joined: the OS reaps both on process exit.
+        self.frame_demultiplexing_reader_thread.take();
+        self.escalate_worker_thread.take();
+        self.native_escalate_worker_thread.take();
+    }
+}
+
+/// Per-line reader that tags each non-empty line with
+/// `intercepted=true, channel=<channel>, source=python|deno` and emits
+/// it as a `tracing::warn!` event. Used by the Python and Deno spawn
+/// paths on the subprocess's fd1 (stdout) and fd2 (stderr). `channel`
+/// must be `"fd1"` or `"fd2"`; the source and tracing target are
+/// inferred from `thread_prefix` (`"py-…"` → python, `"dn-…"` → deno).
+///
+/// Captures the caller's current [`tracing::Dispatch`] and installs it
+/// as the reader thread's default, so events route through whatever
+/// subscriber the owning runtime installed (global for production,
+/// thread-local for `init_for_tests`), and carries the caller's stream log
+/// route, so each line lands in the log of the stream whose helper wrote it —
+/// the stream's log stays open until the reader reaches the pipe's end.
+pub fn spawn_fd_line_reader<R>(
+    reader: R,
+    thread_prefix: &str,
+    channel: &'static str,
+    processor_id: &str,
+) -> Option<JoinHandle<()>>
+where
+    R: Read + Send + 'static,
+{
+    let proc_id = processor_id.to_string();
+    let name = format!(
+        "{}-{}",
+        thread_prefix,
+        processor_id_shortened_for_a_thread_name(processor_id)
+    );
+    let (source, target): (&'static str, &'static str) = if thread_prefix.starts_with("py") {
+        ("python", "streamlib::polyglot::python")
+    } else {
+        ("deno", "streamlib::polyglot::deno")
+    };
+    let dispatch = tracing::dispatcher::get_default(|d| d.clone());
+
+    thread::Builder::new()
+        .name(name)
+        .spawn(
+            carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
+                use std::io::BufRead;
+                tracing::dispatcher::with_default(&dispatch, || {
+                    let reader = BufReader::new(reader);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(text) if !text.is_empty() => {
+                                emit_intercepted_line(target, channel, source, &proc_id, &text);
+                            }
+                            Err(_) => break,
+                            _ => {}
+                        }
+                    }
+                });
+            }),
+        )
+        .ok()
+}
+
+fn emit_intercepted_line(
+    target: &'static str,
+    channel: &'static str,
+    source: &'static str,
+    processor_id: &str,
+    text: &str,
+) {
+    // `tracing` macros require a literal target, so dispatch on the two
+    // known targets here. Fields are identical across both call sites.
+    match target {
+        "streamlib::polyglot::python" => tracing::warn!(
+            target: "streamlib::polyglot::python",
+            intercepted = true,
+            channel = channel,
+            source = source,
+            processor_id = %processor_id,
+            "{}",
+            text
+        ),
+        _ => tracing::warn!(
+            target: "streamlib::polyglot::deno",
+            intercepted = true,
+            channel = channel,
+            source = source,
+            processor_id = %processor_id,
+            "{}",
+            text
+        ),
+    }
+}
+
+fn write_frame<W: Write>(writer: &mut W, msg: &serde_json::Value) -> Result<()> {
+    let bytes = serde_json::to_vec(msg)
+        .map_err(|e| Error::Runtime(format!("failed to serialize bridge message: {e}")))?;
+    let len = bytes.len() as u32;
+    writer
+        .write_all(&len.to_be_bytes())
+        .map_err(|e| Error::Runtime(format!("failed to write bridge frame: {e}")))?;
+    writer
+        .write_all(&bytes)
+        .map_err(|e| Error::Runtime(format!("failed to write bridge frame: {e}")))?;
+    writer
+        .flush()
+        .map_err(|e| Error::Runtime(format!("failed to flush bridge frame: {e}")))?;
+    Ok(())
+}
+
+fn read_frame<R: Read>(reader: &mut R) -> Result<serde_json::Value> {
+    let mut len_buf = [0u8; 4];
+    reader
+        .read_exact(&mut len_buf)
+        .map_err(|e| Error::Runtime(format!("bridge read failed: {e}")))?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    let mut buf = vec![0u8; len];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| Error::Runtime(format!("bridge read failed: {e}")))?;
+    serde_json::from_slice(&buf)
+        .map_err(|e| Error::Runtime(format!("bridge frame decode failed: {e}")))
+}
+
+#[cfg(test)]
+mod tests;
