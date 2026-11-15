@@ -90,10 +90,9 @@ impl PythonGpuSurfaceHandle {
     /// the one it naturally serves.
     pub(super) fn dlpack_device_of_the_natural_device_side(
         &self,
-        python: Python<'_>,
-        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+        _python: Python<'_>,
+        _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
     ) -> PyResult<(i32, i32)> {
-        let _ = (python, owned_memory);
         Ok(dlpack_device_as_python_pair(METAL_DLPACK_DEVICE))
     }
 
@@ -114,6 +113,19 @@ impl PythonGpuSurfaceHandle {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         metal_dlpack_capsule(python, owned_memory, exchange_shape, read_only)
+    }
+
+    /// A staged edit exists only on Linux; the IOSurface's own memory holds
+    /// whatever the scope wrote.
+    pub(super) fn discard_the_staged_write_a_propagating_exception_left(&self) {}
+
+    /// A lock over a lock closes the first scope's doors: its Metal writes
+    /// retire and its IOSurface lock goes, so this scope opens its own.
+    pub(super) fn close_the_previous_lock_scope_before_a_new_one(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<()> {
+        self.settle_this_lock_scopes_pending_writes(python)
     }
 }
 

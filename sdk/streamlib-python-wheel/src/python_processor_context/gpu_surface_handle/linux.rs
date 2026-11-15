@@ -94,9 +94,8 @@ impl PythonGpuSurfaceHandle {
     /// On Linux that publishes a staged edit through whichever staging holds
     /// it.
     ///
-    /// A tensor surface has no lock scope; its settle orders the CUDA or
-    /// torch-MPS writes a writable capsule took ahead of every other holder's
-    /// read.
+    /// A tensor surface has no lock scope; its settle orders the CUDA writes
+    /// a writable capsule took ahead of every other holder's read.
     pub(super) fn settle_this_lock_scopes_pending_writes(
         &self,
         python: Python<'_>,
@@ -212,6 +211,25 @@ impl PythonGpuSurfaceHandle {
         let capsule =
             device_dlpack_capsule(python, owned_memory, prepared, exchange_shape, read_only)?;
         Ok(capsule)
+    }
+
+    /// Drop the edit a scope staged when the scope ends under a propagating
+    /// exception, so `close` has nothing to publish.
+    pub(super) fn discard_the_staged_write_a_propagating_exception_left(&self) {
+        if let Some(owned_memory) = self.owned_memory.lock().clone() {
+            owned_memory.pending_staged_write_back().discard();
+        }
+    }
+
+    /// A fresh scope: whatever the staging holds is a previous one's read-in,
+    /// and this scope owes its own.
+    pub(super) fn close_the_previous_lock_scope_before_a_new_one(
+        &self,
+        _python: Python<'_>,
+    ) -> PyResult<()> {
+        self.cpu_staging_holds_this_locks_frame
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
     }
 }
 

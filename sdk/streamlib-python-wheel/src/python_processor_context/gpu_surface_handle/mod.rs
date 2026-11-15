@@ -307,7 +307,6 @@ impl PythonGpuSurfaceHandle {
             return Ok(None);
         }
         let owned_memory = self.owned_memory()?;
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
         python.detach(|| {
             Ok(Some(
@@ -356,11 +355,8 @@ impl PythonGpuSurfaceHandle {
         traceback: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<bool> {
         let _ = (exception, traceback);
-        #[cfg(target_os = "linux")]
-        if left_by_a_propagating_exception(exception_type)
-            && let Some(owned_memory) = self.owned_memory.lock().clone()
-        {
-            owned_memory.pending_staged_write_back().discard();
+        if left_by_a_propagating_exception(exception_type) {
+            self.discard_the_staged_write_a_propagating_exception_left();
         }
         let closed = self.close(python);
         if left_by_a_propagating_exception(exception_type) {
@@ -386,10 +382,7 @@ impl PythonGpuSurfaceHandle {
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         self.refuse_a_pixel_door_on_a_tensor_surface()?;
         let owned_memory = self.owned_memory()?;
-        // A lock over a lock closes the first scope's doors: its Metal writes
-        // retire and its IOSurface lock goes, so this scope opens its own.
-        #[cfg(target_os = "macos")]
-        self.settle_this_lock_scopes_pending_writes(python)?;
+        self.close_the_previous_lock_scope_before_a_new_one(python)?;
         python.detach(|| -> PyResult<()> {
             // The gate serves both sides, and neither is refused here for
             // want of a host mapping: a surface the CPU cannot address
@@ -399,11 +392,6 @@ impl PythonGpuSurfaceHandle {
             if !owned_memory.cpu_reach_goes_through_the_export_staging() {
                 owned_memory.host_visible_pixel_plane()?;
             }
-            // A fresh scope: whatever the staging holds is a previous
-            // one's read-in, and this scope owes its own.
-            #[cfg(target_os = "linux")]
-            self.cpu_staging_holds_this_locks_frame
-                .store(false, std::sync::atomic::Ordering::SeqCst);
             self.cpu_access.lock_for(read_only);
             Ok(())
         })
@@ -496,7 +484,6 @@ impl PythonGpuSurfaceHandle {
             None => !self.natural_side_is_device(python, &owned_memory),
         };
         if wants_host {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
             self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
             return host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
         }

@@ -12,6 +12,17 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 
 impl PythonGpuSurfaceHandle {
+    /// No surface exchange exists here, so the host mapping is the only door
+    /// and opening it does nothing.
+    pub(super) fn open_the_cpu_door_over_this_frame(
+        &self,
+        _python: Python<'_>,
+        _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<()> {
+        Ok(())
+    }
+
+    /// No surface exchange exists here, so a lock scope leaves nothing pending.
     pub(super) fn settle_this_lock_scopes_pending_writes(
         &self,
         _python: Python<'_>,
@@ -28,19 +39,16 @@ impl PythonGpuSurfaceHandle {
         false
     }
 
-    /// The DLPack device of this surface's device side, once the handle decided that side is
-    /// the one it naturally serves.
+    /// No surface here has a device side, so the host answers.
     pub(super) fn dlpack_device_of_the_natural_device_side(
         &self,
-        python: Python<'_>,
-        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+        _python: Python<'_>,
+        _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
     ) -> PyResult<(i32, i32)> {
-        let _ = (python, owned_memory);
         Ok(dlpack_device_as_python_pair(HOST_VISIBLE_DLPACK_DEVICE))
     }
 
-    /// The DLPack capsule over this surface's device side, for a consumer that did not ask for
-    /// the host.
+    /// No surface here has a device side, so the host's capsule answers.
     pub(super) fn dlpack_capsule_on_the_device_side<'py>(
         &self,
         python: Python<'py>,
@@ -49,5 +57,16 @@ impl PythonGpuSurfaceHandle {
         read_only: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         host_visible_dlpack_capsule(python, owned_memory, exchange_shape, read_only)
+    }
+
+    /// No staging exists here, so there is no staged edit to discard.
+    pub(super) fn discard_the_staged_write_a_propagating_exception_left(&self) {}
+
+    /// No surface exchange exists here, so a lock scope has no door to close.
+    pub(super) fn close_the_previous_lock_scope_before_a_new_one(
+        &self,
+        _python: Python<'_>,
+    ) -> PyResult<()> {
+        Ok(())
     }
 }
