@@ -283,9 +283,9 @@ pub mod platform {
 // so the same emit-paths work in both compilation contexts.
 //
 // External consumers see this crate's items as `streamlib::engine_internal::*`
-// (passthrough re-export from the SDK). They never reach for `streamlib::sdk::*`
-// in this crate directly — that namespace exists only for in-engine macro
-// path resolution.
+// (passthrough re-export from the SDK). The SDK re-exports this mirror's
+// `processors` module as its public `streamlib::sdk::processors`; the rest of
+// this namespace exists only for in-engine macro path resolution.
 
 pub mod sdk {
     pub use crate::core::context;
@@ -302,8 +302,8 @@ pub mod sdk {
     pub use crate::core::texture;
     pub use crate::core::utils;
 
-    /// Processors namespace: combines `core::processors`'s items with
-    /// platform-aliased processor types from the engine root.
+    /// Processor traits and specs from `core::processors`, with the port
+    /// markers and the `input`/`output` helpers from `core::graph`.
     pub mod processors {
         pub use crate::core::processors::{
             __generated_private, Config, ConfigValidationError, ContinuousProcessor,

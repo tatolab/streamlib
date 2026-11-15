@@ -72,8 +72,7 @@ pub mod sdk {
     // `core/mod.rs`) — those module paths are not reachable here OR
     // via `engine_internal::*` (Tier 3) by construction. Items inside
     // that ARE customer-facing are re-exported by the engine at its
-    // crate root and travel into the SDK via the top-level
-    // `pub use streamlib_engine::*` items below and the Tier-3
+    // crate root and travel into the SDK through the Tier-3
     // `engine_internal` namespace.
 
     pub use streamlib_engine::core::child_process_lifetime;
