@@ -20,7 +20,6 @@ use super::*;
 /// reproduction, at pool level.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_leased_slot_is_never_rehanded_to_its_producer() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -57,7 +56,6 @@ fn a_leased_slot_is_never_rehanded_to_its_producer() {
 /// memory first" half of the ruling.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn the_pool_grows_rather_than_rehanding_any_leased_slot() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -87,7 +85,6 @@ fn the_pool_grows_rather_than_rehanding_any_leased_slot() {
 /// producer's cadence.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn past_the_heap_budget_the_shared_pixel_buffer_pool_refuses_its_producer_at_once_rather_than_making_it_wait()
  {
     const FRAMES_THE_CHILD_HOLDS_WHILE_THE_SHARED_POOL_GROWS: usize = 68;
@@ -150,7 +147,6 @@ fn past_the_heap_budget_the_shared_pixel_buffer_pool_refuses_its_producer_at_onc
 /// acquire".
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn an_unreadable_lease_table_stops_the_pool_reusing_any_slot() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -179,7 +175,6 @@ fn an_unreadable_lease_table_stops_the_pool_reusing_any_slot() {
 /// ledger) alike.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn recycling_a_slot_retires_the_id_the_previous_frame_published() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -223,7 +218,6 @@ fn recycling_a_slot_retires_the_id_the_previous_frame_published() {
 /// would otherwise serve the slot's current texture under the dead id.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_retired_id_is_refused_even_with_no_lease_registry() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         println!("Skipping - no GPU device available");
@@ -285,7 +279,6 @@ fn a_retired_id_is_refused_even_with_no_lease_registry() {
 /// is then freed rather than handed out again.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_returned_slot_is_never_rehanded_while_its_last_frame_is_leased_and_is_freed_once_let_go() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;

@@ -42,7 +42,17 @@ use super::texture_pool::{PooledTextureHandle, TexturePool, TexturePoolDescripto
 
 mod compute_dispatch_batches;
 mod counters_and_diagnostics;
+#[cfg(target_os = "linux")]
+mod dma_buf_opaque_fd_and_host_mapping_acquisition;
 mod full_access;
+#[cfg(target_os = "linux")]
+mod full_access_dma_buf_and_opaque_fd_exports;
+#[cfg(target_os = "macos")]
+mod full_access_iosurface_imports;
+#[cfg(target_os = "macos")]
+mod iosurface_acquisition;
+#[cfg(target_os = "macos")]
+mod iosurface_check_in_and_out;
 mod kernels;
 mod limited_access;
 mod pixel_buffer_pool_manager;
@@ -50,6 +60,8 @@ mod pixel_buffer_pool_slot;
 mod pixel_buffers;
 mod ray_tracing;
 mod resource_acquisition;
+#[cfg(not(target_os = "macos"))]
+mod surface_check_in_and_out_refused_off_macos;
 mod surface_store_check_in_and_out;
 mod texture_registration;
 
@@ -490,26 +502,6 @@ impl GpuContext {
         let semaphore =
             crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(device, initial_value)?;
         Ok(Arc::new(semaphore))
-    }
-
-    /// Construct an OPAQUE_FD-exportable timeline semaphore against the
-    /// host's vulkan device. Backs
-    /// [`GpuContextFullAccess::create_exportable_timeline_semaphore`]
-    /// which is the FullAccess-callable entry point.
-    ///
-    /// The returned semaphore is created with
-    /// `VK_KHR_external_semaphore_fd` export support so its
-    /// `export_opaque_fd` can hand a fresh OPAQUE_FD to a subprocess
-    /// consumer (surface-share / CUDA cross-process sync).
-    #[cfg(target_os = "linux")]
-    pub fn create_exportable_timeline_semaphore(
-        &self,
-        initial_value: u64,
-    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        let device = self.device.inner.device();
-        let sem =
-            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(device, initial_value)?;
-        Ok(Arc::new(sem))
     }
 
     /// Initialize GPU context for the current platform.
