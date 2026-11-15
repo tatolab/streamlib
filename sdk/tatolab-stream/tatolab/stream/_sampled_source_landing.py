@@ -15,8 +15,8 @@ from typing import Union
 from ._gpu_protocols import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
-    GpuSurfaceHandle,
 )
+from ._gpu_surface_protocols import GpuSurfaceHandle
 from .node_output_texture_ring import NodeOutputTextureRing
 
 GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess]

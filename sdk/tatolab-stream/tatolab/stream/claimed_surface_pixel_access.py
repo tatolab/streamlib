@@ -22,8 +22,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
-from ._gpu_protocols import (
-    GpuContextLimitedAccess,
+from ._gpu_protocols import GpuContextLimitedAccess
+from ._gpu_surface_protocols import (
     GpuSurfaceCheckOutLease,
     GpuSurfaceDeviceTensorScope,
     GpuSurfaceHandle,
