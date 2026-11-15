@@ -123,9 +123,8 @@ impl Runner {
     /// level on the way.
     ///
     /// `has_ended` is read before the walk: the machine's level only rises
-    /// until the owner takes it, so the walk reaches every level the read saw,
-    /// and a request landing between the two is never seen by the wait and
-    /// left unwalked.
+    /// until the owner takes it, so the walk reaches every level the read saw
+    /// and no request the wait sees is left unwalked.
     pub(super) fn block_until(&self, has_ended: &dyn Fn() -> bool) {
         let observe = || {
             let ended = has_ended();
