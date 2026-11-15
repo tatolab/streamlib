@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
 use super::HostVulkanDevice;
@@ -40,7 +39,6 @@ impl HostVulkanDevice {
     /// shaders. The single-threaded pipeline-create funnel supersedes it
     /// outright; don't grow it (e.g. a ray-tracing probe) on speculation
     /// before necessity is shown.
-    #[cfg(target_os = "linux")]
     pub(super) fn prewarm_pipeline_compiler(device: &Arc<Self>) {
         const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
         // Kitchen-sink layout — NOT modeled on any kernel. The driver's
@@ -92,7 +90,6 @@ impl HostVulkanDevice {
     /// color attachment via dynamic rendering, dynamic viewport/scissor —
     /// built and dropped purely for the compiler-init side effect.
     /// Non-fatal.
-    #[cfg(target_os = "linux")]
     pub(super) fn prewarm_graphics_pipeline(device: &Arc<Self>) {
         use crate::core::rhi::{
             AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState,

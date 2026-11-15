@@ -4,7 +4,9 @@
 #[cfg(target_os = "linux")]
 use super::*;
 #[cfg(target_os = "linux")]
-use crate::vulkan::rhi::vulkan_device::memory_import::refuse_a_file_descriptor_that_is_not_a_dma_buf;
+use crate::vulkan::rhi::vulkan_device::export_memory_pools::refuse_an_image_the_export_pools_memory_type_cannot_bind;
+#[cfg(target_os = "linux")]
+use crate::vulkan::rhi::vulkan_device::opaque_fd_memory_import_and_dma_buf_fd_refusal::refuse_a_file_descriptor_that_is_not_a_dma_buf;
 
 #[cfg(target_os = "linux")]
 #[test]

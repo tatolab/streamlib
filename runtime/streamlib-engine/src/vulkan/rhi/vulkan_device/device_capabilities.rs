@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#[cfg(target_os = "macos")]
-use vulkanalia::vk;
-
 use crate::vulkan::rhi::vulkan_kernel_capability_refusal::{
     VulkanSubgroupOperationSupport, ray_tracing_tier_absent_refusal,
 };
@@ -117,14 +114,5 @@ impl HostVulkanDevice {
     /// checked against each kernel stage before anything is built.
     pub(crate) fn subgroup_operation_support(&self) -> &VulkanSubgroupOperationSupport {
         &self.subgroup_operation_support
-    }
-
-    /// Whether `VK_EXT_metal_objects` was enabled — what an image over an
-    /// IOSurface and a timeline's Metal shared event both need.
-    #[cfg(target_os = "macos")]
-    pub fn supports_metal_objects_interop(&self) -> bool {
-        self.device
-            .extensions()
-            .contains(&vk::EXT_METAL_OBJECTS_EXTENSION.name)
     }
 }

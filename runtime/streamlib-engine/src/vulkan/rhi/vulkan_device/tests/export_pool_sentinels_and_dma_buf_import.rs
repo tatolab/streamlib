@@ -4,7 +4,9 @@
 #[cfg(target_os = "linux")]
 use super::*;
 #[cfg(target_os = "linux")]
-use crate::vulkan::rhi::vulkan_device::export_memory_pools::make_export_pool_buffer_sentinel;
+use crate::vulkan::rhi::vulkan_device::export_pool_sentinels::{
+    ExportPoolSentinelResource, make_export_pool_buffer_sentinel,
+};
 #[cfg(target_os = "linux")]
 use vma::Alloc as _;
 
