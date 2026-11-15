@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::iceoryx2::input_port_borrow_quota::DEFAULT_INPUT_PORT_BORROW_QUOTA;
 
 /// A message written as bytes reaches `read_raw` as its producer wrote it:
 /// the payload untouched, its stamp, and its group flag cleared then set.

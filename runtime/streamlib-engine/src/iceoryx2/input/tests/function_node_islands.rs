@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::iceoryx2::{
+    FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
+    FunctionNodeIslandOutputValue,
+};
 
 struct IslandAnsweringOneHalf;
 

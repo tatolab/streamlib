@@ -382,6 +382,8 @@ impl InputMailboxesInner {
     /// `None` rather than an error on an empty mailbox, unlike
     /// [`InputMailboxes::read_msgpack`]: a destination fanning in N links reads
     /// until its port runs dry, and an empty port is that loop ending.
+    ///
+    /// [`InputMailboxes::read_msgpack`]: super::InputMailboxes::read_msgpack
     pub fn read_msgpack_from_inbound_link<T: DeserializeOwned>(
         &self,
         port: &str,

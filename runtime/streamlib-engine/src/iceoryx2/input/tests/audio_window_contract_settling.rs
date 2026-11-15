@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::test_support::CapturedTracingWarnings;
 
 // =========================================================================
 // The audio window contract at the read seam, through real iceoryx2
