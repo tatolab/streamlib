@@ -13,13 +13,15 @@ use streamlib_surface_client::{
     SURFACE_SHARE_IMPORT_POOL_SLOT_OP, refusal_the_surface_share_service_answered,
 };
 
+use super::parent_and_surface_share_round_trips::SurfaceShareAnswer;
 use super::{
     GpuPoolSlotFrameClaimOfThisImporter, HelperCheckedOutPixelSurface, HelperCheckedOutSurface,
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceHeldAgainstProducerReuse, SurfaceShareAnswer, SurfaceShareTransferredHandle,
-    refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
+    HelperSurfaceHeldAgainstProducerReuse, refuse_check_out_the_service_declined,
+    required_positive_u32_check_out_metadata_field,
 };
 use streamlib_gpu_frame_import_client::{
+    SurfaceShareConnectionOfThisImporter, SurfaceShareTransferredHandle,
     pool_slot_of_a_published_frame_id, pool_slots_a_reply_lists_as_retired,
 };
 
@@ -330,7 +332,7 @@ impl Drop for HelperCheckedOutPixelSurface {
 impl HelperProcessGpuExchangeClient {
     /// The one exchange every surface-share request makes, over this
     /// helper's connection; see
-    /// [`SurfaceShareConnectionOfThisImporter::exchange`](streamlib_gpu_frame_import_client::SurfaceShareConnectionOfThisImporter::exchange).
+    /// [`SurfaceShareConnectionOfThisImporter::exchange`].
     pub(super) fn surface_share_exchange<DecidedWhileTheConnectionIsHeld>(
         &self,
         request: &serde_json::Value,
@@ -685,6 +687,22 @@ impl HelperProcessGpuExchangeClient {
                 ))
             }
         }
+    }
+}
+
+/// The connection to the surface-share service over the Mach service name
+/// the parent named.
+pub(super) fn surface_share_connection_over_the_channel_named(
+    surface_share_channel_name: std::ffi::OsString,
+) -> SurfaceShareConnectionOfThisImporter<HelperPoolSlotImport> {
+    SurfaceShareConnectionOfThisImporter::new(surface_share_channel_name)
+}
+
+impl HelperCheckedOutPixelSurface {
+    /// Where the CPU addresses this surface's pixels in this process, or
+    /// null when its import has no host mapping.
+    pub(crate) fn host_mapped_base_address(&self) -> *mut u8 {
+        self.iosurface_pool_slot_import.consumer_buffer.mapped_ptr()
     }
 }
 
