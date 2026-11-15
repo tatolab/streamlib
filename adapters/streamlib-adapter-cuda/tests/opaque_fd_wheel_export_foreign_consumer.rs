@@ -61,9 +61,9 @@ use streamlib_consumer_rhi::{
 };
 use vulkanalia::vk;
 
-/// Mirrors the probe's `SURFACE_WIDTH` × `SURFACE_HEIGHT` and
-/// `FILL_CONSTANT_RGBA` in `device_exchange_probes.py` — the wire
-/// metadata is asserted against these, so a drift fails loudly.
+/// Mirrors the probes' `SURFACE_WIDTH` × `SURFACE_HEIGHT` and
+/// `FILL_CONSTANT_RGBA` in `device_exchange_probe_shared_surfaces_and_reporting.py`
+/// — the wire metadata is asserted against these, so a drift fails loudly.
 const SURFACE_WIDTH_PIXELS: u32 = 64;
 const SURFACE_HEIGHT_PIXELS: u32 = 32;
 const FILL_CONSTANT_RGBA: [u8; 4] = [64, 128, 192, 255];
