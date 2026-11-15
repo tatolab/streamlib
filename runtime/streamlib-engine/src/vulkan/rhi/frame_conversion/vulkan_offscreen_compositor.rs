@@ -15,11 +15,13 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use crate::vulkan::rhi::command_recording_and_sync::vulkan_command_recorder::RhiCommandRecorder;
+use crate::vulkan::rhi::command_recording_and_sync::vulkan_pipeline_flags::{
+    VulkanAccess, VulkanStage,
+};
 use crate::vulkan::rhi::device::vulkan_device::HostVulkanDevice;
 use crate::vulkan::rhi::kernels::vulkan_graphics_kernel::{
     OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel,
 };
-use crate::vulkan::rhi::kernels::vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 
 /// How a source rectangle maps onto a destination of a different aspect ratio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

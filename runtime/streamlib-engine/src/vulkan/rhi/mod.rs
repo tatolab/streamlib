@@ -14,7 +14,7 @@
 //! FullAccess capability boundary is enforced by the type system.
 
 mod command_recording_and_sync;
-pub mod device;
+pub(crate) mod device;
 mod frame_conversion;
 mod kernels;
 pub(crate) mod memory_and_buffers;
@@ -63,7 +63,7 @@ pub use memory_and_buffers::vulkan_storage_binding::{
 
 pub use memory_and_buffers::vulkan_buffer_binding::VulkanBufferLike;
 
-pub use kernels::vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
+pub use command_recording_and_sync::vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 
 pub use device::vulkan_validation_messenger::VulkanValidationMessageCounts;
 
