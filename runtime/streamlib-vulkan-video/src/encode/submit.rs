@@ -476,7 +476,7 @@ impl SimpleEncoder {
                     FrameType::B => vk::video::STD_VIDEO_H264_SLICE_TYPE_B,
                 };
 
-                // Build StdVideoEncodeH264SliceHeader (required by spec, was NULL causing segfault)
+                // Build StdVideoEncodeH264SliceHeader (required by spec)
                 let mut slice_hdr_flags: vk::video::StdVideoEncodeH264SliceHeaderFlags =
                     std::mem::zeroed();
                 // Signal the reference index override in the slice header so the

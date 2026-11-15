@@ -11,7 +11,7 @@
 //! values derived from the encoder config's framerate.
 //!
 //! H.264 timing rides in the SPS VUI, which the session-parameter creation
-//! path now chains directly via `pSequenceParameterSetVui` (see
+//! path chains directly via `pSequenceParameterSetVui` (see
 //! `session_parameters.rs::create_session_parameters`). No post-write H.264 patching
 //! is required.
 
@@ -400,7 +400,7 @@ fn patch_h265_vps_nal(nal_bytes: &[u8], fps_num: u32, fps_den: u32) -> Vec<u8> {
 /// Patch the timing info in the cached H.265 VPS header bytes.
 ///
 /// Only the H.265 VPS is rewritten — `vps_num_units_in_tick` /
-/// `vps_time_scale`. H.264 SPS VUI timing is now produced directly by the
+/// `vps_time_scale`. H.264 SPS VUI timing is produced directly by the
 /// session-parameter creation path (`session_parameters.rs::create_session_parameters`
 /// chains `pSequenceParameterSetVui`), so calls with
 /// `codec_flag = ENCODE_H264` are a no-op and return the input unchanged.
@@ -416,7 +416,7 @@ pub(crate) fn patch_header_timing(
         return header.to_vec();
     }
     if codec_flag != vk::VideoCodecOperationFlagsKHR::ENCODE_H265 {
-        // H.264 timing now rides in the SPS VUI chain; nothing to patch.
+        // H.264 timing rides in the SPS VUI chain; nothing to patch.
         return header.to_vec();
     }
 
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn h264_patch_header_timing_is_no_op() {
-        // H.264 timing rides in the SPS VUI chain now; patch_header_timing
+        // H.264 timing rides in the SPS VUI chain; patch_header_timing
         // should pass the bytes through unchanged for H.264.
         let header = vec![
             0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1E, // SPS NAL (Baseline)

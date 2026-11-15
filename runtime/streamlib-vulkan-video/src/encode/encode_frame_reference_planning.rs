@@ -17,7 +17,8 @@ use super::config::FrameType;
 /// What [`SimpleEncoder::plan_the_frame_references`] settles for one frame before its commands
 /// are recorded: picture order, the reference lists and the DPB slots they occupy.
 pub(super) struct EncodeFrameReferencePlan {
-    /// The H.264 `frame_num` the codec DPB assigned.
+    /// The H.264 `frame_num`: the codec DPB's on the H.264 path, the frame count on the inline
+    /// path, and 0 for H.265.
     pub(super) h264_frame_num: u32,
     /// The H.264 picture order count.
     pub(super) h264_poc: i32,
