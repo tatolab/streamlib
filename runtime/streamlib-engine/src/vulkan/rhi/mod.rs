@@ -13,36 +13,28 @@
 //! cdylibs depend on `streamlib-consumer-rhi` directly so the
 //! FullAccess capability boundary is enforced by the type system.
 
-mod host_marker;
-mod vulkan_command_buffer;
-mod vulkan_command_queue;
-mod vulkan_device;
-mod vulkan_device_selection;
-mod vulkan_frame_allocation_device_memory_budget;
-mod vulkan_instance;
-#[cfg(target_os = "macos")]
-mod vulkan_metal_working_set_budget;
-mod vulkan_queue_submission_completion;
-mod vulkan_sync;
-mod vulkan_texture;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_upload_resources;
+mod command_recording_and_sync;
+pub mod device;
+mod frame_conversion;
+mod kernels;
+pub(crate) mod memory_and_buffers;
+mod textures_and_readback;
 
-pub use host_marker::HostMarker;
-pub use vulkan_command_buffer::VulkanCommandBuffer;
-pub use vulkan_command_queue::VulkanCommandQueue;
+pub use command_recording_and_sync::vulkan_command_buffer::VulkanCommandBuffer;
+pub use command_recording_and_sync::vulkan_command_queue::VulkanCommandQueue;
+pub(crate) use command_recording_and_sync::vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSnapshot;
+pub use device::host_marker::HostMarker;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
-pub use vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties};
-pub(crate) use vulkan_queue_submission_completion::HostVulkanQueueSubmissionsSnapshot;
+pub use device::vulkan_device::PixelBufferUploadFinalTextureLayout;
+pub use device::vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(unused_imports)]
-pub use vulkan_sync::HostVulkanTimelineSemaphore;
-#[allow(unused_imports)]
-pub use vulkan_texture::HostVulkanTexture;
+pub use command_recording_and_sync::vulkan_sync::HostVulkanTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_upload_resources::HostVulkanUploadResources;
+pub use memory_and_buffers::vulkan_upload_resources::HostVulkanUploadResources;
+#[allow(unused_imports)]
+pub use textures_and_readback::vulkan_texture::HostVulkanTexture;
 
 // Trait machinery + Consumer flavor — re-exported from the canonical
 // home in `streamlib-consumer-rhi`. Some entries appear unused inside
@@ -58,63 +50,50 @@ pub use streamlib_consumer_rhi::{
     VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 
-mod vulkan_blitter;
-pub use vulkan_blitter::VulkanBlitter;
+pub use textures_and_readback::vulkan_blitter::VulkanBlitter;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_tone_mapper;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_tone_mapper::VulkanToneMapper;
+pub use frame_conversion::vulkan_tone_mapper::VulkanToneMapper;
 
-pub(crate) mod vulkan_buffer;
-pub use vulkan_buffer::HostVulkanBuffer;
+pub use memory_and_buffers::vulkan_buffer::HostVulkanBuffer;
 
-mod vulkan_storage_binding;
-pub use vulkan_storage_binding::{
+pub use memory_and_buffers::vulkan_storage_binding::{
     VulkanIndexBindable, VulkanStorageBindable, VulkanUniformBindable, VulkanVertexBindable,
 };
 
-mod vulkan_buffer_binding;
-pub use vulkan_buffer_binding::VulkanBufferLike;
+pub use memory_and_buffers::vulkan_buffer_binding::VulkanBufferLike;
 
-mod vulkan_pipeline_flags;
-pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
+pub use kernels::vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 
-mod vulkan_validation_messenger;
-pub use vulkan_validation_messenger::VulkanValidationMessageCounts;
+pub use device::vulkan_validation_messenger::VulkanValidationMessageCounts;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_command_recorder;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
+pub use command_recording_and_sync::vulkan_command_recorder::{
+    ImageCopyRegion, RhiCommandRecorder,
+};
 // `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
 // for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
 #[cfg(target_os = "linux")]
-pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
+pub(crate) use command_recording_and_sync::vulkan_command_recorder::RhiCommandRecorderInner;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_offscreen_compositor;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_offscreen_compositor::{OffscreenCompositorScalingMode, VulkanOffscreenCompositor};
+pub use frame_conversion::vulkan_offscreen_compositor::{
+    OffscreenCompositorScalingMode, VulkanOffscreenCompositor,
+};
 
-mod vulkan_pixel_buffer_pool;
-pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
+pub use memory_and_buffers::vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
-mod vulkan_compute_kernel;
-mod vulkan_kernel_capability_refusal;
+pub use kernels::vulkan_compute_kernel::VulkanComputeKernel;
 pub use streamlib_consumer_rhi::SampledImageReadLayout;
-pub use vulkan_compute_kernel::VulkanComputeKernel;
 
-mod vulkan_graphics_kernel;
-mod vulkan_pipeline_cache_on_disk;
-pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
+pub use kernels::vulkan_graphics_kernel::{
+    OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_acceleration_structure;
+pub use kernels::vulkan_acceleration_structure::geometry_instance_flags_from_raw_bitmask;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_acceleration_structure::geometry_instance_flags_from_raw_bitmask;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_acceleration_structure::{
+pub use kernels::vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
 };
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
@@ -123,29 +102,17 @@ pub use vulkan_acceleration_structure::{
 // `Arc::decrement_strong_count`. Re-export at crate scope.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-mod vulkan_ray_tracing_kernel;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
+pub use kernels::vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
 
-mod vulkan_texture_readback;
-pub use vulkan_texture_readback::VulkanTextureReadback;
+pub use textures_and_readback::vulkan_texture_readback::VulkanTextureReadback;
 
-mod vulkan_color_converter;
-pub(crate) use vulkan_color_converter::image_to_nv12_buffer_dispatch_group_counts;
-pub use vulkan_color_converter::{COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter};
+pub(crate) use frame_conversion::vulkan_color_converter::image_to_nv12_buffer_dispatch_group_counts;
+pub use frame_conversion::vulkan_color_converter::{
+    COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter,
+};
 
 #[cfg(target_os = "macos")]
-mod vulkan_imported_iosurface_storage_buffer;
-#[cfg(target_os = "macos")]
-pub use vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
+pub use memory_and_buffers::vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
 
 #[cfg(target_os = "linux")]
-mod vulkan_host_mapping_read_by_gpu;
-#[cfg(target_os = "linux")]
-pub use vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;
-
-#[cfg(target_os = "linux")]
-pub mod drm_modifier_probe;
-
-#[cfg(all(test, target_os = "linux"))]
-mod dma_buf_export_test_device_fixture;
+pub use memory_and_buffers::vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;

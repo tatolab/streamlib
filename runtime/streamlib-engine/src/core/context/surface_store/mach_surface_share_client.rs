@@ -341,13 +341,14 @@ impl SurfaceStoreInner {
             crate::core::context::surface_share_wire_verbs::parse_vk_image_create_info_fields(
                 &answer,
             );
-        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
-            .get()
-            .ok_or_else(|| {
-                Error::NotSupported(format!(
-                    "{OPERATION}: HostVulkanDevice not initialized for import"
-                ))
-            })?;
+        let vulkan_device =
+            crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .get()
+                .ok_or_else(|| {
+                    Error::NotSupported(format!(
+                        "{OPERATION}: HostVulkanDevice not initialized for import"
+                    ))
+                })?;
         let vulkan_texture = crate::vulkan::rhi::HostVulkanTexture::from_iosurface(
             vulkan_device,
             iosurface,

@@ -1,0 +1,129 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! [`HostMarker`] — privilege flavor for host-side Vulkan resources.
+//!
+//! `HostMarker` lives in `streamlib` (not in `streamlib-consumer-rhi`)
+//! because its [`DevicePrivilege`] impl associates the marker with
+//! [`HostVulkanTexture`] and [`HostVulkanTimelineSemaphore`] —
+//! streamlib-side types that the consumer crate cannot name without a
+//! circular dep. Putting the marker here also keeps the orphan rule
+//! satisfied: at least one of the trait or the impl-target type is
+//! local.
+//!
+//! [`crate::vulkan::rhi::ConsumerMarker`] (the consumer flavor) is
+//! re-exported from `streamlib_consumer_rhi`.
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use streamlib_consumer_rhi::{DevicePrivilege, private as consumer_rhi_private};
+
+/// Privilege marker for host-side Vulkan resources — full RHI access
+/// (allocation, queue submit, modifier choice, kernel construction).
+pub struct HostMarker;
+
+// Seal the [`DevicePrivilege`] hierarchy across the two crates: the
+// supertrait `Sealed` lives in `streamlib-consumer-rhi::private` and
+// is implemented here for the streamlib-side marker so external
+// crates cannot invent their own privilege flavors.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl consumer_rhi_private::Sealed for HostMarker {}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl DevicePrivilege for HostMarker {
+    type TimelineSemaphore = crate::vulkan::rhi::HostVulkanTimelineSemaphore;
+    type Texture = crate::vulkan::rhi::HostVulkanTexture;
+    type Buffer = crate::vulkan::rhi::HostVulkanBuffer;
+}
+
+// Non-Linux: HostMarker still resolves but to phantom unit types for
+// platforms where the DMA-BUF / OPAQUE_FD machinery isn't built.
+// `ConsumerMarker` only exists on Linux today.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod placeholder {
+    use streamlib_consumer_rhi::{
+        DevicePrivilege, TextureFormat, VulkanRhiBuffer, VulkanTextureLike,
+        VulkanTimelineSemaphoreLike,
+    };
+
+    use super::HostMarker;
+
+    /// Phantom type for platforms where DMA-BUF / OPAQUE_FD primitives
+    /// aren't built. Stays uninstantiable so trait bounds resolve at
+    /// type-check time but no caller can construct one.
+    pub enum NotAvailableOnThisPlatform {}
+
+    impl DevicePrivilege for HostMarker {
+        type TimelineSemaphore = NotAvailableOnThisPlatform;
+        type Texture = NotAvailableOnThisPlatform;
+        type Buffer = NotAvailableOnThisPlatform;
+    }
+
+    impl VulkanTimelineSemaphoreLike for NotAvailableOnThisPlatform {
+        fn wait(&self, _value: u64, _timeout_ns: u64) -> streamlib_consumer_rhi::Result<()> {
+            match *self {}
+        }
+        fn signal_host(&self, _value: u64) -> streamlib_consumer_rhi::Result<()> {
+            match *self {}
+        }
+        fn current_value(&self) -> streamlib_consumer_rhi::Result<u64> {
+            match *self {}
+        }
+        fn semaphore(&self) -> vulkanalia::vk::Semaphore {
+            match *self {}
+        }
+    }
+
+    impl VulkanTextureLike for NotAvailableOnThisPlatform {
+        fn image(&self) -> Option<vulkanalia::vk::Image> {
+            match *self {}
+        }
+        fn chosen_drm_format_modifier(&self) -> u64 {
+            match *self {}
+        }
+        fn width(&self) -> u32 {
+            match *self {}
+        }
+        fn height(&self) -> u32 {
+            match *self {}
+        }
+        fn format(&self) -> TextureFormat {
+            match *self {}
+        }
+        fn vk_format(&self) -> vulkanalia::vk::Format {
+            match *self {}
+        }
+        fn vk_image_tiling(&self) -> vulkanalia::vk::ImageTiling {
+            match *self {}
+        }
+        fn vk_image_usage_flags(&self) -> vulkanalia::vk::ImageUsageFlags {
+            match *self {}
+        }
+        fn vk_memory(&self) -> vulkanalia::vk::DeviceMemory {
+            match *self {}
+        }
+        fn vk_memory_size(&self) -> vulkanalia::vk::DeviceSize {
+            match *self {}
+        }
+    }
+
+    impl VulkanRhiBuffer for NotAvailableOnThisPlatform {
+        fn buffer(&self) -> vulkanalia::vk::Buffer {
+            match *self {}
+        }
+        fn mapped_ptr(&self) -> *mut u8 {
+            match *self {}
+        }
+        fn size(&self) -> vulkanalia::vk::DeviceSize {
+            match *self {}
+        }
+        fn width(&self) -> u32 {
+            match *self {}
+        }
+        fn height(&self) -> u32 {
+            match *self {}
+        }
+        fn bytes_per_pixel(&self) -> u32 {
+            match *self {}
+        }
+    }
+}
