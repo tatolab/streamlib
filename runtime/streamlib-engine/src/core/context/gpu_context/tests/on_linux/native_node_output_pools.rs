@@ -16,7 +16,6 @@ use super::*;
 /// shape, and the shared pool itself, go on being served.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_same_shape() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -61,7 +60,6 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
 /// a frame its consumer lets go of serves the next one.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -127,7 +125,6 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
 /// process claims exactly that frame.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_native_nodes_frame_names_its_slots_claim_table_row_at_the_generation_it_published() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the native node claim-table row test skips");
@@ -181,7 +178,6 @@ fn a_native_nodes_frame_names_its_slots_claim_table_row_at_the_generation_it_pub
 /// ring then grows rather than refusing its own producers.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn the_shared_pixel_buffer_pool_grows_when_native_nodes_have_borrowed_every_slot_of_a_shape() {
     let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -226,7 +222,6 @@ fn the_shared_pixel_buffer_pool_grows_when_native_nodes_have_borrowed_every_slot
 /// back to that shape's shared ring and borrows the new shape's.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_native_nodes_shape_change_returns_the_old_shapes_slots() {
     let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;

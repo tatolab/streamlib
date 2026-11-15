@@ -9,7 +9,6 @@ use super::*;
 /// once it is let go rather than after the idle window.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back_until_let_go() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the native node teardown freeing test skips");
@@ -112,7 +111,6 @@ fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back
 /// the next acquire once let go.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_stopped_streams_pool_entries_are_freed_and_their_ids_retired() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the stopped stream freeing test skips");
@@ -235,7 +233,6 @@ fn a_stopped_streams_pool_entries_are_freed_and_their_ids_retired() {
 /// with no acquire after it.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_stopped_streams_entry_leased_until_its_helpers_connection_closes_is_freed_by_the_stop() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the leased stopped stream freeing test skips");
@@ -291,7 +288,6 @@ fn a_stopped_streams_entry_leased_until_its_helpers_connection_closes_is_freed_b
 /// the next acquire then destroys it.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_freed_pixel_buffer_slot_whose_canvas_a_reader_holds_is_destroyed_only_once_let_go() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -359,7 +355,6 @@ fn a_freed_pixel_buffer_slot_whose_canvas_a_reader_holds_is_destroyed_only_once_
 /// one of each.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_freed_entry_is_destroyed_only_once_the_gpu_work_submitted_before_its_release_completes() {
     use crate::core::rhi::VulkanLayout;
     use crate::host_rhi::{VulkanAccess, VulkanStage};
@@ -513,7 +508,6 @@ fn a_freed_entry_is_destroyed_only_once_the_gpu_work_submitted_before_its_releas
 /// after the idle window.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn a_pixel_buffer_slot_flagged_through_its_buffer_skips_the_idle_window() {
     let Some((gpu, _check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {
         return;
@@ -555,7 +549,6 @@ fn a_pixel_buffer_slot_flagged_through_its_buffer_skips_the_idle_window() {
 /// releasing its registration and its cached frame and retiring its id.
 /// GPU-gated: skips when no device is present.
 #[test]
-#[cfg(target_os = "linux")]
 fn an_entry_unused_past_the_idle_window_is_freed_and_releases_its_registration() {
     let Ok(gpu) = GpuContext::init_for_platform() else {
         tracing::warn!("no GPU device, so the idle window freeing test skips");
