@@ -10,7 +10,7 @@ use parking_lot::{Condvar, Mutex};
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
-use crate::core::context::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
+use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::HowItsHelpersRanAFunctionNode;

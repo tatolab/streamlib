@@ -25,7 +25,7 @@ use parking_lot::Mutex;
 use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
 use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
 use crate::core::color::{ColorSpaceKind, H273ColorVui, ResolveH273ColorVuiDefaults};
-use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
+use crate::core::context::capture_and_playback_devices::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
 use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
     GpuContextLimitedAccess, VideoCaptureInstantResolver, VideoCaptureStreamFormat,

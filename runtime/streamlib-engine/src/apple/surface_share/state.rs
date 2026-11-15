@@ -13,7 +13,7 @@ use streamlib_surface_client::OwnedMachSendRight;
 
 use super::CrossProcessTimelinePairsBySurface;
 use crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads;
-use crate::core::context::surface_share_wire_verbs::VkImageCreateInfoFields;
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::VkImageCreateInfoFields;
 use crate::core::context::{SurfaceCheckOutLeaseRegistry, SurfaceShareRegistrationsByRuntime};
 use crate::core::rhi::pool_slot_key_of_surface_id;
 

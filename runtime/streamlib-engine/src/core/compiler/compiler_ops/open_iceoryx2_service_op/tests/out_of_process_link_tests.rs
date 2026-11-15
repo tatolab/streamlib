@@ -468,7 +468,7 @@ fn a_wired_output_link_keeps_room_in_its_helpers_pools_until_it_is_disconnected(
     let newest_delivery = DeliveryProfile::Newest.resolve();
     assert_eq!(
         kept_by_the_sources_output_links.kept_by_every_output_link(),
-        crate::core::context::processor_output_surface_pool::OutputFramesKeptByOutputLinks {
+        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByOutputLinks {
             queued_in_their_mailboxes: newest_delivery.depth,
             borrowed_past_their_mailboxes: newest_delivery.borrow_quota,
         }

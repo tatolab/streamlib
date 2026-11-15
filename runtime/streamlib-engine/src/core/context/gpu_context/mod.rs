@@ -35,10 +35,12 @@ impl RhiBlitter for NoOpBlitter {
     fn clear_cache(&self) {}
 }
 
-use super::lease_aware_pool_slot_ring::LeaseAwarePoolMintedFrameGenerations;
-use super::shared_pool_entry_freeing::LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES;
-use super::surface_store::SurfaceStore;
-use super::texture_pool::{PooledTextureHandle, TexturePool, TexturePoolDescriptor};
+use super::surfaces_and_their_stores::surface_store::SurfaceStore;
+use super::texture_pools_and_rings::lease_aware_pool_slot_ring::LeaseAwarePoolMintedFrameGenerations;
+use super::texture_pools_and_rings::shared_pool_entry_freeing::LONGEST_A_STOPPING_STREAM_WAITS_FOR_THE_CHECK_OUT_LEASES_ON_ITS_POOL_ENTRIES;
+use super::texture_pools_and_rings::texture_pool::{
+    PooledTextureHandle, TexturePool, TexturePoolDescriptor,
+};
 
 mod compute_dispatch_batches;
 mod counters_and_diagnostics;

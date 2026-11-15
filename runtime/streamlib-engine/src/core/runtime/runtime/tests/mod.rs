@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::runtime::RuntimeShutdownEscalation;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
-use crate::core::runtime::loaded_stream::LoadedStreamInThisRuntime;
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::LoadedStreamInThisRuntime;
 use crate::core::runtime::{HowALoadedStreamEnded, RuntimeStatus};
 use crate::core::{Error, Result};
 use serial_test::serial;

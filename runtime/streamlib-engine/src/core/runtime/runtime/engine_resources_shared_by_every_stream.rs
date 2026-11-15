@@ -16,10 +16,10 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 use crate::core::context::GpuContext;
 use crate::core::runtime::MachineName;
 use crate::core::runtime::RuntimeUniqueId;
-use crate::core::runtime::loaded_stream::{
+use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
     LoadedStreamInThisRuntime, LoadedStreamOutOfTheTableUntilItsEndIsRecorded,
 };
-use crate::core::runtime::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -234,7 +234,7 @@ impl EngineResourcesSharedByEveryStream {
     /// stream's — from the engine's surface-sharing service.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn release_every_surface_registered_by(&self, owner_key: &str) {
-        crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by(
+        crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::release_every_surface_registered_by(
             self.surface_share_registrations_by_owner.as_ref(),
             owner_key,
         );

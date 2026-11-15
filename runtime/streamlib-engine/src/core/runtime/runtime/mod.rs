@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use super::loaded_stream::LoadedStreamInThisRuntime;
-use super::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
+use super::streams_loaded_in_this_runtime::loaded_stream::LoadedStreamInThisRuntime;
+use super::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
 use super::{RuntimeShutdownEscalation, StreamEnvironment, StreamLocation};
 use crate::core::context::{CaptureDeviceAccessPrompting, GpuContext};
 use crate::core::graph::cast_exposed_name_to_url_safe;

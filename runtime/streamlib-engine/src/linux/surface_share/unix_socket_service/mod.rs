@@ -31,7 +31,7 @@ use streamlib_surface_client::{
 };
 
 use super::gpu_pool_claimant_process::GpuPoolClaimantProcess;
-use crate::core::context::surface_share_wire_verbs::{
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::{
     SURFACE_WIRE_FIELD_EXPORTING_DEVICE_UUID, SURFACE_WIRE_FIELD_VK_MEMORY_TYPE_INDEX,
     answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
     latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
@@ -44,7 +44,7 @@ use crate::core::context::{GpuPoolClaimantProcessId, SurfaceCheckOutLeaseHolderI
 
 use super::state::{SurfacePlaneCheckout, SurfaceRegistration, SurfaceShareState};
 #[cfg(test)]
-use crate::core::context::surface_share_wire_verbs::{
+use crate::core::context::surfaces_and_their_stores::surface_share_wire_verbs::{
     VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT,
     VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
     VK_IMAGE_USAGE_DEFAULT,

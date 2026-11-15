@@ -207,7 +207,7 @@ fn a_peer_holding_the_pool_slot_import_takes_the_lease_and_receives_no_fds() {
 /// fd holds the slot in the engine's own table.
 #[test]
 fn a_claim_table_hand_over_maps_the_engines_rows_and_names_every_leased_slot() {
-    use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+    use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
     use std::os::fd::OwnedFd;
     use streamlib_ipc_types::GpuPoolClaimTableMemfd;
     use streamlib_ipc_types::GpuPoolClaimantColumn;
@@ -291,7 +291,7 @@ fn a_claimant_sending_a_malformed_message_is_stopped_and_its_column_cleared() {
 fn a_claimant_breaking_the_protocol_is_stopped_and_its_column_cleared(
     how_it_breaks_the_protocol: &str,
 ) {
-    use crate::core::context::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
+    use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::GpuPoolClaimTablesOfOnePool;
     use std::io::{BufRead as _, Write as _};
     use streamlib_ipc_types::{
         GPU_POOL_CLAIM_TABLE_ROW_BYTES, GPU_POOL_CLAIM_TABLE_ROW_CLAIM_COUNTS_OFFSET,

@@ -17,8 +17,8 @@ use super::*;
 fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
     use uuid::Uuid;
 
-    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
-    use crate::core::context::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+    use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
@@ -108,7 +108,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
         EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireStorageBuffer,
         EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
     };
-    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     const LONGEST_AN_ANSWER_AT_THE_BUDGET_MAY_TAKE: Duration = Duration::from_millis(500);
@@ -286,7 +286,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
 #[allow(clippy::disallowed_macros)]
 fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     use super::super::RegisteredHandle;
-    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
@@ -548,8 +548,8 @@ fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_publi
 /// acquire — and handing a reservation back makes room for one more.
 #[test]
 fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
-    use crate::core::context::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
-    use crate::core::context::one_off_acquisitions_held_for_one_node::one_off_acquisition_shapes_for_tests::{
+    use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
+    use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::one_off_acquisition_shapes_for_tests::{
         a_640x480_bgra32_pixel_buffer, a_1280x720_rgba8_unorm_texture,
     };
 

@@ -9,13 +9,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::RegisteredHandle;
-use crate::core::context::gpu_pool_claim_table::{
+use crate::core::context::texture_pools_and_rings::gpu_pool_claim_table::{
     GpuPoolClaimTableRowLease, GpuPoolClaimTablesOfOnePool,
 };
-use crate::core::context::lease_aware_pool_slot_ring::{
+use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
     LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
 };
-use crate::core::context::processor_output_surface_pool::{
+use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::{
     OutputFramesKeptByTheOutputLinksOfOneProcessor, ProcessorOutputSurfacePool,
     ProcessorOutputSurfacePoolHandOff, ProcessorOutputSurfacePoolRefusedFreshSlot,
 };

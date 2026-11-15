@@ -6,7 +6,7 @@
 
 /// Absent-defaults for the `vk_image_*` recipe fields, mirroring the
 /// surface-share wire's documented defaults
-/// (`core/context/surface_share_wire_verbs.rs`).
+/// (`core/context/surfaces_and_their_stores/surface_share_wire_verbs.rs`).
 pub(super) const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
 pub(super) const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
 pub(super) const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;

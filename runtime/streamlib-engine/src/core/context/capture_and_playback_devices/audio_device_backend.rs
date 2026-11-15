@@ -1,0 +1,662 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! The audio device seam: the one path anything opens an audio stream through.
+//!
+//! It sits beside the audio clock rather than inside a built-in, so audio
+//! reaches hardware the way every other device class does — through a
+//! handle-shaped primitive. The built-ins, the null backend and every test
+//! open their streams here; there is no second audio device path.
+
+use std::sync::{Arc, OnceLock};
+
+use crate::core::Result;
+use crate::core::context::capture_and_playback_devices::device_backend_probe_chain::{
+    DeviceBackendArm, first_device_backend_arm_that_opens_among,
+};
+use crate::core::context::capture_and_playback_devices::device_stream_liveness_report::DeviceStreamLivenessReport;
+use crate::core::context::capture_and_playback_devices::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
+use crate::core::context::{CaptureDeviceAccessPrompting, SharedAudioClock};
+
+/// How the scalars an audio stream carries are encoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioSampleFormat {
+    /// 32-bit little-endian float.
+    F32,
+    /// 16-bit little-endian signed integer.
+    I16,
+}
+
+impl AudioSampleFormat {
+    /// Bytes one scalar occupies in a payload.
+    pub fn bytes_per_sample(self) -> usize {
+        match self {
+            AudioSampleFormat::F32 => 4,
+            AudioSampleFormat::I16 => 2,
+        }
+    }
+}
+
+/// What a stream carries in either direction, fixed for its lifetime.
+///
+/// One type for capture and playback because the triple is the same one: a
+/// second, direction-named copy of it would let the two drift, and a block
+/// crossing from a microphone to a speaker is compared against exactly this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioStreamFormat {
+    /// Sample rate in hertz.
+    pub sample_rate: u32,
+    /// Channel count every payload is interleaved by.
+    pub channels: u32,
+    /// How to read the scalars in a payload.
+    pub sample_format: AudioSampleFormat,
+}
+
+impl AudioStreamFormat {
+    /// Bytes a block of `sample_count` per-channel samples occupies once
+    /// interleaved.
+    pub fn interleaved_byte_count_for(self, sample_count: u32) -> usize {
+        sample_count as usize * self.channels as usize * self.sample_format.bytes_per_sample()
+    }
+}
+
+/// The format a caller asks a stream for; each `None` takes what the device
+/// opened in.
+///
+/// A playback stream opens in it, the arm converting to the device where the
+/// device carries another format. A capture stream opens in the device's own
+/// format, and a request it misses is refused by name, never converted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RequestedAudioStreamFormat {
+    /// Sample rate in hertz.
+    pub sample_rate: Option<u32>,
+    /// Channel count every payload is interleaved by.
+    pub channels: Option<u32>,
+    /// How the scalars in a payload are encoded.
+    pub sample_format: Option<AudioSampleFormat>,
+}
+
+impl RequestedAudioStreamFormat {
+    /// Why a stream opened in `opened` does not meet this request, or `None`
+    /// when it does.
+    pub fn refusal_of(&self, opened: AudioStreamFormat) -> Option<String> {
+        let mut unmet = Vec::new();
+        if let Some(sample_rate) = self.sample_rate
+            && sample_rate != opened.sample_rate
+        {
+            unmet.push(format!(
+                "{sample_rate} Hz was requested and the device opened at {} Hz",
+                opened.sample_rate
+            ));
+        }
+        if let Some(channels) = self.channels
+            && channels != opened.channels
+        {
+            unmet.push(format!(
+                "{channels} channel(s) were requested and the device opened with {}",
+                opened.channels
+            ));
+        }
+        if let Some(sample_format) = self.sample_format
+            && sample_format != opened.sample_format
+        {
+            unmet.push(format!(
+                "{sample_format:?} samples were requested and the device opened with {:?}",
+                opened.sample_format
+            ));
+        }
+        (!unmet.is_empty()).then(|| unmet.join("; "))
+    }
+}
+
+/// Open a capture stream on `backend` and refuse it, by name, unless it opened
+/// in the format the request asks for.
+pub fn open_capture_stream_in_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+) -> Result<Box<dyn AudioCaptureStream>> {
+    let capture_stream = backend.open_capture_stream(request)?;
+    refuse_a_stream_outside_the_requested_format(
+        backend,
+        request,
+        "capture",
+        capture_stream.stream_format(),
+    )?;
+    Ok(capture_stream)
+}
+
+/// Open a playback stream on `backend` in the format the request asks for, and
+/// refuse it, by name, where the arm could not open it in that format.
+pub fn open_playback_stream_in_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+) -> Result<Box<dyn AudioPlaybackStream>> {
+    let playback_stream = backend.open_playback_stream(request)?;
+    refuse_a_stream_outside_the_requested_format(
+        backend,
+        request,
+        "playback",
+        playback_stream.stream_format(),
+    )?;
+    Ok(playback_stream)
+}
+
+fn refuse_a_stream_outside_the_requested_format(
+    backend: &dyn AudioDeviceBackend,
+    request: &AudioDeviceStreamRequest,
+    direction_name: &str,
+    opened: AudioStreamFormat,
+) -> Result<()> {
+    match request.requested_format.refusal_of(opened) {
+        None => Ok(()),
+        Some(refusal) => Err(crate::core::Error::Configuration(format!(
+            "the {} {direction_name} stream on {} cannot be opened in the requested format: \
+             {refusal}. Omit what the device cannot give, and read the stream's format once it \
+             opens.",
+            backend.backend_name(),
+            request.device_id.as_deref().map_or_else(
+                || "the default device".to_string(),
+                |id| format!("device '{id}'")
+            ),
+        ))),
+    }
+}
+
+/// One block of samples as a device delivered it, borrowed for the length of
+/// the hand-off — a callee that keeps the samples copies them.
+#[derive(Debug, Clone, Copy)]
+pub struct CapturedAudioBlockFromDevice<'a> {
+    /// Interleaved little-endian scalars, read according to the stream's
+    /// [`AudioStreamFormat::sample_format`].
+    pub interleaved_sample_bytes: &'a [u8],
+    /// Per-channel sample count: the payload carries `sample_count × channels`
+    /// scalars.
+    pub sample_count: u32,
+    /// Monotonic timestamp of the block's first sample as the device timed it,
+    /// never the instant of delivery — it is what makes joining audio to a
+    /// camera frame a subtraction.
+    pub first_sample_timestamp_ns: i64,
+}
+
+/// What a capture stream calls with each block it captures.
+///
+/// Runs on the backend's own callback thread, so it must not block, and it
+/// must not re-enter the stream it was installed on: a backend is free to hold
+/// the stream's own lock across this call, so calling back into
+/// [`AudioCaptureStream::stop_delivering`] from here deadlocks it.
+pub type CapturedAudioBlockHandOff = Box<dyn Fn(CapturedAudioBlockFromDevice<'_>) + Send + Sync>;
+
+/// What a caller asks a backend to open a stream for, in either direction.
+pub struct AudioDeviceStreamRequest {
+    /// Backend-named device. `None` takes the backend's default; a name the
+    /// backend cannot open is an error, never a quiet landing on a different
+    /// device.
+    pub device_id: Option<String>,
+    /// The clock a backend with no device paces its blocks from. A backend
+    /// whose device provides the cadence ignores it, so device ticks and timer
+    /// ticks never interleave.
+    pub deviceless_pacing_clock: SharedAudioClock,
+    /// Whether opening a capture device may ask the user for access nobody
+    /// has answered yet; a playback stream asks for nothing.
+    pub capture_device_access_prompting: CaptureDeviceAccessPrompting,
+    /// The format the stream is asked for: a playback arm opens in it, a
+    /// capture arm opens in the device's own.
+    pub requested_format: RequestedAudioStreamFormat,
+}
+
+/// A capture stream a backend opened.
+pub trait AudioCaptureStream: Send {
+    /// The rate, channel count and scalar encoding of every block this stream
+    /// delivers.
+    fn stream_format(&self) -> AudioStreamFormat;
+
+    /// Whether this stream is still capturing, readable from whatever thread
+    /// the owner does its work on.
+    ///
+    /// The report belongs to the stream and outlives any one delivery, so an
+    /// owner that took it at open reads the same answer after a stop as
+    /// during a run — and a failure it names outlives
+    /// [`Self::start_delivering_to`] too, because restarting delivery does not
+    /// bring a device back.
+    fn liveness_report(&self) -> DeviceStreamLivenessReport;
+
+    /// Begin delivering captured blocks to `hand_off`, replacing any hand-off
+    /// an earlier call installed.
+    fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()>;
+
+    /// Stop delivering. The hand-off is not called again once this returns.
+    fn stop_delivering(&mut self) -> Result<()>;
+}
+
+/// One block of samples a device is asking for, borrowed for the length of the
+/// hand-off — the buffer is the device's and is invalid the moment it returns.
+#[derive(Debug)]
+pub struct AudioBlockRequestedByDevice<'a> {
+    /// Interleaved little-endian scalars to write, in the stream's
+    /// [`AudioStreamFormat::sample_format`].
+    ///
+    /// The hand-off fills all of it. A hand-off holding fewer samples than
+    /// this has room for writes silence into the remainder and counts what it
+    /// invented — a device buffer left partly unwritten plays whatever the
+    /// previous cycle put there.
+    pub interleaved_sample_bytes_to_fill: &'a mut [u8],
+    /// Per-channel sample count the buffer has room for: it holds
+    /// `sample_count × channels` scalars.
+    pub sample_count: u32,
+}
+
+/// What a playback stream calls each time its device needs samples.
+///
+/// Runs on the backend's own callback thread, so it must not block, and it
+/// must not re-enter the stream it was installed on: a backend is free to hold
+/// the stream's own lock across this call, so calling back into
+/// [`AudioPlaybackStream::stop_requesting`] from here deadlocks it.
+pub type AudioBlockForPlaybackHandOff = Box<dyn Fn(AudioBlockRequestedByDevice<'_>) + Send + Sync>;
+
+/// A playback stream a backend opened.
+pub trait AudioPlaybackStream: Send {
+    /// The rate, channel count and scalar encoding every block handed to this
+    /// stream must already be in: the request's, wherever it named one.
+    fn stream_format(&self) -> AudioStreamFormat;
+
+    /// Per-channel samples the device asks for in one cycle, or `None` where
+    /// the arm does not report its device's period.
+    fn device_period_in_per_channel_samples(&self) -> Option<u32>;
+
+    /// Whether this stream is still playing, readable from whatever thread the
+    /// owner does its work on — the capture seam's report, in the direction a
+    /// sink cares about, under the same latching rule.
+    fn liveness_report(&self) -> DeviceStreamLivenessReport;
+
+    /// Begin asking `hand_off` for samples, replacing any hand-off an earlier
+    /// call installed.
+    fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()>;
+
+    /// Stop asking. The hand-off is not called again once this returns.
+    fn stop_requesting(&mut self) -> Result<()>;
+}
+
+/// The audio device seam every audio stream is opened through.
+pub trait AudioDeviceBackend: Send + Sync {
+    /// The arm's name, for the one probe log line and for error text.
+    fn backend_name(&self) -> &'static str;
+
+    /// Open a capture stream against the named device, or the backend's
+    /// default when none is named.
+    fn open_capture_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioCaptureStream>>;
+
+    /// Open a playback stream against the named device, or the backend's
+    /// default when none is named.
+    fn open_playback_stream(
+        &self,
+        request: &AudioDeviceStreamRequest,
+    ) -> Result<Box<dyn AudioPlaybackStream>>;
+}
+
+/// Shared handle to the backend the chain probed.
+pub type SharedAudioDeviceBackend = Arc<dyn AudioDeviceBackend>;
+
+/// One arm of the audio chain.
+type AudioDeviceBackendArm = DeviceBackendArm<SharedAudioDeviceBackend>;
+
+static PROBED_AUDIO_DEVICE_BACKEND: OnceLock<SharedAudioDeviceBackend> = OnceLock::new();
+
+/// Probe the audio backend chain once per process and log the arm it chose.
+///
+/// No configuration dial selects an arm and no environment variable overrides
+/// the probe. The last arm needs no audio library at all, so the chain always
+/// resolves to something and a machine with no audio runs the graph rather than
+/// failing to start.
+pub fn probe_audio_device_backend() -> SharedAudioDeviceBackend {
+    Arc::clone(PROBED_AUDIO_DEVICE_BACKEND.get_or_init(|| {
+        let backend = first_audio_device_backend_arm_that_opens();
+        tracing::info!(
+            audio_backend = backend.backend_name(),
+            "audio device backend chain probed"
+        );
+        backend
+    }))
+}
+
+/// Walk the chain in order and take the first arm that actually opens.
+///
+/// An arm is chosen by opening, not by loading: a library that resolves but
+/// yields no usable connection — `libpipewire` present with no daemon
+/// answering, the ordinary container case — demotes exactly as a missing
+/// library does. Probing on presence alone would strand precisely the machines
+/// the chain exists to serve.
+fn first_audio_device_backend_arm_that_opens() -> SharedAudioDeviceBackend {
+    first_audio_device_backend_arm_that_opens_among(platform_audio_device_backend_arms())
+        .unwrap_or_else(|| Arc::new(SilentNullAudioDeviceBackend))
+}
+
+/// Take the first arm that opens, logging each demotion with the reason that
+/// caused it.
+///
+/// Separate from the platform arm list so the walk is exercised by arms that
+/// fail on purpose: the order this chain demotes in is the decided behaviour,
+/// and asserting
+/// it in prose proves nothing.
+fn first_audio_device_backend_arm_that_opens_among(
+    arms: impl IntoIterator<Item = AudioDeviceBackendArm>,
+) -> Option<SharedAudioDeviceBackend> {
+    first_device_backend_arm_that_opens_among(arms, |backend_name, reason| {
+        // Info rather than warn: a machine with no audio server is a
+        // supported environment, and the next arm is the answer rather than
+        // the consolation prize. The reason is what tells a reader whether
+        // the library was absent or the device was.
+        tracing::info!(
+            audio_backend = backend_name,
+            %reason,
+            "audio device backend chain: demoting to the next arm"
+        );
+    })
+}
+
+/// The chain's real arms, in the order the plan decided: PipeWire, else ALSA,
+/// else — once both have declined — the null backend the walk falls through to.
+#[cfg(target_os = "linux")]
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
+    use crate::linux::pipewire_audio_device_backend::PipeWireAudioDeviceBackend;
+
+    vec![
+        AudioDeviceBackendArm::named("pipewire", || {
+            PipeWireAudioDeviceBackend::load_and_connect()
+                .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+        }),
+        AudioDeviceBackendArm::named("alsa", || {
+            AlsaAudioDeviceBackend::load_and_open()
+                .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+        }),
+    ]
+}
+
+/// The chain's one real arm on macOS: CoreAudio, else — once it has declined
+/// for want of any device — the null backend the walk falls through to.
+#[cfg(target_os = "macos")]
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    use crate::apple::coreaudio_audio_device_backend::CoreAudioAudioDeviceBackend;
+
+    vec![AudioDeviceBackendArm::named("coreaudio", || {
+        CoreAudioAudioDeviceBackend::find_a_device()
+            .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+    })]
+}
+
+/// A target with no arm of its own falls through to the null backend, which
+/// needs no audio library and captures silence.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::context::DeviceBackendArmUnavailableReason;
+
+    /// An arm that opens, standing in for a real backend so the walk can be
+    /// driven without an audio library or a device.
+    struct ArmThatOpened(&'static str);
+
+    impl AudioDeviceBackend for ArmThatOpened {
+        fn backend_name(&self) -> &'static str {
+            self.0
+        }
+
+        fn open_capture_stream(
+            &self,
+            _request: &AudioDeviceStreamRequest,
+        ) -> Result<Box<dyn AudioCaptureStream>> {
+            unreachable!("the walk only ever opens the arm, never a stream on it")
+        }
+
+        fn open_playback_stream(
+            &self,
+            _request: &AudioDeviceStreamRequest,
+        ) -> Result<Box<dyn AudioPlaybackStream>> {
+            unreachable!("the walk only ever opens the arm, never a stream on it")
+        }
+    }
+
+    fn an_arm_that_opens(backend_name: &'static str) -> AudioDeviceBackendArm {
+        AudioDeviceBackendArm::named(backend_name, move || {
+            Ok(Arc::new(ArmThatOpened(backend_name)) as SharedAudioDeviceBackend)
+        })
+    }
+
+    fn an_arm_that_declines(backend_name: &'static str) -> AudioDeviceBackendArm {
+        AudioDeviceBackendArm::named(backend_name, move || {
+            Err(DeviceBackendArmUnavailableReason::of(format!(
+                "{backend_name} was made to decline by this test"
+            )))
+        })
+    }
+
+    #[test]
+    fn the_chain_is_probed_once_and_hands_back_the_same_backend_every_time() {
+        let first = probe_audio_device_backend();
+        let second = probe_audio_device_backend();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the chain is probed once per process, so every caller shares one backend"
+        );
+    }
+
+    /// The chain resolves on any machine, which is what lets the wheel import
+    /// and run in `manylinux_2_28` and in a headless container — neither of
+    /// which carries an audio library at all.
+    #[test]
+    fn the_chain_always_lands_on_an_arm_however_little_audio_the_machine_has() {
+        let backend = probe_audio_device_backend();
+        assert!(
+            ["pipewire", "alsa", "coreaudio", "silent-null"].contains(&backend.backend_name()),
+            "the chain resolved to an arm nothing declares: {}",
+            backend.backend_name()
+        );
+    }
+
+    /// The decided order, read off the list the probe itself walks rather than
+    /// restated beside it — so an arm inserted in the wrong place fails here.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_chain_offers_pipewire_then_alsa_before_falling_through_to_null() {
+        let arm_names: Vec<&str> = platform_audio_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(
+            arm_names,
+            ["pipewire", "alsa"],
+            "the plan decides PipeWire, else ALSA, else null — and the null arm is the \
+             fall-through the walk takes when this list is exhausted, never an entry in it"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_chain_offers_coreaudio_before_falling_through_to_null() {
+        let arm_names: Vec<&str> = platform_audio_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(arm_names, ["coreaudio"]);
+    }
+
+    #[test]
+    fn the_walk_takes_the_first_arm_that_opens_and_asks_no_arm_behind_it() {
+        let chosen = first_audio_device_backend_arm_that_opens_among([
+            an_arm_that_opens("first"),
+            AudioDeviceBackendArm::named("second", || {
+                unreachable!("an arm behind one that opened is never asked")
+            }),
+        ])
+        .expect("an arm opened");
+        assert_eq!(chosen.backend_name(), "first");
+    }
+
+    /// Each arm made to fail in turn: the chain demotes past exactly the arms
+    /// that declined and stops at the first that did not.
+    #[test]
+    fn the_walk_demotes_past_every_arm_that_declines_in_the_order_it_was_given() {
+        for failing_arm_count in 0..3 {
+            let arms: Vec<AudioDeviceBackendArm> = ["first", "second", "third"]
+                .into_iter()
+                .enumerate()
+                .map(|(position, backend_name)| {
+                    if position < failing_arm_count {
+                        an_arm_that_declines(backend_name)
+                    } else {
+                        an_arm_that_opens(backend_name)
+                    }
+                })
+                .collect();
+            let chosen = first_audio_device_backend_arm_that_opens_among(arms)
+                .expect("one arm was left able to open");
+            assert_eq!(
+                chosen.backend_name(),
+                ["first", "second", "third"][failing_arm_count],
+                "with the leading {failing_arm_count} arm(s) declining, the chain must land \
+                 on the next one rather than skipping it or stopping short"
+            );
+        }
+    }
+
+    /// The fall-through the wheel depends on: with every arm declining there is
+    /// still a backend, because `manylinux_2_28` and headless containers carry
+    /// no audio library at all and must run the graph rather than fail to start.
+    #[test]
+    fn a_chain_whose_arms_all_decline_falls_through_to_the_null_backend() {
+        assert!(
+            first_audio_device_backend_arm_that_opens_among([
+                an_arm_that_declines("first"),
+                an_arm_that_declines("second"),
+            ])
+            .is_none(),
+            "no arm opened, so the walk yields nothing and the caller supplies the null arm"
+        );
+        assert_eq!(
+            SilentNullAudioDeviceBackend.backend_name(),
+            "silent-null",
+            "the arm the walk falls through to"
+        );
+    }
+
+    fn a_request_for_silence(
+        capture_device_access_prompting: CaptureDeviceAccessPrompting,
+        requested_format: RequestedAudioStreamFormat,
+    ) -> AudioDeviceStreamRequest {
+        AudioDeviceStreamRequest {
+            device_id: None,
+            deviceless_pacing_clock: Arc::new(
+                crate::core::context::SoftwareAudioClock::with_defaults(),
+            ),
+            capture_device_access_prompting,
+            requested_format,
+        }
+    }
+
+    #[test]
+    fn a_request_the_opened_stream_meets_opens_it() {
+        let capture_stream = open_capture_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::RefuseWhatWasNeverAskedFor,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(48_000),
+                    channels: Some(1),
+                    sample_format: Some(AudioSampleFormat::F32),
+                },
+            ),
+        )
+        .expect("the null stream opens at the pacing clock's rate, mono, f32");
+        assert_eq!(capture_stream.stream_format().sample_rate, 48_000);
+    }
+
+    #[test]
+    fn a_playback_stream_opens_in_the_format_it_was_asked_for() {
+        let requested_format = RequestedAudioStreamFormat {
+            sample_rate: Some(48_000),
+            channels: Some(2),
+            sample_format: Some(AudioSampleFormat::I16),
+        };
+        let playback_stream = open_playback_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                requested_format,
+            ),
+        )
+        .expect("the null arm plays whatever format it is asked for");
+        assert_eq!(
+            playback_stream.stream_format(),
+            AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+                sample_format: AudioSampleFormat::I16,
+            }
+        );
+    }
+
+    #[test]
+    fn a_playback_request_at_another_rate_than_the_pacing_clock_is_refused_by_name() {
+        let refusal = open_playback_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(44_100),
+                    ..RequestedAudioStreamFormat::default()
+                },
+            ),
+        )
+        .err()
+        .expect("the null arm paces at its clock's rate and cannot play another")
+        .to_string();
+        assert!(refusal.contains("44100 Hz was requested"), "{refusal}");
+        assert!(refusal.contains("playback"), "{refusal}");
+    }
+
+    #[test]
+    fn a_request_the_opened_stream_misses_is_refused_naming_each_field_it_missed() {
+        let refusal = open_capture_stream_in_requested_format(
+            &SilentNullAudioDeviceBackend,
+            &a_request_for_silence(
+                CaptureDeviceAccessPrompting::MayAskTheUser,
+                RequestedAudioStreamFormat {
+                    sample_rate: Some(44_100),
+                    channels: Some(2),
+                    sample_format: None,
+                },
+            ),
+        )
+        .err()
+        .expect("a mono 48 kHz stream does not meet a stereo 44.1 kHz request")
+        .to_string();
+        assert!(refusal.contains("44100 Hz was requested"), "{refusal}");
+        assert!(refusal.contains("2 channel(s) were requested"), "{refusal}");
+        assert!(refusal.contains("silent-null"), "{refusal}");
+    }
+
+    #[test]
+    fn an_empty_request_takes_whatever_the_device_opened_in() {
+        assert_eq!(
+            RequestedAudioStreamFormat::default().refusal_of(AudioStreamFormat {
+                sample_rate: 44_100,
+                channels: 6,
+                sample_format: AudioSampleFormat::I16,
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn a_scalars_width_is_the_width_the_wire_dtype_names() {
+        assert_eq!(AudioSampleFormat::F32.bytes_per_sample(), 4);
+        assert_eq!(AudioSampleFormat::I16.bytes_per_sample(), 2);
+    }
+}
