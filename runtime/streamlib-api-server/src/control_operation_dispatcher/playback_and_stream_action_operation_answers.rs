@@ -60,20 +60,18 @@ impl ControlOperationDispatcher {
         pause_playback_request: OneProjectByItsDirectoryRequest,
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         let OneProjectByItsDirectoryRequest { project_directory } = pause_playback_request;
-        {
-            refuse_a_relative_project_directory(&project_directory)
-                .map_err(ControlOperationRefusal::Failed)?;
-            self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.pause_playback(&project_directory)
+        refuse_a_relative_project_directory(&project_directory)
+            .map_err(ControlOperationRefusal::Failed)?;
+        self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+            operations_on_the_loaded_streams.pause_playback(&project_directory)
+        })
+        .await
+        .map(|paused| {
+            ControlOperationAnswer::PausePlayback(PausePlaybackToolResult {
+                project_directory: paused.project_directory,
+                streams: paused.stream_ids,
             })
-            .await
-            .map(|paused| {
-                ControlOperationAnswer::PausePlayback(PausePlaybackToolResult {
-                    project_directory: paused.project_directory,
-                    streams: paused.stream_ids,
-                })
-            })
-        }
+        })
     }
 
     pub(super) async fn answer_resume_playback(
@@ -81,20 +79,18 @@ impl ControlOperationDispatcher {
         resume_playback_request: OneProjectByItsDirectoryRequest,
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         let OneProjectByItsDirectoryRequest { project_directory } = resume_playback_request;
-        {
-            refuse_a_relative_project_directory(&project_directory)
-                .map_err(ControlOperationRefusal::Failed)?;
-            self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
-                operations_on_the_loaded_streams.resume_playback(&project_directory)
+        refuse_a_relative_project_directory(&project_directory)
+            .map_err(ControlOperationRefusal::Failed)?;
+        self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
+            operations_on_the_loaded_streams.resume_playback(&project_directory)
+        })
+        .await
+        .map(|resumed| {
+            ControlOperationAnswer::ResumePlayback(ResumePlaybackToolResult {
+                project_directory: resumed.project_directory,
+                streams: resumed.stream_ids,
             })
-            .await
-            .map(|resumed| {
-                ControlOperationAnswer::ResumePlayback(ResumePlaybackToolResult {
-                    project_directory: resumed.project_directory,
-                    streams: resumed.stream_ids,
-                })
-            })
-        }
+        })
     }
 
     pub(super) async fn answer_describe_stream_action(
