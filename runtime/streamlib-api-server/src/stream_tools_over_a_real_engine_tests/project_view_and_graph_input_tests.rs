@@ -1,0 +1,323 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! A project's views listed by view type, a view node loaded with the view's ports, and a top-level
+//! graph input loaded linked to its readers.
+
+use super::*;
+
+impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
+    /// Why `project`'s stream `stream_name` is refused loading from its graph document.
+    fn a_stream_refused_loading_from_its_graph_document(
+        &self,
+        project: &ProjectWithGraphDocuments,
+        stream_name: &str,
+    ) -> streamlib::sdk::error::Error {
+        let stream_location = project.location_of(stream_name);
+        let stream_id = stream_location.stream_id_named(TEST_PROJECT_NAME, stream_name);
+        match self.engine.load_stream_from_graph_snapshot(
+            &GraphSnapshot::from_graph_document(project.the_graph_document_of(stream_name))
+                .expect("the graph document parses"),
+            OptionsForLoadingOneStream::at_stream_location(stream_id, stream_location)
+                .in_stream_environment(project.stream_environment())
+                .with_display_name(stream_name),
+        ) {
+            Ok(_) => panic!("the stream `{stream_name}` loads, and a refusal was expected"),
+            Err(refusal) => refusal,
+        }
+    }
+}
+
+/// Write `manifest` as the `tatolab_view.json` of `views/<view_folder_name>/` in `project_directory`.
+fn a_view_folder_in(project_directory: &Path, view_folder_name: &str, manifest: &Value) {
+    let folder = project_directory.join("views").join(view_folder_name);
+    std::fs::create_dir_all(&folder).expect("the view's folder");
+    std::fs::write(folder.join("tatolab_view.json"), manifest.to_string()).expect("its manifest");
+}
+
+/// Project `cell` brings the view `deck` and imports project `levels`, which brings `meter` and a
+/// folder whose manifest is not JSON: each is listed under the project bringing it, and the one
+/// that does not open says why.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_projects_views_and_its_imports_views_are_listed_by_view_type() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let levels = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    std::fs::write(
+        levels.path().join("tatolab-project.json"),
+        json!({ "project": levels.project, "name": "levels", "dependencies": [] }).to_string(),
+    )
+    .expect("the import's project file names it");
+    a_view_folder_in(
+        levels.path(),
+        "meter",
+        &json!({ "contract": "1.0", "title": "Meter", "entry": "index.html", "placement": "area" }),
+    );
+    let broken_folder = levels.path().join("views/broken");
+    std::fs::create_dir_all(&broken_folder).expect("the broken view's folder");
+    std::fs::write(broken_folder.join("tatolab_view.json"), "{").expect("a manifest cut short");
+    let cell = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("main"));
+    let deck_manifest = json!({
+        "contract": "1.0", "title": "DJ Deck", "description": "Two decks and a crossfader.",
+        "icon": "icon.svg", "preview": "preview.png", "entry": "index.html", "placement": "node",
+        "inputs": [{ "name": "waveform", "family": "channels" }],
+        "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+    });
+    a_view_folder_in(cell.path(), "deck", &deck_manifest);
+    let call = |tool_name: &'static str, arguments: Value| {
+        let operations = engine.operations_on_the_loaded_streams();
+        async move { tool_answer(&tool_call_result(operations, tool_name, arguments).await) }
+    };
+    let added = call(
+        "add_dependency",
+        json!({ "project_directory": cell.path(), "source": levels.path().display().to_string(),
+                "author": an_agent_named("alice") }),
+    )
+    .await
+    .expect("levels is imported");
+    let folder = added["dependency"]["folder"].clone();
+
+    let listed = call(
+        "list_project_views",
+        json!({ "project_directory": cell.path() }),
+    )
+    .await
+    .expect("the cell's views are listed");
+
+    assert_eq!(listed["project"], json!(cell.project), "{listed}");
+    assert_eq!(listed["project_name"], TEST_PROJECT_NAME, "{listed}");
+    let views = listed["views"].as_array().expect("a list of views");
+    assert_eq!(views.len(), 3, "{listed}");
+    assert_eq!(
+        views[0],
+        json!({
+            "view_type": format!("{TEST_PROJECT_NAME}:deck"),
+            "project": cell.project, "project_name": TEST_PROJECT_NAME, "import_folder": null,
+            "view_folder_in_the_project": "views/deck",
+            "opens": true, "not_opened_because": null,
+            "title": "DJ Deck", "description": "Two decks and a crossfader.",
+            "icon": "icon.svg", "preview": "preview.png", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels", "description": null, "range": null }],
+            "outputs": [{ "name": "crossfader", "family": "array", "description": null, "range": [-1.0, 1.0] }],
+            "manifest": deck_manifest,
+        })
+    );
+    assert_eq!(views[1]["view_type"], "levels:broken", "{listed}");
+    assert_eq!(views[1]["opens"], false, "{listed}");
+    assert_eq!(views[1]["import_folder"], folder, "{listed}");
+    assert!(
+        views[1]["not_opened_because"]
+            .as_str()
+            .is_some_and(|why| why.starts_with("`tatolab_view.json` is not JSON: ")),
+        "{listed}"
+    );
+    assert_eq!(views[2]["view_type"], "levels:meter", "{listed}");
+    assert_eq!(views[2]["project"], json!(levels.project), "{listed}");
+    assert_eq!(views[2]["project_name"], "levels", "{listed}");
+    assert_eq!(views[2]["placement"], "area", "{listed}");
+    assert_eq!(
+        views[2]["view_folder_in_the_project"],
+        json!(format!(
+            "imports/{}/views/meter",
+            folder.as_str().expect("a folder name")
+        )),
+        "{listed}"
+    );
+}
+
+/// A listing whose interpreter prints no listing is refused naming the project, in the
+/// runtime's own words.
+/// The UUID the graph document of the view-node test gives its `deck`.
+const DECK_NODE_UUID: &str = "decdecde-cdec-4dec-8dec-decdecdecdec";
+
+/// A graph document holding a node of the project's view `deck` loads it with the view's ports,
+/// and a panel's write onto it is live data alone: refused while the node does not run, and the
+/// graph document on disk keeps nothing of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_a_write_records_nothing()
+ {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    register_the_stream_tools_test_source_once();
+    let mut graph = the_graph_of_a_stream_named("main");
+    graph["nodes"].as_array_mut().unwrap().push(json!({
+        "id": DECK_NODE_UUID, "name": "deck", "type": format!("{TEST_PROJECT_NAME}:deck"),
+        "config": { "bpm": 128 },
+    }));
+    let project = ProjectWithGraphDocuments::holding(graph);
+    a_view_folder_in(
+        project.path(),
+        "deck",
+        &json!({
+            "contract": "1.0", "title": "Deck", "entry": "index.html", "placement": "node",
+            "inputs": [{ "name": "waveform", "family": "channels" }],
+            "outputs": [{ "name": "crossfader", "family": "array", "range": [-1, 1] }],
+        }),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let document_before = project.the_graph_document_of("main");
+
+    let live_graph = engine.the_live_graph_of(&stream_id);
+    let deck = the_node_named(&live_graph, "deck");
+    assert_eq!(deck["id"], DECK_NODE_UUID, "{deck}");
+    assert_eq!(deck["type"], format!("{TEST_PROJECT_NAME}:deck"), "{deck}");
+    assert!(
+        deck.to_string().contains("waveform") && deck.to_string().contains("crossfader"),
+        "the view node takes the view's ports: {deck}"
+    );
+
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_studio_view_output",
+        json!({ "stream": stream_id, "node": DECK_NODE_UUID, "port": "crossfader",
+                "value": 0.5 }),
+    )
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
+    assert!(
+        refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
+        "{refusal}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
+/// A native reader of Records on its input `cue`, which does nothing with them.
+#[streamlib::sdk::processor(
+    execution = manual,
+    input("cue", delivery_profile = "newest", family = Records)
+)]
+pub struct StreamToolsTestRecordsReader;
+
+impl ManualProcessor for StreamToolsTestRecordsReader::Processor {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// The UUID the graph document of the Graph Input test gives its `cue` Input.
+const CUE_GRAPH_INPUT_NODE_UUID: &str = "c0ec0ec0-ec0e-4c0e-8c0e-c0ec0ec0ec0e";
+
+/// The graph of `main` with a top-level Records `GraphInput` declaring `cue`, holding `default`
+/// as its config's, read by two [`StreamToolsTestRecordsReader`]s.
+fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED
+        .call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestRecordsReader::Processor>());
+    let reader_type = StreamToolsTestRecordsReader::processor_class_import_path();
+    json!({
+        "stream": "main",
+        "nodes": [
+            { "id": CUE_GRAPH_INPUT_NODE_UUID, "name": "cue", "type": "tatolab.stream:GraphInput",
+              "config": { "port": "cue", "family": "records", "default": default } },
+            { "name": "left", "type": reader_type.as_str(), "config": {} },
+            { "name": "right", "type": reader_type.as_str(), "config": {} },
+        ],
+        "links": [
+            { "source": { "node": "cue", "port": "value" }, "target": { "node": "left", "port": "cue" } },
+            { "source": { "node": "cue", "port": "value" }, "target": { "node": "right", "port": "cue" } },
+        ],
+    })
+}
+
+/// A stream's top-level Records `GraphInput` loads as a running node linked to both its readers,
+/// rendered as an interface node carrying its default; `write_graph_input` names it by its
+/// Input, and a refused write records nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records_nothing() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!({ "track": "intro" })),
+    );
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let document_before = project.the_graph_document_of("main");
+
+    let live_graph = engine.the_live_graph_of(&stream_id);
+    let cue = the_node_named(&live_graph, "cue");
+    assert_eq!(cue["id"], CUE_GRAPH_INPUT_NODE_UUID, "{cue}");
+    assert_eq!(
+        cue["config"]["default"],
+        json!({ "track": "intro" }),
+        "{cue}"
+    );
+    assert_eq!(
+        cue["components"]["graph_interface"],
+        json!({
+            "direction": "input",
+            "port": "cue",
+            "family": "records",
+            "current_value": { "track": "intro" }
+        }),
+        "a node not running shows the value it carries at its next Play, its default: {cue}"
+    );
+    assert_eq!(cue["ports"]["outputs"][0]["name"], "value", "{cue}");
+    let links_out_of_the_input: Vec<&Value> = live_graph["links"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|link| link["source"]["node"] == "cue")
+        .collect();
+    assert_eq!(links_out_of_the_input.len(), 2, "{live_graph}");
+    for link in links_out_of_the_input {
+        assert!(
+            !link["id"].as_str().unwrap_or_default().is_empty(),
+            "a running Input's links are links the runtime runs: {link}"
+        );
+        assert_eq!(
+            link["components"]["graph_interface"]["port"], "cue",
+            "{link}"
+        );
+    }
+
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_graph_input",
+        json!({ "stream": stream_id, "input": "cue", "value": { "track": "drop" } }),
+    )
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
+        "{refused_result}"
+    );
+    let refusal = tool_answer(&refused_result)
+        .expect_err("an Input whose node does not run reaches no reader");
+    assert!(
+        refusal.starts_with("write_graph_input failed:") && refusal.contains("not running"),
+        "{refusal}"
+    );
+    let refusal = tool_answer(
+        &tool_call_result(
+            engine.operations_on_the_loaded_streams(),
+            "write_graph_input",
+            json!({ "stream": stream_id, "input": "fader", "value": 1 }),
+        )
+        .await,
+    )
+    .expect_err("an Input no GraphInput declares is refused");
+    assert!(
+        refusal.contains("`fader`") && refusal.contains("`cue`"),
+        "the refusal names the Inputs the stream has: {refusal}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), document_before);
+}
+
+/// A `GraphInput` whose `default` its family does not take is refused at load, naming the node.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_input_default_its_family_does_not_take_is_refused_at_load() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = ProjectWithGraphDocuments::holding(
+        the_graph_of_a_stream_whose_cue_input_two_nodes_read(json!("intro")),
+    );
+
+    let refusal = engine
+        .a_stream_refused_loading_from_its_graph_document(&project, "main")
+        .to_string();
+
+    assert!(
+        refusal.contains("`cue`")
+            && refusal.contains("`default`")
+            && refusal.contains("JSON object"),
+        "{refusal}"
+    );
+}
