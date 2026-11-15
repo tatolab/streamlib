@@ -82,9 +82,7 @@ impl SimpleDecoder {
     ///
     /// Each axis is `Some(byte)` only if the bitstream actually carried it
     /// AND it isn't the H.273 "Unspecified" enumerant (value `2`).
-    pub(super) fn signalled_color_vui(
-        &self,
-    ) -> Option<streamlib_consumer_rhi::h273_color_vui::H273ColorVui> {
+    fn signalled_color_vui(&self) -> Option<streamlib_consumer_rhi::h273_color_vui::H273ColorVui> {
         match self.config.codec {
             crate::encode::Codec::H264 => {
                 let parser = self.h264_parser.as_ref()?;
