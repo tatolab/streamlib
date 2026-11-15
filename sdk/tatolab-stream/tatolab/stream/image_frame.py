@@ -18,7 +18,7 @@ from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 from .color_info import ColorInfo
 
 if TYPE_CHECKING:
-    from ._gpu_protocols import GpuSurfaceHandle
+    from ._gpu_surface_protocols import GpuSurfaceHandle
 
 __all__ = ["ImageFrame", "ImageFrameToWrite"]
 

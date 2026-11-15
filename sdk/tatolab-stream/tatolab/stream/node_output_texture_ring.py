@@ -30,8 +30,8 @@ from typing import Union
 from ._gpu_protocols import (
     GpuContextFullAccess,
     GpuContextLimitedAccess,
-    GpuSurfaceHandle,
 )
+from ._gpu_surface_protocols import GpuSurfaceHandle
 
 __all__ = ["NodeOutputTextureRing"]
 

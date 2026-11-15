@@ -46,15 +46,15 @@ from ._gpu_protocols import AccelerationStructureHandle as AccelerationStructure
 from ._gpu_protocols import ComputeKernel as ComputeKernel
 from ._gpu_protocols import GpuContextFullAccess as GpuContextFullAccess
 from ._gpu_protocols import GpuContextLimitedAccess as GpuContextLimitedAccess
-from ._gpu_protocols import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
-from ._gpu_protocols import (
+from ._gpu_surface_protocols import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
+from ._gpu_surface_protocols import (
     GpuSurfaceDeviceTensorScope as GpuSurfaceDeviceTensorScope,
 )
-from ._gpu_protocols import GpuSurfaceHandle as GpuSurfaceHandle
+from ._gpu_surface_protocols import GpuSurfaceHandle as GpuSurfaceHandle
 from ._gpu_protocols import GraphicsKernel as GraphicsKernel
-from ._gpu_protocols import IOSurfaceMachPortExport as IOSurfaceMachPortExport
+from ._gpu_surface_protocols import IOSurfaceMachPortExport as IOSurfaceMachPortExport
 from ._gpu_protocols import KernelDispatchBatch as KernelDispatchBatch
-from ._gpu_protocols import OpaqueFdAllocationExport as OpaqueFdAllocationExport
+from ._gpu_surface_protocols import OpaqueFdAllocationExport as OpaqueFdAllocationExport
 from ._gpu_protocols import RayTracingKernel as RayTracingKernel
 from ._node_context_protocols import (
     CastFromMessagePayloadBytes as CastFromMessagePayloadBytes,
