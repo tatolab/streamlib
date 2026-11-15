@@ -1,0 +1,325 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use super::*;
+
+#[test]
+fn a_runtime_description_names_its_log_folder_or_null_when_it_keeps_none() {
+    let described = |runtime_log_directory: Option<&str>| DescribeRuntimeToolResult {
+        version: "0.55.1".to_owned(),
+        build_id: "0.55.1+0123abc.9f8e7d".to_owned(),
+        up_for_ms: 266_400_000,
+        runtime_log_directory: runtime_log_directory.map(PathBuf::from),
+    };
+    for (description, expected_wire_text) in [
+        (
+            described(Some("/home/u/.local/state/tatolab/logs")),
+            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":"/home/u/.local/state/tatolab/logs"}"#,
+        ),
+        (
+            described(None),
+            r#"{"version":"0.55.1","build_id":"0.55.1+0123abc.9f8e7d","up_for_ms":266400000,"runtime_log_directory":null}"#,
+        ),
+    ] {
+        let wire_text = serde_json::to_string(&description).unwrap();
+        assert_eq!(wire_text, expected_wire_text);
+        assert_eq!(
+            serde_json::from_str::<DescribeRuntimeToolResult>(&wire_text).unwrap(),
+            description
+        );
+    }
+}
+
+#[test]
+fn the_machine_runtime_lock_holders_answer_is_its_pid_alone() {
+    let answer = MachineRuntimeLockHolderPidAnswer { pid: 4242 };
+    let wire_text = serde_json::to_string(&answer).unwrap();
+    assert_eq!(wire_text, r#"{"pid":4242}"#);
+    assert_eq!(
+        serde_json::from_str::<MachineRuntimeLockHolderPidAnswer>(&wire_text).unwrap(),
+        answer
+    );
+}
+
+/// Each stream-action result in the order and spelling the runtime writes its keys.
+#[test]
+fn every_stream_action_result_serializes_its_keys_in_wire_order() {
+    fn wire_text(result: &impl Serialize) -> String {
+        serde_json::to_string(result).unwrap()
+    }
+
+    assert_eq!(
+        wire_text(&RemoveProjectToolResult {
+            action: "R-9".to_owned(),
+            project_directory: PathBuf::from("/srv/project"),
+        }),
+        r#"{"action":"R-9","project_directory":"/srv/project"}"#
+    );
+    assert_eq!(
+        wire_text(&ListStreamsToolResult {
+            streams: vec![
+                ListStreamsToolResultStream {
+                    stream: "cam-main-0a1b2c".to_owned(),
+                    display_name: "Desk camera".to_owned(),
+                    location: Some(StreamLocationOnTheWire {
+                        project_directory: PathBuf::from("/srv/cam"),
+                        project: uuid::Uuid::from_u128(1),
+                        stream_asset: uuid::Uuid::from_u128(2),
+                    }),
+                    state: ListedStreamState::Running,
+                    node_count: Some(4),
+                    failed_because: None,
+                    capture_devices_whose_access_was_never_asked_for: vec![
+                        CaptureDeviceOnTheWire::Camera,
+                        CaptureDeviceOnTheWire::Microphone,
+                    ],
+                    action: None,
+                    step: None,
+                },
+                ListStreamsToolResultStream {
+                    stream: "main".to_owned(),
+                    display_name: "main".to_owned(),
+                    location: None,
+                    state: ListedStreamState::Failed,
+                    node_count: None,
+                    failed_because: Some("an earlier runtime recorded it".to_owned()),
+                    capture_devices_whose_access_was_never_asked_for: Vec::new(),
+                    action: None,
+                    step: None,
+                },
+                ListStreamsToolResultStream {
+                    stream: "desk-0a1b2c".to_owned(),
+                    display_name: "desk".to_owned(),
+                    location: Some(StreamLocationOnTheWire {
+                        project_directory: PathBuf::from("/srv/desk"),
+                        project: uuid::Uuid::from_u128(3),
+                        stream_asset: uuid::Uuid::from_u128(4),
+                    }),
+                    state: ListedStreamState::Preparing,
+                    node_count: None,
+                    failed_because: None,
+                    capture_devices_whose_access_was_never_asked_for: Vec::new(),
+                    action: Some("Rabc-3".to_owned()),
+                    step: Some(StreamActionStepOnTheWire::MakingTheVenv),
+                },
+            ],
+        }),
+        r#"{"streams":[{"stream":"cam-main-0a1b2c","display_name":"Desk camera","location":{"project_directory":"/srv/cam","project":"00000000-0000-0000-0000-000000000001","stream_asset":"00000000-0000-0000-0000-000000000002"},"state":"running","node_count":4,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":["camera","microphone"],"action":null,"step":null},{"stream":"main","display_name":"main","location":null,"state":"failed","node_count":null,"failed_because":"an earlier runtime recorded it","capture_devices_whose_access_was_never_asked_for":[],"action":null,"step":null},{"stream":"desk-0a1b2c","display_name":"desk","location":{"project_directory":"/srv/desk","project":"00000000-0000-0000-0000-000000000003","stream_asset":"00000000-0000-0000-0000-000000000004"},"state":"preparing","node_count":null,"failed_because":null,"capture_devices_whose_access_was_never_asked_for":[],"action":"Rabc-3","step":"making_the_venv"}]}"#
+    );
+    assert_eq!(
+        wire_text(&ProjectStreamActionQueuedToolResult {
+            action: "Rabc-3".to_owned(),
+            project_directory: PathBuf::from("/srv/desk"),
+        }),
+        r#"{"action":"Rabc-3","project_directory":"/srv/desk"}"#
+    );
+    assert_eq!(
+        wire_text(&CreateProjectToolResult {
+            action: "Rabc-4".to_owned(),
+            stream: "brisk-otter-main-0a1b2c".to_owned(),
+            project_directory: PathBuf::from("/home/me/streams/brisk-otter"),
+        }),
+        r#"{"action":"Rabc-4","stream":"brisk-otter-main-0a1b2c","project_directory":"/home/me/streams/brisk-otter"}"#
+    );
+    assert_eq!(
+        wire_text(&ListSamplesToolResult {
+            samples: vec![ListSamplesToolResultSample {
+                name: "camera-halftone".to_owned(),
+                title: "Camera halftone".to_owned(),
+                summary: "Your webcam printed as newsprint.".to_owned(),
+            }],
+        }),
+        r#"{"samples":[{"name":"camera-halftone","title":"Camera halftone","summary":"Your webcam printed as newsprint."}]}"#
+    );
+    assert_eq!(
+        wire_text(&DescribeStreamActionToolResult {
+            action: "Rabc-3".to_owned(),
+            project_directory: PathBuf::from("/srv/desk"),
+            kind: StreamActionKindOnTheWire::Load,
+            state: StreamActionStateOnTheWire::InProgress,
+            step: Some(StreamActionStepOnTheWire::Starting),
+            venv_sync: None,
+            streams: vec![DescribeStreamActionToolResultStream {
+                stream: "desk-main-0a1b2c".to_owned(),
+                display_name: "main".to_owned(),
+                state: None,
+            }],
+            failed_because: None,
+        }),
+        r#"{"action":"Rabc-3","project_directory":"/srv/desk","kind":"load","state":"in_progress","step":"starting","venv_sync":null,"streams":[{"stream":"desk-main-0a1b2c","display_name":"main","state":null}],"failed_because":null}"#
+    );
+    assert_eq!(
+        wire_text(&ProjectVenvSyncOnTheWire {
+            phase: ProjectVenvSyncPhaseOnTheWire::Downloading,
+            packages_resolved: Some(8),
+            packages_prepared: None,
+            packages_installed: None,
+            downloads_started: 2,
+            downloads_done: 1,
+            packages: vec![
+                ProjectVenvSyncPackageOnTheWire {
+                    name: "numpy".to_owned(),
+                    version: None,
+                    kind: ProjectVenvSyncPackageKindOnTheWire::Distribution,
+                    state: ProjectVenvSyncPackageStateOnTheWire::Downloading,
+                    download_size_bytes: Some(16_672_358),
+                },
+                ProjectVenvSyncPackageOnTheWire {
+                    name: "cpython-3.12.15-macos-aarch64-none".to_owned(),
+                    version: None,
+                    kind: ProjectVenvSyncPackageKindOnTheWire::PythonInterpreter,
+                    state: ProjectVenvSyncPackageStateOnTheWire::Downloaded,
+                    download_size_bytes: Some(34_288_435),
+                },
+            ],
+        }),
+        r#"{"phase":"downloading","packages_resolved":8,"packages_prepared":null,"packages_installed":null,"downloads_started":2,"downloads_done":1,"packages":[{"name":"numpy","version":null,"kind":"distribution","state":"downloading","download_size_bytes":16672358},{"name":"cpython-3.12.15-macos-aarch64-none","version":null,"kind":"python_interpreter","state":"downloaded","download_size_bytes":34288435}]}"#
+    );
+    assert_eq!(
+        wire_text(&CancelStreamActionToolResult {
+            action: "Rabc-3".to_owned(),
+            state: StreamActionStateOnTheWire::Cancelled,
+        }),
+        r#"{"action":"Rabc-3","state":"cancelled"}"#
+    );
+    assert_eq!(
+        wire_text(&PausePlaybackToolResult {
+            project_directory: PathBuf::from("/srv/project"),
+            streams: vec!["project-main-1a2b3c".to_owned()],
+        }),
+        r#"{"project_directory":"/srv/project","streams":["project-main-1a2b3c"]}"#
+    );
+    assert_eq!(
+        wire_text(&ResumePlaybackToolResult {
+            project_directory: PathBuf::from("/srv/project"),
+            streams: vec!["project-main-1a2b3c".to_owned()],
+        }),
+        r#"{"project_directory":"/srv/project","streams":["project-main-1a2b3c"]}"#
+    );
+    assert_eq!(
+        wire_text(&LogsToolResult {
+            project_directory: PathBuf::from("/srv/project"),
+            records: vec![serde_json::json!({"message": "hello"})],
+            next_after: "2:17".to_owned(),
+            records_no_longer_held: false,
+        }),
+        r#"{"project_directory":"/srv/project","records":[{"message":"hello"}],"next_after":"2:17","records_no_longer_held":false}"#
+    );
+}
+
+/// The `Display` spelling a client prints is the spelling the wire carries.
+#[test]
+fn each_state_displays_as_the_wire_spells_it() {
+    for state in [
+        ListedStreamState::Running,
+        ListedStreamState::Stopped,
+        ListedStreamState::Paused,
+        ListedStreamState::Closed,
+        ListedStreamState::Failed,
+        ListedStreamState::Preparing,
+        ListedStreamState::Stopping,
+    ] {
+        assert_eq!(
+            serde_json::to_value(state).unwrap(),
+            serde_json::Value::String(state.to_string())
+        );
+    }
+}
+
+/// Asset results carry the UUID, kind, path and content hash under the names clients read.
+#[test]
+fn an_asset_transaction_result_spells_its_fields_as_the_wire_carries_them() {
+    let result = AssetTransactionToolResult {
+        asset: ProjectAssetOnTheWire {
+            asset: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
+            kind: "media".to_owned(),
+            path: "media/intro.mp4".to_owned(),
+            content_sha256: "ab".repeat(32),
+            content_byte_len: 12,
+            import_settings: serde_json::Map::new(),
+        },
+        transaction: "0b6f4e1d-3c55-4b0e-8d1e-6e2f0f9b7c21".to_owned(),
+        commit: "c".repeat(40),
+        action: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&result).unwrap(),
+        serde_json::json!({
+            "asset": {
+                "asset": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+                "kind": "media",
+                "path": "media/intro.mp4",
+                "content_sha256": "ab".repeat(32),
+                "content_byte_len": 12,
+                "import_settings": {},
+            },
+            "transaction": "0b6f4e1d-3c55-4b0e-8d1e-6e2f0f9b7c21",
+            "commit": "c".repeat(40),
+        })
+    );
+}
+
+/// A source's origin rides flat beside its listing, under `source`.
+#[test]
+fn a_node_type_source_spells_its_origin_flat_and_keeps_a_null_default() {
+    let wire = serde_json::json!({
+        "source": "dependency",
+        "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+        "folder": "gripper",
+        "version": "ab".repeat(32),
+        "project_name": "Gripper",
+        "node_types": [{
+            "type": "nodes.gripper:Gripper",
+            "kind": "function",
+            "description": "",
+            "category": null,
+            "inputs": [{"name": "grip", "family": "channels", "description": "", "annotation": "float | None", "pin_default": null}],
+            "outputs": null,
+            "path": "nodes/gripper.py",
+            "line": 4,
+        }],
+        "graph_generators": [],
+        "unreadable_modules": [],
+    });
+
+    let source: NodeTypeSourceReadWithoutRunningIt = serde_json::from_value(wire.clone()).unwrap();
+
+    assert_eq!(
+        source.origin,
+        NodeTypeSourceOrigin::Dependency {
+            project: "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11".to_owned(),
+            folder: "gripper".to_owned(),
+            version: "ab".repeat(32),
+            project_name: Some("Gripper".to_owned()),
+        }
+    );
+    assert_eq!(serde_json::to_value(&source).unwrap(), wire);
+}
+
+/// The project's interpreter lists an import's source with no project name, which the runtime
+/// names from the import's project file.
+#[test]
+fn an_imports_source_listed_with_no_project_name_reads_with_none() {
+    let source: NodeTypeSourceReadWithoutRunningIt = serde_json::from_value(serde_json::json!({
+        "source": "dependency",
+        "project": "6f1c2a52-8f0e-4d55-9a57-1f1b8f6f0a11",
+        "folder": "gripper",
+        "version": "ab".repeat(32),
+        "node_types": [],
+        "graph_generators": [],
+        "unreadable_modules": [],
+    }))
+    .unwrap();
+
+    assert!(matches!(
+        source.origin,
+        NodeTypeSourceOrigin::Dependency {
+            project_name: None,
+            ..
+        }
+    ));
+}
