@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-use super::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
+use super::processor_interpreters::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
