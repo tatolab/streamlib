@@ -11,15 +11,20 @@ use crate::module_host_table_abi::{
     MODULE_HOST_TABLE_DMA_BUF_IMPORT_MAX_PLANES, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_TRACE, MODULE_HOST_TABLE_LOG_LEVEL_WARN,
-    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK,
-    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable,
+    MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_TIMED_OUT, ModuleHostTable,
     ModuleHostTableBytes, ModuleHostTableColorInfo, ModuleHostTableDmaBufImport,
     ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
     ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
     ModuleHostTableMutableBytes, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
-    ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
+    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableStatus,
+    ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
+
+mod input_port;
+mod output_port;
+
+pub use input_port::{ModuleHostInputPort, ModuleHostReadMessage};
+pub use output_port::ModuleHostOutputPort;
 
 /// Why the module host table, or one of its verbs, refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -818,252 +823,6 @@ impl Drop for ModuleHostSurface {
         let table = &self.module_host.module_host_table;
         // SAFETY: gives back the surface this value holds, once.
         unsafe { (table.surface_release)(table.node_host, self.handle) };
-    }
-}
-
-/// An output port Python lent to native code.
-#[derive(Debug, Clone)]
-pub struct ModuleHostOutputPort {
-    module_host: ModuleHost,
-    port_name: String,
-    handle: ModuleHostTablePortHandle,
-}
-
-impl ModuleHostOutputPort {
-    /// The port's declared name.
-    pub fn port_name(&self) -> &str {
-        &self.port_name
-    }
-
-    /// Publish `payload` to every downstream link, stamped `timestamp_ns` or,
-    /// with `None`, its stream's clock now.
-    pub fn write(
-        &self,
-        payload: &[u8],
-        timestamp_ns: Option<i64>,
-        starts_group: bool,
-    ) -> Result<(), ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: the node host is retained by `self.module_host`; the
-        // payload and the message buffer are live for the call.
-        let status = unsafe {
-            (table.output_port_write)(
-                table.node_host,
-                self.handle,
-                ModuleHostTableBytes::of(payload),
-                timestamp_ns.unwrap_or(MODULE_HOST_TABLE_TIMESTAMP_NOW),
-                u32::from(starts_group),
-                &mut error_message,
-            )
-        };
-        refuse_unless_ok("output_port_write", status, &error_message)
-    }
-
-    /// Publish `payload` described by `payload_descriptor` to every
-    /// downstream link, stamped as [`Self::write`] stamps.
-    pub fn write_described(
-        &self,
-        payload: &[u8],
-        timestamp_ns: Option<i64>,
-        starts_group: bool,
-        payload_descriptor: &ModuleHostTablePayloadDescriptor,
-    ) -> Result<(), ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: as in `write`; the descriptor is live for the call.
-        let status = unsafe {
-            (table.output_port_write_described)(
-                table.node_host,
-                self.handle,
-                ModuleHostTableBytes::of(payload),
-                timestamp_ns.unwrap_or(MODULE_HOST_TABLE_TIMESTAMP_NOW),
-                u32::from(starts_group),
-                payload_descriptor,
-                &mut error_message,
-            )
-        };
-        refuse_unless_ok("output_port_write_described", status, &error_message)
-    }
-
-    /// Declare `given_up_group_count` groups given up before this port's next
-    /// write; its readers count them as lost since their last read.
-    pub fn declare_groups_given_up_before_the_next_write(
-        &self,
-        given_up_group_count: u64,
-    ) -> Result<(), ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: as in `write`.
-        let status = unsafe {
-            (table.output_port_declare_groups_given_up_before_the_next_write)(
-                table.node_host,
-                self.handle,
-                given_up_group_count,
-                &mut error_message,
-            )
-        };
-        refuse_unless_ok(
-            "output_port_declare_groups_given_up_before_the_next_write",
-            status,
-            &error_message,
-        )
-    }
-
-    /// Replace the port's stream facts: `family` is `image` or `packets`, the
-    /// port's own, and `stream_facts_json` the facts' fields as one JSON object.
-    pub fn set_stream_facts(
-        &self,
-        family: &str,
-        stream_facts_json: &str,
-    ) -> Result<(), ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: as in `write`.
-        let status = unsafe {
-            (table.output_port_set_stream_facts)(
-                table.node_host,
-                self.handle,
-                ModuleHostTableUtf8::of(family),
-                ModuleHostTableUtf8::of(stream_facts_json),
-                &mut error_message,
-            )
-        };
-        refuse_unless_ok("output_port_set_stream_facts", status, &error_message)
-    }
-}
-
-/// An input port Python lent to native code.
-#[derive(Debug, Clone)]
-pub struct ModuleHostInputPort {
-    module_host: ModuleHost,
-    port_name: String,
-    handle: ModuleHostTablePortHandle,
-}
-
-impl ModuleHostInputPort {
-    /// The port's declared name.
-    pub fn port_name(&self) -> &str {
-        &self.port_name
-    }
-
-    /// Take the port's next message, or `None` when its mailbox is empty.
-    pub fn read(&self) -> Result<Option<ModuleHostReadMessage>, ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut read_message = ModuleHostTableReadMessage::empty();
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: as in `ModuleHostOutputPort::write`.
-        let status = unsafe {
-            (table.input_port_read)(
-                table.node_host,
-                self.handle,
-                &mut read_message,
-                &mut error_message,
-            )
-        };
-        if status == MODULE_HOST_TABLE_STATUS_EMPTY {
-            return Ok(None);
-        }
-        refuse_unless_ok("input_port_read", status, &error_message)?;
-        Ok(Some(ModuleHostReadMessage {
-            module_host: self.module_host.clone(),
-            read_message,
-        }))
-    }
-}
-
-/// One message read off an input port; the payload is handed back to the host
-/// when this drops.
-#[derive(Debug)]
-pub struct ModuleHostReadMessage {
-    module_host: ModuleHost,
-    read_message: ModuleHostTableReadMessage,
-}
-
-// SAFETY: the host owns the payload until release, which any thread may call.
-unsafe impl Send for ModuleHostReadMessage {}
-
-impl ModuleHostReadMessage {
-    /// The payload exactly as the producer wrote it.
-    pub fn payload(&self) -> &[u8] {
-        // SAFETY: the host keeps the payload alive until this message drops.
-        unsafe {
-            ModuleHostTableBytes {
-                bytes: self.read_message.payload,
-                length: self.read_message.payload_length,
-            }
-            .as_slice()
-        }
-    }
-
-    /// The producer's stamp, on the engine's monotonic clock.
-    pub fn timestamp_ns(&self) -> i64 {
-        self.read_message.timestamp_ns
-    }
-
-    /// Whether the message opens a group.
-    pub fn starts_group(&self) -> bool {
-        self.read_message.starts_group != 0
-    }
-
-    /// The messages this one's inbound link lost since the read before it.
-    pub fn lost_since_last_read(&self) -> u64 {
-        self.read_message.lost_since_last_read
-    }
-
-    /// What the payload is: its kind and that kind's body.
-    pub fn payload_descriptor(&self) -> Result<ModuleHostTablePayloadDescriptor, ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut payload_descriptor = ModuleHostTablePayloadDescriptor::bytes();
-        // SAFETY: the host owns the message until this value drops.
-        let status = unsafe {
-            (table.input_message_payload_descriptor)(
-                table.node_host,
-                &self.read_message,
-                &mut payload_descriptor,
-            )
-        };
-        refuse_unless_ok(
-            "input_message_payload_descriptor",
-            status,
-            &ModuleHostTableErrorMessage::empty(),
-        )?;
-        Ok(payload_descriptor)
-    }
-
-    /// Lend native code the pooled GPU frame this message's Image frame or
-    /// GPU pool slot frame names, held against its producer's reuse until the
-    /// lent surface drops.
-    pub fn lend_pooled_gpu_frame(&self) -> Result<ModuleHostSurface, ModuleHostError> {
-        let table = &self.module_host.module_host_table;
-        let mut lent_surface = ModuleHostTableSurfaceHandle { value: 0 };
-        let mut error_message = ModuleHostTableErrorMessage::empty();
-        // SAFETY: as in `payload_descriptor`; the slots are live for the call.
-        let status = unsafe {
-            (table.input_message_lend_pooled_gpu_frame)(
-                table.node_host,
-                &self.read_message,
-                &mut lent_surface,
-                &mut error_message,
-            )
-        };
-        refuse_unless_ok(
-            "input_message_lend_pooled_gpu_frame",
-            status,
-            &error_message,
-        )?;
-        Ok(ModuleHostSurface {
-            module_host: self.module_host.clone(),
-            handle: lent_surface,
-        })
-    }
-}
-
-impl Drop for ModuleHostReadMessage {
-    fn drop(&mut self) {
-        let table = &self.module_host.module_host_table;
-        // SAFETY: hands back the message this value took, once.
-        unsafe { (table.input_message_release)(table.node_host, &mut self.read_message) };
     }
 }
 
