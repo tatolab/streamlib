@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Acceleration structures, over a ray-tracing device.
+//! Bottom- and top-level acceleration structures registered over a
+//! ray-tracing device: their ids, their release, and the instances refused.
 
 use super::*;
 

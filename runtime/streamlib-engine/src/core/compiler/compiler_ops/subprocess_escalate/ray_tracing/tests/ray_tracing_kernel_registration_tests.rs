@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Registration, over a ray-tracing device.
+//! Registering a ray-tracing kernel over a ray-tracing device: the binding
+//! names and kinds it answers with, kernel-id reuse, and refused declarations.
 
 use super::*;
 

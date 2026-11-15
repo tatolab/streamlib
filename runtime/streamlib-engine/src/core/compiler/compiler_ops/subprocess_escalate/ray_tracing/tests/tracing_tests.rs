@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Tracing, over a ray-tracing device.
+//! Tracing over a ray-tracing device: the bindings a trace resolves by name,
+//! the ones it refuses, and the escalate gate a trace every frame never enters.
 
 use super::*;
 

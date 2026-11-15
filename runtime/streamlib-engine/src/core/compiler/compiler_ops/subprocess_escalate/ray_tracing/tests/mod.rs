@@ -37,7 +37,7 @@ use crate::core::rhi::{
 };
 
 mod acceleration_structure_tests;
-mod registration_tests;
+mod ray_tracing_kernel_registration_tests;
 mod tracing_tests;
 mod wire_validation_tests;
 

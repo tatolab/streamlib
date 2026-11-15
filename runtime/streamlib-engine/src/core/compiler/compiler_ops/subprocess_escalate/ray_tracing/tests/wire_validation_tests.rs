@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Wire validation, before any device.
+//! The acceleration-structure and ray-tracing escalate requests refused at
+//! wire validation, before any device, and each wire stage compiled for the
+//! stage it names.
 
 use super::*;
 
