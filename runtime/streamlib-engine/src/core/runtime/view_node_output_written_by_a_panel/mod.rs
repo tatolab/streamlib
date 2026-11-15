@@ -13,11 +13,11 @@ use super::LoadedStreamInThisRuntime;
 use super::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 use crate::core::descriptors::{NodeValueLifetime, PortFamily};
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
-use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorInstanceComponent};
-use crate::core::graph_interface_resolution::{
+use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
 };
+use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorInstanceComponent};
 use crate::core::processors::{
     NodeTypesOneStreamResolves, NodeWhoseOutputsAClientWritesProcessor, ProcessorInstance,
 };

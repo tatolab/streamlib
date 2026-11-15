@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::core::graph_interface_resolution::{GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE};
+use crate::core::graph::graph_interface_resolution::{
+    GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
+};
 
 const LOOK_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a01";
 const SOFT_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a02";
@@ -475,14 +477,14 @@ fn two_fragments_of_one_name_on_one_level_are_refused_naming_it() {
 fn a_node_inside_a_fragment_is_read_only_to_a_live_removal_or_rename() {
     let flattening =
         flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
-    let drawn = crate::core::graph_snapshot::GraphOnlyNodesAsDrawn {
+    let drawn = crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn {
         fragments_as_drawn: flattening.fragments_as_drawn,
         ..Default::default()
     };
     let refusal = drawn
         .refuse_a_node_change_a_drawn_link_names(
             "look/soft/blur",
-            crate::core::graph_snapshot::NodeChangeADrawnLinkBlocks::Removal,
+            crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks::Removal,
         )
         .expect_err("refused")
         .to_string();

@@ -16,7 +16,7 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use super::StreamLocation;
-use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::{Error, Result};
 
 /// The name of the one stream asset a new project starts with.

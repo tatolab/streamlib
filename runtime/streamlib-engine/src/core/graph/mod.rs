@@ -8,7 +8,11 @@ mod data_structure;
 
 mod edges;
 mod exposed_config_field_input_ports;
+pub mod graph_fragment_flattening;
+pub mod graph_interface_resolution;
 mod graph_readiness;
+pub mod graph_snapshot;
+pub mod graph_variable_resolution;
 mod nodes;
 mod port_family_link_checks;
 mod processor_state_ecs_component;

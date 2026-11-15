@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
-use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::runtime::RuntimeShutdownEscalation;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::loaded_stream::LoadedStreamInThisRuntime;

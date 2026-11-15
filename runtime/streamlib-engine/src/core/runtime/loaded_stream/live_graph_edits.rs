@@ -8,8 +8,8 @@ use serde::Serialize;
 
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
+use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe};
-use crate::core::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
 use crate::core::processors::ProcessorSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
@@ -275,7 +275,7 @@ impl LoadedStreamInThisRuntime {
                     .interface_as_drawn
                     .refuse_a_config_update_that_breaks_a_declared_port(
                         &self.node_types_this_stream_resolves,
-                        &crate::core::graph_snapshot::GraphSnapshotNode {
+                        &crate::core::graph::graph_snapshot::GraphSnapshotNode {
                             id: Some(node.node_uuid),
                             name: node.display_name.clone(),
                             processor_type: node.processor_type.clone(),

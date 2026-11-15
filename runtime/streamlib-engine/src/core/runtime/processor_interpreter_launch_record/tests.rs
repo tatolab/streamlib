@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
-use crate::core::graph_snapshot::GraphSnapshot;
+use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use crate::core::runtime::a_project_on_disk_for_a_test::{
     options_loading_a_stream_of_the_test_project_at,

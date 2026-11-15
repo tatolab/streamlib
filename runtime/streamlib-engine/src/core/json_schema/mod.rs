@@ -30,7 +30,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughT
 /// Response from the `/api/graph` endpoint: the graph's spec — `stream`, `clock`,
 /// `nodes[].name` / `type` / `config` and `links[].source` / `target` — with
 /// the live keys beside it, so it loads back as a
-/// [`GraphSnapshot`](crate::core::graph_snapshot::GraphSnapshot).
+/// [`GraphSnapshot`](crate::core::graph::graph_snapshot::GraphSnapshot).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphResponse {
     /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.

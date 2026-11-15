@@ -28,7 +28,7 @@ use crate::core::descriptors::{
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorNode;
-use crate::core::graph_interface_resolution::{
+use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_DEFAULT_CONFIG_KEY, GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
 };
