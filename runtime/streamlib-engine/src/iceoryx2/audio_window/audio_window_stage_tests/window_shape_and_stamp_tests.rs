@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Exact windows at the declared size and hop, stamped from the anchor and the frame index, and the start sample each one carries.
+//! Exact windows at the declared size and hop, stamped from the anchor and the
+//! frame index, and the start sample each one carries.
 
 use super::*;
 

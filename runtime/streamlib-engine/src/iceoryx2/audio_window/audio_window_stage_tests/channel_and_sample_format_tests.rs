@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Channels averaged, duplicated or passed through as the contract declares, the sources it refuses, and the sample type a window carries.
+//! Channels averaged, duplicated or passed through as the contract declares,
+//! the sources it refuses, and the sample type a window carries.
 
 use super::*;
 

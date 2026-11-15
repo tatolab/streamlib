@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A gap or format change flushing the filter and the remainder, and what each flush counts as discarded.
+//! A gap or format change flushing the filter and the remainder, and what each
+//! flush counts as discarded.
 
 use super::*;
 

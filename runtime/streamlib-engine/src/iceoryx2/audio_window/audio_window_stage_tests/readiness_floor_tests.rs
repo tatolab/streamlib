@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The readiness floor a read is gated on, which never claims a window the read cannot then produce.
+//! The readiness floor a read is gated on, which never claims a window the read
+//! cannot then produce.
 
 use super::*;
 
