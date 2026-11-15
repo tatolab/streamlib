@@ -158,10 +158,10 @@ class TappedAudioRecorder:
 
 def _require_32_bit_float(stream_formats, what: str) -> None:
     if not stream_formats:
-        raise coreaudio_process_tap.CoreAudioFixtureError(f"{what} reports no streams")
+        raise coreaudio_hal_devices.CoreAudioFixtureError(f"{what} reports no streams")
     for stream_format in stream_formats:
         if not stream_format.is_32_bit_float:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"{what} is {stream_format}, and this peer copies 32-bit float only"
             )
 
@@ -171,13 +171,13 @@ def _raise_for_what_went_wrong_on_the_io_threads(
 ) -> None:
     for role, io_proc in (("player", player_io_proc), ("recorder", recorder_io_proc)):
         if io_proc.exceptions_on_the_io_thread:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the {role}'s IOProc raised {io_proc.exceptions_on_the_io_thread} times, "
                 f"first {io_proc.first_exception_on_the_io_thread}"
             )
     for role, counted in (("player", player), ("recorder", recorder)):
         if counted.buffers_of_an_unexpected_layout:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the {role} met {counted.buffers_of_an_unexpected_layout} buffers laid out "
                 "unlike the device's stream configuration"
             )
@@ -210,12 +210,12 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
         # aggregate its creator cannot list is one the engine could never open.
         aggregate = coreaudio_hal_devices.device_with_uid(aggregate_device_uid)
         if aggregate is None:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the private aggregate {aggregate_device_uid} is not listed to the process "
                 "that made it"
             )
         if aggregate.input_channels == 0:
-            raise coreaudio_process_tap.CoreAudioFixtureError(
+            raise coreaudio_hal_devices.CoreAudioFixtureError(
                 f"the private aggregate {aggregate_device_uid} has no input channels to "
                 "read the tap through"
             )
@@ -234,7 +234,7 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
             aggregate.object_id, recorder.on_io_cycle
         ) as recorder_io_proc:
             if not recorder.first_io_cycle.wait(FIRST_IO_CYCLE_TIMEOUT_SECONDS):
-                raise coreaudio_process_tap.CoreAudioFixtureError(
+                raise coreaudio_hal_devices.CoreAudioFixtureError(
                     f"the private aggregate ran no IO cycle within "
                     f"{FIRST_IO_CYCLE_TIMEOUT_SECONDS:.0f} s of starting"
                 )
@@ -243,7 +243,7 @@ def play_and_record_through_a_process_tap(signal, rate: int, speaker, mute_behav
             ) as player_io_proc:
                 playback_timeout_seconds = played_seconds + PLAYBACK_TIMEOUT_MARGIN_SECONDS
                 if not player.finished.wait(playback_timeout_seconds):
-                    raise coreaudio_process_tap.CoreAudioFixtureError(
+                    raise coreaudio_hal_devices.CoreAudioFixtureError(
                         f"the speaker's IOProc played {player.frames_played} of "
                         f"{player.frames_to_play} frames in {playback_timeout_seconds:.1f} s"
                     )
@@ -303,7 +303,7 @@ def main(argv) -> int:
         captured, capture_rate, evidence = play_and_record_through_a_process_tap(
             signal, rate, speaker, mute_behaviour
         )
-    except coreaudio_process_tap.CoreAudioFixtureError as error:
+    except coreaudio_hal_devices.CoreAudioFixtureError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     print(evidence)

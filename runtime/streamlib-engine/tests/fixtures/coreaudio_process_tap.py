@@ -30,7 +30,10 @@ anything is made, whether a tap may be made at all.
 
 Only the device queries and the preflight are safe to run unattended. Creating
 a tap raises the System Audio Recording prompt the first time it is read.
+
+The HAL bindings and the device queries live in `coreaudio_hal_devices`.
 """
+
 import ctypes
 import os
 import signal
@@ -44,18 +47,17 @@ from coreaudio_hal_devices import (
     AUDIO_OBJECT_UNKNOWN,
     built_in_microphone_among,
     built_in_speaker_among,
-    CF_NUMBER_SINT32_TYPE,
     CF_STRING_ENCODING_UTF8,
     CoreAudioDevice,
     CoreAudioFixtureError,
     default_output_device,
     describe_device,
+    four_char_code,
     four_char_code_text,
     process_object_of,
-    TAP_PROPERTY_FORMAT,
-    _mac_frameworks,
-    _property_bytes,
-    _python_string_from_cf_string,
+    mac_frameworks,
+    property_bytes,
+    python_string_from_cf_string,
 )
 
 TCC_PRIVATE_FRAMEWORK = "/System/Library/PrivateFrameworks/TCC.framework/Versions/A/TCC"
@@ -77,6 +79,9 @@ GRANT_SYSTEM_AUDIO_RECORDING_IN_SYSTEM_SETTINGS = (
 # CATapMuteBehavior. `muted` keeps the tapped process's audio off the hardware
 # for as long as the tap exists, which is what makes the tap path silent.
 TAP_MUTE_BEHAVIOURS = {"unmuted": 0, "muted": 1}
+
+CF_NUMBER_SINT32_TYPE = 3
+TAP_PROPERTY_FORMAT = four_char_code("tfmt")
 
 # The keys `AudioHardwareCreateAggregateDevice` reads, as AudioHardware.h spells
 # them (kAudioAggregateDevice*Key, kAudioSubDevice*Key, kAudioSubTap*Key).
@@ -105,7 +110,7 @@ def system_audio_recording_authorization() -> str:
         return "unknown"
     preflight.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     preflight.restype = ctypes.c_int
-    core_foundation = _mac_frameworks().core_foundation
+    core_foundation = mac_frameworks().core_foundation
     service = core_foundation.CFStringCreateWithCString(
         None, SYSTEM_AUDIO_RECORDING_TCC_SERVICE.encode("ascii"), CF_STRING_ENCODING_UTF8
     )
@@ -215,7 +220,7 @@ class _CoreFoundationObjectsToRelease:
         return self
 
     def __exit__(self, *_exception) -> None:
-        core_foundation = _mac_frameworks().core_foundation
+        core_foundation = mac_frameworks().core_foundation
         for created in reversed(self._created):
             core_foundation.CFRelease(created)
         self._created.clear()
@@ -226,7 +231,7 @@ class _CoreFoundationObjectsToRelease:
         Toll-free bridged, so the same object serves where Foundation wants an
         NSString, NSNumber or NSArray.
         """
-        frameworks = _mac_frameworks()
+        frameworks = mac_frameworks()
         core_foundation = frameworks.core_foundation
         if isinstance(value, str):
             created = core_foundation.CFStringCreateWithCString(
@@ -269,9 +274,9 @@ class _CoreFoundationObjectsToRelease:
 
     def description_of(self, cf_object) -> str:
         """What Core Foundation prints for an object, for a report or a test."""
-        described = _mac_frameworks().core_foundation.CFCopyDescription(cf_object)
+        described = mac_frameworks().core_foundation.CFCopyDescription(cf_object)
         self._created.append(described)
-        return _python_string_from_cf_string(described) or ""
+        return python_string_from_cf_string(described) or ""
 
 
 class _TapDescription:
@@ -301,7 +306,7 @@ class _TapDescription:
         self._core_foundation_objects = _CoreFoundationObjectsToRelease()
 
     def __enter__(self) -> "_TapDescription":
-        frameworks = _mac_frameworks()
+        frameworks = mac_frameworks()
         tap_description_class = frameworks.objective_c_class("CATapDescription")
         if not tap_description_class:
             raise CoreAudioFixtureError(
@@ -343,7 +348,7 @@ class _TapDescription:
         return self
 
     def __exit__(self, *_exception) -> None:
-        frameworks = _mac_frameworks()
+        frameworks = mac_frameworks()
         if self._description:
             frameworks.send_message(self._description, "release", None)
             self._description = None
@@ -357,7 +362,7 @@ class _TapDescription:
         return self._description
 
     def tap_uid(self) -> str:
-        frameworks = _mac_frameworks()
+        frameworks = mac_frameworks()
         uuid = frameworks.send_message(self._description, "UUID")
         uuid_string = frameworks.send_message(uuid, "UUIDString")
         return frameworks.send_message(uuid_string, "UTF8String", ctypes.c_char_p).decode(
@@ -366,11 +371,11 @@ class _TapDescription:
 
     def is_private(self) -> bool:
         return bool(
-            _mac_frameworks().send_message(self._description, "isPrivate", ctypes.c_bool)
+            mac_frameworks().send_message(self._description, "isPrivate", ctypes.c_bool)
         )
 
     def mute_behaviour(self) -> str:
-        value = _mac_frameworks().send_message(self._description, "isMuted", ctypes.c_long)
+        value = mac_frameworks().send_message(self._description, "isMuted", ctypes.c_long)
         return {number: name for name, number in TAP_MUTE_BEHAVIOURS.items()}.get(
             value, str(value)
         )
@@ -429,7 +434,7 @@ class _CaptureDeviceReadingATap:
         raise NotImplementedError
 
     def __enter__(self) -> "_CaptureDeviceReadingATap":
-        core_audio = _mac_frameworks().core_audio
+        core_audio = mac_frameworks().core_audio
         with self._tap_description() as tap_description:
             self.tap_uid = tap_description.tap_uid()
             tap_object_id = ctypes.c_uint32(AUDIO_OBJECT_UNKNOWN)
@@ -464,7 +469,7 @@ class _CaptureDeviceReadingATap:
         return self
 
     def __exit__(self, *_exception) -> None:
-        core_audio = _mac_frameworks().core_audio
+        core_audio = mac_frameworks().core_audio
         if self.aggregate_device_object_id != AUDIO_OBJECT_UNKNOWN:
             core_audio.AudioHardwareDestroyAggregateDevice(self.aggregate_device_object_id)
             self.aggregate_device_object_id = AUDIO_OBJECT_UNKNOWN
@@ -474,7 +479,7 @@ class _CaptureDeviceReadingATap:
 
     def tap_format(self) -> "tuple[float, int] | None":
         """The tap's sample rate and channel count, from its AudioStreamBasicDescription."""
-        value = _property_bytes(self.tap_object_id, TAP_PROPERTY_FORMAT)
+        value = property_bytes(self.tap_object_id, TAP_PROPERTY_FORMAT)
         if not value or len(value) < 32:
             return None
         sample_rate = struct.unpack_from("<d", value, 0)[0]
@@ -583,7 +588,7 @@ class RunningAudioDeviceIOProc:
         return 0
 
     def __enter__(self) -> "RunningAudioDeviceIOProc":
-        core_audio = _mac_frameworks().core_audio
+        core_audio = mac_frameworks().core_audio
         _raise_on_failure(
             "AudioDeviceCreateIOProcID",
             core_audio.AudioDeviceCreateIOProcID(
@@ -604,7 +609,7 @@ class RunningAudioDeviceIOProc:
     def __exit__(self, *_exception) -> None:
         if not self._io_proc_id:
             return
-        core_audio = _mac_frameworks().core_audio
+        core_audio = mac_frameworks().core_audio
         # Called off the IO thread, AudioDeviceStop returns only once the
         # IOProc will not be called again, so destroying it next is safe.
         core_audio.AudioDeviceStop(self.device_object_id, self._io_proc_id)

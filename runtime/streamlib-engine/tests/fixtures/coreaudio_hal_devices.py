@@ -23,7 +23,6 @@ FOUNDATION_FRAMEWORK = "/System/Library/Frameworks/Foundation.framework/Foundati
 OBJECTIVE_C_RUNTIME_LIBRARY = "/usr/lib/libobjc.A.dylib"
 
 CF_STRING_ENCODING_UTF8 = 0x08000100
-CF_NUMBER_SINT32_TYPE = 3
 
 
 def four_char_code(code: str) -> int:
@@ -57,7 +56,6 @@ DEVICE_PROPERTY_DATA_SOURCE = four_char_code("ssrc")
 DEVICE_PROPERTY_NOMINAL_SAMPLE_RATE = four_char_code("nsrt")
 DEVICE_PROPERTY_STREAMS = four_char_code("stm#")
 STREAM_PROPERTY_VIRTUAL_FORMAT = four_char_code("sfmt")
-TAP_PROPERTY_FORMAT = four_char_code("tfmt")
 
 AUDIO_FORMAT_LINEAR_PCM = "lpcm"
 AUDIO_FORMAT_FLAG_IS_FLOAT = 1 << 0
@@ -321,14 +319,14 @@ class _MacFrameworks:
 
 
 @functools.lru_cache(maxsize=1)
-def _mac_frameworks() -> _MacFrameworks:
+def mac_frameworks() -> _MacFrameworks:
     if sys.platform != "darwin":
         raise CoreAudioFixtureError(f"Core Audio is macOS's; this is {sys.platform}")
     return _MacFrameworks()
 
 
-def _python_string_from_cf_string(cf_string) -> Optional[str]:
-    core_foundation = _mac_frameworks().core_foundation
+def python_string_from_cf_string(cf_string) -> Optional[str]:
+    core_foundation = mac_frameworks().core_foundation
     length = core_foundation.CFStringGetLength(cf_string)
     capacity = (
         core_foundation.CFStringGetMaximumSizeForEncoding(length, CF_STRING_ENCODING_UTF8)
@@ -342,9 +340,9 @@ def _python_string_from_cf_string(cf_string) -> Optional[str]:
     return buffer.value.decode("utf-8")
 
 
-def _property_bytes(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL, qualifier=None):
+def property_bytes(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL, qualifier=None):
     """A property's raw value, or None where the object does not have it."""
-    core_audio = _mac_frameworks().core_audio
+    core_audio = mac_frameworks().core_audio
     address = _AudioObjectPropertyAddress(selector, scope, PROPERTY_ELEMENT_MAIN)
     qualifier_size = ctypes.sizeof(qualifier) if qualifier is not None else 0
     qualifier_pointer = ctypes.byref(qualifier) if qualifier is not None else None
@@ -369,32 +367,32 @@ def _property_bytes(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL, qualifier=
 
 
 def _uint32_property(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL, qualifier=None):
-    value = _property_bytes(object_id, selector, scope, qualifier)
+    value = property_bytes(object_id, selector, scope, qualifier)
     return struct.unpack_from("<I", value)[0] if value and len(value) >= 4 else None
 
 
 def _float64_property(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL):
-    value = _property_bytes(object_id, selector, scope)
+    value = property_bytes(object_id, selector, scope)
     return struct.unpack_from("<d", value)[0] if value and len(value) >= 8 else None
 
 
 def _string_property(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL):
     """A CFString property as Python text; the HAL hands the caller a +1 reference."""
-    value = _property_bytes(object_id, selector, scope)
+    value = property_bytes(object_id, selector, scope)
     if not value or len(value) < ctypes.sizeof(ctypes.c_void_p):
         return None
     cf_string = ctypes.c_void_p.from_buffer_copy(value).value
     if not cf_string:
         return None
     try:
-        return _python_string_from_cf_string(cf_string)
+        return python_string_from_cf_string(cf_string)
     finally:
-        _mac_frameworks().core_foundation.CFRelease(cf_string)
+        mac_frameworks().core_foundation.CFRelease(cf_string)
 
 
 def channels_in_each_buffer(object_id, scope) -> "list[int]":
     """The channel count of each buffer an IOProc on this device sees in one direction."""
-    value = _property_bytes(object_id, DEVICE_PROPERTY_STREAM_CONFIGURATION, scope)
+    value = property_bytes(object_id, DEVICE_PROPERTY_STREAM_CONFIGURATION, scope)
     if not value or len(value) < 4:
         return []
     buffer_count = struct.unpack_from("<I", value)[0]
@@ -414,13 +412,13 @@ def _channel_count(object_id, scope):
 
 def stream_virtual_formats(object_id, scope) -> "list[AudioStreamFormat]":
     """The format an IOProc sees on each of a device's streams in one direction."""
-    value = _property_bytes(object_id, DEVICE_PROPERTY_STREAMS, scope) or b""
+    value = property_bytes(object_id, DEVICE_PROPERTY_STREAMS, scope) or b""
     stream_ids = struct.unpack(f"<{len(value) // 4}I", value[: len(value) // 4 * 4])
     formats = []
     for stream_id in stream_ids:
         # AudioStreamBasicDescription: mSampleRate, mFormatID and mFormatFlags
         # lead; mChannelsPerFrame and mBitsPerChannel sit at 28 and 32.
-        description = _property_bytes(stream_id, STREAM_PROPERTY_VIRTUAL_FORMAT)
+        description = property_bytes(stream_id, STREAM_PROPERTY_VIRTUAL_FORMAT)
         if not description or len(description) < 36:
             continue
         sample_rate, format_id, format_flags = struct.unpack_from("<dII", description, 0)
@@ -460,7 +458,7 @@ def describe_device(object_id: int) -> CoreAudioDevice:
 
 def attached_devices() -> "list[CoreAudioDevice]":
     """Every device the HAL lists to this process, private ones it created included."""
-    value = _property_bytes(AUDIO_SYSTEM_OBJECT_ID, HARDWARE_PROPERTY_DEVICES) or b""
+    value = property_bytes(AUDIO_SYSTEM_OBJECT_ID, HARDWARE_PROPERTY_DEVICES) or b""
     object_ids = struct.unpack(f"<{len(value) // 4}I", value[: len(value) // 4 * 4])
     return [describe_device(object_id) for object_id in object_ids]
 
