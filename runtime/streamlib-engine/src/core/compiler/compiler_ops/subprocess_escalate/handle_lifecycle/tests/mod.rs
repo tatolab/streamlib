@@ -1,0 +1,152 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use super::EscalateHandleRegistry;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::core::test_support::LiveSurfaceShareServiceForATest;
+#[cfg(target_os = "linux")]
+use crate::core::test_support::rig_only_capability_skip::{
+    RigOnlyCapability, skip_unless_this_machine_has,
+};
+
+mod one_off_acquisition_budget_tests;
+mod processor_output_pool_and_iosurface_tests;
+mod tensor_storage_buffer_tests;
+mod texture_export_flavour_tests;
+
+/// The handle id an escalate acquire answered, or its refusal's message.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn handle_id_or_refusal_of(
+    response: Option<
+        crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse,
+    >,
+) -> std::result::Result<String, String> {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+
+    match response {
+        Some(EscalateResponse::Ok(ok)) => Ok(ok.handle_id),
+        Some(EscalateResponse::Err(err)) => Err(err.message),
+        None => Err("the escalate op got no response".to_string()),
+    }
+}
+
+/// A one-off 64x32 `rgba8_unorm` `texture_binding` texture request, the
+/// shape the per-node count tests acquire.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_one_off_64x32_rgba8_unorm_texture_request()
+-> crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+
+    EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+        request_id: "req-one-off-64x32".to_string(),
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm
+            .wire_name()
+            .to_string(),
+        processor_output_pool: None,
+        usage: vec!["texture_binding".to_string()],
+    })
+}
+
+/// The shape a one-off 64x32 `rgba8_unorm` `texture_binding` texture is
+/// counted under, the wire's implied copy bits included.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn the_64x32_rgba8_unorm_one_off_texture_shape() -> super::OneOffAcquisitionShape {
+    super::OneOffAcquisitionShape::Texture {
+        width: 64,
+        height: 32,
+        format: crate::core::rhi::TextureFormat::Rgba8Unorm,
+        usage: super::super::acquisition::parse_texture_usages(&["texture_binding".to_string()])
+            .expect("a known usage"),
+    }
+}
+
+/// Acquire a one-off 64x32 `rgba8_unorm` texture over the real escalate op,
+/// answering its handle id or the refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) -> std::result::Result<String, String> {
+    handle_id_or_refusal_of(super::super::handle_escalate_op(
+        sandbox,
+        registry,
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        a_one_off_64x32_rgba8_unorm_texture_request(),
+    ))
+}
+
+/// Release one handle over the real escalate op, answering the refusal if
+/// the release was refused.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn release_a_handle_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    handle_id: &str,
+) -> std::result::Result<(), String> {
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
+
+    handle_id_or_refusal_of(super::super::handle_escalate_op(
+        sandbox,
+        registry,
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+            request_id: "req-release".to_string(),
+            handle_id: handle_id.to_string(),
+        }),
+    ))
+    .map(|_| ())
+}
+
+/// Run every release a helper's teardown owes, as its bridge's drop does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn release_everything_the_helpers_teardown_owes(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+) {
+    super::release_everything_a_torn_down_helper_held(sandbox, registry);
+}
+
+/// Ask one of the helper's processor output pools for its next frame over the
+/// real escalate op, answering the published frame id or the refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn next_processor_output_frame_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    pool_key: &str,
+    rotation_depth: u32,
+) -> std::result::Result<String, String> {
+    use super::super::handle_escalate_op;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+        EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
+    };
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
+        EscalateRequest, EscalateResponse,
+    };
+    use crate::core::rhi::TextureFormat;
+
+    match handle_escalate_op(
+        sandbox,
+        registry,
+        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-pooled".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
+            processor_output_pool: Some(EscalateRequestProcessorOutputPool {
+                pool_key: pool_key.to_string(),
+                rotation_depth,
+            }),
+            usage: vec!["texture_binding".to_string()],
+        }),
+    ) {
+        Some(EscalateResponse::Ok(ok)) => Ok(ok.handle_id),
+        Some(EscalateResponse::Err(err)) => Err(err.message),
+        None => Err("the pooled acquire_texture got no response".to_string()),
+    }
+}
