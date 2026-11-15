@@ -32,7 +32,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Optional
 
-from . import _stream_graph_builder
+from . import _graph_generator_detection, _stream_builder, _stream_graph_builder
 from ._stream_graph_builder import is_graph_generator, place_graph_generator
 
 __all__ = ["main"]
@@ -76,7 +76,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
 def _generator_failure_described(generator_failure: BaseException) -> str:
     """A failure as the project's own traceback, the frames of this entry and the builder
     dropped from its head."""
-    launcher_files = {__file__, _stream_graph_builder.__file__, importlib.__file__}
+    launcher_files = {
+        __file__,
+        _graph_generator_detection.__file__,
+        _stream_builder.__file__,
+        _stream_graph_builder.__file__,
+        importlib.__file__,
+    }
     failure_traceback = generator_failure.__traceback__
     while (
         failure_traceback is not None

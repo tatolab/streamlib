@@ -451,8 +451,8 @@ def _node_reference_schema_unless_not_one(annotation: Any) -> "dict[str, Any] | 
         NodeReference,
         NodeReferenceToNodeType,
         SoleReferrerNodeReferenceToNodeType,
-        _node_type_of,
     )
+    from ._stream_builder import _node_type_of
 
     if annotation is NodeReference or annotation is NodeReferenceToNodeType:
         keyword: "dict[str, Any]" = {}
