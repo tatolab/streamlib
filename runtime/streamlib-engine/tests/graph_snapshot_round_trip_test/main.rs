@@ -1,0 +1,147 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! A `graph` document is a loadable graph: what a running stream renders loads
+//! into a fresh one as the same graph, by name.
+
+use std::path::Path;
+use std::sync::Arc;
+use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+
+use serial_test::serial;
+use streamlib::sdk::descriptors::{
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+};
+use streamlib::sdk::error::Error;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::graph_snapshot::GraphSnapshot;
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::runtime::{
+    LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeOperations,
+};
+
+mod graph_document_load_and_refusal_tests;
+mod node_reference_tests;
+mod variable_and_interface_tests;
+
+/// Register a descriptor-only type with one input and one output port.
+/// Idempotent under `serial_test`.
+fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let descriptor = ProcessorDescriptor::new(
+        ProcessorClassShortName::new(short).unwrap(),
+        import_path.clone(),
+        "graph round-trip test",
+    )
+    .with_input(PortDescriptor::new(
+        input,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ))
+    .with_output(PortDescriptor::new(
+        output,
+        "",
+        false,
+        streamlib::sdk::descriptors::PortFamilyDeclaration::of_family(
+            streamlib::sdk::descriptors::PortFamily::Image,
+        ),
+    ));
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    import_path
+}
+
+fn the_graph_document_of(stream: &LoadedStreamInThisRuntime) -> serde_json::Value {
+    stream.to_json().expect("the graph renders")
+}
+
+fn the_spec_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    GraphSnapshot::from_graph_document(graph_document).expect("a graph document is a graph")
+}
+
+/// The spec in `graph_document` with each node's UUID dropped, refusing a node that renders none.
+fn the_spec_without_its_node_uuids_in(graph_document: serde_json::Value) -> GraphSnapshot {
+    let mut graph = the_spec_in(graph_document);
+    for node in &mut graph.nodes {
+        assert!(
+            node.id.take().is_some(),
+            "node `{}` renders no UUID",
+            node.name
+        );
+    }
+    graph
+}
+
+/// Load options for the stream `stream_id` of the project in `project_directory`.
+fn in_the_project(project_directory: &Path, stream_id: &str) -> OptionsForLoadingOneStream {
+    options_loading_a_stream_of_the_test_project_at(project_directory, stream_id)
+}
+
+/// The stream id a test graph gives the stream it loads: its `stream`, else `main`.
+fn the_stream_id_a_test_graph_gives(graph: &serde_json::Value) -> String {
+    graph["stream"].as_str().unwrap_or("main").to_owned()
+}
+
+fn an_empty_stream_loaded_into(
+    runner: &Runner,
+    project_directory: &Path,
+    stream_id: &str,
+) -> Arc<LoadedStreamInThisRuntime> {
+    runner
+        .load_an_empty_stream(in_the_project(project_directory, stream_id))
+        .expect("an empty stream loads")
+}
+
+/// `graph` loaded into `runner` as a stream of the project in
+/// `project_directory`.
+fn load(
+    runner: &Runner,
+    project_directory: &Path,
+    graph: serde_json::Value,
+) -> streamlib::sdk::error::Result<Arc<LoadedStreamInThisRuntime>> {
+    let stream_id = the_stream_id_a_test_graph_gives(&graph);
+    runner.load_stream_from_graph_snapshot(
+        &the_spec_in(graph),
+        in_the_project(project_directory, &stream_id),
+    )
+}
+
+/// The refusal a load met; a load that succeeded fails the test naming `why`.
+fn the_refusal_of(
+    load: streamlib::sdk::error::Result<Arc<LoadedStreamInThisRuntime>>,
+    why: &str,
+) -> Error {
+    match load {
+        Ok(stream) => panic!("the stream `{}` loaded, and {why}", stream.stream_id()),
+        Err(refusal) => refusal,
+    }
+}
+
+/// Register a gateway type and a track type whose config key `gateway` takes
+/// a reference to a gateway.
+fn register_a_gateway_and_a_track_naming_one()
+-> (ProcessorClassImportPath, ProcessorClassImportPath) {
+    let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
+    let track_import_path =
+        ProcessorClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
+        ProcessorDescriptor::new(
+            ProcessorClassShortName::new("ReferenceEdgeTrack").unwrap(),
+            track_import_path.clone(),
+            "graph round-trip test",
+        )
+        .with_config_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "gateway": {
+                    streamlib::sdk::descriptors::NODE_REFERENCE_SCHEMA_KEYWORD:
+                        {"node_type": gateway.as_str()}
+                }
+            }
+        })),
+    );
+    (gateway, track_import_path)
+}
