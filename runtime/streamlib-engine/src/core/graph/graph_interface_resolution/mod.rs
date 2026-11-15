@@ -18,7 +18,7 @@ use crate::core::descriptors::{
     refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::cast_exposed_name_to_url_safe;
-use crate::core::graph_snapshot::{
+use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
 };

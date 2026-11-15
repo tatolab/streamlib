@@ -391,7 +391,7 @@ impl NodeTypesOneStreamResolves {
     /// link's other end, else Records.
     pub(crate) fn hold_a_placeholder_of_each_node_type_not_described(
         &self,
-        graph: &crate::core::graph_snapshot::GraphSnapshot,
+        graph: &crate::core::graph::graph_snapshot::GraphSnapshot,
         why_its_node_code_did_not_describe_them: &str,
     ) {
         let every_node_type_is_held = self
@@ -557,7 +557,9 @@ impl NodeTypesOneStreamResolves {
         &self,
         node_type: &ProcessorClassImportPath,
     ) -> Option<Arc<NodeTypeOneStreamResolvesBeyondTheNativeOnes>> {
-        if node_type.as_str() == crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE {
+        if node_type.as_str()
+            == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
+        {
             return Some(Arc::clone(&THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS));
         }
         self.view_types_this_streams_project_brings

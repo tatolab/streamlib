@@ -111,7 +111,7 @@ fn unknown_processor_type_leaves_failed_node_in_graph_with_error_state() {
 #[test]
 #[serial]
 fn graph_snapshot_validate_rejects_unknown_processor_type() {
-    use streamlib_engine::core::graph_snapshot::GraphSnapshot;
+    use streamlib_engine::core::graph::graph_snapshot::GraphSnapshot;
 
     let json = r#"{
         "nodes": [

@@ -36,17 +36,17 @@ use uuid::Uuid;
 
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::graph::graph_interface_resolution::{
+    GraphInterfaceLevel, is_a_graph_interface_node_type,
+    the_family_a_port_linked_to_an_interface_node_carries,
+};
+use crate::core::graph::graph_variable_resolution::is_a_graph_variable_node_type;
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
     refuse_a_reference_to_a_node_of_the_wrong_type,
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
-use crate::core::graph_interface_resolution::{
-    GraphInterfaceLevel, is_a_graph_interface_node_type,
-    the_family_a_port_linked_to_an_interface_node_carries,
-};
-use crate::core::graph_variable_resolution::is_a_graph_variable_node_type;
 use crate::core::json_schema::{LabelledNodeGroup, LinkPortRefOutput};
 use crate::core::processors::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};

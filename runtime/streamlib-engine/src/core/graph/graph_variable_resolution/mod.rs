@@ -15,11 +15,11 @@ use std::collections::{HashMap, HashSet};
 use streamlib_processor_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references};
 
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
-use crate::core::graph_fragment_flattening::{
+use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
-use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
     ProcessorNodeOutput, ProcessorNodePortsOutput,

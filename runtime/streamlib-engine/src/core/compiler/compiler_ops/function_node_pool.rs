@@ -562,7 +562,7 @@ pub(crate) mod tests {
         let (graph, ..) = a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
         let rendered = serde_json::to_string(&graph.to_graph_response("rig".to_string())).unwrap();
 
-        let loaded = crate::core::graph_snapshot::GraphSnapshot::from_json_str(&rendered)
+        let loaded = crate::core::graph::graph_snapshot::GraphSnapshot::from_json_str(&rendered)
             .expect("`graph`'s output loads");
 
         assert_eq!(loaded.nodes.len(), 2);

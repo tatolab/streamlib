@@ -26,7 +26,7 @@ use crate::core::context::{
     CaptureDeviceAccessPrompting, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
 };
 use crate::core::graph::cast_exposed_name_to_url_safe;
-use crate::core::graph_snapshot::GraphOnlyNodesAsDrawn;
+use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::processors::NodeTypesOneStreamResolves;
@@ -624,7 +624,7 @@ pub(super) fn the_current_value_of_each_graph_input(
         .iter()
         .filter(|node| {
             node.processor_type.as_str()
-                == crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
+                == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
         })
         .filter_map(|node| {
             let current_value = match node.get::<crate::core::graph::ProcessorInstanceComponent>() {
@@ -634,7 +634,7 @@ pub(super) fn the_current_value_of_each_graph_input(
                     .as_any_mut()
                     .downcast_mut::<NodeWhoseOutputsAClientWritesProcessor>()?
                     .current_value_of_the_output(
-                        crate::core::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
+                        crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
                     )?
                     .clone(),
                 None => {
@@ -670,7 +670,7 @@ fn render_the_current_value_of_each_graph_input_into(
         };
         if let Some(serde_json::Value::Object(graph_interface)) = node
             .components
-            .get_mut(crate::core::graph_interface_resolution::GRAPH_INTERFACE_COMPONENT_KEY)
+            .get_mut(crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_COMPONENT_KEY)
         {
             graph_interface.insert(
                 GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD.to_string(),

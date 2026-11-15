@@ -15,16 +15,16 @@ use streamlib_processor_schema::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references,
 };
 
-use crate::core::graph::{
-    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
-};
-use crate::core::graph_interface_resolution::{
+use crate::core::graph::graph_interface_resolution::{
     GraphInterfaceAsDrawn, GraphInterfaceLevel, GraphInterfacePort, GraphInterfacePortDirection,
     is_a_graph_interface_node_type, the_family_a_port_linked_to_an_interface_node_carries,
 };
-use crate::core::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
-use crate::core::graph_variable_resolution::{
+use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::graph_variable_resolution::{
     SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
+};
+use crate::core::graph::{
+    cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphResponse, LinkOutput, LinkPortRefOutput, LinkStateOutput,

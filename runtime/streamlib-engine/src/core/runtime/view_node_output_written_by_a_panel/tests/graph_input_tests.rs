@@ -12,7 +12,7 @@ impl AStreamOfAProjectBringingViews {
             .add_processor(
                 ProcessorSpec::new(
                     ProcessorClassImportPath::new(
-                        crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                        crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                     )
                     .unwrap(),
                     config,
@@ -340,7 +340,7 @@ fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
 #[serial]
 fn a_graph_input_declaring_a_lifetime_that_is_neither_kept_nor_reset_is_refused() {
     let refusal =
-        crate::core::graph_interface_resolution::the_value_lifetime_a_graph_input_config_declares(
+        crate::core::graph::graph_interface_resolution::the_value_lifetime_a_graph_input_config_declares(
             Some(&json!({ "lifetime": "forever" })),
         )
         .unwrap_err();
@@ -370,7 +370,7 @@ fn add_the_lights_input(stream: &LoadedStreamInThisRuntime, node_uuid: uuid::Uui
         .add_processor(
             ProcessorSpec::new(
                 ProcessorClassImportPath::new(
-                    crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                    crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                 )
                 .unwrap(),
                 json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
@@ -551,7 +551,7 @@ fn a_value_written_to_a_stopped_reset_graph_input_is_refused_saying_the_project_
         .add_processor(
             ProcessorSpec::new(
                 ProcessorClassImportPath::new(
-                    crate::core::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+                    crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                 )
                 .unwrap(),
                 json!({ "port": "trigger", "family": "array", "default": 0, "lifetime": "reset" }),

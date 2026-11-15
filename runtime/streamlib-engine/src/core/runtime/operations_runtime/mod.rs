@@ -15,12 +15,12 @@ use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     PendingDeletionComponent, ProcessorInstanceComponent, ProcessorUniqueId, StateComponent,
     node_named_or_refused, refuse_a_link_between_ports_whose_families_do_not_match,
 };
-use crate::core::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
