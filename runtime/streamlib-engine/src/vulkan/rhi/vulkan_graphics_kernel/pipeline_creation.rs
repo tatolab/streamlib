@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -25,7 +25,6 @@ use super::pipeline_state_conversions::{
     graphics_stage_to_vk, polygon_mode_to_vk, primitive_topology_to_vk, shader_stage_flags_to_vk,
     texture_format_to_vk, vertex_attribute_format_to_vk, vertex_input_rate_to_vk,
 };
-use sha2::Digest as _;
 
 pub(super) fn create_shader_modules(
     device: &vulkanalia::Device,

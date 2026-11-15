@@ -11,8 +11,8 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use super::{
-    BindingResource, DrawKind, OffscreenColorTarget, OffscreenDraw, OffscreenScaffold,
-    OffscreenScaffoldHandles, PendingState, VulkanGraphicsKernelInner,
+    BindingResource, OffscreenColorTarget, OffscreenDraw, OffscreenScaffold, PendingState,
+    VulkanGraphicsKernelInner,
 };
 
 use super::pipeline_creation::{allocate_command_buffer, create_command_pool};
@@ -572,4 +572,16 @@ impl VulkanGraphicsKernelInner {
         }
         Ok(())
     }
+}
+
+#[derive(Clone, Copy)]
+struct OffscreenScaffoldHandles {
+    command_buffer: vk::CommandBuffer,
+    fence: vk::Fence,
+}
+
+#[derive(Clone, Copy)]
+enum DrawKind {
+    Draw(DrawCall),
+    DrawIndexed(DrawIndexedCall),
 }

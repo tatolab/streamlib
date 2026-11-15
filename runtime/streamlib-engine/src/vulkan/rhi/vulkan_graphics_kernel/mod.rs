@@ -32,6 +32,7 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
+use pipeline_state_conversions::index_type_to_vk;
 
 /// Rich data backing a [`VulkanGraphicsKernel`], reached through the
 /// kernel's opaque handle.
@@ -133,8 +134,6 @@ mod offscreen_drawing;
 mod pipeline_creation;
 mod pipeline_state_conversions;
 mod spirv_validation;
-
-use pipeline_state_conversions::index_type_to_vk;
 
 impl VulkanGraphicsKernelInner {
     /// Bindings declared at construction time.
@@ -387,18 +386,6 @@ impl VulkanGraphicsKernelInner {
         *guard = Some(sampler);
         Ok(sampler)
     }
-}
-
-#[derive(Clone, Copy)]
-struct OffscreenScaffoldHandles {
-    command_buffer: vk::CommandBuffer,
-    fence: vk::Fence,
-}
-
-#[derive(Clone, Copy)]
-enum DrawKind {
-    Draw(DrawCall),
-    DrawIndexed(DrawIndexedCall),
 }
 
 impl Drop for VulkanGraphicsKernelInner {
@@ -670,5 +657,6 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
         f.debug_struct("VulkanGraphicsKernel").finish()
     }
 }
+
 #[cfg(test)]
 mod tests;

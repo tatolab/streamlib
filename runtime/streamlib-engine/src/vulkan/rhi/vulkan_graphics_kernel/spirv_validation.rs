@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use rspirv_reflect::DescriptorType as RDescriptorType;
+
 use crate::core::rhi::{
     GraphicsBindingKind, GraphicsBindingSpec, GraphicsKernelDescriptor, GraphicsShaderStage,
     GraphicsShaderStageFlags, reflect_spirv_without_its_debug_source_strings,
@@ -12,7 +14,6 @@ use crate::core::{Error, Result};
 use crate::vulkan::rhi::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 
 use super::pipeline_state_conversions::graphics_stage_to_vk;
-use rspirv_reflect::DescriptorType as RDescriptorType;
 
 // ---- Validation + creation helpers --------------------------------------------
 
