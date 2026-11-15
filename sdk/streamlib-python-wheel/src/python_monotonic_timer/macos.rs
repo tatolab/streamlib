@@ -41,8 +41,10 @@ pub(super) fn wait_on_python_monotonic_timer(
     python: Python<'_>,
     timeout_ms: u64,
 ) -> i64 {
-    // Copied out for the same reason as the Linux arm; the schedule is
-    // relocked only once a deadline fired, to count and re-arm.
+    // Copied out rather than held: a close() racing this wait must not block
+    // behind the kqueue timeout, and a wait on a just-closed kqueue reports -1
+    // through EBADF. The schedule is relocked only once a deadline fired, to
+    // count and re-arm.
     let Some(kqueue_fd) = timer
         .kqueue_schedule
         .lock()
