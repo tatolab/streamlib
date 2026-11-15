@@ -13,6 +13,7 @@ use streamlib_project_repository::{
     ProjectTransactionAuthorKind, the_file_of_an_asset, the_upload_file_of,
 };
 use uuid::Uuid;
+
 mod asset_import_paths_and_refusals_tests;
 mod asset_lifecycle_and_history_tests;
 mod stream_assets_and_asset_files_tests;
