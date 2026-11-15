@@ -204,7 +204,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 iosurface.bytes_per_row()
             )));
         }
-        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+        let vulkan_device = crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
             .get()
             .ok_or_else(|| {
                 crate::core::Error::NotSupported(
@@ -284,7 +284,7 @@ impl RhiPixelBufferImport for super::PixelBuffer {
         }
 
         let vulkan_device =
-            crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                 .get()
                 .ok_or_else(|| {
                     crate::core::Error::NotSupported(

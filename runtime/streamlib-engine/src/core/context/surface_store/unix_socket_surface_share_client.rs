@@ -834,13 +834,14 @@ impl SurfaceStoreInner {
             Error::Configuration(format!("lookup_texture: unknown format '{}'", format_str))
         })?;
 
-        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
-            .get()
-            .ok_or_else(|| {
-                Error::NotSupported(
-                    "lookup_texture: HostVulkanDevice not initialized for import".into(),
-                )
-            })?;
+        let vulkan_device =
+            crate::vulkan::rhi::memory_and_buffers::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+                .get()
+                .ok_or_else(|| {
+                    Error::NotSupported(
+                        "lookup_texture: HostVulkanDevice not initialized for import".into(),
+                    )
+                })?;
 
         let drm_format_modifier = response
             .get("drm_format_modifier")

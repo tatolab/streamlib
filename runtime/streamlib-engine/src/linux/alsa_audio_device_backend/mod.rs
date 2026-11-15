@@ -4,7 +4,7 @@
 //! The audio backend chain's second arm: ALSA, reached entirely at runtime.
 //!
 //! `libasound.so.2` is opened with `libloading` and every entry point is a
-//! `dlsym` result, the way `vulkan/rhi/drm_modifier_probe.rs` reaches
+//! `dlsym` result, the way `vulkan/rhi/device/drm_modifier_probe.rs` reaches
 //! `libEGL.so.1`. Nothing here links an audio library, so the wheel's
 //! `DT_NEEDED` set does not grow. Unlike the PipeWire arm this one needs no
 //! compiled shim: ALSA's API is opaque-pointer C with no header-only inline
