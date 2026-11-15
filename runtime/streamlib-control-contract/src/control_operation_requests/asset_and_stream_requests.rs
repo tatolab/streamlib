@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The params of the operations on a project's assets and stream assets, and the asset kind they name.
+//! The params of the operations on a project's assets and stream assets, and their kind.
 
 use std::path::PathBuf;
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The params of the operations that create, import, rename, describe, cover and duplicate a project.
+//! The params of the operations that create, import, rename and describe a project.
 
 use std::path::PathBuf;
 

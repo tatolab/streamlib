@@ -70,6 +70,10 @@ pub const IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION: &str = "A key the caller mints o
 /// What `project_directory` says where it names the project an operation acts on.
 pub const PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str = "The project, by absolute path: a folder holding `tatolab-project.json` and its stream assets' graph documents.";
 
+/// What `asset_project_directory` says.
+pub const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
+    "The project, by absolute path: a folder holding `tatolab-project.json`.";
+
 /// Whether a graph edit is kept.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -121,7 +125,3 @@ pub struct OneProjectByItsDirectoryRequest {
     #[schemars(description = PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION)]
     pub project_directory: PathBuf,
 }
-
-/// What `asset_project_directory` says.
-pub const ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION: &str =
-    "The project, by absolute path: a folder holding `tatolab-project.json`.";

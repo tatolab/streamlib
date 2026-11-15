@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The params of the operations that describe the runtime, list and export its streams, read logs, and subscribe to changes.
+//! The params of the operations that describe the runtime, its streams, logs and changes.
 
 use std::path::PathBuf;
 
