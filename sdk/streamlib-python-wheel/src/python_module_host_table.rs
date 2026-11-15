@@ -20,28 +20,20 @@ mod shared_native_service_leases;
 use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyCapsule, PyDict};
+use pyo3::types::PyCapsule;
 use streamlib::sdk::context::CaptureDeviceAccessPrompting;
-use streamlib::sdk::error::Error;
-use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
-use streamlib::sdk::iceoryx2::{
-    DataChannelPayloadDescriptor, InputMailboxesInner, MessageGroupBoundary,
-    MessageReadFromInputPort, OutputWriterInner,
-};
+use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
 use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_ABI_MAJOR, MODULE_HOST_TABLE_ABI_MINOR, MODULE_HOST_TABLE_LOG_LEVEL_DEBUG,
     MODULE_HOST_TABLE_LOG_LEVEL_ERROR, MODULE_HOST_TABLE_LOG_LEVEL_INFO,
     MODULE_HOST_TABLE_LOG_LEVEL_WARN, MODULE_HOST_TABLE_PYTHON_CAPSULE_NAME,
     MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_ENDED, MODULE_HOST_TABLE_STATUS_OK,
-    MODULE_HOST_TABLE_STATUS_REFUSED, MODULE_HOST_TABLE_STATUS_TIMED_OUT,
-    MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTable, ModuleHostTableBytes,
-    ModuleHostTableColorInfo, ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage,
-    ModuleHostTableHostMemoryPixels, ModuleHostTableHostMemoryPixelsToFill,
-    ModuleHostTableIOSurfaceImport, ModuleHostTableNodeOutputTextureRequest,
-    ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle, ModuleHostTableReadMessage,
+    MODULE_HOST_TABLE_STATUS_REFUSED, ModuleHostTable, ModuleHostTableColorInfo,
+    ModuleHostTableDmaBufImport, ModuleHostTableErrorMessage, ModuleHostTableHostMemoryPixels,
+    ModuleHostTableHostMemoryPixelsToFill, ModuleHostTableIOSurfaceImport,
+    ModuleHostTableNodeOutputTextureRequest, ModuleHostTablePayloadDescriptor,
     ModuleHostTableSharedNativeServiceLease, ModuleHostTableSharedNativeServiceLeaseHandle,
     ModuleHostTableStatus, ModuleHostTableSurfaceHandle, ModuleHostTableUtf8,
 };
@@ -59,10 +51,7 @@ use self::shared_native_service_leases::{
 use crate::helper_process_native_escalate_channel::HelperProcessNativeEscalateChannel;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
-use crate::python_bag_conversion::json_value_to_python_object;
-use crate::python_helper_stream_clock::{
-    helper_stream_clock_now_ns, helper_stream_time_ns_of_a_machine_instant,
-};
+use crate::python_helper_stream_clock::helper_stream_time_ns_of_a_machine_instant;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
 

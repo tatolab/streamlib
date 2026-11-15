@@ -4,7 +4,28 @@
 //! The verbs a native module calls on the ports lent to it: opening one, writing an output, and
 //! reading, describing and releasing an input's messages.
 
-use super::*;
+use std::ffi::c_void;
+use std::time::Duration;
+
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use streamlib::sdk::error::Error;
+use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
+use streamlib::sdk::iceoryx2::{
+    DataChannelPayloadDescriptor, MessageGroupBoundary, MessageReadFromInputPort,
+};
+use tatolab_module_sdk::module_host_table_abi::{
+    MODULE_HOST_TABLE_STATUS_EMPTY, MODULE_HOST_TABLE_STATUS_OK, MODULE_HOST_TABLE_STATUS_REFUSED,
+    MODULE_HOST_TABLE_STATUS_TIMED_OUT, MODULE_HOST_TABLE_TIMESTAMP_NOW, ModuleHostTableBytes,
+    ModuleHostTableErrorMessage, ModuleHostTablePayloadDescriptor, ModuleHostTablePortHandle,
+    ModuleHostTableReadMessage, ModuleHostTableStatus, ModuleHostTableSurfaceHandle,
+    ModuleHostTableUtf8,
+};
+
+use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
+
+use super::{ModuleHostOfOneNode, node_host_of, refuse};
 
 /// The lent port `port_name` names, as a handle counted from one.
 fn handle_of_a_lent_port(
