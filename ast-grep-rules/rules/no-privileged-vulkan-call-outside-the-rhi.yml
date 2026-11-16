@@ -33,5 +33,6 @@ rule:
       regex: '^(allocate_memory|get_memory_fd_khr|create_compute_pipelines)$'
       inside:
         kind: token_tree
+        stopBy: end
       follows:
         regex: '^\.$'

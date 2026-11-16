@@ -1,0 +1,62 @@
+id: no-table-in-doc-comment
+valid:
+  - |
+    /// Picks `Bt709` primaries for an RGB source and `Bt709` for YCbCr.
+    fn f() {}
+  - |
+    /// Reads `a | b` as a bitwise or.
+    fn f() {}
+  - |
+    /// ---
+    fn f() {}
+  - |
+    // |---|---|
+    fn f() {}
+  - |
+    /// ```text
+    /// src/
+    /// ├── lib.rs
+    /// └── mod.rs
+    /// ```
+    fn f() {}
+  - |
+    //// +---+ not a doc
+    fn f() {}
+invalid:
+  - |
+    /// | a | b |
+    /// |--|--|
+    fn f() {}
+  - |
+    /** |---|---| */
+    fn f() {}
+  - |
+    /// a ╠══╣ b
+    fn f() {}
+  - |
+    /// | a |
+    /// |-|
+    fn f() {}
+  - |
+    /// | axis | RGB |
+    /// |---|---|
+    /// | `primaries` | `Bt709` |
+    fn f() {}
+  - |
+    //! | :--- | ---: |
+    fn f() {}
+  - |
+    /// +-----+-----+
+    /// | a   | b   |
+    /// +-----+-----+
+    fn f() {}
+  - |
+    /// ┌───┐
+    /// │ a │
+    /// └───┘
+    fn f() {}
+  - |
+    /**
+     * |---|---|
+     */
+    fn f() {}

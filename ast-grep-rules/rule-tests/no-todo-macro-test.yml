@@ -1,0 +1,15 @@
+id: no-todo-macro
+valid:
+  - "fn f() -> u8 { 1 }"
+  - "fn f() { unreachable!(\"checked above\"); }"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn f() { todo!(); }
+    }
+  - "// todo!()"
+invalid:
+  - "fn f() { todo!(); }"
+  - "fn f() { unimplemented!(\"later\"); }"
+  - "fn f() { ::core::todo!(); }"
+  - "fn f() { std::unimplemented!(); }"

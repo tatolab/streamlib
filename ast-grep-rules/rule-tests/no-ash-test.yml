@@ -3,8 +3,20 @@ valid:
   - "use ahash::AHashMap;"
   - "// use ash::vk;"
   - "use crate::ash_tree::Tree;"
+  - |
+    cfg_if::cfg_if! {
+        if #[cfg(unix)] { let ash = 1; }
+    }
 invalid:
   - "use ash::vk;"
   - "pub use ash::{vk, Device};"
   - "use ::ash::vk;"
   - "extern crate ash;"
+  - |
+    cfg_if::cfg_if! {
+        if #[cfg(unix)] {
+            use ash::vk;
+        }
+    }
+  - |
+    m! { extern crate ash; }

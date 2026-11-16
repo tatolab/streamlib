@@ -27,6 +27,8 @@ sdk/streamlib-python-wheel/python/tatolab/runtime/_slang_compiler/
 
 # Output files
 output/
+# A source module named output/ is code, not a run's output; ast-grep skips what git ignores.
+!**/src/**/output/
 *.mp4
 output.log
 

@@ -27,6 +27,7 @@ rule:
       regex: '^engine$'
       inside:
         kind: token_tree
+        stopBy: end
       follows:
         regex: '^::$'
         follows:

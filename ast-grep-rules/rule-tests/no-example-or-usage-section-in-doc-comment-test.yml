@@ -1,0 +1,64 @@
+id: no-example-or-usage-section-in-doc-comment
+valid:
+  - |
+    /// Encodes one frame.
+    fn f() {}
+  - |
+    /// The usage counter for this pool.
+    fn f() {}
+  - |
+    // # Example
+    fn f() {}
+  - |
+    /* # Usage */
+    fn f() {}
+  - |
+    /// # Errors
+    ///
+    /// Refuses a zero width.
+    fn f() {}
+  - |
+    /// The # Usage counter.
+    fn f() {}
+  - |
+    //// # Usage
+    fn f() {}
+  - |
+    /***
+     * # Usage
+     */
+    fn f() {}
+invalid:
+  - |
+    /// # Examples:
+    fn f() {}
+  - |
+    /// # EXAMPLES
+    fn f() {}
+  - |
+    /// # Example: building one
+    fn f() {}
+  - |
+    /// ## Usage notes
+    fn f() {}
+  - |
+    /** # Usage */
+    fn f() {}
+  - |
+    /// # Example
+    ///
+    /// ```ignore
+    /// f();
+    /// ```
+    fn f() {}
+  - |
+    //! ## Usage
+    fn f() {}
+  - |
+    /// # Examples
+    fn f() {}
+  - |
+    /**
+     * # Usage
+     */
+    fn f() {}

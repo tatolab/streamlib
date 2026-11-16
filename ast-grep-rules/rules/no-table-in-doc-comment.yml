@@ -1,0 +1,30 @@
+id: no-table-in-doc-comment
+language: rust
+severity: error
+message: A doc comment holds no Markdown or ASCII table; say it in sentences or a short list.
+note: >-
+  Matches a Markdown table's separator row (`|---|---|`), an ASCII box edge
+  (`+---+`) and a box-drawing corner or double junction. `├` and `└` are left
+  out, since a directory-tree listing uses them too.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - packages/test-fixtures/**/*.rs
+  - xtask/**/*.rs
+rule:
+  any:
+    - kind: line_comment
+      all:
+        - regex: '^//(/[^/]|!)'
+        - any:
+            - regex: '^//[/!][ \t]*\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|\s*$'
+            - regex: '\+-{3,}\+'
+            - regex: '[┌┐┘╔╗╚╝╠╣╦╩╬]'
+    - kind: block_comment
+      all:
+        - regex: '^/\*([*][^*/]|!)'
+        - any:
+            - regex: '(?m)^[ \t]*(/\*[*!])?[ \t]*\*?[ \t]*\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|[ \t]*(\*/)?\s*$'
+            - regex: '\+-{3,}\+'
+            - regex: '[┌┐┘╔╗╚╝╠╣╦╩╬]'
