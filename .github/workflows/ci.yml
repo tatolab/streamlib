@@ -6,8 +6,8 @@ name: CI
 # end on the runtime. It builds nothing that ships: release.yml builds and
 # publishes the distributables, and distribution-checks.yml checks them nightly.
 #
-#   Lint                       formatting, clippy, the source gates, licences,
-#                              Python types
+#   Lint                       formatting, clippy, the source gates, the
+#                              structure lints, licences, Python types
 #   Unit Test (Linux)          every Rust test suite, the hardware tests on a
 #                              software GPU (the lavapipe the runtime carries);
 #                              skipped on a pull request that changes no path the
@@ -140,6 +140,19 @@ jobs:
 
       - name: cargo xtask check-all-source-gates
         run: cargo run --locked -q -p xtask -- check-all-source-gates
+
+      # lint-config's rules, ast-grep pinned and checksummed. On a pull request each
+      # list under lint-exceptions/ may only shrink from the base branch's.
+      - name: Structure lints (lint-config)
+        env:
+          PULL_REQUEST_BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$PULL_REQUEST_BASE_REF" ]; then
+            git fetch -q --depth=1 origin "$PULL_REQUEST_BASE_REF"
+            bash scripts/run-structure-lints.sh --compare-to FETCH_HEAD
+          else
+            bash scripts/run-structure-lints.sh
+          fi
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2

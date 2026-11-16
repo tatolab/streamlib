@@ -328,6 +328,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             "bash",
             &["scripts/check-license-headers.sh"],
         ),
+        (
+            "structure lints",
+            "bash",
+            &["scripts/run-structure-lints.sh"],
+        ),
         // Linux compiles in every built-in, so only Linux can render them all.
         #[cfg(target_os = "linux")]
         (

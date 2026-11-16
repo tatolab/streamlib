@@ -1,0 +1,23 @@
+# <lines> <path>: the hand-written files over 1,000 lines, not split yet.
+# scripts/run-structure-lints.sh checks it; an entry only goes down or away.
+1080 examples/camera-python-effects/src/camera_python_effects/avatar_scene.py
+1020 packages/streamlib-webrtc/tests/test_processors.py
+1660 packages/tatolab-browser/src/browser_host_tab_client.rs
+1244 packages/tatolab-camera/src/avfoundation_camera_capture.rs
+1145 packages/tatolab-opus/src/encoded_packet_to_audio_block_decoder.rs
+1098 runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_island.rs
+2438 runtime/streamlib-engine/src/core/processors/__generated_private/generated_processor_impl.rs
+1377 runtime/streamlib-vulkan-video/src/codec_utils/vk_image_resource/mod.rs
+1115 runtime/streamlib-vulkan-video/src/codec_utils/vk_video_core_profile/mod.rs
+1241 runtime/streamlib-vulkan-video/src/codec_utils/vulkan_command_buffer_pool/mod.rs
+1171 runtime/streamlib-vulkan-video/src/frame_buffer/vulkan_video_frame_buffer/mod.rs
+3236 runtime/streamlib-vulkan-video/src/nv_video_parser/vulkan_av1_decoder/mod.rs
+2723 runtime/streamlib-vulkan-video/src/nv_video_parser/vulkan_h264_decoder/mod.rs
+1964 runtime/streamlib-vulkan-video/src/nv_video_parser/vulkan_h265_decoder/mod.rs
+1612 runtime/streamlib-vulkan-video/src/nv_video_parser/vulkan_video_decoder/mod.rs
+1129 runtime/streamlib-vulkan-video/src/nv_video_parser/vulkan_vp9_decoder/mod.rs
+1652 runtime/streamlib-vulkan-video/src/vk_video_decoder/vk_video_decoder.rs
+1132 runtime/streamlib-vulkan-video/src/vk_video_encoder/vk_encoder_dpb_h264/mod.rs
+1574 runtime/streamlib-vulkan-video/src/vk_video_encoder/vk_encoder_dpb_h265/mod.rs
+3081 xtask/src/check_boundaries.rs
+1658 xtask/src/lint_logging.rs
