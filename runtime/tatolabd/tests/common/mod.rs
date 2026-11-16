@@ -32,24 +32,24 @@ use streamlib::sdk::runtime::{
 
 /// The line `tatolabd` logs once its local API is served and its re-loads
 /// queued.
-pub const THE_RUNTIME_IS_SERVING_LOG_LINE: &str = "the runtime is serving:";
+pub(crate) const THE_RUNTIME_IS_SERVING_LOG_LINE: &str = "the runtime is serving:";
 
 /// How long a `tatolabd` holding no started stream takes to start serving.
-pub const A_RUNTIME_STARTS_SERVING_WITHIN: Duration = Duration::from_secs(60);
+pub(crate) const A_RUNTIME_STARTS_SERVING_WITHIN: Duration = Duration::from_secs(60);
 
 /// How long a `tatolabd` takes to exit once interrupted.
-pub const AN_INTERRUPTED_RUNTIME_EXITS_WITHIN: Duration = Duration::from_secs(30);
+pub(crate) const AN_INTERRUPTED_RUNTIME_EXITS_WITHIN: Duration = Duration::from_secs(30);
 
 /// A temporary runtime unit: `bin/tatolabd`, and the lend beside it unless the
 /// test asked for none.
-pub struct TemporaryRuntimeUnit {
+pub(crate) struct TemporaryRuntimeUnit {
     runtime_unit_root: tempfile::TempDir,
     pub tatolabd: PathBuf,
 }
 
 impl TemporaryRuntimeUnit {
     /// `bin/tatolabd` beside the lend, holding the bootstrap.
-    pub fn with_its_lend() -> Self {
+    pub(crate) fn with_its_lend() -> Self {
         let runtime_unit = Self::without_a_lend();
         let bootstrap = processor_interpreter_bootstrap_path(&lend_directory_in_the_runtime_unit(
             runtime_unit.runtime_unit_root(),
@@ -61,7 +61,7 @@ impl TemporaryRuntimeUnit {
     }
 
     /// The directory holding `bin/` and the lend.
-    pub fn runtime_unit_root(&self) -> &Path {
+    pub(crate) fn runtime_unit_root(&self) -> &Path {
         self.runtime_unit_root.path()
     }
 
@@ -69,7 +69,7 @@ impl TemporaryRuntimeUnit {
     ///
     /// Linked, or else copied, never symlinked: `tatolabd` finds its lend from
     /// its own canonical path, which a symlink would point back at the build.
-    pub fn without_a_lend() -> Self {
+    pub(crate) fn without_a_lend() -> Self {
         let runtime_unit_root = tempfile::Builder::new()
             .prefix("tatolabd-runtime-unit-")
             .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
@@ -95,7 +95,7 @@ impl TemporaryRuntimeUnit {
 /// Darwin's `socket` takes no close-on-exec flag, so std sets it in a second call; a spawn on
 /// another test thread between the two hands that runtime the socket, and once the socket is
 /// bound it holds another test's machine lock port for as long as that runtime lives.
-pub fn close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_child(
+pub(crate) fn close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_child(
     command: &mut Command,
 ) {
     use std::os::unix::process::CommandExt;
@@ -113,7 +113,7 @@ pub fn close_on_exec_every_descriptor_above_the_standard_streams_in_the_forked_c
 }
 
 /// A port both UDP and TCP bind on `host` now.
-pub fn a_port_free_for_udp_and_tcp_on(host: &str) -> u16 {
+pub(crate) fn a_port_free_for_udp_and_tcp_on(host: &str) -> u16 {
     for _ in 0..50 {
         let probe = std::net::TcpListener::bind(format!("{host}:0")).expect("an ephemeral port");
         let port = probe.local_addr().expect("a bound port").port();
@@ -134,7 +134,7 @@ const MACHINE_LOCK_PORT_RANGE_LENGTH: u32 = 20_000;
 /// A loopback port free for UDP and TCP that no other test root of this process is given,
 /// below the ephemeral range, so that no connection a test opens while a runtime restarts
 /// is given it as its local port.
-pub fn a_machine_lock_port_free_on_loopback() -> u16 {
+pub(crate) fn a_machine_lock_port_free_on_loopback() -> u16 {
     use std::sync::atomic::{AtomicU32, Ordering};
     /// A prime that shares no factor with the range's length, so successive picks visit every
     /// port of the range once before repeating one.
@@ -156,14 +156,14 @@ pub fn a_machine_lock_port_free_on_loopback() -> u16 {
 }
 
 /// Whether both UDP and TCP bind `port` on `host`.
-pub fn the_port_is_free_for_udp_and_tcp_on(host: &str, port: u16) -> bool {
+pub(crate) fn the_port_is_free_for_udp_and_tcp_on(host: &str, port: u16) -> bool {
     std::net::TcpListener::bind(format!("{host}:{port}")).is_ok()
         && std::net::UdpSocket::bind(format!("{host}:{port}")).is_ok()
 }
 
 /// The body of `GET <path>` on loopback `port`, or `None` when nothing answers
 /// it with a 200.
-pub fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
+pub(crate) fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).ok()?;
     stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
@@ -181,7 +181,7 @@ pub fn http_get_body_on_loopback(port: u16, path: &str) -> Option<String> {
 
 /// A WebSocket upgrade of `path` on `127.0.0.1:port` naming `host` as its `Host` and
 /// `origin` as its `Origin`, and the status line it is answered with.
-pub fn websocket_upgrade_status_line_on_loopback(
+pub(crate) fn websocket_upgrade_status_line_on_loopback(
     port: u16,
     path: &str,
     host: &str,
@@ -214,13 +214,13 @@ pub fn websocket_upgrade_status_line_on_loopback(
 /// loopback HTTP port it names, one of its own.
 ///
 /// Short and under `/tmp`, so the local API socket's path fits `sun_path`.
-pub struct TatolabTestMachineRoot {
+pub(crate) struct TatolabTestMachineRoot {
     machine_root: tempfile::TempDir,
     loopback_http_port_on_macos: Option<u16>,
 }
 
 impl TatolabTestMachineRoot {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let machine_root = tempfile::Builder::new()
             .prefix("tl-")
             .tempdir_in("/tmp")
@@ -236,55 +236,55 @@ impl TatolabTestMachineRoot {
         }
     }
 
-    pub fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         self.machine_root.path()
     }
 
     /// The runtime directory a test build resolves: `<root>/run/`.
-    pub fn runtime_directory(&self) -> PathBuf {
+    pub(crate) fn runtime_directory(&self) -> PathBuf {
         self.path().join("run")
     }
 
     /// The local API's fixed socket in the runtime directory.
-    pub fn local_api_socket_path(&self) -> PathBuf {
+    pub(crate) fn local_api_socket_path(&self) -> PathBuf {
         self.runtime_directory().join("local-api.sock")
     }
 
     /// The state directory a test build resolves: `<root>/state/`.
-    pub fn state_directory(&self) -> PathBuf {
+    pub(crate) fn state_directory(&self) -> PathBuf {
         self.path().join("state")
     }
 
     /// `<state>/streams/`, one `<stream id>.json` record per recorded stream.
-    pub fn streams_directory(&self) -> PathBuf {
+    pub(crate) fn streams_directory(&self) -> PathBuf {
         self.state_directory().join("streams")
     }
 
     /// `<state>/runtime-run-in-progress`, which a crash leaves behind.
-    pub fn runtime_run_in_progress_record_path(&self) -> PathBuf {
+    pub(crate) fn runtime_run_in_progress_record_path(&self) -> PathBuf {
         self.state_directory().join("runtime-run-in-progress")
     }
 
     /// `<state>/logs/`, the runtime's own log.
-    pub fn runtime_log_directory(&self) -> PathBuf {
+    pub(crate) fn runtime_log_directory(&self) -> PathBuf {
         self.state_directory().join("logs")
     }
 
     /// A directory standing in for a stream's project.
-    pub fn project_directory(&self) -> PathBuf {
+    pub(crate) fn project_directory(&self) -> PathBuf {
         self.path().join("p")
     }
 
     /// The stream records under this machine's state directory, as the
     /// engine writes and reads them.
-    pub fn stream_records(&self) -> StreamRecordsInTheStateDirectory {
+    pub(crate) fn stream_records(&self) -> StreamRecordsInTheStateDirectory {
         StreamRecordsInTheStateDirectory::open(&self.streams_directory())
             .expect("the streams directory opens")
     }
 
     /// The record of `stream_id` the runtime wrote under this schema, `None`
     /// when there is none.
-    pub fn current_stream_record_of(&self, stream_id: &str) -> Option<StreamRecord> {
+    pub(crate) fn current_stream_record_of(&self, stream_id: &str) -> Option<StreamRecord> {
         match self
             .stream_records()
             .read(stream_id)
@@ -298,7 +298,7 @@ impl TatolabTestMachineRoot {
 
     /// A `tatolabd` command on this machine that inherits none of the
     /// engine's settings from the test's own environment.
-    pub fn tatolabd_command(&self, tatolabd: &Path) -> Command {
+    pub(crate) fn tatolabd_command(&self, tatolabd: &Path) -> Command {
         let mut tatolabd_command = Command::new(tatolabd);
         tatolabd_command
             .current_dir(self.path())
@@ -323,7 +323,7 @@ impl TatolabTestMachineRoot {
 
     /// A `tatolabd` command whose Vulkan loader finds no driver, so a stream
     /// it loads is refused at its start, wherever the test runs.
-    pub fn tatolabd_command_with_no_vulkan_driver(&self, tatolabd: &Path) -> Command {
+    pub(crate) fn tatolabd_command_with_no_vulkan_driver(&self, tatolabd: &Path) -> Command {
         let no_vulkan_driver_file = self.path().join("no-vulkan-driver-here.json");
         let mut tatolabd_command = self.tatolabd_command(tatolabd);
         tatolabd_command
@@ -334,7 +334,7 @@ impl TatolabTestMachineRoot {
 }
 
 /// A stream of one native numbered message writer.
-pub fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
+pub(crate) fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
     serde_json::json!({
         "stream": stream_id,
         "nodes": [{
@@ -345,12 +345,12 @@ pub fn a_native_only_stream_graph(stream_id: &str) -> serde_json::Value {
 }
 
 /// The class import path the crash-on-demand test node registers under.
-pub const CRASH_ON_DEMAND_TEST_NODE_TYPE: &str =
+pub(crate) const CRASH_ON_DEMAND_TEST_NODE_TYPE: &str =
     "tatolabd::crash_on_demand_test_node::CrashOnDemandTestNode";
 
 /// A stream of one crash-on-demand node, which crashes the runtime on
 /// `SIGSEGV` at the stream's load while `trigger` exists.
-pub fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> serde_json::Value {
+pub(crate) fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> serde_json::Value {
     serde_json::json!({
         "stream": stream_id,
         "nodes": [{
@@ -362,7 +362,7 @@ pub fn a_stream_graph_crashing_while(stream_id: &str, trigger: &Path) -> serde_j
 }
 
 /// Start `tatolabd_command` and expect it to crash on `SIGSEGV` at its start.
-pub fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
+pub(crate) fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
     let crashed = run_to_exit_within(tatolabd_command, A_RUNTIME_STARTS_SERVING_WITHIN);
     assert_eq!(
         crashed.status.signal(),
@@ -374,11 +374,11 @@ pub fn expect_the_runtime_to_crash_on_segv(tatolabd_command: Command) {
 }
 
 /// The name every test project's `tatolab-project.json` gives it.
-pub const TEST_PROJECT_NAME: &str = "rig";
+pub(crate) const TEST_PROJECT_NAME: &str = "rig";
 
 /// The project UUID of the project at `project_directory`, writing its
 /// `tatolab-project.json` with a fresh one when it holds none.
-pub fn the_project_at(project_directory: &Path) -> uuid::Uuid {
+pub(crate) fn the_project_at(project_directory: &Path) -> uuid::Uuid {
     let project_file_path = project_directory.join("tatolab-project.json");
     if let Ok(project_file_text) = std::fs::read_to_string(&project_file_path) {
         let project_file: serde_json::Value =
@@ -401,7 +401,10 @@ pub fn the_project_at(project_directory: &Path) -> uuid::Uuid {
 
 /// The location of the stream `stream_name` of the project at `project_directory`: its
 /// project UUID, and the stream asset UUID drawn from it and the stream's name.
-pub fn the_location_of_the_stream(project_directory: &Path, stream_name: &str) -> StreamLocation {
+pub(crate) fn the_location_of_the_stream(
+    project_directory: &Path,
+    stream_name: &str,
+) -> StreamLocation {
     let project = the_project_at(project_directory);
     StreamLocation {
         project_directory: project_directory.to_path_buf(),
@@ -412,7 +415,7 @@ pub fn the_location_of_the_stream(project_directory: &Path, stream_name: &str) -
 
 /// The stream id a first run records the stream `stream_name` of the project at
 /// `project_directory` under.
-pub fn the_stream_id_of_the_stream(project_directory: &Path, stream_name: &str) -> String {
+pub(crate) fn the_stream_id_of_the_stream(project_directory: &Path, stream_name: &str) -> String {
     the_location_of_the_stream(project_directory, stream_name)
         .stream_id_named(TEST_PROJECT_NAME, stream_name)
 }
@@ -421,7 +424,7 @@ pub fn the_stream_id_of_the_stream(project_directory: &Path, stream_name: &str) 
 /// `project_directory`, whose graph document holding `graph` it writes, a UUID given to each
 /// node holding none as the runtime gives one, under
 /// `interpreter`, keyed by the stream id its location computes to.
-pub fn a_stream_record(
+pub(crate) fn a_stream_record(
     stream_name: &str,
     graph: serde_json::Value,
     project_directory: &Path,
@@ -464,12 +467,12 @@ pub fn a_stream_record(
 
 /// An interpreter path that exists and is executable, for a stream whose
 /// native-only graph never starts a processor interpreter.
-pub fn an_executable_standing_in_for_the_interpreter() -> PathBuf {
+pub(crate) fn an_executable_standing_in_for_the_interpreter() -> PathBuf {
     PathBuf::from("/bin/sh")
 }
 
 /// Run `tatolabd_command` to its exit within `budget`, collecting both streams.
-pub fn run_to_exit_within(mut tatolabd_command: Command, budget: Duration) -> Output {
+pub(crate) fn run_to_exit_within(mut tatolabd_command: Command, budget: Duration) -> Output {
     let child = tatolabd_command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -486,7 +489,7 @@ pub fn run_to_exit_within(mut tatolabd_command: Command, budget: Duration) -> Ou
 
 /// The refusal on standard error, after asserting it exited 1 with nothing on
 /// standard output.
-pub fn the_refusal_of(output: &Output) -> String {
+pub(crate) fn the_refusal_of(output: &Output) -> String {
     let standard_error = String::from_utf8_lossy(&output.stderr).into_owned();
     assert_eq!(
         output.status.code(),
@@ -503,7 +506,7 @@ pub fn the_refusal_of(output: &Output) -> String {
 }
 
 /// A running `tatolabd` whose standard streams are read as it writes them.
-pub struct SpawnedTatolabd {
+pub(crate) struct SpawnedTatolabd {
     child: Child,
     standard_error_lines: Arc<Mutex<Vec<String>>>,
     standard_output: Arc<Mutex<String>>,
@@ -511,7 +514,7 @@ pub struct SpawnedTatolabd {
 }
 
 impl SpawnedTatolabd {
-    pub fn spawn(mut tatolabd_command: Command) -> Self {
+    pub(crate) fn spawn(mut tatolabd_command: Command) -> Self {
         let child = tatolabd_command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -521,7 +524,7 @@ impl SpawnedTatolabd {
     }
 
     /// Spawn `tatolabd_command` and wait until it logs that it is serving.
-    pub fn spawn_and_wait_until_serving(tatolabd_command: Command) -> Self {
+    pub(crate) fn spawn_and_wait_until_serving(tatolabd_command: Command) -> Self {
         let mut spawned = Self::spawn(tatolabd_command);
         spawned.wait_until_standard_error_carries(
             THE_RUNTIME_IS_SERVING_LOG_LINE,
@@ -564,13 +567,13 @@ impl SpawnedTatolabd {
         }
     }
 
-    pub fn process_id(&self) -> i32 {
+    pub(crate) fn process_id(&self) -> i32 {
         self.child.id() as i32
     }
 
     /// Block until a line of standard error contains `marker`, or panic naming
     /// what it carried after `budget`.
-    pub fn wait_until_standard_error_carries(&mut self, marker: &str, budget: Duration) {
+    pub(crate) fn wait_until_standard_error_carries(&mut self, marker: &str, budget: Duration) {
         let deadline = Instant::now() + budget;
         loop {
             if self
@@ -603,7 +606,7 @@ impl SpawnedTatolabd {
     }
 
     /// Deliver `signal` to the process.
-    pub fn deliver(&self, signal: i32) {
+    pub(crate) fn deliver(&self, signal: i32) {
         // SAFETY: `kill` reads only its two integer arguments.
         let delivered = unsafe { libc::kill(self.process_id(), signal) };
         assert_eq!(delivered, 0, "the signal was not delivered");
@@ -611,7 +614,7 @@ impl SpawnedTatolabd {
 
     /// Interrupt the process and assert it exits 0 with nothing on standard
     /// output.
-    pub fn interrupt_and_expect_a_clean_exit(&mut self) {
+    pub(crate) fn interrupt_and_expect_a_clean_exit(&mut self) {
         self.deliver(libc::SIGINT);
         let status = self.wait_for_exit_within(AN_INTERRUPTED_RUNTIME_EXITS_WITHIN);
         assert_eq!(
@@ -629,7 +632,7 @@ impl SpawnedTatolabd {
 
     /// Wait for the process to exit within `budget`, killing it and panicking
     /// if it does not; the stream readers are joined before this returns.
-    pub fn wait_for_exit_within(&mut self, budget: Duration) -> ExitStatus {
+    pub(crate) fn wait_for_exit_within(&mut self, budget: Duration) -> ExitStatus {
         let deadline = Instant::now() + budget;
         loop {
             if let Some(status) = self.child.try_wait().expect("the child can be waited on") {
@@ -655,11 +658,11 @@ impl SpawnedTatolabd {
         }
     }
 
-    pub fn standard_error(&self) -> String {
+    pub(crate) fn standard_error(&self) -> String {
         self.standard_error_lines.lock().unwrap().join("\n")
     }
 
-    pub fn standard_output(&self) -> String {
+    pub(crate) fn standard_output(&self) -> String {
         self.standard_output.lock().unwrap().clone()
     }
 }
@@ -674,7 +677,10 @@ impl Drop for SpawnedTatolabd {
 }
 
 /// `GET <path>` over the local API socket, retried until it answers 200.
-pub fn the_local_apis_answer_to_get(local_api_socket_path: &Path, path: &str) -> serde_json::Value {
+pub(crate) fn the_local_apis_answer_to_get(
+    local_api_socket_path: &Path,
+    path: &str,
+) -> serde_json::Value {
     let deadline = Instant::now() + A_RUNTIME_STARTS_SERVING_WITHIN;
     loop {
         if let Some(answer) = get_once(local_api_socket_path, path) {
@@ -708,7 +714,7 @@ fn get_once(local_api_socket_path: &Path, path: &str) -> Option<serde_json::Valu
 
 /// What one MCP `tools/call` over the local API answered.
 #[derive(Debug)]
-pub struct LocalApiToolCallAnswer {
+pub(crate) struct LocalApiToolCallAnswer {
     /// Whether the tool reported a failure.
     pub is_error: bool,
     /// The tool result's first text block.
@@ -717,14 +723,14 @@ pub struct LocalApiToolCallAnswer {
 
 impl LocalApiToolCallAnswer {
     /// The first text block as JSON, after asserting the tool succeeded.
-    pub fn json(&self) -> serde_json::Value {
+    pub(crate) fn json(&self) -> serde_json::Value {
         assert!(!self.is_error, "the tool failed: {}", self.text);
         serde_json::from_str(&self.text).expect("the tool's text block is JSON")
     }
 }
 
 /// Every file under `directory`, read as text.
-pub fn every_file_under(directory: &std::path::Path) -> String {
+pub(crate) fn every_file_under(directory: &std::path::Path) -> String {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return String::new();
     };
@@ -743,7 +749,7 @@ pub fn every_file_under(directory: &std::path::Path) -> String {
 
 /// Call `tool_name` with `tool_arguments` through `rmcp`'s client over the
 /// local API socket — one connection per call, as a one-shot client makes it.
-pub fn call_a_tool_over_the_local_api(
+pub(crate) fn call_a_tool_over_the_local_api(
     local_api_socket_path: &Path,
     tool_name: &str,
     tool_arguments: serde_json::Value,
@@ -794,7 +800,7 @@ pub fn call_a_tool_over_the_local_api(
 
 /// The ids of the re-loads `tatolabd` logged it queued at its start, from its
 /// standard error once it serves.
-pub fn the_reloads_queued_at_the_start(standard_error: &str) -> Vec<String> {
+pub(crate) fn the_reloads_queued_at_the_start(standard_error: &str) -> Vec<String> {
     let serving_line = standard_error
         .lines()
         .find(|line| line.contains(THE_RUNTIME_IS_SERVING_LOG_LINE))
@@ -812,11 +818,11 @@ pub fn the_reloads_queued_at_the_start(standard_error: &str) -> Vec<String> {
 }
 
 /// How long a stream action queued over the local API takes to end.
-pub const A_STREAM_ACTION_ENDS_WITHIN: Duration = Duration::from_secs(120);
+pub(crate) const A_STREAM_ACTION_ENDS_WITHIN: Duration = Duration::from_secs(120);
 
 /// `describe_stream_action`'s answer for `action_id` once its `state` is `done`
 /// or `failed`.
-pub fn the_stream_action_once_ended(
+pub(crate) fn the_stream_action_once_ended(
     local_api_socket_path: &Path,
     action_id: &str,
 ) -> serde_json::Value {
@@ -841,7 +847,7 @@ pub fn the_stream_action_once_ended(
 }
 
 /// The mode bits of `path`.
-pub fn the_mode_of(path: &Path) -> u32 {
+pub(crate) fn the_mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::metadata(path)

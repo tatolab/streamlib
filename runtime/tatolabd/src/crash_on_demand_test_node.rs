@@ -17,7 +17,7 @@ use streamlib::sdk::schemars::JsonSchema;
 /// How the node crashes the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
-pub enum CrashOnDemandSignal {
+pub(crate) enum CrashOnDemandSignal {
     /// `raise(SIGSEGV)`.
     #[serde(rename = "SIGSEGV")]
     RaiseSegmentationFault,
@@ -29,6 +29,10 @@ pub enum CrashOnDemandSignal {
 /// The node's config: what file arms it and how it crashes.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
+#[allow(
+    unreachable_pub,
+    reason = "the processor macro names the config in a trait impl, which needs it public"
+)]
 pub struct CrashOnDemandTestNodeConfig {
     /// While this file exists, the check of this config crashes the runtime.
     pub crash_while_this_file_exists: PathBuf,

@@ -13,10 +13,10 @@ use streamlib::sdk::iceoryx2::MessageGroupBoundary;
 use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
 
 /// Every how many messages one opens a group.
-pub const MESSAGES_PER_GROUP: u64 = 3;
+pub(crate) const MESSAGES_PER_GROUP: u64 = 3;
 
 /// The stamp of the message after one, the interval the node writes at.
-pub const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
+pub(crate) const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
 
 #[streamlib::sdk::processor(
     execution = continuous(interval_ms = 10),
