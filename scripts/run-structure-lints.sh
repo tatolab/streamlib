@@ -21,7 +21,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-LINT_CONFIG_COMMIT=30c63add3227de8ab9abf2beca833f5524dfdbc6
+LINT_CONFIG_COMMIT=5e2cc8b81720b468d4a180b75d5397562ae816a6
 
 compared_ref=""
 case "$#" in
