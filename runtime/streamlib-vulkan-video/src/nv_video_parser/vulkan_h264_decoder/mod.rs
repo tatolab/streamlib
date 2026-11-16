@@ -1427,10 +1427,10 @@ impl VulkanH264Decoder {
         pps.num_slice_groups_minus1 = num_slice_groups_minus1;
         if num_slice_groups_minus1 > 0 {
             // Simplified FMO handling — skip group map data
-            if self.slice_group_map.is_none() {
-                self.slice_group_map = Some(vec![SliceGroupMap::default(); MAX_NUM_PPS]);
-            }
-            let sgm = &mut self.slice_group_map.as_mut().unwrap()[pps_id as usize];
+            let sgm = &mut self
+                .slice_group_map
+                .get_or_insert_with(|| vec![SliceGroupMap::default(); MAX_NUM_PPS])
+                [pps_id as usize];
             sgm.slice_group_map_type = reader.ue() as u16;
             match sgm.slice_group_map_type {
                 0 => {

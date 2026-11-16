@@ -19,7 +19,7 @@
 //! - `VulkanDeviceContext` is replaced by `vulkanalia::Device` plus the raw `vk::Device` handle.
 
 use std::cell::UnsafeCell;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -146,14 +146,12 @@ impl PoolNode {
         begin_info: &vk::CommandBufferBeginInfo,
     ) -> Result<vk::CommandBuffer, vk::Result> {
         unsafe {
-            if !self.is_valid() {
+            if !self.is_valid() || self.cmd_buf_state != CmdBufState::Reset {
                 return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
             }
-            if self.cmd_buf_state != CmdBufState::Reset {
+            let Some(device) = self.device.as_ref() else {
                 return Err(vk::Result::ERROR_INITIALIZATION_FAILED);
-            }
-
-            let device = self.device.as_ref().unwrap();
+            };
             device.begin_command_buffer(cmd_buf, begin_info)?;
             self.cmd_buf_state = CmdBufState::Recording;
             Ok(cmd_buf)
@@ -170,14 +168,12 @@ impl PoolNode {
         cmd_buf: vk::CommandBuffer,
     ) -> vk::Result {
         unsafe {
-            if !self.is_valid() {
+            if !self.is_valid() || self.cmd_buf_state != CmdBufState::Recording {
                 return vk::Result::ERROR_INITIALIZATION_FAILED;
             }
-            if self.cmd_buf_state != CmdBufState::Recording {
+            let Some(device) = self.device.as_ref() else {
                 return vk::Result::ERROR_INITIALIZATION_FAILED;
-            }
-
-            let device = self.device.as_ref().unwrap();
+            };
             match device.end_command_buffer(cmd_buf) {
                 Ok(()) => {
                     self.cmd_buf_state = CmdBufState::Recorded;
@@ -659,7 +655,7 @@ pub unsafe fn wait_and_reset_fence(
 /// `Arc` so that pool-node handles can release back to the pool when dropped.
 pub struct VulkanCommandBufferPool {
     device: Option<vulkanalia::Device>,
-    mutex: Mutex<PoolInner>,
+    mutex: parking_lot::Mutex<PoolInner>,
     command_buffers_set: VulkanCommandBuffersSet,
     semaphore_set: VulkanSemaphoreSet,
     fence_set: VulkanFenceSet,
@@ -701,7 +697,7 @@ impl VulkanCommandBufferPool {
         }
         Arc::new(Self {
             device: Some(device),
-            mutex: Mutex::new(PoolInner::new()),
+            mutex: parking_lot::Mutex::new(PoolInner::new()),
             command_buffers_set: VulkanCommandBuffersSet::new(),
             semaphore_set: VulkanSemaphoreSet::new(),
             fence_set: VulkanFenceSet::new(),
@@ -734,7 +730,7 @@ impl VulkanCommandBufferPool {
             let pool =
                 Arc::get_mut(self).expect("Cannot configure pool while other references exist");
 
-            let mut inner = pool.mutex.lock().unwrap();
+            let mut inner = pool.mutex.lock();
 
             let nodes = pool.pool_nodes.get_mut();
             if num_pool_nodes as usize > nodes.len() {
@@ -798,7 +794,7 @@ impl VulkanCommandBufferPool {
     /// Returns the pool node index if one is available.
     pub fn get_available_pool_node(self: &Arc<Self>) -> Option<PoolNodeHandle> {
         let available_index = {
-            let mut inner = self.mutex.lock().unwrap();
+            let mut inner = self.mutex.lock();
             if inner.next_node_to_use >= inner.pool_size {
                 inner.next_node_to_use = 0;
             }
@@ -849,7 +845,7 @@ impl VulkanCommandBufferPool {
     /// Release a pool node back to the available set.
     /// Mirrors C++ `VulkanCommandBufferPool::ReleasePoolNodeToPool`.
     pub fn release_pool_node_to_pool(&self, pool_node_index: u32) -> bool {
-        let mut inner = self.mutex.lock().unwrap();
+        let mut inner = self.mutex.lock();
         debug_assert!(
             inner.available_pool_nodes & (1u64 << pool_node_index) == 0,
             "Pool node {} is already marked as available",
@@ -905,7 +901,7 @@ impl VulkanCommandBufferPool {
     pub unsafe fn deinit(self: &mut Arc<Self>) {
         unsafe {
             let pool = Arc::get_mut(self).expect("Cannot deinit pool while other references exist");
-            let inner = pool.mutex.lock().unwrap();
+            let inner = pool.mutex.lock();
             let pool_size = inner.pool_size as usize;
             drop(inner);
 

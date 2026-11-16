@@ -32,7 +32,7 @@
 //! answer. It never terminates a display, and it keeps libEGL loaded.
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CStr, c_char, c_void};
 use std::os::unix::fs::MetadataExt;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -260,8 +260,7 @@ impl EglFns {
     /// Resolve `eglQueryDmaBufModifiersEXT` after `eglInitialize`. The
     /// extension function is only valid once a display is initialized.
     fn resolve_modifier_query(&mut self, _display: egl::EGLDisplay) -> Result<(), ProbeError> {
-        let name = CString::new("eglQueryDmaBufModifiersEXT").unwrap();
-        let raw = unsafe { (self.egl_get_proc_address)(name.as_ptr()) };
+        let raw = unsafe { (self.egl_get_proc_address)(c"eglQueryDmaBufModifiersEXT".as_ptr()) };
         if raw.is_null() {
             return Err(ProbeError::ExtensionMissing);
         }

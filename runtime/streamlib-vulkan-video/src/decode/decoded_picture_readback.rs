@@ -92,42 +92,47 @@ impl SimpleDecoder {
         Ok(())
     }
 
-    /// Ensure the RGBA staging buffer is large enough for W*H*4 readback.
-    fn ensure_rgba_staging(&mut self, width: u32, height: u32) -> Result<(), VideoError> {
+    /// The RGBA staging buffer, grown to hold a W*H*4 readback: its buffer, byte size and mapping.
+    fn ensure_rgba_staging(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<(vk::Buffer, u64, *mut u8), VideoError> {
         let total = (width as u64) * (height as u64) * 4;
 
-        if self.rgba_staging.as_ref().is_none_or(|s| s.2 < total) {
-            if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
-                unsafe {
-                    self.ctx.allocator().destroy_buffer(buf, alloc);
-                }
-            }
-            let buf_info = vk::BufferCreateInfo::builder()
-                .size(total)
-                .usage(vk::BufferUsageFlags::TRANSFER_DST)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            // Same read-back constraint as `ensure_readback_staging` above:
-            // HOST_ACCESS_RANDOM + preferred HOST_CACHED, or the per-frame
-            // 8.3 MB memcpy runs at write-combined speed.
-            let alloc_opts = vma::AllocationOptions {
-                flags: vma::AllocationCreateFlags::MAPPED
-                    | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
-                required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
-                    | vk::MemoryPropertyFlags::HOST_COHERENT,
-                preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
-                ..Default::default()
-            };
-            let (buf, alloc) = unsafe {
-                self.ctx
-                    .allocator()
-                    .create_buffer(buf_info, &alloc_opts)
-                    .map_err(VideoError::from)?
-            };
-            let info = self.ctx.allocator().get_allocation_info(alloc);
-            self.rgba_staging = Some((buf, alloc, total, info.pMappedData as *mut u8));
+        if let Some(&(buf, _, size, mapped)) = self.rgba_staging.as_ref().filter(|s| s.2 >= total) {
+            return Ok((buf, size, mapped));
         }
-
-        Ok(())
+        if let Some((buf, alloc, _, _)) = self.rgba_staging.take() {
+            unsafe {
+                self.ctx.allocator().destroy_buffer(buf, alloc);
+            }
+        }
+        let buf_info = vk::BufferCreateInfo::builder()
+            .size(total)
+            .usage(vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        // Same read-back constraint as `ensure_readback_staging` above:
+        // HOST_ACCESS_RANDOM + preferred HOST_CACHED, or the per-frame
+        // 8.3 MB memcpy runs at write-combined speed.
+        let alloc_opts = vma::AllocationOptions {
+            flags: vma::AllocationCreateFlags::MAPPED
+                | vma::AllocationCreateFlags::HOST_ACCESS_RANDOM,
+            required_flags: vk::MemoryPropertyFlags::HOST_VISIBLE
+                | vk::MemoryPropertyFlags::HOST_COHERENT,
+            preferred_flags: vk::MemoryPropertyFlags::HOST_CACHED,
+            ..Default::default()
+        };
+        let (buf, alloc) = unsafe {
+            self.ctx
+                .allocator()
+                .create_buffer(buf_info, &alloc_opts)
+                .map_err(VideoError::from)?
+        };
+        let info = self.ctx.allocator().get_allocation_info(alloc);
+        let mapped = info.pMappedData as *mut u8;
+        self.rgba_staging = Some((buf, alloc, total, mapped));
+        Ok((buf, total, mapped))
     }
 
     /// Wait for the in-flight decode to finish and read back the decoded frame.
@@ -163,8 +168,8 @@ impl SimpleDecoder {
             // Sized for the copy below, which is the display window alone —
             // the padding rows outside it never reach a consumer.
             let display_window = pending.display_window;
-            self.ensure_rgba_staging(display_window.width, display_window.height)?;
-            let &(stg_buf, _, stg_size, stg_ptr) = self.rgba_staging.as_ref().unwrap();
+            let (stg_buf, stg_size, stg_ptr) =
+                self.ensure_rgba_staging(display_window.width, display_window.height)?;
 
             // Copy RGBA image → staging buffer via transfer command buffer
             unsafe {

@@ -25,16 +25,11 @@ impl SimpleDecoder {
     // ------------------------------------------------------------------
 
     pub(crate) fn handle_sps(&mut self, sps_nalu: &[u8]) -> Result<(), VideoError> {
-        // Initialize parser if not yet created
-        if self.h264_parser.is_none() {
-            self.h264_parser = Some(VulkanH264Decoder::new());
-        }
-
         // Remove emulation prevention bytes and skip 1-byte NAL header
         let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[1..]);
         let mut reader = H264BitstreamReader::new(&rbsp);
 
-        let parser = self.h264_parser.as_mut().unwrap();
+        let parser = self.h264_parser.get_or_insert_with(VulkanH264Decoder::new);
         let sps_id = parser
             .parse_sps(&mut reader)
             .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.264 SPS".into()))?;
@@ -238,7 +233,7 @@ impl SimpleDecoder {
         let parser = self
             .h264_parser
             .as_mut()
-            .ok_or_else(|| VideoError::BitstreamError("H.264 parser not initialized".into()))?;
+            .ok_or_else(super::no_h264_parser)?;
 
         // Extract NAL header fields
         let nal_ref_idc = (nal[0] >> 5) & 0x3;
@@ -492,7 +487,10 @@ impl SimpleDecoder {
         }
 
         // Apply decoded reference picture marking (MMCO / sliding window)
-        let parser = self.h264_parser.as_mut().unwrap();
+        let parser = self
+            .h264_parser
+            .as_mut()
+            .ok_or_else(super::no_h264_parser)?;
         parser.decoded_reference_picture_marking(&slh, sps.max_num_ref_frames);
 
         // Update physical DPB tracking

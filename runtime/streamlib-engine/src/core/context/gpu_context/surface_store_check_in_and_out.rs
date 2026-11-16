@@ -15,10 +15,7 @@ impl GpuContext {
                     "the engine's own surface store is installed once, and it already was".into(),
                 )
             })?;
-        *self
-            .surface_store
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(store);
+        *self.surface_store.lock() = Some(store);
         Ok(())
     }
 
@@ -30,16 +27,11 @@ impl GpuContext {
     /// Clear this view's surface store, closing its connection to the
     /// surface-sharing service. Called as the stream whose view this is stops.
     pub(crate) fn clear_surface_store(&self) {
-        // A poisoned slot is still cleared: a stream's stop must not panic on
-        // a lock another thread's panic left behind.
-        *self
-            .surface_store
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self.surface_store.lock() = None;
     }
 
     /// Get the surface store, if initialized.
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        self.surface_store.lock().unwrap().clone()
+        self.surface_store.lock().clone()
     }
 }

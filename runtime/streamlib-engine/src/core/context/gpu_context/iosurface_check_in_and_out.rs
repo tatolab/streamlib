@@ -11,7 +11,7 @@ impl GpuContext {
     ///
     /// If this pixel buffer was already checked in, returns the existing ID.
     pub fn check_in_surface(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        let store = self.surface_store.lock().unwrap();
+        let store = self.surface_store.lock();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
                 NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into(),
@@ -26,7 +26,7 @@ impl GpuContext {
     /// over the surface-share service's Mach channel and imports its
     /// IOSurface, zero-copy.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        let store = self.surface_store.lock().unwrap();
+        let store = self.surface_store.lock();
         let store = store.as_ref().ok_or_else(|| {
             crate::core::Error::Configuration(
                 NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into(),

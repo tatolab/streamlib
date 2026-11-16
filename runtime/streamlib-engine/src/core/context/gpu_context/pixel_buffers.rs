@@ -74,7 +74,7 @@ impl GpuContext {
             surface_id
         );
 
-        let surface_store = self.surface_store.lock().unwrap();
+        let surface_store = self.surface_store.lock();
         let store = surface_store.as_ref().ok_or_else(|| {
             Error::Configuration(NO_SURFACE_STORE_IS_CONNECTED_TO_THIS_GPU_CONTEXT.into())
         })?;
@@ -101,7 +101,6 @@ impl GpuContext {
         self.pixel_buffer_pool_manager
             .buffer_cache
             .lock()
-            .unwrap()
             .buffers_by_surface_id
             .keys()
             .filter(|surface_id| PublishedPixelBufferFrameId::parse(surface_id).is_some())
@@ -141,7 +140,7 @@ impl GpuContext {
         {
             return answer;
         }
-        let surface_store = self.surface_store.lock().unwrap();
+        let surface_store = self.surface_store.lock();
         match surface_store
             .as_ref()
             .and_then(SurfaceStore::check_out_leases)
@@ -175,10 +174,7 @@ impl GpuContext {
         {
             return;
         }
-        let mut cache = self
-            .buffer_texture_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self.buffer_texture_cache.lock();
         if cache.get(slot_key).is_some_and(|still_cached| {
             Arc::ptr_eq(still_cached.vulkan_inner(), cached_canvas.vulkan_inner())
         }) {
@@ -213,7 +209,7 @@ impl GpuContext {
         // identity check happened before the buffer was resolved.
         let slot_key = pool_slot_key_of_surface_id(surface_id);
         let texture = {
-            let mut cache = self.buffer_texture_cache.lock().unwrap();
+            let mut cache = self.buffer_texture_cache.lock();
             if let Some(existing) = cache.get(slot_key) {
                 if existing.width() == width && existing.height() == height {
                     existing.clone()
@@ -365,7 +361,6 @@ impl GpuContext {
         if let Some(reg) = self
             .texture_cache
             .lock()
-            .unwrap()
             .get(pool_slot_key_of_surface_id(surface_id))
         {
             reg.update_layout(upload.final_texture_layout);

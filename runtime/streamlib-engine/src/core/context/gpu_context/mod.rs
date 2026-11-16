@@ -17,8 +17,9 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::host_rhi::HostTextureExt;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::VulkanLayout;
 

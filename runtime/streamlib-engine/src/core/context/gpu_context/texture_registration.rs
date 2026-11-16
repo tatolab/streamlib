@@ -18,7 +18,7 @@ impl GpuContext {
         let registration = TextureRegistration::new(texture, VulkanLayout::UNDEFINED);
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let registration = TextureRegistration::new(texture);
-        let mut cache = self.texture_cache.lock().unwrap();
+        let mut cache = self.texture_cache.lock();
         cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
@@ -39,7 +39,7 @@ impl GpuContext {
         initial_layout: VulkanLayout,
     ) {
         let registration = TextureRegistration::new(texture, initial_layout);
-        let mut cache = self.texture_cache.lock().unwrap();
+        let mut cache = self.texture_cache.lock();
         // Keyed by the slot so a producer re-registering per published
         // frame replaces one entry instead of growing one per frame; the
         // published id's generation is checked at resolve time instead.
@@ -59,7 +59,6 @@ impl GpuContext {
         // else needs. The two removals were never atomic together anyway.
         self.texture_cache
             .lock()
-            .unwrap()
             .remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
         self.evict_surface_export_stagings(id);
@@ -72,7 +71,7 @@ impl GpuContext {
         id: &str,
         tensor_storage_buffer: crate::core::rhi::StorageBuffer,
     ) {
-        self.storage_buffer_registrations.lock().unwrap().insert(
+        self.storage_buffer_registrations.lock().insert(
             pool_slot_key_of_surface_id(id).to_string(),
             tensor_storage_buffer,
         );
@@ -83,7 +82,6 @@ impl GpuContext {
     pub(crate) fn unregister_storage_buffer_from_the_parent_wide_map(&self, id: &str) {
         self.storage_buffer_registrations
             .lock()
-            .unwrap()
             .remove(pool_slot_key_of_surface_id(id));
     }
 
@@ -98,7 +96,6 @@ impl GpuContext {
         self.refuse_a_retired_frame_id(surface_id)?;
         self.storage_buffer_registrations
             .lock()
-            .unwrap()
             .get(pool_slot_key_of_surface_id(surface_id))
             .cloned()
             .ok_or_else(|| {
@@ -123,7 +120,7 @@ impl GpuContext {
         ) else {
             return Ok(());
         };
-        let texture_cache = self.texture_cache.lock().unwrap();
+        let texture_cache = self.texture_cache.lock();
         let Some(registration) = texture_cache.get(pool_slot_key_of_surface_id(surface_id)) else {
             return Ok(());
         };
@@ -161,7 +158,6 @@ impl GpuContext {
     ) -> Option<TextureRegistration> {
         self.texture_cache
             .lock()
-            .unwrap()
             .get(pool_slot_key_of_surface_id(surface_id))
             .cloned()
     }
@@ -190,7 +186,6 @@ impl GpuContext {
         if let Some(reg) = self
             .texture_cache
             .lock()
-            .unwrap()
             .get(pool_slot_key_of_surface_id(id))
         {
             reg.update_layout(layout);
@@ -244,7 +239,6 @@ impl GpuContext {
         if let Some(reg) = self
             .texture_cache
             .lock()
-            .unwrap()
             .get(pool_slot_key_of_surface_id(surface_id))
         {
             return Ok(reg.clone());
@@ -282,7 +276,7 @@ impl GpuContext {
         // VUID-VkImageMemoryBarrier-oldLayout-01197.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let surface_store = self.surface_store.lock().unwrap();
+            let surface_store = self.surface_store.lock();
             if let Some(store) = surface_store.as_ref()
                 && let Ok((texture, ipc_layout)) = store.lookup_texture(surface_id)
             {
@@ -313,7 +307,7 @@ impl GpuContext {
             let buffer = self.pixel_buffer_pool_manager.get_from_cache(surface_id);
             #[cfg(target_os = "linux")]
             let buffer = buffer.or_else(|| {
-                let surface_store = self.surface_store.lock().unwrap();
+                let surface_store = self.surface_store.lock();
                 surface_store
                     .as_ref()
                     .and_then(|store| store.lookup_buffer(surface_id).ok())

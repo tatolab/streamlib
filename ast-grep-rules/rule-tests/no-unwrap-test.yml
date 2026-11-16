@@ -1,0 +1,32 @@
+id: no-unwrap
+valid:
+  - "fn f(x: Option<u8>) -> Result<u8, E> { x.ok_or(E) }"
+  - "fn f(x: Option<u8>) -> u8 { x.expect(\"set at construction\") }"
+  - "fn f(x: Option<u8>) -> u8 { x.unwrap_or(0) }"
+  - "fn f(m: &parking_lot::Mutex<u8>) -> u8 { *m.lock() }"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn f(x: Option<u8>) -> u8 { x.unwrap() }
+    }
+  - |
+    #[cfg(test)]
+    fn read_until(x: Option<u8>) -> u8 { x.unwrap() }
+  - "fn f(x: Option<u8>) { tracing::info!(\"{}\", x.unwrap_or(0)); }"
+invalid:
+  - "fn f(x: Option<u8>) -> u8 { x.unwrap() }"
+  - "fn f(m: &std::sync::Mutex<u8>) -> u8 { *m.lock().unwrap() }"
+  - |
+    fn f(cache: &Cache) {
+        cache
+            .entries
+            .lock()
+            .unwrap()
+            .insert(1);
+    }
+  - "fn f(x: Option<u8>) { tracing::info!(\"{}\", x.unwrap()); }"
+  - "fn f(x: Option<u8>) -> Vec<u8> { vec![x.unwrap()] }"
+  - |
+    #[cfg(test)]
+    fn a() {}
+    fn b(x: Option<u8>) -> u8 { x.unwrap() }

@@ -23,8 +23,9 @@ use crate::core::rhi::{
     RhiPixelBufferPool, Texture, pool_slot_key_of_surface_id,
 };
 use crate::core::runtime::LoadedStreamTag;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// Number of buffers to pre-allocate per pool.
 pub(super) const POOL_PRE_ALLOCATE_COUNT: usize = 4;
@@ -117,14 +118,11 @@ impl PixelBufferPoolManager {
         }
     }
 
-    /// The shared rings, locked; a panic under an earlier hold leaves them
-    /// usable rather than poisoning every later acquire.
+    /// The shared rings, locked.
     pub(super) fn lock_the_shared_rings(
         &self,
-    ) -> std::sync::MutexGuard<'_, HashMap<PixelBufferPoolKey, PixelBufferRingPool>> {
-        self.pools
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ) -> parking_lot::MutexGuard<'_, HashMap<PixelBufferPoolKey, PixelBufferRingPool>> {
+        self.pools.lock()
     }
 
     /// Acquire a buffer of the shape from its shared ring, created on first
@@ -544,15 +542,11 @@ impl PixelBufferPoolManager {
         if slot_taken_out.published_frame_generation() > 0 {
             self.buffer_cache
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .buffers_by_surface_id
                 .remove(&slot_taken_out.currently_published_frame_id());
         }
-        let canvas_texture_synthesized_from_the_slot = self
-            .buffer_texture_cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(pool_slot_key);
+        let canvas_texture_synthesized_from_the_slot =
+            self.buffer_texture_cache.lock().remove(pool_slot_key);
         PixelBufferPoolSlotTakenOutOfItsRing {
             slot: slot_taken_out,
             canvas_texture_synthesized_from_the_slot,
@@ -800,7 +794,7 @@ impl PixelBufferPoolManager {
         slot: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
         buffer: &PixelBuffer,
     ) {
-        let mut cache = self.buffer_cache.lock().unwrap();
+        let mut cache = self.buffer_cache.lock();
         if let Some(previously_published_frame_id) = slot.previously_published_frame_id() {
             cache
                 .buffers_by_surface_id
@@ -816,7 +810,6 @@ impl PixelBufferPoolManager {
     pub(super) fn publishes_a_frame_of_the_slot(&self, pool_slot_key: &str) -> bool {
         self.buffer_cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .buffers_by_surface_id
             .keys()
             .any(|cached_surface_id| {
@@ -829,7 +822,6 @@ impl PixelBufferPoolManager {
     pub(super) fn get_from_cache(&self, pool_id: &str) -> Option<PixelBuffer> {
         self.buffer_cache
             .lock()
-            .unwrap()
             .buffers_by_surface_id
             .get(pool_id)
             .cloned()
@@ -847,7 +839,7 @@ impl PixelBufferPoolManager {
         if PublishedPixelBufferFrameId::parse(surface_id).is_some() {
             return;
         }
-        let mut cache = self.buffer_cache.lock().unwrap();
+        let mut cache = self.buffer_cache.lock();
         if cache
             .buffers_by_surface_id
             .insert(surface_id.to_string(), buffer)
@@ -876,7 +868,7 @@ impl PixelBufferPoolManager {
         if PublishedPixelBufferFrameId::parse(surface_id).is_some() {
             return;
         }
-        let mut cache = self.buffer_cache.lock().unwrap();
+        let mut cache = self.buffer_cache.lock();
         if cache.buffers_by_surface_id.remove(surface_id).is_some() {
             cache.surface_store_lookup_count = cache.surface_store_lookup_count.saturating_sub(1);
         }

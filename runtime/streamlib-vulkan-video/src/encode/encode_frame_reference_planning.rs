@@ -249,7 +249,10 @@ impl SimpleEncoder {
                 ..Default::default()
             };
 
-            let dpb = enc.dpb264.as_mut().unwrap();
+            let dpb = enc
+                .dpb264
+                .as_mut()
+                .expect("an H.264 encoder gets its DPB from init_dpb when its session is created");
             dpb.dpb_picture_start(
                 &pic_info,
                 enc.log2_max_frame_num_minus4,

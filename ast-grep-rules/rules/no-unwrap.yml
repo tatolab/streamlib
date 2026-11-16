@@ -1,0 +1,36 @@
+id: no-unwrap
+language: rust
+severity: error
+message: Library code never calls `.unwrap()`. Return a failure that can happen at runtime through `?`, and write a broken invariant as `.expect("why this cannot fail")`.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - packages/test-fixtures/**/*.rs
+ignores:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/*_tests/**"
+  - runtime/streamlib-api-server/src/control_plane_stub_support.rs
+  - "**/benches/**"
+  - "**/examples/**"
+  - "**/build.rs"
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        kind: field_expression
+        has:
+          field: field
+          regex: '^unwrap$'
+    - kind: identifier
+      regex: '^unwrap$'
+      inside:
+        kind: token_tree
+        stopBy: end
+      follows:
+        regex: '^\.$'
+  not:
+    matches: inside-rust-test-code

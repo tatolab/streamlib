@@ -5857,6 +5857,7 @@ name = "streamlib-vulkan-video"
 version = "0.68.82"
 dependencies = [
  "libc",
+ "parking_lot",
  "streamlib-consumer-rhi",
  "streamlib-slang-shader-compiler",
  "streamlib-video-bitstream",

@@ -35,11 +35,11 @@ use vulkanalia::vk;
 use vulkanalia_vma as vma;
 
 use self::decoded_picture_display_window::DecodedPictureDisplayWindow;
-use crate::VulkanVideoDecodeContext;
 use crate::nv_video_parser::vulkan_h264_decoder::{
     MAX_DPB_SIZE as H264_MAX_DPB_SIZE, VulkanH264Decoder,
 };
 use crate::nv_video_parser::vulkan_h265_decoder::{HEVC_DPB_SIZE, VulkanH265Decoder};
+use crate::{VideoError, VulkanVideoDecodeContext};
 
 // ======================================================================
 // SimpleDecoder — high-level decoder with auto NAL parsing
@@ -199,4 +199,14 @@ impl Drop for SimpleDecoder {
             // VkVideoDecoder, device, instance are dropped via their own Drop impls.
         }
     }
+}
+
+/// The refusal for an H.264 slice that arrives before any parameter set created the parser.
+fn no_h264_parser() -> VideoError {
+    VideoError::BitstreamError("an H.264 slice arrived before its SPS and PPS".into())
+}
+
+/// The refusal for an H.265 slice that arrives before any parameter set created the parser.
+fn no_h265_parser() -> VideoError {
+    VideoError::BitstreamError("an H.265 slice arrived before its VPS, SPS and PPS".into())
 }

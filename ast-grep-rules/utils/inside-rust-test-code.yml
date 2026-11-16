@@ -1,4 +1,4 @@
-# Code that only builds under test: an inline `#[cfg(test)]` module, or a file
+# Code that only builds under test: an item under `#[cfg(test)]`, or a file
 # whose first attribute is `#![cfg(test)]` or `#![cfg(all(test, …))]`. A rule
 # that exempts test code adds `not: { matches: inside-rust-test-code }`; files
 # that are test code by name are left out with the rule's `ignores`.
@@ -8,7 +8,6 @@ rule:
   any:
     - inside:
         stopBy: end
-        kind: mod_item
         follows:
           stopBy:
             not:

@@ -29,11 +29,6 @@ impl SimpleDecoder {
 
     pub(crate) fn handle_h265_vps(&mut self, vps_nalu: &[u8]) -> Result<(), VideoError> {
         self.cached_vps_nalu = Some(vps_nalu.to_vec());
-        // Initialize the h265 parser if not yet created
-        if self.h265_parser.is_none() {
-            self.h265_parser = Some(VulkanH265Decoder::new());
-        }
-
         // Parse VPS from RBSP data (after EPB removal, skip 2-byte NAL header)
         let rbsp = Self::remove_emulation_prevention_bytes(&vps_nalu[2..]);
         let mut reader = RbspBitstreamReader::new(&rbsp);
@@ -44,7 +39,7 @@ impl SimpleDecoder {
                 max_sub_layers = vps.vps_max_sub_layers_minus1,
                 "H265 VPS parsed"
             );
-            let parser = self.h265_parser.as_mut().unwrap();
+            let parser = self.h265_parser.get_or_insert_with(VulkanH265Decoder::new);
             if vps_id < MAX_NUM_VPS {
                 let boxed = Box::new(vps);
                 parser.active_vps = Some(boxed.clone());
@@ -61,11 +56,6 @@ impl SimpleDecoder {
 
     pub(crate) fn handle_h265_sps(&mut self, sps_nalu: &[u8]) -> Result<(), VideoError> {
         self.cached_sps_nalu = Some(sps_nalu.to_vec());
-
-        // Initialize the h265 parser if not yet created
-        if self.h265_parser.is_none() {
-            self.h265_parser = Some(VulkanH265Decoder::new());
-        }
 
         // Remove emulation prevention bytes and skip 2-byte NAL header
         let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[2..]);
@@ -111,7 +101,7 @@ impl SimpleDecoder {
         );
 
         // Store in parser's SPS store and set as active
-        let parser = self.h265_parser.as_mut().unwrap();
+        let parser = self.h265_parser.get_or_insert_with(VulkanH265Decoder::new);
         if sps_id < MAX_NUM_SPS {
             // Set DPB sizing from parsed SPS
             parser.max_dec_pic_buffering = sps.max_dec_pic_buffering as i32;
@@ -131,15 +121,10 @@ impl SimpleDecoder {
     pub(crate) fn handle_h265_pps(&mut self, pps_nalu: &[u8]) -> Result<(), VideoError> {
         self.cached_pps_nalu = Some(pps_nalu.to_vec());
 
-        // Initialize the h265 parser if not yet created
-        if self.h265_parser.is_none() {
-            self.h265_parser = Some(VulkanH265Decoder::new());
-        }
-
         let rbsp = Self::remove_emulation_prevention_bytes(&pps_nalu[2..]);
         let mut reader = RbspBitstreamReader::new(&rbsp);
 
-        let parser = self.h265_parser.as_mut().unwrap();
+        let parser = self.h265_parser.get_or_insert_with(VulkanH265Decoder::new);
         let pps = VulkanH265Decoder::parse_pps(&mut reader, &parser.spss)
             .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 PPS".into()))?;
 
@@ -192,7 +177,10 @@ impl SimpleDecoder {
             || nal_type == H265NalUnitType::IdrNLp as u8;
 
         // Get active SPS/PPS for slice header parsing
-        let parser = self.h265_parser.as_ref().unwrap();
+        let parser = self
+            .h265_parser
+            .as_ref()
+            .ok_or_else(super::no_h265_parser)?;
         let sps = parser.active_sps[0]
             .as_ref()
             .ok_or_else(|| VideoError::BitstreamError("No active H.265 SPS".into()))?
@@ -215,7 +203,10 @@ impl SimpleDecoder {
         .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 slice header".into()))?;
 
         // Mutable borrow for POC calculation, RPS derivation, and DPB management
-        let parser = self.h265_parser.as_mut().unwrap();
+        let parser = self
+            .h265_parser
+            .as_mut()
+            .ok_or_else(super::no_h265_parser)?;
 
         // Set IRAP flags for POC calculation
         if is_irap {
@@ -537,7 +528,10 @@ impl SimpleDecoder {
         }
 
         // End the logical DPB picture (marks entry as in-use/short-term)
-        let parser = self.h265_parser.as_mut().unwrap();
+        let parser = self
+            .h265_parser
+            .as_mut()
+            .ok_or_else(super::no_h265_parser)?;
         parser.dpb_picture_end();
 
         // Update physical DPB tracking

@@ -615,8 +615,7 @@ impl ConsumerVulkanTexture {
                 .create_image_view(&view_info, None)
         }
         .map_err(|e| ConsumerRhiError::Gpu(format!("create_image_view failed: {e}")))?;
-        let _ = self.cached_image_view.set(view);
-        Ok(*self.cached_image_view.get().unwrap())
+        Ok(*self.cached_image_view.get_or_init(|| view))
     }
 }
 

@@ -79,7 +79,10 @@ impl SimpleEncoder {
                 reference_slot_indices,
             } = self.plan_the_frame_references(frame_type, is_idr);
 
-            let config = self.encode_config.as_ref().unwrap();
+            let config = self
+                .encode_config
+                .as_ref()
+                .expect("configure() sets encode_config, and every constructor calls it");
             let device = self.ctx.device();
 
             // --- Reset command buffer and begin recording ---
@@ -930,13 +933,12 @@ impl SimpleEncoder {
                 // H.265: use DPB-managed POC
                 self.dpb_slots[setup_slot_index].frame_num = self.frame_count;
                 self.dpb_slots[setup_slot_index].poc = h265_poc;
-            } else if is_h264 && self.h264_encoder.is_some() {
+            } else if is_h264 && let Some(enc) = self.h264_encoder.as_mut() {
                 // H.264: use DPB-provided frame_num and POC
                 self.dpb_slots[setup_slot_index].frame_num = h264_frame_num as u64;
                 self.dpb_slots[setup_slot_index].poc = h264_poc;
 
                 // Advance H.264-specific counters via VkVideoEncoderH264
-                let enc = self.h264_encoder.as_mut().unwrap();
                 if is_reference {
                     let max_frame_num = 1u32 << (enc.log2_max_frame_num_minus4 + 4);
                     enc.frame_num = (enc.frame_num + 1) % max_frame_num;
