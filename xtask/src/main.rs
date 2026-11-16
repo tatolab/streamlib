@@ -21,7 +21,6 @@ pub mod generate_built_in_node_classes;
 pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;
 pub mod generate_runtime_client;
-pub mod lint_logging;
 pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod runtime_client_zod_schemas;
@@ -33,12 +32,6 @@ pub mod stage_runtime_client_package;
 pub mod stage_runtime_unit_carried_packages;
 pub mod stage_runtime_unit_uv;
 pub mod stage_sample_projects;
-
-/// Rust source roots a workspace crate may hold: the classic `src/` and the
-/// folder-backed `processors/`. `lint_logging` walks these by name rather
-/// than descending from the crate root, so a source tree outside both is
-/// invisible to it.
-pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Tracked (and untracked-but-not-ignored) files under one repo-relative root.
 ///
@@ -134,7 +127,6 @@ type SourceWalkingGate = fn(&Path) -> Result<()>;
 /// lets one process run them all in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
-    ("lint-logging", lint_logging::run),
     ("check-boundaries", check_boundaries::run),
     ("check-vendored-trees", check_vendored_trees::run),
     (
@@ -226,8 +218,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
     let shelled_out_gates: &[(&str, &str, &[&str])] = &[
         ("rustfmt", "cargo", &["fmt", "--all", "--check"]),
         // Default targets only. A test's `println!` is a test's business —
-        // `lint-logging` exempts `tests` directories, and `--all-targets` here
-        // would deny what that walk deliberately allows.
+        // `no-print-macro` ignores `tests` directories, and `--all-targets` here
+        // would deny what that rule deliberately allows.
         // Same exclusion as CI so this really does mirror it: `skia-bindings`
         // cannot build on a runner, and a local gate that lints more than CI
         // does is a gate whose result nobody can act on.
@@ -420,10 +412,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
-    /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
-    LintLogging,
-
     /// Boundary-grep CI gate for the Vulkan RHI capability split. Fails on
     /// `ash`, raw `vulkanalia` outside RHI/adapter crates, cdylibs depending
     /// on the full `streamlib` crate, or privileged Vulkan calls outside
@@ -624,7 +612,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckModuleHostTableSurface => {
             check_module_host_table_surface::run(&workspace_root()?)?

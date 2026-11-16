@@ -26,6 +26,25 @@ class RefusedSuppressionsTest(unittest.TestCase):
             with self.subTest(spelling=spelling):
                 self.assertEqual(len(refused_suppressions(spelling, UNSUPPRESSIBLE)), 1)
 
+    def test_a_directive_on_a_block_comment_continuation_line_is_refused(self) -> None:
+        for text in [
+            "/*\n * ast-grep-ignore: no-wall-clock-read */\nfn f() {}",
+            "/*\nast-grep-ignore: no-wall-clock-read\n*/",
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    refused_suppressions(text, UNSUPPRESSIBLE),
+                    [(2, "names no-wall-clock-read, which takes no ast-grep-ignore")],
+                )
+
+    def test_a_directive_after_a_closed_block_comment_needs_a_marker(self) -> None:
+        self.assertEqual(
+            refused_suppressions(
+                "/* a */\nast-grep-ignore: no-wall-clock-read", UNSUPPRESSIBLE
+            ),
+            [],
+        )
+
     def test_a_bare_suppression_is_refused(self) -> None:
         for spelling in [
             "// ast-grep-ignore",

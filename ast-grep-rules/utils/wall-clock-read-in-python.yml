@@ -8,10 +8,24 @@ rule:
     - kind: call
       has:
         field: function
-        regex: '(^|\.)time\.time(_ns)?$'
+        kind: attribute
+        all:
+          - has:
+              field: object
+              regex: '(^|\.)\s*time$'
+          - has:
+              field: attribute
+              regex: '^time(_ns)?$'
     - kind: call
       has:
         field: function
-        regex: '(^|\.)datetime\.(now|utcnow|today)$'
+        kind: attribute
+        all:
+          - has:
+              field: object
+              regex: '(^|\.)\s*datetime$'
+          - has:
+              field: attribute
+              regex: '^(now|utcnow|today)$'
     - kind: identifier
       regex: '^CLOCK_REALTIME'

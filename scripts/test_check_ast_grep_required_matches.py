@@ -59,6 +59,17 @@ class RequiredMatchFailuresTest(unittest.TestCase):
         self.assertEqual(len(failures), 1)
         self.assertIn("the two lists change together", failures[0])
 
+    def test_an_ignore_after_a_blank_line_in_the_list_still_counts(self) -> None:
+        refusing_rule = [
+            *REFUSING_RULE[:5],
+            "",
+            "  - runtime/extra.rs",
+            *REFUSING_RULE[5:],
+        ]
+        failures = failures_for(HINT_RULE, refusing_rule=refusing_rule)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("the two lists change together", failures[0])
+
     def test_a_hint_rule_without_a_required_by_line_fails(self) -> None:
         failures = failures_for(HINT_RULE[1:])
         self.assertEqual(

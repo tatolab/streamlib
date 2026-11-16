@@ -2,6 +2,13 @@ id: no-escalate-in-lifecycle
 valid:
   - |
     impl Processor for P {
+        fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            assert!(self.flags.escalate);
+            Ok(())
+        }
+    }
+  - |
+    impl Processor for P {
         fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
             ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
         }

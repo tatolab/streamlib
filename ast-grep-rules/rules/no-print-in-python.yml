@@ -1,0 +1,34 @@
+id: no-print-in-python
+language: python
+severity: error
+message: Logging is `tatolab.stream.log.*` only; no `print`, `sys.stdout`, `sys.stderr` or `logging.basicConfig` in library code.
+files:
+  - sdk/streamlib-python-wheel/python/**/*.py
+  - sdk/tatolab-stream/**/*.py
+ignores:
+  - "**/tests/**"
+  - "**/_generated_*/**"
+  - "**/*_test.py"
+  # Each file below writes to stdout or stderr on purpose and says why in its header: a log
+  # channel that does not exist yet, a JSON document the runtime parses, or a command's report.
+  - sdk/streamlib-python-wheel/python/tatolab/runtime/_helper_process_log_forwarding.py
+  - sdk/streamlib-python-wheel/python/tatolab/runtime/_processor_interpreter_bootstrap.py
+  - sdk/tatolab-stream/tatolab/stream/_graph_generator_run_entry.py
+  - sdk/tatolab-stream/tatolab/stream/_project_node_type_listing_entry.py
+  - sdk/tatolab-stream/tatolab/stream/description_lint.py
+rule:
+  any:
+    - kind: call
+      has:
+        field: function
+        regex: '^(builtins\.)?print$'
+    - kind: call
+      has:
+        field: function
+        regex: '^(pprint\.)?(pprint|pp)$'
+    - kind: attribute
+      regex: '^sys\.(stdout|stderr)$'
+    - kind: call
+      has:
+        field: function
+        regex: '(^|\.)logging\.basicConfig$'

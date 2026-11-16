@@ -1,6 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
-# streamlib:lint-logging:allow-file — stdout carries the one JSON document the runtime
+# no-print-in-python ignores this file: stdout carries the one JSON document the runtime
 # parses; neither stream is a log event.
 
 """The entry the runtime runs in a project's own interpreter to list its node types and graph generators.

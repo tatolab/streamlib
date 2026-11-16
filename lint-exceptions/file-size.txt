@@ -20,4 +20,3 @@
 1132 runtime/streamlib-vulkan-video/src/vk_video_encoder/vk_encoder_dpb_h264/mod.rs
 1574 runtime/streamlib-vulkan-video/src/vk_video_encoder/vk_encoder_dpb_h265/mod.rs
 3081 xtask/src/check_boundaries.rs
-1658 xtask/src/lint_logging.rs

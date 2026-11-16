@@ -1,6 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
-# streamlib:lint-logging:allow-file — the findings are the command's report on stdout,
+# no-print-in-python ignores this file: the findings are the command's report on stdout,
 # not log events.
 
 """The description lint: which node types, ports and config keys have no description.

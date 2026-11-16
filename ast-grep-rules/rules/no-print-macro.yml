@@ -1,0 +1,41 @@
+id: no-print-macro
+language: rust
+severity: error
+message: Logging is `tracing` only; use `tracing::info!`, `tracing::warn!`, `tracing::error!` or `tracing::debug!` in place of `println!`, `eprintln!`, `print!`, `eprint!` or `dbg!`.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - packages/test-fixtures/**/*.rs
+ignores:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/benches/**"
+  - "**/examples/**"
+  - "**/build.rs"
+rule:
+  kind: macro_invocation
+  has:
+    field: macro
+    regex: '^(::)?(std::)?(println|eprintln|print|eprint|dbg)$'
+  not:
+    any:
+      - matches: inside-rust-test-code
+      - inside:
+          stopBy: end
+          follows:
+            stopBy:
+              not:
+                any:
+                  - kind: attribute_item
+                  - kind: line_comment
+                  - kind: block_comment
+            kind: attribute_item
+            regex: '(?s)^#!?\[(allow|expect)\(.*clippy::disallowed_macros'
+      - inside:
+          stopBy: end
+          kind: source_file
+          has:
+            kind: inner_attribute_item
+            regex: '(?s)^#!?\[(allow|expect)\(.*clippy::disallowed_macros'

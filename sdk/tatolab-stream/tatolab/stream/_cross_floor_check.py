@@ -463,7 +463,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     itself is reported and never fails the run.
     """
     # The runtime logs each line of standard error into the project's log.
-    warning_channel_to_the_runtime = sys.stderr  # streamlib:lint-logging:allow-line
+    warning_channel_to_the_runtime = sys.stderr  # ast-grep-ignore: no-print-in-python
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) != 1:
         warning_channel_to_the_runtime.write(CROSS_FLOOR_CHECK_MODULE_RUN_USAGE)

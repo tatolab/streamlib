@@ -57,13 +57,11 @@ streamlib-slang-shader-compiler = { path = "../runtime/streamlib-slang-shader-co
 # Same pin as the engine's, which decodes the very same reference set.
 png = "0.17"
 
-# Rust AST parsing for lint-logging — matches clippy's disallowed_macros
-# semantics (respects #[cfg(test)], #[allow(clippy::disallowed_macros)], and
-# file-level #![allow(...)]) without having to compile the workspace.
-syn = { version = "2", features = ["full", "visit", "extra-traits"] }
+# Parses the module host table ABI source for `check-module-host-table-surface` and
+# `generate-module-host-table-c-header`.
+syn = { version = "2", features = ["full"] }
 # Renders a refused type back to source for a gate's message.
 quote = "1"
-proc-macro2 = { version = "1", features = ["span-locations"] }
 
 
 # stdout and stderr are the output channel of a development tool.

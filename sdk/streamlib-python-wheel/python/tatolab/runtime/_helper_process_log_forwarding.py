@@ -1,6 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
-# streamlib:lint-logging:allow-file — a describe has no parent log channel, so its
+# no-print-in-python ignores this file: a describe has no parent log channel, so its
 # records are written to raw stderr, which the parent mirrors into its own log.
 
 """Logging from a processor interpreter: describe-time records to stderr, the rest to its parent."""

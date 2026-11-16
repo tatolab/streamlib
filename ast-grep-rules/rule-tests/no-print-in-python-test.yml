@@ -1,0 +1,21 @@
+id: no-print-in-python
+valid:
+  - "log.info('ready')"
+  - "blueprint(graph)"
+  - "self.pprint_table(rows)"
+  - "# print(value) is not allowed here"
+  - |
+    """Never print() from a node."""
+    import tatolab.stream.log as log
+  - "stream = sys.stdin"
+invalid:
+  - "pprint(value)"
+  - "pprint.pprint(value)"
+  - "print('ready')"
+  - "builtins.print('ready')"
+  - "sys.stderr.write('ready')"
+  - "out = sys.stdout"
+  - "logging.basicConfig(level=logging.INFO)"
+  - |
+    def f():
+        print(1)
