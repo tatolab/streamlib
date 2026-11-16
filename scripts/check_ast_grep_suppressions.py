@@ -15,7 +15,7 @@ from pathlib import Path
 
 UNSUPPRESSIBLE_RULE_LIST = Path("ast-grep-rules/unsuppressible-rules.txt")
 EXEMPT_PREFIXES = ("ast-grep-rules/", "vendor/", "scripts/check_ast_grep_suppressions.py")
-SUPPRESSION_COMMENT = re.compile(r"ast-grep-ignore(?P<rules>:[^\n]*)?")
+SUPPRESSION_COMMENT = re.compile(r"(?://|#|/\*)\s*ast-grep-ignore(?P<rules>:[^\n]*)?")
 
 
 def unsuppressible_rule_ids() -> set[str]:

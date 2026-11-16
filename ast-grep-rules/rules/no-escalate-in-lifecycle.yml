@@ -15,21 +15,28 @@ ignores:
   # Tests gate serialization across concurrent workers, so it escalates from start() on purpose.
   - packages/test-fixtures/processors/concurrent_escalate_test_processor.rs
 rule:
-  kind: call_expression
-  has:
-    field: function
-    any:
-      - kind: field_expression
-        has:
-          field: field
-          regex: '^escalate$'
-      - kind: generic_function
-        has:
-          field: function
-          kind: field_expression
-          has:
-            field: field
-            regex: '^escalate$'
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        any:
+          - kind: field_expression
+            has:
+              field: field
+              regex: '^escalate$'
+          - kind: generic_function
+            has:
+              field: function
+              kind: field_expression
+              has:
+                field: field
+                regex: '^escalate$'
+    - kind: identifier
+      regex: '^escalate$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^\.$'
   inside:
     stopBy: end
     kind: function_item
