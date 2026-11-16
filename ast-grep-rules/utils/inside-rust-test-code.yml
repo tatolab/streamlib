@@ -1,0 +1,20 @@
+# Code that only builds under test: an inline `#[cfg(test)]` module, or a file
+# whose first attribute is `#![cfg(test)]` or `#![cfg(all(test, …))]`. A rule
+# that exempts test code adds `not: { matches: inside-rust-test-code }`; files
+# that are test code by name are left out with the rule's `ignores`.
+id: inside-rust-test-code
+language: rust
+rule:
+  any:
+    - inside:
+        stopBy: end
+        kind: mod_item
+        follows:
+          kind: attribute_item
+          regex: '^#\[cfg\((all\()?test\b'
+    - inside:
+        stopBy: end
+        kind: source_file
+        has:
+          kind: inner_attribute_item
+          regex: '^#!\[cfg\((all\()?test\b'

@@ -1,0 +1,26 @@
+id: no-raw-device-wait-idle
+valid:
+  - "impl Drop for Kernel { fn drop(&mut self) { let _ = self.vulkan_device.wait_idle(); } }"
+  - "// a comment naming self.device.device_wait_idle() is not a call"
+  - |
+    fn real_code() {}
+    #[cfg(test)]
+    mod tests {
+        fn helper() { let _ = device.device_wait_idle(); }
+    }
+  - |
+    #![cfg(all(test, target_os = "linux"))]
+    fn helper() { let _ = device.device_wait_idle(); }
+invalid:
+  - "impl Drop for Kernel { fn drop(&mut self) { unsafe { let _ = self.device.device_wait_idle(); } } }"
+  - |
+    fn real_code() { let _ = self.device.device_wait_idle(); }
+    #[cfg(test)]
+    mod tests {
+        fn helper() {}
+    }
+  - |
+    #[cfg(feature = "slow")]
+    mod slow_path {
+        fn drain() { let _ = device.device_wait_idle(); }
+    }

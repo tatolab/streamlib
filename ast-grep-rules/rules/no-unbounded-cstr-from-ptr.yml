@@ -1,0 +1,25 @@
+id: no-unbounded-cstr-from-ptr
+language: rust
+severity: error
+message: "`CStr::from_ptr(owner.as_ptr())` returns a lifetime the borrow checker can't tie to `owner`; read a Vulkan name array with `vk::StringArray::as_cstr`."
+note: >-
+  A name read out of an enumerated VkExtensionProperties, VkLayerProperties or
+  VkPhysicalDeviceProperties buffer this way keeps compiling after the buffer is
+  dropped, and two device bring-up paths shipped that use-after-free.
+  `StringArray::as_cstr(&self) -> &CStr` does the same read while borrowing from
+  the array. A bare pointer argument over storage an external API owns has no
+  Rust owner to borrow from and is not flagged.
+files:
+  - runtime/streamlib-engine/src/vulkan/**/*.rs
+  - runtime/streamlib-consumer-rhi/src/**/*.rs
+rule:
+  kind: call_expression
+  all:
+    - has:
+        field: function
+        regex: '(^|::)CStr::from_ptr$'
+    - has:
+        field: arguments
+        has:
+          stopBy: end
+          pattern: $OWNER.as_ptr()
