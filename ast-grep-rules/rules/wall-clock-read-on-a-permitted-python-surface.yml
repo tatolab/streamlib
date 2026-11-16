@@ -6,7 +6,7 @@
 id: wall-clock-read-on-a-permitted-python-surface
 language: python
 severity: hint
-message: This permitted surface reads the wall clock.
+message: This file still reads the wall clock, as the ignore entry the refusing rule holds for it requires.
 files:
   - sdk/streamlib-python-wheel/python/tatolab/runtime/_helper_process_log_forwarding.py
   - sdk/tatolab-stream/tests/test_function_node_side_effect_check.py

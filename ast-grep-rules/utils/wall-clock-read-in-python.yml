@@ -1,6 +1,6 @@
 # A read of the wall clock in Python: `time.time()`, `time.time_ns()`,
 # `datetime.now()`, `datetime.utcnow()`, `datetime.today()`, and the
-# `CLOCK_REALTIME` clock id.
+# `CLOCK_REALTIME` clock ids (`_COARSE` and `_ALARM` too).
 id: wall-clock-read-in-python
 language: python
 rule:
@@ -14,4 +14,4 @@ rule:
         field: function
         regex: '(^|\.)datetime\.(now|utcnow|today)$'
     - kind: identifier
-      regex: '^CLOCK_REALTIME$'
+      regex: '^CLOCK_REALTIME'

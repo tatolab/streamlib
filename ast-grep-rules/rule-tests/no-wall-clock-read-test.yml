@@ -19,3 +19,4 @@ invalid:
     mod tests {
         fn stamp() { let _ = SystemTime::now(); }
     }
+  - "unsafe { libc::clock_gettime(libc::CLOCK_REALTIME_COARSE, &mut timespec) };"

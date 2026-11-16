@@ -13,6 +13,7 @@ stopped needing it.
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 RULE_DIRECTORY = Path("ast-grep-rules/rules")
@@ -32,9 +33,10 @@ def listed_paths(lines: list[str], key: str) -> list[str]:
     return entries
 
 
-def rule_lines_by_id() -> dict[str, list[str]]:
+def rule_lines_by_id(rule_directory: Path = RULE_DIRECTORY) -> dict[str, list[str]]:
+    """Each rule file's lines, keyed by its `id:`."""
     rules = {}
-    for rule_path in sorted(RULE_DIRECTORY.glob("*.yml")):
+    for rule_path in sorted(rule_directory.glob("*.yml")):
         lines = rule_path.read_text().splitlines()
         rule_id = next(
             line.removeprefix("id:").strip() for line in lines if line.startswith("id:")
@@ -43,28 +45,43 @@ def rule_lines_by_id() -> dict[str, list[str]]:
     return rules
 
 
-def required_match_rules() -> dict[str, tuple[list[str], str | None]]:
-    """Each hint rule's id, mapped to the files it lists and the rule requiring it."""
-    rules = {}
-    for rule_id, lines in rule_lines_by_id().items():
+def required_by_of(lines: list[str]) -> str | None:
+    """The rule a hint rule's `# required-by:` line names."""
+    return next(
+        (
+            line.removeprefix("# required-by:").strip()
+            for line in lines
+            if line.startswith("# required-by:")
+        ),
+        None,
+    )
+
+
+def files_with_a_finding_of(rule_id: str) -> set[str] | str:
+    """The files `ast-grep scan` reports `rule_id` in, or why the scan failed."""
+    scan = subprocess.run(
+        ["ast-grep", "scan", "--json=compact", "--filter", f"^{rule_id}$"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if not scan.stdout.strip().startswith("["):
+        return f"ast-grep scan for {rule_id} failed ({scan.returncode}): {scan.stderr}"
+    return {finding["file"] for finding in json.loads(scan.stdout)}
+
+
+def required_match_failures(
+    all_rule_lines: dict[str, list[str]],
+    files_with_a_finding: Callable[[str], set[str] | str],
+    file_exists: Callable[[str], bool],
+) -> list[str]:
+    """Every way a hint rule's list, its required-by rule's ignores and the findings disagree."""
+    failures = []
+    for rule_id, lines in all_rule_lines.items():
         if "severity: hint" not in lines:
             continue
-        required_by = next(
-            (
-                line.removeprefix("# required-by:").strip()
-                for line in lines
-                if line.startswith("# required-by:")
-            ),
-            None,
-        )
-        rules[rule_id] = (listed_paths(lines, "files"), required_by)
-    return rules
-
-
-def main() -> int:
-    failures = []
-    all_rule_lines = rule_lines_by_id()
-    for rule_id, (listed_files, required_by) in required_match_rules().items():
+        listed_files = listed_paths(lines, "files")
+        required_by = required_by_of(lines)
         if not listed_files:
             failures.append(f"{rule_id} lists no files")
             continue
@@ -77,26 +94,27 @@ def main() -> int:
                 f"{rule_id} lists {sorted(listed_files)}, but {required_by} ignores "
                 f"{sorted(permitted_files)}; the two lists change together"
             )
-        scan = subprocess.run(
-            ["ast-grep", "scan", "--json=compact", "--filter", f"^{rule_id}$"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if not scan.stdout.strip().startswith("["):
-            failures.append(
-                f"ast-grep scan for {rule_id} failed ({scan.returncode}): {scan.stderr}"
-            )
+        found_in = files_with_a_finding(rule_id)
+        if isinstance(found_in, str):
+            failures.append(found_in)
             continue
-        files_with_a_finding = {finding["file"] for finding in json.loads(scan.stdout)}
         for listed_file in listed_files:
-            if not Path(listed_file).is_file():
+            if not file_exists(listed_file):
                 failures.append(f"{rule_id} lists {listed_file}, which does not exist")
-            elif listed_file not in files_with_a_finding:
+            elif listed_file not in found_in:
                 failures.append(
                     f"{rule_id} requires a finding in {listed_file}, and it has none: drop the "
                     "file from this rule and from the ignores of the rule that permits it"
                 )
+    return failures
+
+
+def main() -> int:
+    failures = required_match_failures(
+        rule_lines_by_id(),
+        files_with_a_finding_of,
+        lambda listed_file: Path(listed_file).is_file(),
+    )
     for failure in failures:
         print(failure, file=sys.stderr)
     return 1 if failures else 0

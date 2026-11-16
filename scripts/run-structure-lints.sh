@@ -83,6 +83,9 @@ run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_com
   --exceptions lint-exceptions/ast-grep.txt $(compare_arguments_for lint-exceptions/ast-grep.txt)
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
+for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py; do
+  run_lint "${script_test}" "${python_command[@]}" "${script_test}"
+done
 run_lint "ast-grep suppressions" "${python_command[@]}" scripts/check_ast_grep_suppressions.py
 run_lint "ast-grep required matches" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
   scripts/check_ast_grep_required_matches.py

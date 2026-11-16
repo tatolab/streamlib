@@ -22,3 +22,4 @@ invalid:
   - |
     def f():
         """Docstring."""; return time.time()
+  - "stamp = time.clock_gettime_ns(time.CLOCK_REALTIME_COARSE)"

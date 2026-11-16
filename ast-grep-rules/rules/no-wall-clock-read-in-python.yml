@@ -9,8 +9,9 @@ note: >-
   in Python; for a unique name rather than a timestamp,
   `mint_machine_global_unique_name_suffix()`. Wall clock is permitted only on the
   observability surfaces this rule ignores: a log record's `host_ts` and
-  `source_ts`, log file naming, and a project change feed's `refused_at`.
-  Widening that list is an owner decision, and the rule takes no
+  `source_ts`, log file naming, and a project change feed's `refused_at`. Its
+  one other ignore holds never-called test bodies, not a permitted surface.
+  Widening the list is an owner decision, and the rule takes no
   ast-grep-ignore.
 files:
   - runtime/**/*.py
