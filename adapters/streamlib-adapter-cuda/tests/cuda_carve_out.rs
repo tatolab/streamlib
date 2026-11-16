@@ -269,22 +269,6 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
         }
     };
 
-    // ── Phase 4a (Stage 8 of #588): probe the imported pointer's
-    //    memory class. The cdylib that constructs DLPack capsules
-    //    (#589/#590) needs to know whether to advertise the pointer
-    //    as `kDLCUDA = 2` (real device memory; reads at device
-    //    bandwidth) or `kDLCUDAHost = 3` (pinned-host memory; reads
-    //    cross PCIe per access). CUDA's `cudaPointerGetAttributes`
-    //    is the authoritative answer.
-    //
-    //    Expected: `cudaMemoryTypeDevice` for the imported HOST_VISIBLE
-    //    OPAQUE_FD `VkBuffer`. If a future driver downgrades to
-    //    `cudaMemoryTypeHost`, drop `HOST_VISIBLE` from
-    //    `HostVulkanBuffer::new_opaque_fd_export` and re-test —
-    //    the host-side mapped pointer goes away (host-side population
-    //    routes through `vkCmdCopyBuffer` instead) but device-side
-    //    inference performance is preserved. The flip is recorded in
-    //    `context.md` under "Open empirical question (Stage 8)".
     let mut ptr_attrs = MaybeUninit::<sys::cudaPointerAttributes>::uninit();
     let ptr_attrs_call =
         unsafe { sys::cudaPointerGetAttributes(ptr_attrs.as_mut_ptr(), dev_ptr).result() };

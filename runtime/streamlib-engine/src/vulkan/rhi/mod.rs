@@ -64,14 +64,12 @@ pub use command_recording_and_sync::vulkan_pipeline_flags::{VulkanAccess, Vulkan
 
 pub(crate) use device::vulkan_validation_messenger::VulkanValidationMessageCounts;
 
+#[cfg(target_os = "linux")]
+pub(crate) use command_recording_and_sync::vulkan_command_recorder::RhiCommandRecorderInner;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use command_recording_and_sync::vulkan_command_recorder::{
     ImageCopyRegion, RhiCommandRecorder,
 };
-// `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
-// for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
-#[cfg(target_os = "linux")]
-pub(crate) use command_recording_and_sync::vulkan_command_recorder::RhiCommandRecorderInner;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use frame_conversion::vulkan_offscreen_compositor::{
@@ -94,10 +92,6 @@ pub use kernels::vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
 };
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
-// `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
-// the host's clone/drop callbacks in `core::plugin::host_services`
-// need to reference it for `Arc::increment_strong_count` /
-// `Arc::decrement_strong_count`. Re-export at crate scope.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use kernels::vulkan_ray_tracing_kernel::VulkanRayTracingKernel;

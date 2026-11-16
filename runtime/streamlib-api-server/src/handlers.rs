@@ -796,11 +796,6 @@ pub(crate) mod router_surface_tests {
         );
     }
 
-    /// The router itself, not only its spec, serves nothing that changes the
-    /// runtime: every path it serves outside `/mcp` (whose tools
-    /// `tools_list_advertises_exactly_the_control_vocabulary` holds) answers
-    /// no mutating method with success, and nothing at all is served under
-    /// `/api/runtime`.
     #[tokio::test]
     async fn the_router_serves_no_mutating_method_and_nothing_under_api_runtime() {
         let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();

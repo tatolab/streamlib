@@ -65,9 +65,6 @@ impl VulkanAccelerationStructure {
         unsafe { &*(self.handle as *const VulkanAccelerationStructureInner) }
     }
 
-    /// Build a triangle-geometry BLAS. Engine-side entry — the
-    /// FullAccess vtable's `build_triangles_blas` slot dispatches
-    /// through this on host mode.
     pub fn build_triangles_blas(
         vulkan_device: &Arc<HostVulkanDevice>,
         label: &str,

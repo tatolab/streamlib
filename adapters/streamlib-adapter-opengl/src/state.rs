@@ -8,25 +8,6 @@
 use khronos_egl as egl;
 use streamlib_surface_adapter::SurfaceRegistration;
 
-/// Inputs the host hands to
-/// [`crate::OpenGlSurfaceAdapter::register_host_surface`].
-///
-/// `dma_buf_fd` is the FD exported from a host-allocated `VkImage`
-/// (via `streamlib`'s `HostVulkanTexture::export_dma_buf_fd`). The adapter
-/// dups it during EGL import; the caller may close their copy after
-/// `register_host_surface` returns.
-///
-/// `drm_format_modifier` is the modifier the host's allocator chose
-/// for the `VkImage` — per the NVIDIA EGL DMA-BUF render-target
-/// learning, the host MUST pick a tiled, render-target-capable
-/// modifier or the resulting GL texture is sampler-only.
-///
-/// `#[repr(C)]` so the layout matches
-/// [`streamlib_adapter_opengl_abi::HostSurfaceRegistrationRepr`]
-/// byte-for-byte — the host's cdylib-facing `register_host_surface`
-/// vtable slot reads the repr type and projects it to this struct
-/// without a per-field copy. Locked by
-/// `host_vtable::tier1_null_handle_tests::host_surface_registration_repr_matches_source_layout`.
 #[repr(C)]
 pub struct HostSurfaceRegistration {
     pub dma_buf_fd: i32,

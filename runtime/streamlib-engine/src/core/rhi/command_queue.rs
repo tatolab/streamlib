@@ -1,16 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! RHI command queue abstraction.
-//!
-//! Layout-stable `(handle, vtable)` shape. The handle is
-//! `Arc::into_raw(Arc<RhiCommandQueueInner>)`; the vtable's
-//! `clone_rhi_command_queue` / `drop_rhi_command_queue` callbacks
-//! manage the Arc refcount in host-compiled code.
-//!
-//! The platform-specific Arc lives on the private
-//! [`RhiCommandQueueInner`] type behind the opaque handle.
-
 use std::ffi::c_void;
 use std::sync::Arc;
 

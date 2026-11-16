@@ -20,9 +20,6 @@ const EXAMPLES_RELATIVE_TO_WORKSPACE: &str = "examples";
 /// The file that makes an example a project, and so a sample.
 const PROJECT_FILE_NAME: &str = "tatolab-project.json";
 
-/// The file that marks a held pre-pivot example, which never ships.
-const HELD_PRE_PIVOT_EXAMPLE_MARKER_FILE_NAME: &str = "Cargo.toml";
-
 /// The name every project gives Tatolab's package index.
 const TATOLAB_PACKAGE_INDEX_NAME: &str = "tatolab";
 
@@ -52,18 +49,13 @@ pub fn runtime_unit_sample_projects_directory_in_the_workspace(
 }
 
 /// Every converted example in `workspace_root`'s `examples/`, in name order: each folder holding
-/// a project file and no `Cargo.toml`.
+/// a project file.
 pub fn every_converted_example_in_the_workspace(workspace_root: &Path) -> Result<Vec<PathBuf>> {
     let examples_directory = workspace_root.join(EXAMPLES_RELATIVE_TO_WORKSPACE);
     let mut converted_examples: Vec<PathBuf> = std::fs::read_dir(&examples_directory)
         .with_context(|| format!("reading {}", examples_directory.display()))?
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|example| {
-            example.join(PROJECT_FILE_NAME).is_file()
-                && !example
-                    .join(HELD_PRE_PIVOT_EXAMPLE_MARKER_FILE_NAME)
-                    .exists()
-        })
+        .filter(|example| example.join(PROJECT_FILE_NAME).is_file())
         .collect();
     converted_examples.sort();
     Ok(converted_examples)
@@ -303,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn every_converted_example_is_a_sample_and_no_held_one_is() {
+    fn every_converted_example_is_a_sample() {
         let converted_examples: Vec<String> =
             every_converted_example_in_the_workspace(the_workspace_root())
                 .unwrap()
@@ -314,10 +306,6 @@ mod tests {
             converted_examples.contains(&"test-pattern-halftone-lens".to_owned()),
             "the sample that keeps the old starter's halftone lens and brightness meter ships: \
              {converted_examples:?}"
-        );
-        assert!(
-            !converted_examples.contains(&"screen-recorder".to_owned()),
-            "a held pre-pivot example never ships: {converted_examples:?}"
         );
     }
 

@@ -85,14 +85,6 @@ pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
     /// `consume_done` timeline — same single-writer contract as
     /// [`HostSurfaceRegistration::consume_done`].
     pub consume_done: Arc<P::TimelineSemaphore>,
-    /// Vulkan image layout the image is in at registration time. The
-    /// cross-process release path (a `CudaContext.release_for_cross_process`
-    /// SDK shim that delegates to `VulkanSurfaceAdapter::release_to_foreign`)
-    /// reads this when running the producer-side
-    /// QFOT release barrier. The cuda adapter itself does NOT issue any
-    /// Vulkan-side barriers on the imported image — CUDA's sync runs
-    /// pairwise via `cudaWaitExternalSemaphoresAsync` /
-    /// `cudaSignalExternalSemaphoresAsync` on the timeline.
     pub initial_layout: VulkanLayout,
 }
 

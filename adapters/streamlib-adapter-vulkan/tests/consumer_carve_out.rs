@@ -1,34 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Carve-out semantic tests for `ConsumerVulkanDevice`.
-//!
-//! Phase 1 (#561) only landed thin "constructs + exposes queue" tests.
-//! Phase 2 (#560) lands the cdylib swap to `ConsumerVulkanDevice`, so
-//! the consumer device starts running in production. These tests
-//! cover the carve-out paths that aren't already covered by the
-//! adapter-vulkan host↔subprocess round-trip integration tests
-//! (`streamlib-adapter-vulkan/tests/round_trip_*` — those exercise
-//! the full DMA-BUF import + bind + map flow against a real host
-//! allocation):
-//!
-//! - **Concurrent submit serialization** — threads issuing
-//!   `submit_to_queue` against the same `VkQueue` with real
-//!   `vkCmdFillBuffer` work, per-submit fences, and per-thread
-//!   readback verification. Without the per-queue mutex, concurrent
-//!   `vkQueueSubmit2` is UB; the failure mode that matters in
-//!   practice is a lost / corrupted submit, which the readback would
-//!   catch.
-//! - **Leak-on-drop tracing** — `Drop` emits `tracing::warn!` when
-//!   the device is dropped with live DMA-BUF imports. Captured here
-//!   via a custom `tracing_subscriber` layer that records warn-level
-//!   events. Real DMA-BUF import: host allocates an exportable
-//!   buffer, exports the fd, consumer imports — drop the consumer
-//!   without freeing.
-//!
-//! All tests skip gracefully when no GPU / no Vulkan loader is
-//! available, matching `consumer_vulkan_device.rs::tests`.
-
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::sync::Arc;

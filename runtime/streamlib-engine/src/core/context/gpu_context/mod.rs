@@ -179,11 +179,6 @@ pub struct GpuContext {
             >,
         >,
     >,
-    /// Cache of textures backing surface-share-registered pixel buffers
-    /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
-    /// rotating-pool producers don't render stale contents — kept separate
-    /// from `texture_cache` so a same-process cache hit can't shortcut the
-    /// refresh.
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
     /// Tensor storage buffers a helper process acquired, keyed by pool slot —
     /// the parent-wide map a dispatch in any helper binds another helper's

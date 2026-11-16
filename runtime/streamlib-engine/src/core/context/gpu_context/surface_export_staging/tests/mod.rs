@@ -154,11 +154,6 @@ fn stamp_every_byte_of_device_export_staging(
     recorder.submit_and_wait().expect("submit the edit");
 }
 
-/// The producer-published shape a stale ring-slot read comes from: one surface id over a
-/// pooled backing *and* a producer-internal ring texture registered
-/// under that same id, which the producer overwrites in place every
-/// `RING_TEXTURE_COUNT` frames: acquire the pool member, register the
-/// ring slot under its id, render into the slot.
 struct RotatingProducerPublishedFrame {
     surface_id: String,
     /// Held for the fixture's life: the pool reclaims a slot when the

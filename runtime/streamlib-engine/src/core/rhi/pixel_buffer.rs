@@ -46,12 +46,6 @@ pub struct PixelBuffer {
     /// via [`PixelBuffer::format`] which casts through the well-
     /// defined `repr(u32)` mapping.
     pub(crate) format_raw: u32,
-    /// Cached plane count (queried once at construction).
-    ///
-    /// Always `>= 1`. Mirrors `slpn_gpu_surface_plane_count` /
-    /// `sldn_gpu_surface_plane_count` on the polyglot shim side so
-    /// cdylib callers reach the same value through a pure field
-    /// read instead of a vtable round-trip.
     pub(crate) plane_count_cached: u32,
 }
 
@@ -177,9 +171,6 @@ impl PixelBuffer {
         unsafe { &*(self.handle as *const PixelBufferRef) }
     }
 
-    /// Number of memory planes backing this pixel buffer. Always `>= 1`.
-    /// Mirror of `slpn_gpu_surface_plane_count` on the polyglot shims.
-    /// Cached at construction; pure field read.
     pub fn plane_count(&self) -> u32 {
         self.plane_count_cached
     }

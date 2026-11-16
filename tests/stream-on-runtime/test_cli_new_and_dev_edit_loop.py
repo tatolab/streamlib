@@ -225,11 +225,6 @@ def assert_the_stream_carried_live_video(
         f"{what_ran} wrote only {frames_written} frames in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
-    # A viewer drains its listener, so this guards the run's records rather
-    # than the undrained-listener regression, which
-    # `an_undrained_listener_is_delivered_every_send_and_drains_the_whole_count`
-    # in `iceoryx2/output.rs` locks.
-    # The text iceoryx2 logs for a notify that did not reach a listener.
     undeliverable_notifications = output.count("Unable to send notification")
     assert undeliverable_notifications == 0, (
         f"{what_ran}: {undeliverable_notifications} undeliverable link notifications in "

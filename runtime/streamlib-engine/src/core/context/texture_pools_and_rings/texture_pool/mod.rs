@@ -797,17 +797,6 @@ impl std::fmt::Debug for TexturePool {
     }
 }
 
-// =============================================================================
-// Layout regression tests
-// =============================================================================
-//
-// `PooledTextureHandle` crosses the plugin ABI as a
-// `#[repr(C)]` struct. Drift in its byte-level shape would silently
-// corrupt every `acquire_texture` return-path: the cdylib's Drop
-// impl reads `vtable` and `handle` at fixed offsets to call
-// `drop_pooled_texture_handle`. The vtable layout-version constant
-// guards the dispatch table; this test guards the value type.
-
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;

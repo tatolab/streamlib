@@ -1,24 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Per-type kernel binding traits.
-//!
-//! Each Vulkan binding slot (storage / uniform / vertex / index) has
-//! its own trait, and each typed wrapper implements only the traits
-//! matching its allocation's `VkBufferUsageFlags`. This is what makes
-//! it impossible to bind a [`crate::core::rhi::PixelBuffer`] as a
-//! vertex buffer at compile time — `PixelBuffer` does not implement
-//! [`VulkanVertexBindable`].
-//!
-//! Implementation note: a single `VkBuffer` can carry multiple
-//! `BufferUsageFlags` bits simultaneously (e.g. a buffer flagged
-//! `VERTEX | INDEX | STORAGE` legitimately binds to any of those
-//! slots). The trait taxonomy here enforces exclusion at the
-//! **binding-site** layer; the allocation layer is free to combine
-//! usage flags. If a future workflow needs a multi-usage buffer, the
-//! typed wrappers can each provide a `wrap_existing` constructor
-//! that asserts the underlying usage flag is present.
-
 use vulkanalia::vk;
 
 use crate::core::rhi::PixelBuffer;

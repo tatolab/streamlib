@@ -83,8 +83,6 @@ impl ManualNode for GpuAcquireTest::Node {
                 }
             }
 
-            // Drop the PixelBuffer — exercises `drop_pixel_buffer`.
-            // The pool slot returns to the pool host-side.
             drop(pixel_buffer);
 
             Ok((observed_w, observed_h, plane_ptr))
@@ -104,8 +102,6 @@ impl ManualNode for GpuAcquireTest::Node {
     }
 
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Drop the stashed GpuContextLimitedAccess — exercises
-        // `drop_handle` (Arc refcount decrement).
         self.gpu.take();
         Ok(())
     }

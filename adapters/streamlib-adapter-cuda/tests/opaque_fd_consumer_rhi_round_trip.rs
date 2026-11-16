@@ -320,13 +320,6 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         SurfaceSyncState::default(),
     );
 
-    // The host-signaled timeline value is 1; the adapter's first acquire
-    // waits on `current_release_value=0`, which is past, so it returns
-    // immediately. This confirms:
-    //   - The generic `CudaSurfaceAdapter<ConsumerVulkanDevice>` resolves
-    //     and instantiates,
-    //   - The imported timeline-wait works on a consumer-flavor device,
-    //   - The view returns the imported buffer's vk::Buffer + size.
     {
         let read_guard = adapter.acquire_read(&surface).expect("acquire_read");
         // SurfaceAdapter::ReadView<'g> for CudaSurfaceAdapter is `CudaReadView<'g>`,
