@@ -9,21 +9,21 @@ use std::time::Duration;
 use crate::core::logging::writer::JsonlSegmentRotationPolicy;
 
 /// Environment variables read as a logging pathway is installed.
-pub mod env {
+pub(super) mod env {
     /// Suppresses the pretty log mirror. JSONL is unaffected.
-    pub const QUIET: &str = "STREAMLIB_QUIET";
+    pub(crate) const QUIET: &str = "STREAMLIB_QUIET";
     /// Batched JSONL flush size threshold in bytes.
-    pub const BATCH_BYTES: &str = "STREAMLIB_LOG_BATCH_BYTES";
+    pub(crate) const BATCH_BYTES: &str = "STREAMLIB_LOG_BATCH_BYTES";
     /// Batched JSONL flush time threshold in milliseconds.
-    pub const BATCH_MS: &str = "STREAMLIB_LOG_BATCH_MS";
+    pub(crate) const BATCH_MS: &str = "STREAMLIB_LOG_BATCH_MS";
     /// Bounded channel capacity (records). Drop-oldest when full.
-    pub const CHANNEL_CAPACITY: &str = "STREAMLIB_LOG_CHANNEL_CAPACITY";
+    pub(crate) const CHANNEL_CAPACITY: &str = "STREAMLIB_LOG_CHANNEL_CAPACITY";
     /// Force `fdatasync` on every batch flush (default off).
-    pub const FSYNC_ON_EVERY_BATCH: &str = "STREAMLIB_LOG_FSYNC_ON_EVERY_BATCH";
+    pub(crate) const FSYNC_ON_EVERY_BATCH: &str = "STREAMLIB_LOG_FSYNC_ON_EVERY_BATCH";
     /// Bytes after which the active JSONL segment rotates; `0` never rotates.
-    pub const ROTATE_BYTES: &str = "STREAMLIB_LOG_ROTATE_BYTES";
+    pub(crate) const ROTATE_BYTES: &str = "STREAMLIB_LOG_ROTATE_BYTES";
     /// JSONL segments kept per stream log, the active one included; `0` keeps every one.
-    pub const RETAIN_SEGMENTS: &str = "STREAMLIB_LOG_RETAIN_SEGMENTS";
+    pub(crate) const RETAIN_SEGMENTS: &str = "STREAMLIB_LOG_RETAIN_SEGMENTS";
 }
 
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024;

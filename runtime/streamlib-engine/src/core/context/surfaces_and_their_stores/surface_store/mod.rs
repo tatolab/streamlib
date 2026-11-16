@@ -153,14 +153,14 @@ impl SurfaceStoreInner {
     /// Create a new surface store (not yet connected). Returns an
     /// `Arc<SurfaceStoreInner>` so the engine can store it directly
     /// and hand [`SurfaceStore`] handles to consumers on demand.
-    pub fn new(service_name: String, runtime_id: String) -> Arc<Self> {
+    pub(crate) fn new(service_name: String, runtime_id: String) -> Arc<Self> {
         Self::new_reading_check_out_leases(service_name, runtime_id, None)
     }
 
     /// As [`Self::new`], but reading the checkout leases of the service this
     /// store connects to. The runtime's `start()` path uses this so the
     /// pixel-buffer pool can see cross-process holders.
-    pub fn new_reading_check_out_leases(
+    pub(crate) fn new_reading_check_out_leases(
         service_name: String,
         runtime_id: String,
         check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
@@ -195,7 +195,7 @@ impl SurfaceStoreInner {
     }
 
     /// The checkout leases backing this store, if a service owns any.
-    pub fn check_out_leases(&self) -> Option<&Arc<SurfaceCheckOutLeaseRegistry>> {
+    pub(crate) fn check_out_leases(&self) -> Option<&Arc<SurfaceCheckOutLeaseRegistry>> {
         self.check_out_leases.as_ref()
     }
 
@@ -204,7 +204,7 @@ impl SurfaceStoreInner {
     /// The `release` op is best-effort; a missing connection returns Ok since the
     /// surface-share service already treats the client's socket-close as a full
     /// release.
-    pub fn release(&self, surface_id: &str) -> Result<()> {
+    pub(crate) fn release(&self, surface_id: &str) -> Result<()> {
         // Evict the local cache's strong reference first: `check_in` parks a
         // clone there, and a pixel-buffer pool frees a slot only once the
         // buffer's strong count returns to 1 — without this eviction a
@@ -234,7 +234,7 @@ impl SurfaceStoreInner {
     /// connection closing as a full release of everything it held, which is
     /// why nothing is released one id at a time here.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn disconnect(&self) -> Result<()> {
+    pub(crate) fn disconnect(&self) -> Result<()> {
         self.cache.lock().clear();
         self.connection.lock().take();
         tracing::info!("SurfaceStore: Disconnected from the surface-share service");

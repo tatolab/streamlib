@@ -85,7 +85,7 @@ pub fn the_type_that_replaced_a_tatolab_ops_type(node_type: &str) -> Option<Stri
 /// asset `stream` that `document` holds to the type that replaced it: the node taken out with
 /// its links and placed again under its UUID, name, config, pins and studio fields with its new
 /// type and the same links, so an undo puts back exactly what was there.
-pub fn operations_moving_each_tatolab_ops_node_to_core_nodes(
+pub(crate) fn operations_moving_each_tatolab_ops_node_to_core_nodes(
     stream: Uuid,
     document: &StreamGraphDocument,
 ) -> Vec<ProjectOperation> {

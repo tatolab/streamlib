@@ -13,7 +13,7 @@ use crate::core::{Error, Result};
 use crate::vulkan::rhi::HostVulkanDevice;
 
 /// Vulkan implementation of [`RhiBlitter`] for GPU copy operations on Linux.
-pub struct VulkanBlitter {
+pub(crate) struct VulkanBlitter {
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
     queue: vk::Queue,
@@ -22,7 +22,7 @@ pub struct VulkanBlitter {
 
 impl VulkanBlitter {
     /// Create a new Vulkan blitter with a dedicated command pool.
-    pub fn new(
+    pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         queue: vk::Queue,
         queue_family_index: u32,

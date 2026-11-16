@@ -10,7 +10,7 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use iceoryx2::service::builder::publish_subscribe::Builder as PublishSubscribeServiceBuilder;
-pub use iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError as ChannelDataServiceOpenError;
+pub(crate) use iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError as ChannelDataServiceOpenError;
 pub use streamlib_runtime_client_contract::streamlib_runtime_directory::{
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, engine_owned_iceoryx2_prefix_for_this_user,
 };

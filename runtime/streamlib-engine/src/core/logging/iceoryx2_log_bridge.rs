@@ -32,7 +32,7 @@ pub(crate) const ICEORYX2_LOG_RECORD_MESSAGE_CAP_BYTES: usize = 512;
 /// Zero-sized bridge implementing iceoryx2's [`Log`] trait by
 /// forwarding records into the streamlib tracing pipeline, each field on one
 /// line and bounded by its cap.
-pub struct IceoryxLogBridge;
+pub(crate) struct IceoryxLogBridge;
 
 impl Log for IceoryxLogBridge {
     fn log(
@@ -143,7 +143,7 @@ impl core::fmt::Write for Iceoryx2LogRecordFieldBoundedFormatter<'_, '_> {
 
 /// Process-wide bridge value. Lives in `.rodata` (zero-sized); impls `Log`
 /// against the workspace-pinned `iceoryx2-log-types::Log` vtable.
-pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
+pub(crate) static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 
 /// Whether this process's iceoryx2 logger is [`HOST_BRIDGE`], so a second
 /// install is read as the idempotent call it is rather than as iceoryx2
@@ -161,7 +161,7 @@ static THIS_PROCESSES_ICEORYX2_LOGGER_IS_THE_BRIDGE: AtomicBool = AtomicBool::ne
 /// most verbose level any target is configured for, not the `iceoryx2`
 /// target's own, so a per-target filter has iceoryx2 format records the
 /// subscriber then drops.
-pub fn install_iceoryx2_log_bridge_at_the_engines_configured_level() {
+pub(crate) fn install_iceoryx2_log_bridge_at_the_engines_configured_level() {
     if iceoryx2_log::set_logger(&HOST_BRIDGE) {
         THIS_PROCESSES_ICEORYX2_LOGGER_IS_THE_BRIDGE.store(true, Ordering::Relaxed);
     } else if !THIS_PROCESSES_ICEORYX2_LOGGER_IS_THE_BRIDGE.load(Ordering::Relaxed) {

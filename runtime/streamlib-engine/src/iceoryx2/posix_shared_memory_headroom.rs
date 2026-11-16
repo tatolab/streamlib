@@ -30,7 +30,7 @@ const POSIX_SHARED_MEMORY_MOUNT_POINT: &str = "/dev/shm";
 const TRUSTED_CEILING_CHUNKS_OF_HEADROOM_A_RUNTIME_WANTS: usize = 4;
 
 /// Free shared-memory bytes below which a runtime warns at start.
-pub const POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS: usize =
+pub(super) const POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS: usize =
     TRUSTED_CEILING_CHUNKS_OF_HEADROOM_A_RUNTIME_WANTS * TRUSTED_CHANNEL_CHUNK_CEILING_BYTES;
 
 /// Warn once, at runtime start, when this machine's POSIX shared memory holds

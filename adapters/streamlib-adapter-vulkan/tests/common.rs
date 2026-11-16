@@ -11,7 +11,7 @@
 )]
 
 #[path = "support/render_target_texture.rs"]
-pub mod render_target_texture;
+pub(crate) mod render_target_texture;
 
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
@@ -28,7 +28,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 /// surfaced by Cargo as `CARGO_BIN_EXE_<name>` because it lives in
 /// this crate.
 #[cfg(target_os = "linux")]
-pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
+pub(crate) fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper"))
 }
 
@@ -43,7 +43,7 @@ use streamlib_surface_adapter::{
     SurfaceUsage,
 };
 
-pub fn try_init_gpu() -> Option<GpuContext> {
+pub(crate) fn try_init_gpu() -> Option<GpuContext> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter("streamlib_adapter_vulkan=debug,streamlib=warn")
@@ -51,14 +51,14 @@ pub fn try_init_gpu() -> Option<GpuContext> {
     GpuContext::init_for_platform_sync().ok()
 }
 
-pub struct HostFixture {
+pub(crate) struct HostFixture {
     pub gpu: GpuContext,
     pub adapter: Arc<VulkanSurfaceAdapter<HostVulkanDevice>>,
     pub ctx: VulkanContext<HostVulkanDevice>,
 }
 
 impl HostFixture {
-    pub fn try_new() -> Option<Self> {
+    pub(crate) fn try_new() -> Option<Self> {
         let gpu = try_init_gpu()?;
         let adapter = Arc::new(VulkanSurfaceAdapter::new(Arc::clone(
             gpu.device().vulkan_device(),
@@ -67,7 +67,7 @@ impl HostFixture {
         Some(Self { gpu, adapter, ctx })
     }
 
-    pub fn register_surface(
+    pub(crate) fn register_surface(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -124,7 +124,7 @@ impl HostFixture {
     }
 }
 
-pub struct RegisteredSurface {
+pub(crate) struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
     pub texture: Texture,
     /// `produce_done` timeline — signaled by the producer side
@@ -141,7 +141,7 @@ pub struct RegisteredSurface {
 /// Returns the child handle and the parent end of the socketpair the
 /// helper reads its descriptor + fds from.
 #[cfg(target_os = "linux")]
-pub fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
+pub(crate) fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
     let (parent, child) = UnixStream::pair().expect("socketpair");
     // Move the child end's fd into the helper's fd table without
     // closing it on exec; the parent side is normal Rust ownership.
@@ -177,7 +177,7 @@ pub fn spawn_helper(role: &str, host: &HostFixture) -> (Child, UnixStream) {
 /// imports both timelines; whether it signals produce_done or
 /// consume_done depends on its role.
 #[cfg(target_os = "linux")]
-pub fn send_helper_request(
+pub(crate) fn send_helper_request(
     parent: &UnixStream,
     descriptor: &serde_json::Value,
     dma_buf_fds: &[RawFd],
@@ -196,7 +196,7 @@ pub fn send_helper_request(
 
 /// Read the helper's response (length-prefixed JSON, no fds).
 #[cfg(target_os = "linux")]
-pub fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
+pub(crate) fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
     let mut len_buf = [0u8; 4];
     let mut total = 0;
     while total < 4 {
@@ -226,7 +226,7 @@ pub fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
 /// Build the request descriptor the helper expects, using the
 /// metadata stored on a registered surface.
 #[cfg(target_os = "linux")]
-pub fn helper_descriptor(
+pub(crate) fn helper_descriptor(
     role: &str,
     surface: &RegisteredSurface,
     wait_value: u64,

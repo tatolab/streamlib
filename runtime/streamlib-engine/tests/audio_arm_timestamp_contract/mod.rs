@@ -178,7 +178,7 @@ fn assert_stamps_land_in_the_kernel_monotonic_domain(
 ///
 /// The composition is the contract as much as the individual assertions are —
 /// a fourth claim belongs here, once, not in each arm's file.
-pub fn assert_the_timestamp_contract_holds_on(
+pub(crate) fn assert_the_timestamp_contract_holds_on(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {
@@ -200,7 +200,7 @@ pub fn assert_the_timestamp_contract_holds_on(
 ///
 /// The restart is also where a stream that left its device running would
 /// surface — `snd_pcm_prepare` against a running PCM is `EBUSY`.
-pub fn assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(
+pub(crate) fn assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {
@@ -253,7 +253,7 @@ pub fn assert_a_stopped_stream_is_silent_and_a_restart_replaces_the_hand_off(
 /// stream its owner stopped is asked again — a deliberate stop is not a
 /// failure, and an owner that could not tell the two apart is back where it
 /// started.
-pub fn assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(
+pub(crate) fn assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {

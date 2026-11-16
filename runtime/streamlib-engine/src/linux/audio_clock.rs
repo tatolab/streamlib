@@ -20,7 +20,7 @@ use std::thread::{self, JoinHandle};
 /// machine clock. The clock is free-running — no audio device paces it — so it
 /// drifts against any real device's sample clock. A dedicated thread reads from
 /// the timerfd and invokes registered callbacks on each tick.
-pub struct LinuxTimerFdAudioClock {
+pub(crate) struct LinuxTimerFdAudioClock {
     config: AudioClockConfig,
     callbacks: Arc<Mutex<Vec<AudioTickCallback>>>,
     running: Arc<AtomicBool>,
@@ -30,7 +30,7 @@ pub struct LinuxTimerFdAudioClock {
 
 impl LinuxTimerFdAudioClock {
     /// Create a new Linux timerfd audio clock with the given configuration.
-    pub fn new(config: AudioClockConfig) -> Self {
+    pub(crate) fn new(config: AudioClockConfig) -> Self {
         Self {
             config,
             callbacks: Arc::new(Mutex::new(Vec::new())),
@@ -41,7 +41,7 @@ impl LinuxTimerFdAudioClock {
     }
 
     /// Create a new Linux timerfd audio clock with default configuration (48kHz, 512 samples).
-    pub fn with_defaults() -> Self {
+    pub(crate) fn with_defaults() -> Self {
         Self::new(AudioClockConfig::default())
     }
 }

@@ -10,7 +10,7 @@ use std::ops::Deref;
 use crate::core::error::{Error, Result};
 
 /// The environment variable that pins a runtime's id.
-pub const RUNTIME_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_ID";
+pub(crate) const RUNTIME_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_ID";
 
 /// The most bytes a pinned runtime id may take.
 ///
@@ -18,7 +18,7 @@ pub const RUNTIME_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_ID";
 /// names the surface-sharing socket, whose whole path must fit `sun_path`, so
 /// how much of this the socket leaves depends on the runtime directory — a
 /// path past it is refused when the socket binds, naming the path.
-pub const PINNED_RUNTIME_ID_MAX_BYTES: usize = 64;
+pub(crate) const PINNED_RUNTIME_ID_MAX_BYTES: usize = 64;
 
 /// Unique identifier for a runtime instance.
 ///

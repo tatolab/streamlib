@@ -17,7 +17,7 @@ impl VulkanRayTracingKernelInner {
     /// Run the kernel: write all staged descriptors, record bind+push+
     /// trace_rays, submit to the device queue, and wait on the kernel
     /// fence before returning.
-    pub fn trace_rays(&self, width: u32, height: u32, depth: u32) -> Result<()> {
+    pub(crate) fn trace_rays(&self, width: u32, height: u32, depth: u32) -> Result<()> {
         let pending = {
             let mut guard = self.pending.lock();
             PendingState {

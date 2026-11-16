@@ -30,7 +30,7 @@ mod audio_shim {
     /// Mirrors `struct StreamLibPipeWireRequestedAudioFormat`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct RequestedAudioFormat {
+    pub(super) struct RequestedAudioFormat {
         pub sample_rate: u32,
         pub channels: u32,
         pub sample_format: u32,
@@ -39,29 +39,29 @@ mod audio_shim {
     /// Mirrors `struct StreamLibPipeWireNegotiatedAudioFormat`.
     #[repr(C)]
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct NegotiatedAudioFormat {
+    pub(super) struct NegotiatedAudioFormat {
         pub sample_rate: u32,
         pub channels: u32,
         pub sample_format: u32,
     }
 
     /// `STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_F32_LE`.
-    pub const SAMPLE_FORMAT_F32_LE: u32 = 0;
+    pub(super) const SAMPLE_FORMAT_F32_LE: u32 = 0;
     /// `STREAMLIB_PIPEWIRE_SAMPLE_FORMAT_I16_LE`.
-    pub const SAMPLE_FORMAT_I16_LE: u32 = 1;
+    pub(super) const SAMPLE_FORMAT_I16_LE: u32 = 1;
 
     /// Mirrors `struct StreamLibPipeWireAudioStream`, which is opaque here.
     #[repr(C)]
-    pub struct AudioStream {
+    pub(super) struct AudioStream {
         _opaque: [u8; 0],
     }
 
     /// `STREAMLIB_PIPEWIRE_STREAM_DIRECTION_CAPTURE`.
-    pub const STREAM_DIRECTION_CAPTURE: c_int = 0;
+    pub(super) const STREAM_DIRECTION_CAPTURE: c_int = 0;
     /// `STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK`.
-    pub const STREAM_DIRECTION_PLAYBACK: c_int = 1;
+    pub(super) const STREAM_DIRECTION_PLAYBACK: c_int = 1;
 
-    pub type CapturedBlockHandOff = unsafe extern "C" fn(
+    pub(super) type CapturedBlockHandOff = unsafe extern "C" fn(
         hand_off_context: *mut c_void,
         interleaved_sample_bytes: *const u8,
         interleaved_sample_byte_count: usize,
@@ -69,18 +69,18 @@ mod audio_shim {
         first_sample_timestamp_ns: i64,
     );
 
-    pub type PlaybackBlockHandOff = unsafe extern "C" fn(
+    pub(super) type PlaybackBlockHandOff = unsafe extern "C" fn(
         hand_off_context: *mut c_void,
         interleaved_sample_bytes_to_fill: *mut u8,
         interleaved_sample_byte_count: usize,
         sample_count: u32,
     );
 
-    pub type StreamFailureHandOff =
+    pub(super) type StreamFailureHandOff =
         unsafe extern "C" fn(hand_off_context: *mut c_void, reason: *const c_char);
 
     unsafe extern "C" {
-        pub fn streamlib_pipewire_audio_stream_open(
+        pub(super) fn streamlib_pipewire_audio_stream_open(
             entry_points: *const *mut c_void,
             direction: c_int,
             device_id_or_null: *const c_char,
@@ -89,30 +89,32 @@ mod audio_shim {
             failure_text: *mut c_char,
             failure_text_capacity: usize,
         ) -> *mut AudioStream;
-        pub fn streamlib_pipewire_capture_stream_start_delivering(
+        pub(super) fn streamlib_pipewire_capture_stream_start_delivering(
             audio_stream: *mut AudioStream,
             hand_off: CapturedBlockHandOff,
             hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_playback_stream_start_requesting(
+        pub(super) fn streamlib_pipewire_playback_stream_start_requesting(
             audio_stream: *mut AudioStream,
             hand_off: PlaybackBlockHandOff,
             hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_audio_stream_report_failures_to(
+        pub(super) fn streamlib_pipewire_audio_stream_report_failures_to(
             audio_stream: *mut AudioStream,
             hand_off: Option<StreamFailureHandOff>,
             hand_off_context: *mut c_void,
         );
-        pub fn streamlib_pipewire_audio_stream_stop_handing_off(audio_stream: *mut AudioStream);
-        pub fn streamlib_pipewire_audio_stream_close(audio_stream: *mut AudioStream);
+        pub(super) fn streamlib_pipewire_audio_stream_stop_handing_off(
+            audio_stream: *mut AudioStream,
+        );
+        pub(super) fn streamlib_pipewire_audio_stream_close(audio_stream: *mut AudioStream);
     }
 
     /// Mirrors `struct StreamLibPipeWireStreamProperty`.
     #[repr(C)]
     #[derive(Clone, Copy)]
     #[cfg(test)]
-    pub struct StreamProperty {
+    pub(super) struct StreamProperty {
         pub key: *const c_char,
         pub value: *const c_char,
     }
@@ -121,7 +123,7 @@ mod audio_shim {
     #[repr(C)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[cfg(test)]
-    pub struct ChunkExtent {
+    pub(super) struct ChunkExtent {
         pub offset: u32,
         pub byte_count: u32,
     }
@@ -130,10 +132,10 @@ mod audio_shim {
     // the arithmetic in a test, which is why they are declared only there.
     #[cfg(test)]
     unsafe extern "C" {
-        pub fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
+        pub(super) fn streamlib_pipewire_sink_name_length_of_monitor_device_id(
             device_id: *const c_char,
         ) -> usize;
-        pub fn streamlib_pipewire_stream_properties(
+        pub(super) fn streamlib_pipewire_stream_properties(
             items: *mut StreamProperty,
             item_capacity: u32,
             direction: c_int,
@@ -141,12 +143,12 @@ mod audio_shim {
             sink_name: *mut c_char,
             sink_name_capacity: usize,
         ) -> u32;
-        pub fn streamlib_pipewire_clamped_chunk_extent(
+        pub(super) fn streamlib_pipewire_clamped_chunk_extent(
             chunk_offset: u32,
             chunk_size: u32,
             data_maxsize: u32,
         ) -> ChunkExtent;
-        pub fn streamlib_pipewire_first_sample_timestamp_ns(
+        pub(super) fn streamlib_pipewire_first_sample_timestamp_ns(
             cycle_timestamp_ns: i64,
             delay_in_rate_units: i64,
             rate_numerator: u32,
@@ -158,7 +160,7 @@ mod audio_shim {
 }
 
 /// Audio over a PipeWire session, with libpipewire bound at runtime.
-pub struct PipeWireAudioDeviceBackend {
+pub(crate) struct PipeWireAudioDeviceBackend {
     entry_points: Arc<PipeWireLibraryEntryPoints>,
 }
 
@@ -169,7 +171,8 @@ impl PipeWireAudioDeviceBackend {
     /// The connection round trip is the point: `libpipewire` present with no
     /// daemon behind it is the ordinary container case, and probing on presence
     /// alone would strand exactly the machines the chain exists to serve.
-    pub fn load_and_connect() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
+    pub(crate) fn load_and_connect() -> std::result::Result<Self, DeviceBackendArmUnavailableReason>
+    {
         let entry_points = PipeWireLibraryEntryPoints::loaded_once_per_process()
             .map_err(|reason| DeviceBackendArmUnavailableReason::of(reason.to_string()))?;
 

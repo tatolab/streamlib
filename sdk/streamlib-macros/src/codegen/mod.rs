@@ -29,7 +29,7 @@ use syn::spanned::Spanned;
 /// A config declared as `config = <Path>` binds that typed `Config` alias and a
 /// generated struct field; none binds `EmptyConfig`, whose schema is the empty
 /// object a processor declaring no config publishes.
-pub fn generate_from_parsed_processor_attr(
+pub(crate) fn generate_from_parsed_processor_attr(
     item: &ItemStruct,
     parsed: &ParsedProcessorAttr,
     sdk_root: TokenStream,

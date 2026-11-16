@@ -19,7 +19,7 @@ use crate::vulkan::rhi::{HostVulkanBuffer, HostVulkanDevice};
 
 /// Which of the two tiers a [`HostMappingReadByGpu`] took.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HostMappingReadByGpuTier {
+pub(crate) enum HostMappingReadByGpuTier {
     /// The caller's range is the buffer; the kernel reads it in place.
     ImportedHostPointer,
     /// The kernel reads host-visible staging; `stage_from_host` copies once.
@@ -28,7 +28,7 @@ pub enum HostMappingReadByGpuTier {
 
 impl HostMappingReadByGpuTier {
     /// The tier's name as a log field.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::ImportedHostPointer => "imported_host_pointer",
             Self::HostVisibleStagingCopy => "host_visible_staging_copy",
@@ -42,7 +42,7 @@ impl HostMappingReadByGpuTier {
 /// then bind [`Self::storage_buffer`] as the kernel's input. The range must
 /// outlive this value: on the imported tier the driver pins it, and on the
 /// staged tier every stage reads from it.
-pub struct HostMappingReadByGpu {
+pub(crate) struct HostMappingReadByGpu {
     storage_buffer: StorageBuffer,
     host_range_ptr: *const u8,
     readable_byte_len: usize,
@@ -68,7 +68,7 @@ impl HostMappingReadByGpu {
     ///
     /// All `mapped_byte_len` bytes must stay mapped and readable until the
     /// returned value drops.
-    pub unsafe fn import_for_gpu_reads(
+    pub(crate) unsafe fn import_for_gpu_reads(
         vulkan_device: &Arc<HostVulkanDevice>,
         host_range_ptr: *const u8,
         mapped_byte_len: usize,
@@ -133,7 +133,7 @@ impl HostMappingReadByGpu {
     ///
     /// All `readable_byte_len` bytes must stay mapped and readable until the
     /// returned value drops.
-    pub unsafe fn stage_for_gpu_reads(
+    pub(crate) unsafe fn stage_for_gpu_reads(
         vulkan_device: &Arc<HostVulkanDevice>,
         host_range_ptr: *const u8,
         readable_byte_len: usize,
@@ -159,17 +159,17 @@ impl HostMappingReadByGpu {
     }
 
     /// The buffer a kernel binds as its storage-buffer input.
-    pub fn storage_buffer(&self) -> &StorageBuffer {
+    pub(crate) fn storage_buffer(&self) -> &StorageBuffer {
         &self.storage_buffer
     }
 
     /// Which tier this mapping took.
-    pub fn tier(&self) -> HostMappingReadByGpuTier {
+    pub(crate) fn tier(&self) -> HostMappingReadByGpuTier {
         self.tier
     }
 
     /// Why the imported tier was not taken; `None` on the imported tier.
-    pub fn fallback_reason(&self) -> Option<&str> {
+    pub(crate) fn fallback_reason(&self) -> Option<&str> {
         self.fallback_reason.as_deref()
     }
 
@@ -177,7 +177,7 @@ impl HostMappingReadByGpu {
     /// sees. On the imported tier the kernel reads the range itself; on the
     /// staged tier this is the one copy, and the caller must not submit a
     /// read of the previous stage that is still in flight.
-    pub fn stage_from_host(&mut self) {
+    pub(crate) fn stage_from_host(&mut self) {
         if self.tier == HostMappingReadByGpuTier::ImportedHostPointer {
             return;
         }

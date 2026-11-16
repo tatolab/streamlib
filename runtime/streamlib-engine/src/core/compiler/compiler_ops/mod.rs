@@ -34,6 +34,6 @@ pub(crate) use open_iceoryx2_service_op::{
     open_iceoryx2_service_into_the_host_of_a_shader_node_island,
     open_the_source_side_for_a_reader_on_the_reserved_slot,
 };
-pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
+pub(crate) use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
 pub(crate) use prepare_processor_op::prepare_processor;
 pub(crate) use spawn_processor_op::spawn_processor;

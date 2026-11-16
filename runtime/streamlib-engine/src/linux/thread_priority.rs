@@ -19,7 +19,7 @@ use crate::linux::rtkit;
 ///   `MaxRealtimePriority` policy when granted directly.
 /// - `High` → niceness `-10` (via rtkit), or SCHED_RR priority 50 fallback.
 /// - `Normal` → no-op.
-pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
+pub(crate) fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
     match priority {
         ThreadPriority::RealTime => set_realtime_priority(),
         ThreadPriority::High => set_high_priority(),
@@ -30,7 +30,7 @@ pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
 /// Ask for realtime scheduling on the thread `thread_id` of this process:
 /// rtkit first, then `sched_setscheduler` directly. The refusal says why both
 /// failed; the thread then stays on `SCHED_OTHER`.
-pub fn apply_realtime_priority_to_thread_of_this_process(
+pub(crate) fn apply_realtime_priority_to_thread_of_this_process(
     thread_id: u64,
 ) -> std::result::Result<(), String> {
     let rtkit_refusal = match rtkit::make_thread_of_this_process_realtime(thread_id) {
@@ -55,7 +55,7 @@ pub fn apply_realtime_priority_to_thread_of_this_process(
 
 /// Whether the thread `thread_id` of this process is already `SCHED_FIFO` or
 /// `SCHED_RR`.
-pub fn thread_of_this_process_is_realtime(thread_id: u64) -> bool {
+pub(crate) fn thread_of_this_process_is_realtime(thread_id: u64) -> bool {
     // SAFETY: `sched_getscheduler` only reads the policy of the named thread.
     let policy = unsafe { libc::sched_getscheduler(thread_id as libc::pid_t) };
     policy == libc::SCHED_FIFO || policy == libc::SCHED_RR

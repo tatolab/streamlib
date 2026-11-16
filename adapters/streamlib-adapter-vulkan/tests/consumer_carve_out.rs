@@ -299,10 +299,10 @@ mod warn_capture {
     use tracing_subscriber::layer::{Context, Layer};
 
     #[derive(Default)]
-    pub struct CapturedWarns(pub Mutex<Vec<String>>);
+    pub(crate) struct CapturedWarns(pub Mutex<Vec<String>>);
 
     impl CapturedWarns {
-        pub fn matches(&self, needle: &str) -> bool {
+        pub(crate) fn matches(&self, needle: &str) -> bool {
             self.0
                 .lock()
                 .unwrap()
@@ -311,12 +311,12 @@ mod warn_capture {
         }
     }
 
-    pub struct WarnCaptureLayer {
+    pub(crate) struct WarnCaptureLayer {
         sink: Arc<CapturedWarns>,
     }
 
     impl WarnCaptureLayer {
-        pub fn new(sink: Arc<CapturedWarns>) -> Self {
+        pub(crate) fn new(sink: Arc<CapturedWarns>) -> Self {
             Self { sink }
         }
     }

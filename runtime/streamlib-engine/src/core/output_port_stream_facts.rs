@@ -30,14 +30,14 @@ struct StreamFactsOfOneOutputPort {
 /// node, the processor's writer or its helper's bridge, and every downstream
 /// node an inbound link reaches it from.
 #[derive(Debug, Default)]
-pub struct StreamFactsOfOutputPorts {
+pub(crate) struct StreamFactsOfOutputPorts {
     facts_by_output_port: RwLock<HashMap<String, StreamFactsOfOneOutputPort>>,
 }
 
 impl StreamFactsOfOutputPorts {
     /// Each output port with its family resolved against `node_config`, an
     /// Image port carrying the frame rate it declares.
-    pub fn as_declared_by(
+    pub(crate) fn as_declared_by(
         output_ports: &[PortInfo],
         node_config: Option<&serde_json::Value>,
     ) -> Self {
@@ -76,7 +76,7 @@ impl StreamFactsOfOutputPorts {
 
     /// The facts `output_port` carries now, or `None` — also for a port the
     /// node does not have.
-    pub fn current_facts_of(&self, output_port: &str) -> Option<PortStreamFacts> {
+    pub(crate) fn current_facts_of(&self, output_port: &str) -> Option<PortStreamFacts> {
         let output_port = cast_exposed_name_to_url_safe(output_port).ok()?;
         self.facts_by_output_port
             .read()
@@ -86,7 +86,7 @@ impl StreamFactsOfOutputPorts {
 
     /// Replace `output_port`'s facts, refusing a port the node does not declare
     /// and facts of another family than the port's.
-    pub fn replace_facts_of(&self, output_port: &str, facts: PortStreamFacts) -> Result<()> {
+    pub(crate) fn replace_facts_of(&self, output_port: &str, facts: PortStreamFacts) -> Result<()> {
         let output_port = cast_exposed_name_to_url_safe(output_port)?;
         let mut facts_by_output_port = self.facts_by_output_port.write();
         let Some(port) = facts_by_output_port.get_mut(output_port.as_ref()) else {
@@ -129,14 +129,14 @@ struct UpstreamOutputPortOfAnInboundLink {
 /// For each of one node's input ports, the upstream output port of every
 /// inbound link wired into it, in wiring order.
 #[derive(Debug, Default)]
-pub struct UpstreamStreamFactsByInboundLink {
+pub(crate) struct UpstreamStreamFactsByInboundLink {
     upstream_ports_by_input_port: Mutex<HashMap<String, Vec<UpstreamOutputPortOfAnInboundLink>>>,
 }
 
 impl UpstreamStreamFactsByInboundLink {
     /// Record link `link_id` into `input_port`, reading `upstream_output_port`
     /// of the node whose facts are `upstream_stream_facts`.
-    pub fn record_inbound_link(
+    pub(crate) fn record_inbound_link(
         &self,
         input_port: &str,
         link_id: &LinkUniqueId,
@@ -158,7 +158,7 @@ impl UpstreamStreamFactsByInboundLink {
     }
 
     /// Forget link `link_id`, wherever it was wired.
-    pub fn forget_inbound_link(&self, link_id: &LinkUniqueId) {
+    pub(crate) fn forget_inbound_link(&self, link_id: &LinkUniqueId) {
         let mut upstream_ports_by_input_port = self.upstream_ports_by_input_port.lock();
         for upstream_ports in upstream_ports_by_input_port.values_mut() {
             upstream_ports.retain(|upstream_port| &upstream_port.link_id != link_id);
@@ -171,7 +171,7 @@ impl UpstreamStreamFactsByInboundLink {
     ///
     /// A port fed by more than one link is asked about one of them by its
     /// `inbound_link` name; asked about none, it is refused naming them.
-    pub fn stream_facts_of_inbound_link(
+    pub(crate) fn stream_facts_of_inbound_link(
         &self,
         input_port: &str,
         inbound_link: Option<&str>,

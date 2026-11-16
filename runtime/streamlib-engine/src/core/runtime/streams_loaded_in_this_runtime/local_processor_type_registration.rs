@@ -53,6 +53,10 @@ mod tests {
         Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
     )]
     #[serde(deny_unknown_fields)]
+    #[allow(
+        unreachable_pub,
+        reason = "the processor macro names the config in a trait impl, which needs it public"
+    )]
     pub struct AddLocalSourceTakingOneSettingConfig {
         #[serde(default)]
         pub frame_width: Option<u32>,

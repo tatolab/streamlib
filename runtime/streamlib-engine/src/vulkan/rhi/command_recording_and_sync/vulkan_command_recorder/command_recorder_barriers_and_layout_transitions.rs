@@ -13,7 +13,7 @@ impl RhiCommandRecorderInner {
     /// barrier; updating any `TextureRegistration` after the barrier is
     /// the caller's responsibility.
     #[tracing::instrument(level = "trace", skip(self, texture), fields(label = %self.label, from = ?from_layout, to = ?to_layout))]
-    pub fn record_image_barrier(
+    pub(crate) fn record_image_barrier(
         &mut self,
         texture: &Texture,
         from_layout: VulkanLayout,
@@ -67,7 +67,7 @@ impl RhiCommandRecorderInner {
     /// Release `texture` to `VK_QUEUE_FAMILY_EXTERNAL` in `layout`, after
     /// every earlier write, so an importer in another process or API
     /// acquires what was written.
-    pub fn record_image_release_to_the_external_queue_family(
+    pub(crate) fn record_image_release_to_the_external_queue_family(
         &mut self,
         texture: &Texture,
         layout: VulkanLayout,
@@ -114,7 +114,7 @@ impl RhiCommandRecorderInner {
 
     /// Buffer memory barrier covering the whole buffer.
     #[tracing::instrument(level = "trace", skip(self, buffer), fields(label = %self.label))]
-    pub fn record_buffer_barrier(
+    pub(crate) fn record_buffer_barrier(
         &mut self,
         buffer: &(impl VulkanBufferLike + ?Sized),
         from_stage: VulkanStage,

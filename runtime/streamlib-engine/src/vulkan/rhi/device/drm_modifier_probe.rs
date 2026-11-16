@@ -175,21 +175,21 @@ impl DrmModifierTable {
 mod egl {
     use std::ffi::c_void;
 
-    pub type EGLDisplay = *mut c_void;
-    pub type EGLDeviceEXT = *mut c_void;
-    pub type EGLenum = u32;
-    pub type EGLBoolean = u32;
-    pub type EGLint = i32;
-    pub type EGLuint64KHR = u64;
-    pub type EGLNativeDisplayType = *mut c_void;
+    pub(super) type EGLDisplay = *mut c_void;
+    pub(super) type EGLDeviceEXT = *mut c_void;
+    pub(super) type EGLenum = u32;
+    pub(super) type EGLBoolean = u32;
+    pub(super) type EGLint = i32;
+    pub(super) type EGLuint64KHR = u64;
+    pub(super) type EGLNativeDisplayType = *mut c_void;
 
-    pub const EGL_NO_DISPLAY: EGLDisplay = std::ptr::null_mut();
-    pub const EGL_DEFAULT_DISPLAY: EGLNativeDisplayType = std::ptr::null_mut();
-    pub const EGL_TRUE: EGLBoolean = 1;
-    pub const EGL_FALSE: EGLBoolean = 0;
-    pub const EGL_EXTENSIONS: EGLint = 0x3055;
-    pub const EGL_PLATFORM_DEVICE_EXT: EGLenum = 0x313F;
-    pub const EGL_DRM_RENDER_NODE_FILE_EXT: EGLint = 0x3377;
+    pub(super) const EGL_NO_DISPLAY: EGLDisplay = std::ptr::null_mut();
+    pub(super) const EGL_DEFAULT_DISPLAY: EGLNativeDisplayType = std::ptr::null_mut();
+    pub(super) const EGL_TRUE: EGLBoolean = 1;
+    pub(super) const EGL_FALSE: EGLBoolean = 0;
+    pub(super) const EGL_EXTENSIONS: EGLint = 0x3055;
+    pub(super) const EGL_PLATFORM_DEVICE_EXT: EGLenum = 0x313F;
+    pub(super) const EGL_DRM_RENDER_NODE_FILE_EXT: EGLint = 0x3377;
 }
 
 static LIBEGL_KEPT_LOADED_FOR_PROCESS: OnceLock<Result<Library, ProbeError>> = OnceLock::new();

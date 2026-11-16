@@ -25,13 +25,13 @@ const TEST_MACHINE_ROOT_ENVIRONMENT_VARIABLE: &str = "TATOLAB_TEST_MACHINE_ROOT"
 const SHORT_MACHINE_ROOT_PARENT: &str = "/tmp";
 
 /// A machine root of a test's own, removed when dropped.
-pub struct IsolatedMachineDirectories {
+pub(crate) struct IsolatedMachineDirectories {
     machine_root: tempfile::TempDir,
 }
 
 impl IsolatedMachineDirectories {
     /// A fresh, empty machine: nothing answers at its local API socket.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             machine_root: tempfile::Builder::new()
                 .prefix("tl-")
@@ -41,12 +41,12 @@ impl IsolatedMachineDirectories {
     }
 
     /// The root every machine directory sits under.
-    pub fn machine_root(&self) -> &Path {
+    pub(crate) fn machine_root(&self) -> &Path {
         self.machine_root.path()
     }
 
     /// The runtime directory `tatolab` resolves on this machine.
-    pub fn runtime_directory(&self) -> PathBuf {
+    pub(crate) fn runtime_directory(&self) -> PathBuf {
         if cfg!(feature = "machine-directories-under-a-test-root") {
             self.machine_root().join("run")
         } else {
@@ -55,12 +55,12 @@ impl IsolatedMachineDirectories {
     }
 
     /// The fixed path the machine's runtime serves its local API on.
-    pub fn local_api_socket_path(&self) -> PathBuf {
+    pub(crate) fn local_api_socket_path(&self) -> PathBuf {
         self.runtime_directory().join("local-api.sock")
     }
 
     /// The state directory `tatolab` names the runtime's log under.
-    pub fn state_directory(&self) -> PathBuf {
+    pub(crate) fn state_directory(&self) -> PathBuf {
         if cfg!(feature = "machine-directories-under-a-test-root") {
             self.machine_root().join("state")
         } else {
@@ -78,7 +78,7 @@ impl IsolatedMachineDirectories {
 
     /// Serve a stub local API answering `stub_local_api_script` at this machine's fixed socket, as
     /// the machine's runtime does.
-    pub fn serve_stub_local_api(
+    pub(crate) fn serve_stub_local_api(
         &self,
         stub_local_api_script: StubLocalApiScript,
     ) -> StubLocalApiServer {
@@ -91,7 +91,7 @@ impl IsolatedMachineDirectories {
     }
 
     /// `tatolab` with `tatolab_arguments`, reading this machine's directories, stdin closed.
-    pub fn tatolab_command(&self, tatolab_arguments: &[&str]) -> Command {
+    pub(crate) fn tatolab_command(&self, tatolab_arguments: &[&str]) -> Command {
         let mut tatolab_command = Command::new(env!("CARGO_BIN_EXE_tatolab"));
         tatolab_command
             .args(tatolab_arguments)
@@ -103,7 +103,7 @@ impl IsolatedMachineDirectories {
     }
 
     /// Run `tatolab` with `tatolab_arguments` to its exit on this machine.
-    pub fn run_tatolab(&self, tatolab_arguments: &[&str]) -> Output {
+    pub(crate) fn run_tatolab(&self, tatolab_arguments: &[&str]) -> Output {
         self.tatolab_command(tatolab_arguments).output().unwrap()
     }
 }

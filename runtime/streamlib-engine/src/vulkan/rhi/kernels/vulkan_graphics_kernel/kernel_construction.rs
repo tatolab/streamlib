@@ -28,7 +28,7 @@ impl VulkanGraphicsKernelInner {
     /// Reflects every stage's SPIR-V via `rspirv-reflect`, validates that the
     /// declared `bindings` match the merged shader declaration, and rejects
     /// any mismatch before allocating Vulkan objects.
-    pub fn new(
+    pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &GraphicsKernelDescriptor<'_>,
     ) -> Result<Self> {
@@ -37,7 +37,7 @@ impl VulkanGraphicsKernelInner {
 
     /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
     /// `pipeline_cache_directory_of_its_stream` when one is given.
-    pub fn new_caching_its_pipeline_in(
+    pub(crate) fn new_caching_its_pipeline_in(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &GraphicsKernelDescriptor<'_>,
         pipeline_cache_directory_of_its_stream: Option<&Path>,

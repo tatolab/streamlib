@@ -17,15 +17,13 @@ mod compile_result;
     reason = "the module holds the `Compiler` type its parent is named for"
 )]
 mod compiler;
-pub mod compiler_ops;
+pub(crate) mod compiler_ops;
 mod compiler_transaction;
 mod pending_operation;
-mod processor_thread_shutdown;
+pub(crate) mod processor_thread_shutdown;
 pub(crate) mod scheduling;
 
-pub use compiler::Compiler;
+pub(crate) use compiler::Compiler;
 pub(crate) use compiler_transaction::CompilerTransactionHandle;
-pub use pending_operation::PendingOperation;
-pub use processor_thread_shutdown::{
-    DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId, ProcessorThreadKind,
-};
+pub(crate) use pending_operation::PendingOperation;
+pub(crate) use processor_thread_shutdown::ProcessorThreadKind;

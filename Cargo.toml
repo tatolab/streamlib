@@ -72,6 +72,7 @@ disallowed_macros = "deny"
 # `loom` is the cfg a loom model build sets; the claim table swaps its atomics under it.
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
+unreachable_pub = "deny"
 
 [workspace.dependencies]
 # Core dependencies

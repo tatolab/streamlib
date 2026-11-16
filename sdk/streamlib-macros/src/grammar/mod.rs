@@ -84,7 +84,7 @@ impl PortDirection {
 }
 
 /// A `description = …` value: CommonMark, stored and served exactly as written.
-pub enum DeclaredDescription {
+pub(crate) enum DeclaredDescription {
     /// `description = "…"`.
     Literal(LitStr),
     /// `description = SOME_CONST`, the path of a `const` `&str`.
@@ -108,7 +108,7 @@ impl DeclaredDescription {
     }
 
     /// The literal's text; `None` for a `const`, whose value only rustc knows.
-    pub fn literal_text(&self) -> Option<String> {
+    pub(crate) fn literal_text(&self) -> Option<String> {
         match self {
             DeclaredDescription::Literal(literal) => Some(literal.value()),
             DeclaredDescription::Constant(_) => None,
@@ -118,7 +118,7 @@ impl DeclaredDescription {
     /// The `&'static str` expression the descriptor is built from. A constant
     /// is bound to a `const` first, so a `static` or a non-`&str` is refused
     /// where it is named.
-    pub fn to_str_expression(&self) -> proc_macro2::TokenStream {
+    pub(crate) fn to_str_expression(&self) -> proc_macro2::TokenStream {
         match self {
             DeclaredDescription::Literal(literal) => quote::quote! { #literal },
             DeclaredDescription::Constant(path) => quote::quote_spanned! { path.span() =>
@@ -133,7 +133,7 @@ impl DeclaredDescription {
 
 /// The `&'static str` a declaration's optional description builds into; `""`
 /// where none is declared.
-pub fn declared_description_str_expression(
+pub(crate) fn declared_description_str_expression(
     description: Option<&DeclaredDescription>,
 ) -> proc_macro2::TokenStream {
     match description {
@@ -152,7 +152,7 @@ const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
 /// `tatolab-module-sdk-macros`' `DeclaredNodeMeta`, which reads the same
 /// grammar under `#[function_node]`.
 #[derive(Default)]
-pub struct DeclaredNodeMeta {
+pub(crate) struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group
     /// inside one, exactly as written.
     pub category: Option<String>,
@@ -162,7 +162,7 @@ pub struct DeclaredNodeMeta {
 
 impl DeclaredNodeMeta {
     /// Take every `#[meta(...)]` off `attributes`, since rustc knows no such attribute, and read what they declare.
-    pub fn take_from_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Self> {
+    pub(crate) fn take_from_attributes(attributes: &mut Vec<Attribute>) -> syn::Result<Self> {
         let mut declared = DeclaredNodeMeta::default();
         let mut refusal: Option<syn::Error> = None;
         attributes.retain(|attribute| {
@@ -257,7 +257,7 @@ fn refuse_a_category_with_a_level_that_has_no_name(category: &LitStr) -> syn::Re
 }
 
 /// A parsed input/output port declaration.
-pub struct ParsedPort {
+pub(crate) struct ParsedPort {
     /// The name as the author wrote it, spanned at the declaration — the
     /// marker type's identifier (`OutputLink::videoOut`).
     pub declared_marker_ident: Ident,
@@ -281,7 +281,7 @@ pub struct ParsedPort {
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
-pub struct ParsedProcessorAttr {
+pub(crate) struct ParsedProcessorAttr {
     /// The author's type name — what an instance's display name defaults to.
     pub processor_class_short_name: String,
     /// The description the node's `#[meta(...)]` declares.
@@ -315,7 +315,7 @@ impl ParsedProcessorAttr {
     /// schema; the consuming layer projects the config-schema id to a
     /// release-core catalog entry. A description declared as a `const` has no
     /// value until rustc evaluates it, so it projects as `None`.
-    pub fn to_processor_schema(&self) -> ProcessorSchema {
+    pub(crate) fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
             name: p.cast_name.clone(),
             description: p
@@ -368,7 +368,7 @@ impl ParsedProcessorAttr {
 ///
 /// `struct_ident` supplies the class short name the display-name default reads,
 /// and `node_meta` what the `#[meta(...)]` under the attribute declares.
-pub fn parse2(
+pub(crate) fn parse2(
     attr: proc_macro2::TokenStream,
     node_meta: DeclaredNodeMeta,
     struct_ident: &Ident,

@@ -126,7 +126,7 @@ fn spirv_without_its_debug_source_strings(spirv: &[u8]) -> Cow<'_, [u8]> {
 }
 
 /// Render a shader's declared binding names for an error message.
-pub fn quote_declared_shader_binding_names(names: &[&str]) -> String {
+pub(crate) fn quote_declared_shader_binding_names(names: &[&str]) -> String {
     quote_names(names, "no named bindings")
 }
 
@@ -134,7 +134,7 @@ pub fn quote_declared_shader_binding_names(names: &[&str]) -> String {
 ///
 /// The two flag types are unrelated newtypes over `u32`, so the reconciliation
 /// they share is generic over this rather than over either of them.
-pub trait KernelShaderStageMask: Copy + PartialEq {
+pub(crate) trait KernelShaderStageMask: Copy + PartialEq {
     /// The mask that names no stage at all, which every accumulation starts
     /// from.
     fn mask_naming_no_stages() -> Self;
@@ -159,7 +159,7 @@ fn quote_stage_mask<Stages: KernelShaderStageMask>(stages: Stages) -> String {
 }
 
 /// Render a set of shader-stage names for an error message.
-pub fn quote_shader_stage_names(names: &[&str]) -> String {
+pub(crate) fn quote_shader_stage_names(names: &[&str]) -> String {
     quote_names(names, "no stage")
 }
 
@@ -180,7 +180,7 @@ fn quote_names(names: &[&str], when_empty: &str) -> String {
 /// this view, which is why neither has to give up its own explicit types to
 /// share the check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KernelBindingUnderReconciliation<'a, Kind, Stages> {
+pub(super) struct KernelBindingUnderReconciliation<'a, Kind, Stages> {
     pub name: &'a str,
     pub kind: Kind,
     pub stages: Stages,
@@ -203,7 +203,7 @@ pub struct KernelBindingUnderReconciliation<'a, Kind, Stages> {
 /// actually supplied a shader module for. Naming a stage outside it is the
 /// stage-mismatch case the plan puts at construction: the kernel has no module
 /// that could ever read that binding, so no dispatch could make it true.
-pub fn reconcile_staged_kernel_binding_declarations<Kind, Stages>(
+pub(super) fn reconcile_staged_kernel_binding_declarations<Kind, Stages>(
     kernel_kind_label: &str,
     declared: &[KernelBindingUnderReconciliation<'_, Kind, Stages>],
     reflected: &[KernelBindingUnderReconciliation<'_, Kind, Stages>],
@@ -292,7 +292,7 @@ where
 /// shader whose only set is set 1 reports exactly one set — a count cannot tell
 /// it apart from a shader that uses set 0, and every binding in it would be
 /// dropped by a walk that reads set 0 alone.
-pub fn refuse_a_descriptor_set_other_than_set_0<Stage>(
+pub(crate) fn refuse_a_descriptor_set_other_than_set_0<Stage>(
     kernel_kind_label: &str,
     stage_the_spirv_fills: Option<Stage>,
     descriptor_set_numbers_the_shader_declares: impl IntoIterator<Item = u32>,
@@ -323,7 +323,7 @@ where
 /// One of the three ways a name can fail to identify one binding slot. Every
 /// path that merges reflection across stages runs all three, so a name resolves
 /// to exactly one slot no matter which path built the kernel.
-pub fn refuse_a_binding_the_shader_left_unnamed<Stage, Kind>(
+pub(crate) fn refuse_a_binding_the_shader_left_unnamed<Stage, Kind>(
     kernel_kind_label: &str,
     stage: Stage,
     binding: u32,
@@ -346,7 +346,7 @@ where
 }
 
 /// Refuse one binding slot two of a kernel's stages spell differently.
-pub fn refuse_one_binding_slot_two_stages_spell_differently<Stage>(
+pub(crate) fn refuse_one_binding_slot_two_stages_spell_differently<Stage>(
     kernel_kind_label: &str,
     stage: Stage,
     binding: u32,
@@ -370,7 +370,7 @@ where
 ///
 /// Takes the merged slots in slot order, which is the order the refusal names
 /// the colliding pair in.
-pub fn refuse_one_binding_name_that_identifies_two_slots<'a>(
+pub(crate) fn refuse_one_binding_name_that_identifies_two_slots<'a>(
     kernel_kind_label: &str,
     names_in_binding_slot_order: impl IntoIterator<Item = (u32, &'a str)>,
 ) -> Result<()> {
@@ -393,7 +393,7 @@ pub fn refuse_one_binding_name_that_identifies_two_slots<'a>(
 /// One shader module handed to the multi-stage reflection merge, paired with
 /// the pipeline stage it fills.
 #[derive(Debug, Clone, Copy)]
-pub struct KernelShaderStageSpirvModule<'a, Stage> {
+pub(super) struct KernelShaderStageSpirvModule<'a, Stage> {
     pub stage: Stage,
     pub spirv: &'a [u8],
 }
@@ -401,7 +401,7 @@ pub struct KernelShaderStageSpirvModule<'a, Stage> {
 /// One binding the multi-stage reflection merge found, carrying the shader's
 /// own name for it and every stage that reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KernelBindingDerivedFromShaderReflection<Kind, Stages> {
+pub(super) struct KernelBindingDerivedFromShaderReflection<Kind, Stages> {
     pub binding: u32,
     pub kind: Kind,
     pub stages: Stages,
@@ -410,7 +410,7 @@ pub struct KernelBindingDerivedFromShaderReflection<Kind, Stages> {
 
 /// The push-constant range the multi-stage reflection merge found.
 #[derive(Debug, Clone, Copy)]
-pub struct KernelPushConstantRangeDerivedFromShaderReflection<Stages> {
+pub(super) struct KernelPushConstantRangeDerivedFromShaderReflection<Stages> {
     pub size: u32,
     pub stages: Stages,
 }
@@ -431,7 +431,7 @@ pub struct KernelPushConstantRangeDerivedFromShaderReflection<Stages> {
 /// `binding_kind_of_descriptor_type` maps a reflected descriptor type to the
 /// kernel kind's own binding kind, which is everything graphics and ray tracing
 /// do not share.
-pub fn derive_staged_kernel_bindings_from_shader_reflection<Stage, Kind, Stages>(
+pub(super) fn derive_staged_kernel_bindings_from_shader_reflection<Stage, Kind, Stages>(
     kernel_kind_label: &str,
     stage_modules: &[KernelShaderStageSpirvModule<'_, Stage>],
     stage_flag_of: impl Fn(Stage) -> Stages,

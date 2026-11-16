@@ -17,7 +17,7 @@ use syn::{Attribute, Expr, Fields, Ident, ItemStruct, Meta};
 const DESCRIPTION_ATTRIBUTE: &str = "description";
 
 /// Expand `#[processor_config]` on `item`.
-pub fn expand_processor_config(
+pub(crate) fn expand_processor_config(
     attribute: TokenStream,
     mut item: ItemStruct,
     sdk_root: TokenStream,

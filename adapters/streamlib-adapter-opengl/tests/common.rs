@@ -25,7 +25,7 @@ use streamlib_surface_adapter::{
     SurfaceUsage,
 };
 
-pub fn try_init_runtime() -> Option<(GpuContext, Arc<EglRuntime>)> {
+pub(crate) fn try_init_runtime() -> Option<(GpuContext, Arc<EglRuntime>)> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_env_filter("streamlib_adapter_opengl=debug,streamlib=warn")
@@ -41,14 +41,14 @@ pub fn try_init_runtime() -> Option<(GpuContext, Arc<EglRuntime>)> {
     Some((gpu, egl))
 }
 
-pub struct HostFixture {
+pub(crate) struct HostFixture {
     pub gpu: GpuContext,
     pub egl: Arc<EglRuntime>,
     pub adapter: Arc<OpenGlSurfaceAdapter>,
 }
 
 impl HostFixture {
-    pub fn try_new() -> Option<Self> {
+    pub(crate) fn try_new() -> Option<Self> {
         let (gpu, egl) = try_init_runtime()?;
         let adapter = Arc::new(OpenGlSurfaceAdapter::new(Arc::clone(&egl)));
         Some(Self { gpu, egl, adapter })
@@ -58,7 +58,7 @@ impl HostFixture {
     /// DMA-BUF + DRM modifier, register both with the OpenGL
     /// adapter as a `GL_TEXTURE_2D`, and return everything the test
     /// needs.
-    pub fn register_surface(
+    pub(crate) fn register_surface(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -73,7 +73,7 @@ impl HostFixture {
     /// `GL_TEXTURE_EXTERNAL_OES`. The underlying VkImage is identical
     /// (render-target-capable tiled DMA-BUF) — the difference is
     /// purely in the GL binding target.
-    pub fn register_external_oes_surface(
+    pub(crate) fn register_external_oes_surface(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -96,7 +96,7 @@ impl HostFixture {
     /// [`TextureUsages::COPY_DST`] + [`TextureUsages::COPY_SRC`] (no
     /// `RENDER_ATTACHMENT`) — matches the sampler-only contract of
     /// `GL_TEXTURE_EXTERNAL_OES`.
-    pub fn register_external_oes_surface_with_modifier(
+    pub(crate) fn register_external_oes_surface_with_modifier(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -225,7 +225,7 @@ impl HostFixture {
     }
 }
 
-pub struct RegisteredSurface {
+pub(crate) struct RegisteredSurface {
     pub descriptor: StreamlibSurface,
     pub texture: Texture,
     pub width: u32,
@@ -235,7 +235,11 @@ pub struct RegisteredSurface {
 /// Common helper: acquire write through the Vulkan adapter, clear the
 /// VkImage to a known color, release. Used by tests that need the
 /// host to seed a known pattern before exercising the GL side.
-pub fn host_write_clear_color(gpu: &GpuContext, surface: &RegisteredSurface, color: [f32; 4]) {
+pub(crate) fn host_write_clear_color(
+    gpu: &GpuContext,
+    surface: &RegisteredSurface,
+    color: [f32; 4],
+) {
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 
@@ -363,7 +367,7 @@ pub fn host_write_clear_color(gpu: &GpuContext, surface: &RegisteredSurface, col
 
 /// Read pixels from the host VkImage back into a CPU buffer for
 /// verification. Returns BGRA8 bytes in `width*height*4` size.
-pub fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
+pub(crate) fn host_readback(gpu: &GpuContext, surface: &RegisteredSurface) -> Vec<u8> {
     use vulkanalia::prelude::v1_4::*;
     use vulkanalia::vk;
 

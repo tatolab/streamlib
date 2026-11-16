@@ -164,13 +164,13 @@ fn min_nice_level(props: &Proxy<'static>) -> i32 {
 /// streamlib has a single RealTime tier — so taking rtkit's max
 /// gives the strongest preemption rtkit will broker without the call
 /// being refused.
-pub fn make_current_thread_realtime() -> Result<(), String> {
+pub(crate) fn make_current_thread_realtime() -> Result<(), String> {
     make_thread_of_this_process_realtime(current_tid())
 }
 
 /// Ask rtkit to schedule the thread `tid` of this process as `SCHED_RR` at
 /// its policy max, as [`make_current_thread_realtime`] does for the caller.
-pub fn make_thread_of_this_process_realtime(tid: u64) -> Result<(), String> {
+pub(crate) fn make_thread_of_this_process_realtime(tid: u64) -> Result<(), String> {
     let RtkitProxies { rtkit, properties } =
         proxies().ok_or_else(|| "rtkit not available on system bus".to_string())?;
 
@@ -188,7 +188,7 @@ pub fn make_thread_of_this_process_realtime(tid: u64) -> Result<(), String> {
 /// lowest (most-negative) nice level rtkit's policy allows (typically
 /// -15 on stock rtkit-daemon installs). Returns `Err` if rtkit isn't
 /// reachable or rejects the request.
-pub fn make_current_thread_high_priority() -> Result<(), String> {
+pub(crate) fn make_current_thread_high_priority() -> Result<(), String> {
     let RtkitProxies { rtkit, properties } =
         proxies().ok_or_else(|| "rtkit not available on system bus".to_string())?;
 

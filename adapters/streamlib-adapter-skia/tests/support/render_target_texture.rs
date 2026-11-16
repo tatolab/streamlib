@@ -8,7 +8,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::rhi::{Texture, TextureFormat};
 
 /// A DMA-BUF image on Linux, an image over a private IOSurface on macOS.
-pub fn acquire_render_target_texture(
+pub(crate) fn acquire_render_target_texture(
     gpu: &GpuContext,
     width: u32,
     height: u32,

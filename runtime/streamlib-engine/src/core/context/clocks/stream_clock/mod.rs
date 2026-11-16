@@ -137,7 +137,9 @@ pub struct StreamClockReading {
 
 /// Whether a published clock advances one step at a time behind the step
 /// barrier: a stepped clock, or a scaled one faster than real time.
-pub fn a_published_clock_runs_behind_the_step_barrier(published: &StreamClockBoardEntry) -> bool {
+pub(crate) fn a_published_clock_runs_behind_the_step_barrier(
+    published: &StreamClockBoardEntry,
+) -> bool {
     match published.mode {
         STREAM_CLOCK_BOARD_MODE_STEPPED => true,
         STREAM_CLOCK_BOARD_MODE_SCALED => f64::from_bits(published.scale_f64_bits) > 1.0,

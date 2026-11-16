@@ -35,7 +35,7 @@ impl SurfaceStoreInner {
     // =========================================================================
 
     /// Connect to the surface-share Unix socket.
-    pub fn connect(&self) -> Result<()> {
+    pub(crate) fn connect(&self) -> Result<()> {
         let stream = std::os::unix::net::UnixStream::connect(&self.service_name).map_err(|e| {
             Error::Configuration(format!(
                 "Failed to connect to surface-share socket '{}': {}",
@@ -54,7 +54,7 @@ impl SurfaceStoreInner {
     }
 
     /// Check in a pixel buffer via Unix socket, returning a surface ID.
-    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
+    pub(crate) fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
 
         let request = pixel_buffer_check_in_payload(
@@ -151,7 +151,7 @@ impl SurfaceStoreInner {
     }
 
     /// Check out a surface by ID via Unix socket.
-    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
+    pub(crate) fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         if let Some(cached) = self.cache.lock().checked_out_clone(surface_id) {
             return Ok(cached);
         }
@@ -250,7 +250,7 @@ impl SurfaceStoreInner {
     ///
     /// Its one plane is the tensor's exact byte size — what a CUDA import
     /// maps — not the allocation's rounded size.
-    pub fn register_storage_buffer(
+    pub(crate) fn register_storage_buffer(
         &self,
         surface_id: &str,
         buffer: &crate::core::rhi::StorageBuffer,
@@ -288,7 +288,7 @@ impl SurfaceStoreInner {
     /// The plane sizes travel with the registration because a checkout's
     /// importer derives the row pitch from them; a registration without
     /// sizes checks out as an unusable zero-byte plane.
-    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
+    pub(crate) fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
 
         let request = pixel_buffer_registration_payload(
@@ -325,7 +325,7 @@ impl SurfaceStoreInner {
     /// staging alone, with `produce_done` empty too: on a device that
     /// exports no timeline every copy is retired on the host before the
     /// escalate reply, so the consumer has nothing to wait on.
-    pub fn register_surface_export_staging(
+    pub(crate) fn register_surface_export_staging(
         &self,
         surface_id: &str,
         staging_buffer: &crate::vulkan::rhi::HostVulkanBuffer,
@@ -408,7 +408,7 @@ impl SurfaceStoreInner {
     ///   memory handle and publishes with `handle_type: "opaque_fd"` plus
     ///   the `vk_image_*` round-trip fields (#806) the consumer needs to
     ///   rebuild a matching `VkImageCreateInfo`, usage included.
-    pub fn register_texture(
+    pub(crate) fn register_texture(
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::Texture,
@@ -506,7 +506,7 @@ impl SurfaceStoreInner {
     /// Per-acquire IPC after registration is a thin trigger that
     /// signals a new timeline value on the same shared timeline; no
     /// further FD passing is needed.
-    pub fn register_pixel_buffer_with_timeline(
+    pub(crate) fn register_pixel_buffer_with_timeline(
         &self,
         surface_id: &str,
         pixel_buffer: &PixelBuffer,
@@ -671,7 +671,7 @@ impl SurfaceStoreInner {
     /// Checks the host-local cache first so producers that `check_in`'d the
     /// buffer in the same process (e.g. the escalate-on-behalf flow) skip the
     /// per-frame unix-socket round-trip and DMA-BUF re-import.
-    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
+    pub(crate) fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
         if let Some(cached) = self.cache.lock().cached_clone(pool_id) {
             return Ok(cached);
         }
@@ -707,7 +707,7 @@ impl SurfaceStoreInner {
     /// sees the post-release layout instead of the previous one.
     /// Returns `Ok(())` on success; `Err` on socket failure or wire
     /// rejection (e.g., unknown surface_id).
-    pub fn update_image_layout(
+    pub(crate) fn update_image_layout(
         &self,
         surface_id: &str,
         layout: streamlib_consumer_rhi::VulkanLayout,
@@ -753,7 +753,7 @@ impl SurfaceStoreInner {
     /// [`Texture`] paired with the producer's last-published
     /// `current_image_layout`, the source layout of a cross-process
     /// consumer's first acquire barrier.
-    pub fn lookup_texture(
+    pub(crate) fn lookup_texture(
         &self,
         surface_id: &str,
     ) -> Result<(

@@ -16,13 +16,13 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 /// How long a wait on a running `tatolab` lasts before failing rather than hanging.
-pub const RUNNING_TATOLAB_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const RUNNING_TATOLAB_WAIT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How often a wait on a condition looks again.
 const CONDITION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// A `tatolab` running in the background.
-pub struct RunningTatolab {
+pub(crate) struct RunningTatolab {
     tatolab_process: Child,
     standard_output_lines: Receiver<String>,
     standard_error_lines: Receiver<String>,
@@ -38,7 +38,7 @@ impl Drop for RunningTatolab {
 
 impl RunningTatolab {
     /// Start `tatolab_command` with its stdout and stderr piped.
-    pub fn spawn(mut tatolab_command: Command) -> Self {
+    pub(crate) fn spawn(mut tatolab_command: Command) -> Self {
         let mut tatolab_process = tatolab_command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -57,7 +57,7 @@ impl RunningTatolab {
     }
 
     /// The next line on stdout, `awaited` naming it when it never comes.
-    pub fn next_standard_output_line(&self, awaited: &str) -> String {
+    pub(crate) fn next_standard_output_line(&self, awaited: &str) -> String {
         self.standard_output_lines
             .recv_timeout(RUNNING_TATOLAB_WAIT_TIMEOUT)
             .unwrap_or_else(|_| {
@@ -66,7 +66,7 @@ impl RunningTatolab {
     }
 
     /// Read stderr until a line containing `awaited_text`, answering that line.
-    pub fn wait_for_standard_error_line_containing(&mut self, awaited_text: &str) -> String {
+    pub(crate) fn wait_for_standard_error_line_containing(&mut self, awaited_text: &str) -> String {
         let deadline = Instant::now() + RUNNING_TATOLAB_WAIT_TIMEOUT;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -88,7 +88,7 @@ impl RunningTatolab {
     }
 
     /// Deliver `signal` to the process, as a terminal does.
-    pub fn send_signal(&self, signal: libc::c_int) {
+    pub(crate) fn send_signal(&self, signal: libc::c_int) {
         // SAFETY: `kill` takes a pid and a signal number and touches no memory; the pid is this
         // test's unreaped child.
         let kill_result = unsafe { libc::kill(self.tatolab_process.id() as libc::pid_t, signal) };
@@ -96,7 +96,7 @@ impl RunningTatolab {
     }
 
     /// Wait for the process to exit, answering how, and every stderr line it wrote.
-    pub fn wait_for_exit(mut self) -> (ExitStatus, Vec<String>) {
+    pub(crate) fn wait_for_exit(mut self) -> (ExitStatus, Vec<String>) {
         let deadline = Instant::now() + RUNNING_TATOLAB_WAIT_TIMEOUT;
         let exit_status = loop {
             if let Some(exit_status) = self.tatolab_process.try_wait().unwrap() {
@@ -123,13 +123,13 @@ impl RunningTatolab {
     }
 
     /// Whether the process is still running.
-    pub fn is_still_running(&mut self) -> bool {
+    pub(crate) fn is_still_running(&mut self) -> bool {
         self.tatolab_process.try_wait().unwrap().is_none()
     }
 }
 
 /// Wait until `condition` holds, `what_is_awaited` naming it when it never does.
-pub fn wait_until(what_is_awaited: &str, mut condition: impl FnMut() -> bool) {
+pub(crate) fn wait_until(what_is_awaited: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + RUNNING_TATOLAB_WAIT_TIMEOUT;
     while !condition() {
         assert!(

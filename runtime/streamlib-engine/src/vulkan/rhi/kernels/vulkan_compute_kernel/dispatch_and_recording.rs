@@ -16,7 +16,7 @@ impl VulkanComputeKernelInner {
     /// Every binding declared at construction must have been set since the last
     /// dispatch (unset bindings are an error — Vulkan's behavior in that case
     /// is undefined, so we refuse to dispatch).
-    pub fn dispatch(
+    pub(crate) fn dispatch(
         &self,
         group_count_x: u32,
         group_count_y: u32,

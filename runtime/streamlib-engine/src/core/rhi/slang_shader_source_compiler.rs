@@ -26,7 +26,7 @@ use crate::core::{Error, Result};
 /// Never the source alone: the same text compiled for another stage, another
 /// backend, or by another compiler build is a different module.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ShaderCompilationCacheKey {
+pub(super) struct ShaderCompilationCacheKey {
     source_sha256: [u8; 32],
     stage: ShaderCompilationTargetStage,
     entry_point: String,
@@ -36,7 +36,7 @@ pub struct ShaderCompilationCacheKey {
 
 impl ShaderCompilationCacheKey {
     #[must_use]
-    pub fn new(
+    pub(super) fn new(
         source: &str,
         stage: ShaderCompilationTargetStage,
         entry_point: &str,

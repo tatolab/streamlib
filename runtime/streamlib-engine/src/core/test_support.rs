@@ -268,6 +268,10 @@ impl crate::core::ManualProcessor for MockProcessorWithACamelCaseOutputPort::Pro
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
+#[allow(
+    unreachable_pub,
+    reason = "the processor macro names the config in a trait impl, which needs it public"
+)]
 pub struct MockSourceTakingOneSettingConfig {
     #[serde(default)]
     pub frame_width: Option<u32>,
@@ -295,6 +299,10 @@ impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
+#[allow(
+    unreachable_pub,
+    reason = "the processor macro names the config in a trait impl, which needs it public"
+)]
 pub struct MockSourceReadingAnImageAssetConfig {
     #[serde(default)]
     pub image: Option<serde_json::Value>,

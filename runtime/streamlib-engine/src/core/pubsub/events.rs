@@ -444,7 +444,7 @@ pub enum ProcessorEvent {
 }
 
 // Re-export ProcessorState from the canonical location
-pub use crate::core::processors::ProcessorState;
+pub(super) use crate::core::processors::ProcessorState;
 
 // ===== Input Types =====
 

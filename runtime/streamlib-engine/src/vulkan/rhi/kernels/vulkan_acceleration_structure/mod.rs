@@ -82,7 +82,7 @@ impl TlasInstanceDesc {
 /// A bit no flag owns is refused rather than masked off: the caller meant a
 /// behaviour by it, and dropping it silently would build a different instance
 /// than the one asked for.
-pub fn geometry_instance_flags_from_raw_bitmask(
+pub(crate) fn geometry_instance_flags_from_raw_bitmask(
     raw_bitmask: u32,
 ) -> Result<vk::GeometryInstanceFlagsKHR> {
     vk::GeometryInstanceFlagsKHR::from_bits(raw_bitmask).ok_or_else(|| {
@@ -614,23 +614,23 @@ impl VulkanAccelerationStructureInner {
     /// Device address of the AS. For a BLAS, this is the value placed in
     /// `VkAccelerationStructureInstanceKHR::accelerationStructureReference`
     /// when wiring it into a TLAS.
-    pub fn device_address(&self) -> u64 {
+    pub(crate) fn device_address(&self) -> u64 {
         self.device_address
     }
 
     /// `BottomLevel` or `TopLevel`.
-    pub fn kind(&self) -> AccelerationStructureKind {
+    pub(crate) fn kind(&self) -> AccelerationStructureKind {
         self.kind
     }
 
     /// Human-readable label used in diagnostics.
-    pub fn label(&self) -> &str {
+    pub(crate) fn label(&self) -> &str {
         &self.label
     }
 
     /// Storage size in bytes (the size returned by
     /// `vkGetAccelerationStructureBuildSizesKHR` at build time).
-    pub fn storage_size(&self) -> vk::DeviceSize {
+    pub(crate) fn storage_size(&self) -> vk::DeviceSize {
         self.storage_size
     }
 }

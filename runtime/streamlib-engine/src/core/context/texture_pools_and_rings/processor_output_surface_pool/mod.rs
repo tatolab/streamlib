@@ -28,7 +28,7 @@ pub(crate) const PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY: usize = 16;
 /// queued in their mailboxes, where a frame holds no claim until its read, and
 /// borrowed past them, up to each link's borrow quota.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct OutputFramesKeptByOutputLinks {
+pub(crate) struct OutputFramesKeptByOutputLinks {
     pub(crate) queued_in_their_mailboxes: usize,
     pub(crate) borrowed_past_their_mailboxes: usize,
 }
@@ -37,7 +37,7 @@ pub struct OutputFramesKeptByOutputLinks {
 /// recorded at wiring and forgotten at unwiring, which its output pools are
 /// sized from.
 #[derive(Debug, Default)]
-pub struct OutputFramesKeptByTheOutputLinksOfOneProcessor {
+pub(crate) struct OutputFramesKeptByTheOutputLinksOfOneProcessor {
     kept_by_output_link_id: Mutex<HashMap<String, OutputFramesKeptByOutputLinks>>,
 }
 

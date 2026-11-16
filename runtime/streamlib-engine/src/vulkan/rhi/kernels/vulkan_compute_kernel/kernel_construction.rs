@@ -27,7 +27,7 @@ impl VulkanComputeKernelInner {
     /// Reflects the SPIR-V via `rspirv-reflect`, validates that the declared
     /// `bindings` match the shader's descriptor types, and rejects any mismatch
     /// before allocating Vulkan objects.
-    pub fn new(
+    pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
     ) -> Result<Self> {
@@ -36,7 +36,7 @@ impl VulkanComputeKernelInner {
 
     /// [`Self::new`], keeping the pipeline's on-disk cache in the stream's
     /// `pipeline_cache_directory_of_its_stream` when one is given.
-    pub fn new_caching_its_pipeline_in(
+    pub(crate) fn new_caching_its_pipeline_in(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
         pipeline_cache_directory_of_its_stream: Option<&Path>,
@@ -68,7 +68,7 @@ impl VulkanComputeKernelInner {
     /// [`Self::set_combined_image_sampler_view`], which writes the
     /// image view only — Vulkan ignores the sampler field in the write
     /// whenever the layout slot has an immutable sampler.
-    pub fn new_with_immutable_samplers(
+    pub(crate) fn new_with_immutable_samplers(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &ComputeKernelDescriptor<'_>,
         immutable_samplers: &[(u32, vk::Sampler)],
