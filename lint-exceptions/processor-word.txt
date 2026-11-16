@@ -542,7 +542,9 @@
 15 runtime/tatolabd/src/runtime_unit_lend.rs
 4 runtime/tatolabd/tests/common/mod.rs
 1 runtime/tatolabd/tests/tatolabd_refuses_by_name.rs
+19 scripts/check_processor_word.py  # the lint itself
 5 scripts/run-structure-lints.sh  # runs the lint and names it
+17 scripts/test_check_processor_word.py  # the lint's own tests
 2 sdk/streamlib-error/Cargo.toml
 29 sdk/streamlib-error/src/lib.rs
 8 sdk/streamlib-error/src/node_and_port_refusal_details.rs

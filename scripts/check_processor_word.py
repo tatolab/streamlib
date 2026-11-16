@@ -18,12 +18,7 @@ import sys
 from pathlib import Path
 
 EXCEPTION_LIST = Path("lint-exceptions/processor-word.txt")
-EXEMPT_PREFIXES = (
-    "vendor/",
-    "scripts/check_processor_word.py",
-    "scripts/test_check_processor_word.py",
-    str(EXCEPTION_LIST),
-)
+EXEMPT_PREFIXES = ("vendor/", str(EXCEPTION_LIST))
 PROCESSOR_WORD = re.compile(r"(?<!pre)processor", re.IGNORECASE)
 EXCEPTION_LINE = re.compile(r"^(?P<count>\d+) (?P<path>\S+)(?:\s+#.*)?$")
 
@@ -46,6 +41,10 @@ def parse_exception_list(text: str) -> dict[str, int]:
     return counts
 
 
+def times(count: int) -> str:
+    return "once" if count == 1 else f"{count} times"
+
+
 def findings(
     found_counts: dict[str, int],
     listed_counts: dict[str, int],
@@ -57,11 +56,11 @@ def findings(
         listed = listed_counts.get(path, 0)
         if found > listed:
             failures.append(
-                f'{path}: says "processor" {found} times, {listed} listed; say node'
+                f'{path}: says "processor" {times(found)}, {listed} listed; say node'
             )
         elif found < listed:
             failures.append(
-                f"{path}: says \"processor\" {found} times, {listed} listed; "
+                f"{path}: says \"processor\" {times(found)}, {listed} listed; "
                 f"lower its entry in {EXCEPTION_LIST}"
             )
     for path in sorted(listed_counts.keys() - found_counts.keys()):
@@ -88,8 +87,8 @@ def tracked_processor_word_counts() -> dict[str, int]:
         if not tracked_path or tracked_path.startswith(EXEMPT_PREFIXES):
             continue
         try:
-            text = Path(tracked_path).read_text()
-        except (UnicodeDecodeError, FileNotFoundError, IsADirectoryError):
+            text = Path(tracked_path).read_bytes().decode("utf-8", errors="replace")
+        except (FileNotFoundError, IsADirectoryError):
             text = ""
         count = processor_word_count(tracked_path, text)
         if count:
@@ -102,7 +101,7 @@ def main() -> int:
     parser.add_argument("--compare-to", metavar="GIT_REF")
     arguments = parser.parse_args()
     try:
-        listed_counts = parse_exception_list(EXCEPTION_LIST.read_text())
+        listed_counts = parse_exception_list(EXCEPTION_LIST.read_text(encoding="utf-8"))
         compared_counts = None
         if arguments.compare_to:
             compared_text = subprocess.run(
