@@ -28,6 +28,10 @@ if [[ "$#" -ne 0 && -z "${compared_ref}" ]]; then
   echo "usage: run-structure-lints.sh [--compare-to <git-ref>]" >&2
   exit 2
 fi
+if [[ -n "${compared_ref}" ]] && ! git rev-parse --verify -q "${compared_ref}^{commit}" >/dev/null; then
+  echo "run-structure-lints.sh: ${compared_ref} is not a commit to compare the exception lists to" >&2
+  exit 2
+fi
 
 if python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
   python_command=(python3)
