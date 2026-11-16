@@ -5,7 +5,8 @@
 # The structure lints from tatolab/lint-config, pinned at LINT_CONFIG_COMMIT, and
 # this repository's own: the ast-grep rules (through sgconfig.yml), their tests,
 # the suppressions they allow and the matches they require, the 1,000-line
-# file-size limit, the module-file convention and the workspace lint table.
+# file-size limit, the module-file convention, the workspace lint table and the
+# word "processor", which this tree spells node.
 # Findings not fixed yet are listed under lint-exceptions/, and each list may only
 # shrink from the one at the compared ref: `--compare-to <git-ref>`, or
 # origin/main when none is given and it exists. A list the ref doesn't have yet is
@@ -106,7 +107,8 @@ run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_com
   $(compare_arguments_for lint-exceptions/ast-grep.txt)
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
-for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py; do
+for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py \
+  scripts/test_check_processor_word.py; do
   run_lint "${script_test}" "${python_command[@]}" "${script_test}"
 done
 run_lint "ast-grep suppressions" "${python_command[@]}" scripts/check_ast_grep_suppressions.py
@@ -118,6 +120,9 @@ run_lint "file size" "${python_command[@]}" "${lint_config_directory}/file-size/
 # shellcheck disable=SC2046
 run_lint "module files" "${python_command[@]}" "${lint_config_directory}/rust/check_module_files.py" \
   --exceptions lint-exceptions/module-files.txt $(compare_arguments_for lint-exceptions/module-files.txt)
+# shellcheck disable=SC2046
+run_lint "the word processor" "${python_command[@]}" scripts/check_processor_word.py \
+  $(compare_arguments_for lint-exceptions/processor-word.txt)
 run_lint "workspace lint table" "${python_command[@]}" "${lint_config_directory}/rust/check_lint_table.py"
 
 if (( ${#failed_lints[@]} > 0 )); then

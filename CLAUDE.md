@@ -124,6 +124,8 @@ built-in publishes on means you skipped it.
   a change is a recorded patch against upstream and never a drive-by edit. Never touch the
   licence files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
+- A node is one unit in a stream's graph. "Processor" is not a word in this tree: say node
+  (`scripts/check_processor_word.py` fails on it; `lint-exceptions/processor-word.txt` only shrinks).
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
   surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
   migration's scope; a broken *converted* consumer gets a Linear backlog issue, a held
