@@ -73,7 +73,7 @@ impl GpuContext {
         acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
     ) -> String {
         let acceleration_structure_id = uuid::Uuid::new_v4().to_string();
-        self.acceleration_structure_registry.lock().unwrap().insert(
+        self.acceleration_structure_registry.lock().insert(
             acceleration_structure_id.clone(),
             Arc::new(acceleration_structure),
         );
@@ -89,7 +89,6 @@ impl GpuContext {
     ) -> Option<Arc<crate::vulkan::rhi::VulkanAccelerationStructure>> {
         self.acceleration_structure_registry
             .lock()
-            .unwrap()
             .get(acceleration_structure_id)
             .map(Arc::clone)
     }
@@ -105,7 +104,6 @@ impl GpuContext {
     pub fn release_acceleration_structure(&self, acceleration_structure_id: &str) -> bool {
         self.acceleration_structure_registry
             .lock()
-            .unwrap()
             .remove(acceleration_structure_id)
             .is_some()
     }

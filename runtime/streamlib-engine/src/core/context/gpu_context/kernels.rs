@@ -215,13 +215,13 @@ impl GpuContext {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
         // a fresh handle via from_arc_into_raw per request.
         {
-            let cache = self.color_converter_cache.read().unwrap();
+            let cache = self.color_converter_cache.read();
             if let Some(c) = cache.get(&(src, dst)) {
                 return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
             }
         }
         // Slow path: build under write lock with double-check.
-        let mut cache = self.color_converter_cache.write().unwrap();
+        let mut cache = self.color_converter_cache.write();
         if let Some(c) = cache.get(&(src, dst)) {
             return Ok(RhiColorConverter::from_arc_into_raw(Arc::clone(c)));
         }
@@ -449,7 +449,6 @@ impl GpuContext {
         let cached_kernel = self
             .compute_kernel_cache
             .lock()
-            .unwrap()
             .get(&kernel_id)
             .map(Arc::clone);
         if let Some(cached) = cached_kernel {
@@ -495,7 +494,6 @@ impl GpuContext {
             Arc::clone(
                 self.compute_kernel_cache
                     .lock()
-                    .unwrap()
                     .entry(kernel_id)
                     .or_insert(kernel),
             ),
@@ -511,7 +509,6 @@ impl GpuContext {
     ) -> Option<Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.compute_kernel_cache
             .lock()
-            .unwrap()
             .get(kernel_id)
             .map(Arc::clone)
     }
@@ -553,7 +550,6 @@ impl GpuContext {
         let cached_kernel = self
             .graphics_kernel_cache
             .lock()
-            .unwrap()
             .get(&kernel_id)
             .map(Arc::clone);
         if let Some(cached) = cached_kernel {
@@ -608,7 +604,6 @@ impl GpuContext {
             Arc::clone(
                 self.graphics_kernel_cache
                     .lock()
-                    .unwrap()
                     .entry(kernel_id)
                     .or_insert(kernel),
             ),
@@ -626,7 +621,6 @@ impl GpuContext {
         let kernel = self
             .graphics_kernel_cache
             .lock()
-            .unwrap()
             .get(kernel_id)
             .map(Arc::clone)?;
         Some(GraphicsKernelHeldForOneDraw {
@@ -669,7 +663,6 @@ impl GpuContext {
         let cached_kernel = self
             .ray_tracing_kernel_cache
             .lock()
-            .unwrap()
             .get(&kernel_id)
             .map(Arc::clone);
         if let Some(cached) = cached_kernel {
@@ -720,7 +713,6 @@ impl GpuContext {
             Arc::clone(
                 self.ray_tracing_kernel_cache
                     .lock()
-                    .unwrap()
                     .entry(kernel_id)
                     .or_insert(kernel),
             ),
@@ -740,7 +732,6 @@ impl GpuContext {
         let kernel = self
             .ray_tracing_kernel_cache
             .lock()
-            .unwrap()
             .get(kernel_id)
             .map(Arc::clone)?;
         Some(RayTracingKernelHeldForOneTrace {

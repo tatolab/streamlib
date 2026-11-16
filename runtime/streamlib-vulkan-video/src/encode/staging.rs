@@ -277,7 +277,9 @@ impl SimpleEncoder {
         unsafe {
             let width = self.config.width;
             let height = self.config.height;
-            let enc_cfg = self.encode_config().unwrap();
+            let enc_cfg = self
+                .encode_config()
+                .expect("configure() sets encode_config, and every constructor calls it");
             let aligned_w = enc_cfg.aligned_width();
             let aligned_h = enc_cfg.aligned_height();
 

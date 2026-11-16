@@ -496,7 +496,7 @@ impl SimpleDecoder {
         let parser = self
             .h264_parser
             .as_ref()
-            .ok_or_else(|| VideoError::BitstreamError("H.264 parser not initialized".into()))?;
+            .ok_or_else(super::no_h264_parser)?;
         let sps = parser
             .sps
             .as_ref()

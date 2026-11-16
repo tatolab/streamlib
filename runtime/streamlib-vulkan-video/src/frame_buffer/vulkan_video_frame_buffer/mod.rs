@@ -12,7 +12,7 @@
 //! - `vkPicBuffBase` / `NvPerFrameDecodeResources` are merged into
 //!   `PerFrameDecodeResources` with an `Arc`-based reference count.
 //! - Bit-field structs are replaced by regular `bool` fields.
-//! - `std::mutex` → `std::sync::Mutex`.
+//! - `std::mutex` → `parking_lot::Mutex`.
 //! - `std::queue<uint8_t>` → `VecDeque<u8>`.
 //! - `VulkanDeviceContext*` is represented as `vulkanalia::Device` (the Vulkan
 //!   device dispatch table) which is the only thing actually used for
@@ -21,7 +21,7 @@
 //! - Virtual interface methods become trait methods on `VulkanVideoFrameBuffer`.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -703,7 +703,7 @@ impl PerFrameDecodeImageSet {
 /// Mirrors C++ `VkVideoFrameBuffer` (the private impl of `VulkanVideoFrameBuffer`).
 pub struct VkVideoFrameBuffer {
     device: vulkanalia::Device,
-    display_queue_mutex: Mutex<DisplayQueueState>,
+    display_queue_mutex: parking_lot::Mutex<DisplayQueueState>,
     image_set: PerFrameDecodeImageSet,
     query_pool: vk::QueryPool,
     frame_num_in_display_order: i32,
@@ -724,7 +724,7 @@ impl VkVideoFrameBuffer {
     pub fn new(device: vulkanalia::Device) -> Arc<Self> {
         Arc::new(Self {
             device,
-            display_queue_mutex: Mutex::new(DisplayQueueState {
+            display_queue_mutex: parking_lot::Mutex::new(DisplayQueueState {
                 display_frames: VecDeque::new(),
                 owned_by_display_mask: 0,
             }),
@@ -764,7 +764,7 @@ impl VkVideoFrameBuffer {
     /// Flush the display queue, releasing all pending frames.
     /// Mirrors C++ `FlushDisplayQueue`.
     pub fn flush_display_queue(&mut self) -> u32 {
-        let mut state = self.display_queue_mutex.lock().unwrap();
+        let mut state = self.display_queue_mutex.lock();
         let mut flushed = 0u32;
         while let Some(pic_idx) = state.display_frames.pop_front() {
             let res = &mut self.image_set.per_frame[pic_idx as usize];
@@ -816,7 +816,7 @@ impl VkVideoFrameBuffer {
     ) -> i32 {
         debug_assert!((pic_id as u32) < self.image_set.size());
 
-        let mut state = self.display_queue_mutex.lock().unwrap();
+        let mut state = self.display_queue_mutex.lock();
         let res = &mut self.image_set.per_frame[pic_id as usize];
         res.display_order = self.frame_num_in_display_order as u64;
         self.frame_num_in_display_order += 1;
@@ -893,7 +893,7 @@ impl VkVideoFrameBuffer {
 
         // Store per-frame data under the mutex.
         {
-            let _lock = self.display_queue_mutex.lock().unwrap();
+            let _lock = self.display_queue_mutex.lock();
             let res = &mut self.image_set.per_frame[idx];
             res.pic_disp_info = *decode_picture_info;
             res.in_decode_queue = true;
@@ -950,7 +950,7 @@ impl VkVideoFrameBuffer {
     /// Dequeue a decoded picture for display.
     /// Mirrors C++ `VkVideoFrameBuffer::DequeueDecodedPicture`.
     pub fn dequeue_decoded_picture(&mut self, decoded_frame: &mut VulkanDecodedFrame) -> i32 {
-        let mut state = self.display_queue_mutex.lock().unwrap();
+        let mut state = self.display_queue_mutex.lock();
         let num_pending = state.display_frames.len() as i32;
         let mut picture_index: i32 = -1;
 
@@ -1027,7 +1027,7 @@ impl VkVideoFrameBuffer {
     /// Release displayed pictures back to the pool.
     /// Mirrors C++ `VkVideoFrameBuffer::ReleaseDisplayedPicture`.
     pub fn release_displayed_picture(&mut self, releases: &[&DecodedFrameRelease]) -> i32 {
-        let mut state = self.display_queue_mutex.lock().unwrap();
+        let mut state = self.display_queue_mutex.lock();
         for release in releases {
             let pic_id = release.picture_index as usize;
             debug_assert!((pic_id as u32) < self.image_set.size());
@@ -1056,7 +1056,7 @@ impl VkVideoFrameBuffer {
         pic_id: i32,
         pic_num_in_decode_order: u64,
     ) -> u64 {
-        let _lock = self.display_queue_mutex.lock().unwrap();
+        let _lock = self.display_queue_mutex.lock();
         if (pic_id as u32) < self.image_set.size() {
             let old = self.image_set.per_frame[pic_id as usize].decode_order;
             self.image_set.per_frame[pic_id as usize].decode_order = pic_num_in_decode_order;
@@ -1073,7 +1073,7 @@ impl VkVideoFrameBuffer {
         pic_id: i32,
         pic_num_in_display_order: i32,
     ) -> i32 {
-        let _lock = self.display_queue_mutex.lock().unwrap();
+        let _lock = self.display_queue_mutex.lock();
         if (pic_id as u32) < self.image_set.size() {
             let old = self.image_set.per_frame[pic_id as usize].display_order as i32;
             self.image_set.per_frame[pic_id as usize].display_order =
@@ -1087,7 +1087,7 @@ impl VkVideoFrameBuffer {
     /// Reserve a picture buffer (find the least-recently-used available frame).
     /// Mirrors C++ `VkVideoFrameBuffer::ReservePictureBuffer`.
     pub fn reserve_picture_buffer(&mut self) -> Option<usize> {
-        let _lock = self.display_queue_mutex.lock().unwrap();
+        let _lock = self.display_queue_mutex.lock();
         let mut found_pic_id: i32 = -1;
         let mut min_decode_order: i64 = self.image_set.per_frame[0].decode_order as i64 + 1000;
 
@@ -1149,7 +1149,7 @@ impl VkVideoFrameBuffer {
         self.flush_display_queue();
         self.destroy_video_queries();
         {
-            let mut state = self.display_queue_mutex.lock().unwrap();
+            let mut state = self.display_queue_mutex.lock();
             state.owned_by_display_mask = 0;
         }
         self.frame_num_in_display_order = 0;

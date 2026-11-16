@@ -7,10 +7,11 @@
 //! the runtime unit and is opened by path on first use, so a kernel author
 //! needs no shader toolchain beyond the installed wheel.
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 use sha2::{Digest, Sha256};
 pub use streamlib_slang_shader_compiler::{
@@ -143,7 +144,7 @@ impl SlangShaderSourceCompiler {
             backend,
             global_session.compiler_version(),
         );
-        if let Some(cached) = self.compiled_code_by_key.lock().unwrap().get(&key) {
+        if let Some(cached) = self.compiled_code_by_key.lock().get(&key) {
             tracing::debug!(
                 rhi_op = "compile_slang_shader_source",
                 stage = stage.wire_name(),
@@ -172,7 +173,6 @@ impl SlangShaderSourceCompiler {
         Ok(Arc::clone(
             self.compiled_code_by_key
                 .lock()
-                .unwrap()
                 .entry(key)
                 .or_insert(compiled),
         ))
@@ -199,7 +199,7 @@ fn slang_compiler_library_candidate_paths() -> Vec<PathBuf> {
 /// holds from start to finish: a global session, and every session and module
 /// it creates, is not thread-safe.
 fn lock_the_process_slang_global_session()
--> Result<std::sync::MutexGuard<'static, SlangCompilerGlobalSession>> {
+-> Result<parking_lot::MutexGuard<'static, SlangCompilerGlobalSession>> {
     static PROCESS_SLANG_GLOBAL_SESSION: OnceLock<
         std::result::Result<Mutex<SlangCompilerGlobalSession>, String>,
     > = OnceLock::new();
@@ -210,9 +210,7 @@ fn lock_the_process_slang_global_session()
         .map(Mutex::new)
         .map_err(|refusal| refusal.to_string())
     }) {
-        Ok(global_session) => Ok(global_session
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)),
+        Ok(global_session) => Ok(global_session.lock()),
         Err(why_the_compiler_is_unavailable) => {
             Err(Error::GpuError(why_the_compiler_is_unavailable.clone()))
         }

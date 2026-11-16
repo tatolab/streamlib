@@ -341,7 +341,6 @@ fn dropping_a_nodes_output_texture_unregisters_its_id_and_hands_its_count_back()
     let is_registered = |id: &str| {
         gpu.texture_cache
             .lock()
-            .unwrap()
             .contains_key(pool_slot_key_of_surface_id(id))
     };
 

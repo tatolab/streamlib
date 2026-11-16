@@ -702,9 +702,7 @@ impl VkImageResource {
             }
         }
 
-        let mp_info = ycbcr_vk_format_info(format);
-
-        if mp_info.is_none() {
+        let Some(mp_info) = ycbcr_vk_format_info(format) else {
             // Not a multi-planar format
             self.is_linear_image = self.image_create_info.tiling == vk::ImageTiling::LINEAR;
             if self.is_linear_image {
@@ -720,9 +718,7 @@ impl VkImageResource {
                 }
             }
             return;
-        }
-
-        let mp_info = mp_info.unwrap();
+        };
         self.query_format_flags_from_mp_info(&mp_info);
 
         // External/non-owning wrapper has no device memory — skip host-visible queries

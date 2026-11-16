@@ -107,8 +107,7 @@ impl HostVulkanTexture {
         let view = unsafe { vk_dev.device().create_image_view(&view_info, None) }
             .map_err(|e| Error::GpuError(format!("Failed to create image view: {e}")))?;
 
-        let _ = self.cached_image_view.set(view);
-        Ok(*self.cached_image_view.get().unwrap())
+        Ok(*self.cached_image_view.get_or_init(|| view))
     }
 
     /// One-shot UNDEFINED → GENERAL barrier on a freshly-allocated

@@ -26,6 +26,7 @@ path = "src/lib.rs"
 vulkanalia.workspace = true
 vulkanalia-vma.workspace = true
 tracing.workspace = true
+parking_lot = "0.12"
 
 # The owned-device tier a codec module encodes on, and the layout vocabulary
 # shared with the rest of the RHI.
