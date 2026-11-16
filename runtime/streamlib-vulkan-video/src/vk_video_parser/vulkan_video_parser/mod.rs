@@ -34,12 +34,21 @@ use vulkanalia::vk;
 // ---------------------------------------------------------------------------
 
 const TOP_FIELD_SHIFT: u32 = 0;
-#[allow(dead_code)] // Part of the C++ field handling API; kept for parity
+#[allow(
+    dead_code,
+    reason = "kept for parity with the nvpro-samples C++ source this ports"
+)]
 const TOP_FIELD_MASK: u32 = 1 << TOP_FIELD_SHIFT;
 const BOTTOM_FIELD_SHIFT: u32 = 1;
-#[allow(dead_code)] // Part of the C++ field handling API; kept for parity
+#[allow(
+    dead_code,
+    reason = "kept for parity with the nvpro-samples C++ source this ports"
+)]
 const BOTTOM_FIELD_MASK: u32 = 1 << BOTTOM_FIELD_SHIFT;
-#[allow(dead_code)] // Part of the C++ field handling API; kept for parity
+#[allow(
+    dead_code,
+    reason = "kept for parity with the nvpro-samples C++ source this ports"
+)]
 const FIELD_IS_REFERENCE_MASK: u32 = TOP_FIELD_MASK | BOTTOM_FIELD_MASK;
 
 pub const MAX_DPB_REF_SLOTS: u32 = 16;

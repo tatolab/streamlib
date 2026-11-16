@@ -134,11 +134,17 @@ pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
 /// crossing to the parent: escalate for allocation, surface-share for the
 /// memory, one consumer Vulkan device per child for the import.
 pub(crate) struct HelperProcessGpuExchangeClient {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     escalate_request_to_parent: Py<PyAny>,
     /// The bridge's door for a release that must not wait on its answer where
     /// it is owed — every release a drop owes.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     release_to_parent_without_waiting: Py<PyAny>,
     /// The connection to the runtime's surface-sharing service — its socket
     /// on Linux, its Mach service on macOS — and the pool slot imports made
@@ -152,7 +158,10 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// the node's id would have its crash sweep the parent's own
     /// registrations. A child-scoped id makes the sweep exactly this
     /// child's adoptions.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     foreign_surface_registration_runtime_id: String,
     /// The claim tables this helper was handed, mapped once per pool, and the
     /// claims its frames hold in them.
@@ -196,7 +205,10 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// `convert_surface_into` named it as its source — the parent then holds
     /// what it resolved until the adoption's release says to drop it. Every
     /// other source is a surface whose own release already tells the parent.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     foreign_adoptions_and_whether_a_conversion_named_them:
         Mutex<std::collections::HashMap<String, bool>>,
 }

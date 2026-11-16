@@ -20,9 +20,10 @@
 
 use streamlib_engine::core::context::SilentNullAudioDeviceBackend;
 
-// The suite is compiled into each arm's binary, and this arm runs one of its
-// claims — the rest need a device.
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "this arm runs one claim of the shared suite; the rest need a device"
+)]
 mod audio_arm_timestamp_contract;
 use audio_arm_timestamp_contract::assert_a_live_capture_stream_reports_no_failure_and_neither_does_a_stopped_one;
 

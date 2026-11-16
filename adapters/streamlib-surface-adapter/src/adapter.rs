@@ -47,14 +47,12 @@ pub trait SurfaceAdapter: Send + Sync {
     ///
     /// Returns a [`ReadGuard`] whose `Drop` releases the access. Several
     /// concurrent readers are permitted; a writer is exclusive.
-    #[allow(clippy::missing_errors_doc)]
     fn acquire_read<'g>(
         &'g self,
         surface: &StreamlibSurface,
     ) -> Result<ReadGuard<'g, Self>, AdapterError>;
 
     /// Acquire scoped exclusive write access to `surface`, blocking until ready.
-    #[allow(clippy::missing_errors_doc)]
     fn acquire_write<'g>(
         &'g self,
         surface: &StreamlibSurface,
@@ -66,7 +64,6 @@ pub trait SurfaceAdapter: Send + Sync {
     /// currently holds the surface (no error — caller decides whether
     /// to back off, retry, or skip the frame), or `Err(...)` on a
     /// genuine adapter failure.
-    #[allow(clippy::missing_errors_doc)]
     fn try_acquire_read<'g>(
         &'g self,
         surface: &StreamlibSurface,
@@ -77,7 +74,6 @@ pub trait SurfaceAdapter: Send + Sync {
     /// Returns `Ok(Some(guard))` on success, `Ok(None)` if any reader
     /// or another writer currently holds the surface, or `Err(...)`
     /// on a genuine adapter failure.
-    #[allow(clippy::missing_errors_doc)]
     fn try_acquire_write<'g>(
         &'g self,
         surface: &StreamlibSurface,

@@ -175,7 +175,10 @@ fn refuses_by_name_off_linux_and_runs_nothing() {
 #[cfg(target_os = "linux")]
 #[test]
 #[ignore = "runs the privileged verb, which asks for a password; run with --ignored and TATOLAB_RUN_PRIVILEGED_VERB=1"]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn enable_virtual_camera_makes_the_control_node_writable() {
     use std::time::{Duration, Instant};
 

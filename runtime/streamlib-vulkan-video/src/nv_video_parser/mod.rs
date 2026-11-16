@@ -8,7 +8,13 @@
 pub mod byte_stream_parser;
 pub mod nv_vulkan_h264_scaling_list;
 pub mod nv_vulkan_h265_scaling_list;
-#[allow(dead_code, unused_variables, unused_assignments, unused_mut)]
+#[allow(
+    dead_code,
+    unused_variables,
+    unused_assignments,
+    unused_mut,
+    reason = "the AV1 decoder port is not wired in yet and keeps the C++ structure"
+)]
 pub mod vulkan_av1_decoder;
 pub mod vulkan_h264_decoder;
 pub mod vulkan_h265_decoder;

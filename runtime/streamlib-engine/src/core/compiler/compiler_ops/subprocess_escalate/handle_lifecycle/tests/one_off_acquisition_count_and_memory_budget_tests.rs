@@ -13,7 +13,10 @@ use super::*;
 /// pooled frame and one-off of the same shape are both served.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
     use uuid::Uuid;
 
@@ -96,7 +99,10 @@ fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
 /// be rescued.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -283,7 +289,10 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn a_released_or_torn_down_one_off_hands_its_count_back_to_its_node() {
     use super::super::RegisteredHandle;
     use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
@@ -390,7 +399,10 @@ fn a_torn_down_helpers_textures_are_freed_without_waiting_out_the_idle_window() 
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_releases_it() {
     use super::super::{OneOffAcquisitionShape, RegisteredHandle};
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
@@ -465,7 +477,10 @@ fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_re
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_published_frame_cached()
 {
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;

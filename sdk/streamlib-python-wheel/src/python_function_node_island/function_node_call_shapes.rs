@@ -70,7 +70,10 @@ impl HowAFunctionNodeIsCalled {
     /// the state its stream carries for it, when it carries one. Of a compiled
     /// node's `input_count` inputs, the last set the config values
     /// `config_value_indices_set_by_the_inputs_past_its_own` names.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate value the bootstrap hands over"
+    )]
     pub(super) fn handed_over_by_the_bootstrap(
         node_id: &str,
         called_through: Py<PyAny>,

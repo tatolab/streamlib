@@ -330,7 +330,10 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         inputs_carrying_an_unread_message = Vec::new(),
         outputs_carrying_an_unread_message = Vec::new(),
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "pyo3 maps each Python keyword argument to its own parameter"
+    )]
     fn new(
         link_data_access: &PythonProcessorLinkDataAccess,
         node_id: String,

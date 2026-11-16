@@ -37,7 +37,10 @@
 //! parallel `cargo bench` invocations don't collide on the
 //! machine-global `/dev/shm` namespace.
 
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a benchmark prints its numbers for the operator running `cargo bench`"
+)]
 
 use std::sync::Arc;
 

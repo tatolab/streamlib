@@ -91,9 +91,10 @@ fn avfoundation_capture_devices_in_default_order() -> Vec<Retained<AVCaptureDevi
     let Some(video) = (unsafe { AVMediaTypeVideo }) else {
         return Vec::new();
     };
-    // The deprecated synonym rather than `AVCaptureDeviceTypeExternal`, which
-    // exists only from macOS 14: the macOS floor is the wheel's to set.
-    #[allow(deprecated)]
+    #[allow(
+        deprecated,
+        reason = "`AVCaptureDeviceTypeExternalUnknown` is the deprecated name of `AVCaptureDeviceTypeExternal`"
+    )]
     // SAFETY: both are AVFoundation-exported constants.
     let device_types = unsafe {
         NSArray::from_slice(&[

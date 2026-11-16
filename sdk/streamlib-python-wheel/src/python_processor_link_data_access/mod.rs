@@ -295,7 +295,10 @@ impl PythonProcessorLinkDataAccess {
         link_id,
         output_port_wiring_generation = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "pyo3 maps each Python keyword argument to its own parameter"
+    )]
     pub(crate) fn wire_output_link(
         &self,
         python: Python<'_>,
@@ -408,7 +411,10 @@ impl PythonProcessorLinkDataAccess {
         wiring_generation = None,
         input_port_borrow_quota = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "pyo3 maps each Python keyword argument to its own parameter"
+    )]
     pub(crate) fn wire_input_link(
         &self,
         python: Python<'_>,

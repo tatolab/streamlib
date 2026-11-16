@@ -252,7 +252,6 @@ fn requeue_a_v4l2_buffer_to_the_driver(device_fd: RawFd, buf: Option<v4l::v4l_sy
 
 /// Hand one converted frame to the node unless a stop arrived during its GPU
 /// work, and tally it; returns whether the capture is still running.
-#[allow(clippy::too_many_arguments)]
 fn deliver_a_converted_v4l2_frame(
     is_capturing: &AtomicBool,
     hand_off: &CapturedVideoFrameHandOff,

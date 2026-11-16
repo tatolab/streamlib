@@ -8,7 +8,10 @@
 //! Communicates with the parent via stdout because tracing would route through
 //! the host's logging pathway, which the test doesn't want to interleave.
 
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "the helper reports on stdout so its output stays out of the host's logging pathway"
+)]
 
 #[cfg(target_os = "linux")]
 use std::io::Write;

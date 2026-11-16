@@ -40,7 +40,10 @@ const LONGEST_DELIVERY_DELAY_NS: i64 = 250_000_000;
 /// may arrive: the device's timing model, not a block from the future.
 const TIMING_MODEL_ALLOWANCE_NS: i64 = 2_000_000;
 
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers for whoever reads the run"
+)]
 fn print_for_the_evidence_record(line: impl std::fmt::Display) {
     println!("{line}");
 }

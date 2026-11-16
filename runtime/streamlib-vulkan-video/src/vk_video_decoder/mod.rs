@@ -5,9 +5,15 @@
 //!
 //! Port of nvpro-samples/vk_video_decoder/libs/VkVideoDecoder/
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "kept for parity with the nvpro-samples C++ source this ports"
+)]
 pub mod vk_parser_video_picture_parameters;
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "kept for parity with the nvpro-samples C++ source this ports"
+)]
 #[expect(
     clippy::module_inception,
     reason = "module names follow the nvpro-samples sources they port"

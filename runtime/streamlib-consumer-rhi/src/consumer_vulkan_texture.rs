@@ -246,7 +246,10 @@ impl ConsumerVulkanTexture {
     /// fd ownership: the consumer transfers ownership to Vulkan on
     /// success (the driver dups internally and releases on
     /// `vkFreeMemory`). On error the caller still owns `fd`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is one field of the external memory import Vulkan asks for"
+    )]
     pub fn from_opaque_fd(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
         fd: std::os::unix::io::RawFd,

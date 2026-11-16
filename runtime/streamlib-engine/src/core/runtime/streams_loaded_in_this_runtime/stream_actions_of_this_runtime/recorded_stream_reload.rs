@@ -526,7 +526,6 @@ impl Runner {
     /// `is_interrupted` reports true — then start it or hold it stopped as
     /// `playback_after_the_load` says. A refused load or start records the stream failed with
     /// the reason; a record that cannot be written unloads the stream and is refused.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn load_a_recorded_stream_recording_it_failed_when_refused(
         &self,
         stream_records: &StreamRecordsInTheStateDirectory,

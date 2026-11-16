@@ -59,7 +59,10 @@ const fn posix_shared_memory_is_short_for_a_runtime(free_bytes: u64) -> bool {
 }
 
 /// Raise the warning when `free_bytes` is short of what a runtime wants.
-#[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(dead_code, reason = "only the Linux build uses it")
+)]
 fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) {
     if !posix_shared_memory_is_short_for_a_runtime(free_bytes) {
         tracing::debug!(

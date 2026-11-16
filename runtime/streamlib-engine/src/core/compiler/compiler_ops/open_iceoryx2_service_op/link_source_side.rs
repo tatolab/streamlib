@@ -363,7 +363,6 @@ pub(super) fn release_the_source_side_of_a_link(
 /// or `None` for a processor that holds none.
 ///
 /// [`OutputWriterInner`]: crate::iceoryx2::OutputWriterInner
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_rust_source(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -402,7 +401,6 @@ pub(super) fn wire_rust_source(
 /// Hands back the cell this end's answer will land in, or `None` where the
 /// entry rides the far side's startup envelope instead and its `ready`
 /// confirms it.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_subprocess_source(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,

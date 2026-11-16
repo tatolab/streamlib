@@ -65,7 +65,13 @@ enum StateDirectoryPlacementRule {
 }
 
 impl StateDirectoryPlacementRule {
-    #[cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
+    #[cfg_attr(
+        feature = "machine-directories-under-a-test-root",
+        allow(
+            dead_code,
+            reason = "a test build resolves under its machine root; the real resolvers stay compiled for their tests"
+        )
+    )]
     fn for_this_platform() -> Self {
         if cfg!(target_os = "macos") {
             Self::MacOsUsersApplicationSupport
@@ -143,7 +149,13 @@ fn this_users_tatolab_state_directory_path() -> Result<PathBuf, TatolabStateDire
 
 /// The resolver with its inputs named, so every arm is testable without the
 /// process environment.
-#[cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
+#[cfg_attr(
+    feature = "machine-directories-under-a-test-root",
+    allow(
+        dead_code,
+        reason = "a test build resolves under its machine root; the real resolvers stay compiled for their tests"
+    )
+)]
 fn tatolab_state_directory_path_from(
     xdg_state_home: Option<OsString>,
     home: Option<OsString>,

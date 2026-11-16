@@ -162,7 +162,6 @@ impl HostVulkanDevice {
     /// create the probe image. When the EGL probe returned no modifiers (no
     /// libEGL, no display, extension missing) the tiled pool is `None` and
     /// callers fall back to refusing render-target allocations.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_dma_buf_pools(
         allocator: &Arc<vma::Allocator>,
         device: &vulkanalia::Device,

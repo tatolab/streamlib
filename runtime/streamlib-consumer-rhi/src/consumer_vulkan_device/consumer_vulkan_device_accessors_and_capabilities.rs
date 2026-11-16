@@ -89,13 +89,11 @@ impl ConsumerVulkanDevice {
     }
 
     /// Loaded Vulkan entry points.
-    #[allow(dead_code)]
     pub fn entry(&self) -> &vulkanalia::Entry {
         &self.entry
     }
 
     /// Vulkan instance owned by this consumer device.
-    #[allow(dead_code)]
     pub fn instance(&self) -> &vulkanalia::Instance {
         &self.instance
     }

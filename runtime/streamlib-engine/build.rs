@@ -1,7 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a build script talks to Cargo through `cargo:` lines on stdout"
+)]
 
 //! Build script: wherever the Vulkan RHI is compiled, compiles the Vulkan
 //! compute, vertex, fragment, and ray-tracing shaders this crate ships

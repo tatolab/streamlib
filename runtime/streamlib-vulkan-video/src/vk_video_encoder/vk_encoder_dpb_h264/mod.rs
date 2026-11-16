@@ -162,7 +162,7 @@ fn sort_check_short_term_p_frame(entry: &DpbEntryH264, _poc_type: u32, v: &mut i
     entry.top_field_marking == MARKING_SHORT && entry.bottom_field_marking == MARKING_SHORT
 }
 
-#[allow(dead_code)] // Field-coding reference list variant; kept for codec parity
+#[allow(dead_code, reason = "a field-coding variant kept for C++ parity")]
 fn sort_check_short_term_p_field(entry: &DpbEntryH264, _poc_type: u32, v: &mut i32) -> bool {
     *v = entry.frame_num_wrap;
     entry.top_field_marking == MARKING_SHORT || entry.bottom_field_marking == MARKING_SHORT
@@ -175,7 +175,7 @@ fn sort_check_short_term_b_frame(entry: &DpbEntryH264, poc_type: u32, v: &mut i3
         && entry.bottom_field_marking == MARKING_SHORT
 }
 
-#[allow(dead_code)] // Field-coding reference list variant; kept for codec parity
+#[allow(dead_code, reason = "a field-coding variant kept for C++ parity")]
 fn sort_check_short_term_b_field(entry: &DpbEntryH264, poc_type: u32, v: &mut i32) -> bool {
     *v = entry.pic_info_pic_order_cnt;
     !(poc_type == 0 && entry.not_existing)
@@ -187,7 +187,7 @@ fn sort_check_long_term_frame(entry: &DpbEntryH264, _poc_type: u32, v: &mut i32)
     entry.top_field_marking == MARKING_LONG && entry.bottom_field_marking == MARKING_LONG
 }
 
-#[allow(dead_code)] // Field-coding reference list variant; kept for codec parity
+#[allow(dead_code, reason = "a field-coding variant kept for C++ parity")]
 fn sort_check_long_term_field(entry: &DpbEntryH264, _poc_type: u32, v: &mut i32) -> bool {
     *v = entry.long_term_frame_idx;
     entry.top_field_marking == MARKING_LONG || entry.bottom_field_marking == MARKING_LONG

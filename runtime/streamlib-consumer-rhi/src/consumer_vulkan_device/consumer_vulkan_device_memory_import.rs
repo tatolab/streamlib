@@ -279,7 +279,6 @@ impl ConsumerVulkanDevice {
 
     /// Current number of live DMA-BUF imports through this device.
     /// Surfaced for tracing + leak detection on Drop.
-    #[allow(dead_code)]
     pub fn live_import_allocation_count(&self) -> usize {
         self.live_allocation_count.load(Ordering::Relaxed)
     }

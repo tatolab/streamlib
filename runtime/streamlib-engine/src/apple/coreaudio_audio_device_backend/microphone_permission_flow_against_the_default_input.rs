@@ -64,7 +64,10 @@ impl CaptureDeviceAuthorizationAuthority for AUserWhoAnswersOnCue {
 /// A request for the default input, or `None` when this Mac has none. The
 /// real gate must already allow the microphone: "allowed" binds a real
 /// unit, and against a real prompt that bind would wait on a person.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints why it cannot run for whoever reads the run"
+)]
 fn a_request_for_the_default_input() -> Option<AudioDeviceStreamRequest> {
     if default_device_object_id(CoreAudioStreamDirection::Capture).is_none() {
         println!("cannot run: CoreAudio lists no default input device");

@@ -1,8 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Ported C++ image pool — many fields/methods awaiting full integration
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "ported from the C++ image pool; not every field and method is wired in yet"
+)]
 
 //! Port of VulkanVideoImagePool.h + VulkanVideoImagePool.cpp
 //!
@@ -440,7 +442,10 @@ impl VulkanVideoImagePoolInner {
 /// (`pNext`, `pQueueFamilyIndices`).  Instead we keep the scalar fields we
 /// need and reconstruct the struct on demand.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields mirror VkImageCreateInfo for compatibility checks
+#[allow(
+    dead_code,
+    reason = "the fields mirror VkImageCreateInfo for compatibility checks"
+)]
 pub(crate) struct ImageCreateInfoSnapshot {
     s_type: vk::StructureType,
     flags: vk::ImageCreateFlags,

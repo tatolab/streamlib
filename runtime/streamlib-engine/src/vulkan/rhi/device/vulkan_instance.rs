@@ -101,7 +101,7 @@ impl HostVulkanInstance {
             .api_version(REQUESTED_VULKAN_INSTANCE_API_VERSION)
             .build();
 
-        #[allow(unused_mut)]
+        #[allow(unused_mut, reason = "only the macOS build adds the portability flag")]
         let mut instance_create_flags = vk::InstanceCreateFlags::empty();
 
         // On macOS/iOS, enable portability enumeration flag

@@ -68,9 +68,9 @@ struct ProcessLoggingPathway {
     record_queue: DrainWorkerRecordQueue,
     /// Never joined: the worker drains for the process's life.
     _drain_worker: WorkerHandle,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code, reason = "only Unix builds use it"))]
     dispatch: Dispatch,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code, reason = "only Unix builds use it"))]
     intercepts_the_standard_streams: bool,
     holds: Mutex<HoldsOnTheProcessLoggingPathway>,
 }
@@ -168,8 +168,10 @@ pub fn hold_the_process_logging_pathway(
             }
             ProcessLoggingPathwayInstallation::NotInstalled if host_owns_logging() => {
                 *installation = ProcessLoggingPathwayInstallation::DeferredToTheHost;
-                // Raw stderr: the subscriber is the host's, not ours to use.
-                #[allow(clippy::disallowed_macros)]
+                #[allow(
+                    clippy::disallowed_macros,
+                    reason = "the subscriber belongs to the host, so this one line goes to raw stderr"
+                )]
                 {
                     eprintln!(
                         "streamlib::logging: {}=1 — deferring all logging initialization to the \
@@ -251,7 +253,7 @@ pub(crate) fn request_a_best_effort_flush() {
 pub struct StreamlibLoggingGuard {
     worker: Option<WorkerHandle>,
     default_scope: Option<tracing::dispatcher::DefaultGuard>,
-    #[cfg_attr(not(unix), allow(dead_code))]
+    #[cfg_attr(not(unix), allow(dead_code, reason = "only Unix builds use it"))]
     dispatch: Dispatch,
     /// Dropped BEFORE the worker so the reader threads' tail events drain
     /// into the worker queue before shutdown.
@@ -295,7 +297,7 @@ impl Drop for StreamlibLoggingGuard {
 /// and by criterion benches measuring hot-path latency. A stream route opened
 /// on this thread while the guard lives writes through this pathway.
 pub fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLoggingGuard> {
-    #[cfg_attr(not(unix), allow(unused_mut))]
+    #[cfg_attr(not(unix), allow(unused_mut, reason = "only Unix builds mutate it"))]
     let mut guard = init_for_tests_intercepting_nothing_yet(&config)?;
     #[cfg(unix)]
     if config.intercept_stdio {
@@ -398,8 +400,7 @@ fn build_components(
                         ) as Box<dyn std::io::Write + Send>;
                     }
                     Err(e) => {
-                        // Pre-init error path: the subscriber does not exist yet.
-                        #[allow(clippy::disallowed_macros)]
+                        #[allow(clippy::disallowed_macros, reason = "the subscriber does not exist yet, so the error goes to raw stderr")]
                         {
                             eprintln!(
                                 "streamlib::logging: failed to copy the real standard streams \

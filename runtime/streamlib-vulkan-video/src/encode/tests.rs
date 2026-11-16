@@ -209,7 +209,6 @@ fn test_config_defaults() {
     assert_eq!(cfg.height, 0);
     assert_eq!(cfg.framerate_numerator, 30);
     assert_eq!(cfg.framerate_denominator, 1);
-    assert_eq!(cfg.codec, vk::VideoCodecOperationFlagsKHR::ENCODE_H264);
     assert_eq!(cfg.rate_control_mode, RateControlMode::Default);
     assert_eq!(cfg.average_bitrate, 5_000_000);
     assert_eq!(cfg.gop_size, 30);
@@ -543,19 +542,6 @@ fn test_simple_config_effective_prepend_header() {
     // Explicit override
     cfg.prepend_header_to_idr = Some(false);
     assert!(!cfg.effective_prepend_header());
-}
-
-#[test]
-fn test_simple_config_codec_h265() {
-    let cfg = SimpleEncoderConfig {
-        width: 640,
-        height: 480,
-        fps: 30,
-        codec: Codec::H265,
-        ..Default::default()
-    };
-    let enc = cfg.to_encode_config();
-    assert_eq!(enc.codec, vk::VideoCodecOperationFlagsKHR::ENCODE_H265);
 }
 
 #[test]

@@ -5,7 +5,10 @@
 //! `#[path = "common.rs"] mod common;` in each test file.
 
 #![cfg(target_os = "linux")]
-#![allow(dead_code)] // Each test file uses a different subset.
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;

@@ -4,7 +4,10 @@
 //! JSONL records as a runtime writes them into its log files, for the `logs` tests. Shared by the
 //! integration tests and, through `#[path]`, the unit tests.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use std::io::Write;
 use std::path::Path;

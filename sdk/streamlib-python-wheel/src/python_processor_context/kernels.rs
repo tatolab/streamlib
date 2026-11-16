@@ -30,7 +30,10 @@ use super::{gpu_unreachable_from_a_helper_process_error, left_by_a_propagating_e
 /// the same two fields whichever op asked for it.
 pub(crate) struct ReflectedKernelBinding {
     pub(crate) name: String,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(crate) kind: String,
 }
 
@@ -53,14 +56,23 @@ pub(super) fn reflected_binding_names(reflected: &[ReflectedKernelBinding]) -> V
 /// before reaching it.
 #[pyclass(name = "ComputeKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonComputeKernel {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) push_constant_size: u32,
     /// The caller supplies surfaces by name; which kind each name is, is the
     /// shader's to say, so it is carried rather than guessed per dispatch.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -142,9 +154,15 @@ impl PythonComputeKernel {
 struct RecordedKernelDispatch {
     /// Kept beside the entry rather than read back out of it, so refusing a
     /// repeated kernel cannot drift from the entry it refuses against.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     kernel_id: String,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     wire_entry: Py<PyDict>,
     /// Ordered when the batch runs, not when it records: torch can write
     /// between the two.
@@ -181,7 +199,10 @@ pub(super) struct KernelDispatchBatchRecording {
 #[pyclass(name = "KernelDispatchBatch", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonKernelDispatchBatch {
     /// `None` means this helper was started without its GPU channels.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
     pub(super) recording: Mutex<KernelDispatchBatchRecording>,
 }
@@ -346,14 +367,23 @@ impl PythonKernelDispatchBatch {
 /// reaching it.
 #[pyclass(name = "GraphicsKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGraphicsKernel {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) push_constant_size: u32,
     /// The caller supplies surfaces by name; which kind each name is, is the
     /// shaders' to say, so it is carried rather than guessed per draw.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -472,15 +502,24 @@ impl PythonGraphicsKernel {
 /// before reaching it.
 #[pyclass(name = "RayTracingKernel", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRayTracingKernel {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) push_constant_size: u32,
     /// The caller supplies targets by name; which kind each name is, is the
     /// shaders' to say, and it is also what decides whether a name takes a
     /// surface or an acceleration structure.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -549,12 +588,18 @@ impl PythonRayTracingKernel {
     frozen
 )]
 pub(crate) struct PythonAccelerationStructureHandle {
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) acceleration_structure_id: String,
     /// Which of the two builders minted this, so binding a bottom-level
     /// structure at a trace — or instancing a top-level one — refuses in the
     /// caller's own stack.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        expect(dead_code, reason = "only the Linux and macOS builds use it")
+    )]
     pub(super) is_top_level: bool,
     pub(super) structure_label: String,
     /// The release this handle owes the engine, paid on drop. `None` only in

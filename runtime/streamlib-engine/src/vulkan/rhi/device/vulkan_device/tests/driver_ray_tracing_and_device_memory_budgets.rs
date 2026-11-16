@@ -64,7 +64,10 @@ fn ray_tracing_on_a_device_without_it_refuses_rather_than_panicking() {
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_buffer_still_allocates()
  {
     use crate::core::rhi::{TextureFormat, TextureUsages};
@@ -142,7 +145,10 @@ fn a_frame_texture_past_a_budget_with_no_room_left_is_refused_while_an_engine_bu
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn every_vma_frame_constructors_refusal_names_the_heap_its_allocation_lands_on() {
     use crate::core::rhi::{TextureFormat, TextureUsages};
     use crate::vulkan::rhi::HostVulkanBuffer;
@@ -343,7 +349,10 @@ fn every_vma_frame_constructors_refusal_names_the_heap_its_allocation_lands_on()
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn the_heap_budget_the_device_reads_falls_while_another_process_holds_a_large_cuda_allocation() {
     use std::io::{BufRead as _, BufReader};
     use std::process::{Command, Stdio};

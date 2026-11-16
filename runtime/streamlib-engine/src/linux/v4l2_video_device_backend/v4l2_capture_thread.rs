@@ -43,7 +43,6 @@ impl CaptureFormat {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn capture_thread_loop(
     mut stream: v4l::io::mmap::Stream,
     is_capturing: Arc<AtomicBool>,

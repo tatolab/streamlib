@@ -46,7 +46,10 @@ pub struct SkiaGlWriteView<'g> {
     /// own its backing texture by refcount on the GL side — the
     /// `BackendTexture` value owns the wrap-state, and dropping it
     /// before the surface is invalid.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "held so the wrapped texture drops after the surface that wraps it"
+    )]
     pub(crate) backend_texture: skia_safe::gpu::BackendTexture,
 }
 

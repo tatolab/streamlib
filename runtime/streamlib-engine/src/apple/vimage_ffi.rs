@@ -7,7 +7,8 @@
     dead_code,
     non_snake_case,
     non_upper_case_globals,
-    non_camel_case_types
+    non_camel_case_types,
+    reason = "vImage FFI bindings keep the C names and declare more than the engine calls"
 )]
 
 use std::ffi::c_void;

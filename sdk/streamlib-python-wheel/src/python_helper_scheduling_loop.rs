@@ -53,7 +53,10 @@ const TAKE_THE_LIFECYCLE_COMMANDS_THAT_WOKE_THE_SCHEDULING_LOOP_METHOD: &str =
     stream_clock_may_step,
     paused,
 ))]
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate piece of the helper's scheduling state"
+)]
 pub(crate) fn run_the_scheduling_loop_of_this_helper(
     python: Python<'_>,
     processor_interpreter: Py<PyAny>,

@@ -50,11 +50,17 @@ pub(crate) use runtime_unit_layout::{
 use std::path::{Path, PathBuf};
 
 #[path = "../../../runtime/streamlib-engine/src/core/engine_build_id_composition.rs"]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "xtask shares the engine's source file and uses part of it"
+)]
 mod engine_build_id_composition;
 
 #[path = "../../../runtime/streamlib-consumer-rhi/src/runtime_unit_layout.rs"]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "xtask shares the consumer RHI's source file and uses part of it"
+)]
 mod runtime_unit_layout;
 
 /// Where `cargo xtask build-runtime` lays out the runtime unit, relative to the

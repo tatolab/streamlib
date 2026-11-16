@@ -196,7 +196,10 @@ enum SurfaceExportStagingMemory {
     /// An OPAQUE_FD `VkBuffer`, device-local or host-visible.
     OpaqueFdBuffer(Arc<HostVulkanBuffer>),
     /// A DMA-BUF image with an explicit tiled modifier, for a display.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux build uses it")
+    )]
     DisplayImportableImage(Texture),
 }
 
@@ -405,7 +408,10 @@ struct SurfaceExportStagingShape {
     backing_kind_at_mint: SurfaceExportStagingBackingKindAtMint,
     /// The image format a display's staging of this source is allocated
     /// in, `None` where no single-plane colour format carries it.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        allow(dead_code, reason = "only the Linux build uses it")
+    )]
     display_importable_image_format: Option<TextureFormat>,
 }
 

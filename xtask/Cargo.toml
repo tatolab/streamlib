@@ -66,4 +66,5 @@ quote = "1"
 
 # stdout and stderr are the output channel of a development tool.
 [lints.clippy]
+allow_attributes_without_reason = "deny"
 disallowed_macros = "allow"

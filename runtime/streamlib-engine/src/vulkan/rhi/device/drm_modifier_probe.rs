@@ -171,7 +171,7 @@ impl DrmModifierTable {
 /// We dlopen libEGL and call extension functions via `eglGetProcAddress`, so
 /// no `khronos-egl` dep is required and a missing libEGL becomes a graceful
 /// `ProbeError::LibraryNotFound` rather than a link-time failure.
-#[allow(non_camel_case_types)]
+#[allow(non_camel_case_types, reason = "the EGL bindings keep the C names")]
 mod egl {
     use std::ffi::c_void;
 

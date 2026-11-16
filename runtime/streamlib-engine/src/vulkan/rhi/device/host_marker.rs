@@ -11,8 +11,7 @@
 //! satisfied: at least one of the trait or the impl-target type is
 //! local.
 //!
-//! [`crate::vulkan::rhi::ConsumerMarker`] (the consumer flavor) is
-//! re-exported from `streamlib_consumer_rhi`.
+//! `streamlib_consumer_rhi::ConsumerMarker` is the consumer flavor.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::{DevicePrivilege, private as consumer_rhi_private};

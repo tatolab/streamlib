@@ -11,7 +11,10 @@
 //!
 //! Reports to the parent on stdout, one line per event.
 
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a helper binary reports to its parent test on stdout"
+)]
 
 /// The Mach channel and IOSurface are macOS-only, so elsewhere the binary
 /// exists to keep the target compiling and nothing drives it.

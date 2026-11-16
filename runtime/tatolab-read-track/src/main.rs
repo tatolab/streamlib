@@ -8,8 +8,10 @@
 //! track its `MoqTrack` names in the broadcast `<broadcast>.hang` its `MoqGateway` publishes.
 //! A relay URL carrying a credential is read from stdin with `-`, never an argument.
 
-// stderr is this tool's progress and refusal channel, as it is the CLI's.
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "stderr is this tool's progress and refusal channel"
+)]
 
 mod relay_track_object_dump;
 

@@ -9,9 +9,8 @@ use super::*;
 /// the compiler op's subprocess branches do.
 ///
 /// Shared so the wiring a disconnect has to undo is byte-for-byte the
-/// wiring the connect laid down; the arguments are positional and both
-/// helpers carry `#[allow(clippy::too_many_arguments)]`, so a second copy
-/// is a slip waiting to happen.
+/// wiring the connect laid down; both helpers take many positional
+/// arguments, so a second copy is a slip waiting to happen.
 fn record_wiring_for_both_out_of_process_endpoints(
     graph: &mut Graph,
     source_id: &str,

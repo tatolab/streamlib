@@ -13,7 +13,10 @@
 //! This binary necessarily uses raw stdout/stderr (not tracing!) to
 //! communicate with the parent test harness — routing through tracing
 //! would land bytes in the pipeline under measurement.
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "the helper reports on stdout so its bytes stay out of the logging pipeline under measurement"
+)]
 
 use streamlib_engine::logging::{
     LoggingTunables, ProjectLogRouteEntry, StreamlibLoggingConfig, init_for_tests,

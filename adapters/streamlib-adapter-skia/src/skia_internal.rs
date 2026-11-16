@@ -117,7 +117,7 @@ pub(crate) fn drop_skia_image_under_lock(
 macro_rules! assert_skia_views_not_cpu_readable {
     ($module:ident, $($ty:ty),+ $(,)?) => {
         mod $module {
-            #[allow(unused_imports)]
+            #[allow(unused_imports, reason = "a module this macro generates may name nothing from its parent")]
             use super::*;
             use streamlib_surface_adapter::CpuReadable;
 
@@ -125,7 +125,7 @@ macro_rules! assert_skia_views_not_cpu_readable {
                 fn some_item() {}
             }
             impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-            #[allow(dead_code)]
+            #[allow(dead_code, reason = "the marker type only steers trait resolution in a compile-time assertion; nothing constructs it")]
             struct Invalid;
             impl<T: ?Sized + CpuReadable> AmbiguousIfImpl<Invalid> for T {}
 

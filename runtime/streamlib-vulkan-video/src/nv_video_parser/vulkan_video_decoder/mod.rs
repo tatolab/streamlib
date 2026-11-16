@@ -1279,7 +1279,7 @@ impl VulkanVideoDecoder {
     /// `VulkanVideoDecoder::ParseByteStreamSimd<NOSIMD>` (the C fallback).
     ///
     /// Returns `(success, parsed_bytes)`.
-    #[allow(unused_assignments)]
+    #[allow(unused_assignments, reason = "ported C++ control flow")]
     pub fn parse_byte_stream(
         &mut self,
         pck: &BitstreamPacket,

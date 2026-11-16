@@ -1,15 +1,34 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-// Suppress pedantic clippy warnings that are intentional design choices
-#![allow(clippy::too_many_arguments)] // Some APIs need many parameters (e.g., video encoding config)
-#![allow(clippy::type_complexity)] // Complex types are clear in context
-#![allow(clippy::missing_safety_doc)] // Safety documented in implementation comments
-#![allow(clippy::arc_with_non_send_sync)] // Used intentionally for specific threading patterns
-#![allow(clippy::wrong_self_convention)] // to_* methods with Copy types are intentional
-#![allow(clippy::collapsible_match)] // Nested matches are clearer in some cases
-#![allow(clippy::manual_clamp)] // Manual clamp is sometimes clearer
-#![allow(clippy::should_implement_trait)] // Method names like `default` are contextually clear
+#![allow(
+    clippy::too_many_arguments,
+    reason = "some engine APIs take many independent parameters, such as a video encoding config"
+)]
+#![allow(
+    clippy::type_complexity,
+    reason = "the engine's nested generic types read clearly where they are used"
+)]
+#![allow(
+    clippy::missing_safety_doc,
+    reason = "safety contracts are documented in the implementation comments"
+)]
+#![allow(
+    clippy::wrong_self_convention,
+    reason = "to_* methods on Copy types take self by value on purpose"
+)]
+#![allow(
+    clippy::collapsible_match,
+    reason = "nested matches read more clearly in some places"
+)]
+#![allow(
+    clippy::manual_clamp,
+    reason = "a written-out clamp reads more clearly in some places"
+)]
+#![allow(
+    clippy::should_implement_trait,
+    reason = "some method names match a std trait's without implementing it"
+)]
 
 // Allow `::streamlib::` paths to work inside this crate (for proc macro generated code)
 extern crate self as streamlib;

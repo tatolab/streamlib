@@ -95,7 +95,10 @@ fn a_private_iosurface_too_large_to_count_requests_every_byte_and_is_refused_pas
 // A device-gated test that finds no device passes trivially, so the skip has
 // to reach the person reading the run — and stdout is the only channel a test
 // harness surfaces.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn host_vulkan_device_on_moltenvk_or_skip() -> Option<Arc<HostVulkanDevice>> {
     match HostVulkanDevice::new() {
         Ok(device) => Some(device),
@@ -129,7 +132,10 @@ fn metal_current_allocated_bytes(device: &HostVulkanDevice) -> u64 {
 /// Metal's own growth for a plain, VMA-allocated image of the frame's extent:
 /// the reference that tells a doubled IOSurface delta apart from MoltenVK
 /// backing a raw `vkAllocateMemory` with a Metal allocation of its own.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn print_what_a_plain_image_of_the_frames_extent_adds_to_metals_count(
     device: &Arc<HostVulkanDevice>,
 ) {
@@ -163,7 +169,10 @@ fn assert_counted_once_in_the_working_set(
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usage() {
     let Some(device) = host_vulkan_device_on_moltenvk_or_skip() else {
         return;
@@ -199,7 +208,10 @@ fn an_iosurface_backed_vulkan_image_is_counted_once_in_the_metal_working_set_usa
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn an_iosurface_backed_pixel_buffer_is_counted_once_in_the_metal_working_set_usage() {
     let Some(device) = host_vulkan_device_on_moltenvk_or_skip() else {
         return;

@@ -1,7 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#![allow(clippy::disallowed_macros)] // codegen binary: stdout is the output channel
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a codegen binary: stdout is its output channel"
+)]
 
 //! Generates JSON Schema files for streamlib API responses.
 //!

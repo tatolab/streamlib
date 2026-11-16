@@ -28,16 +28,25 @@ use streamlib_consumer_rhi::ConsumerVulkanDevice;
 use streamlib_surface_adapter::{VulkanImageInfoExt, VulkanWritable};
 
 trait AmbiguousIfImpl<A> {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "the trait item exists only to make resolution ambiguous; nothing calls it"
+    )]
     fn some_item() {}
 }
 impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the marker type only steers trait resolution in a compile-time assertion; nothing constructs it"
+)]
 struct ImplsVulkanWritable;
 impl<T: ?Sized + VulkanWritable> AmbiguousIfImpl<ImplsVulkanWritable> for T {}
 
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "the marker type only steers trait resolution in a compile-time assertion; nothing constructs it"
+)]
 struct ImplsVulkanImageInfoExt;
 impl<T: ?Sized + VulkanImageInfoExt> AmbiguousIfImpl<ImplsVulkanImageInfoExt> for T {}
 
