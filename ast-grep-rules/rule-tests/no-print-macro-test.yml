@@ -1,0 +1,26 @@
+id: no-print-macro
+valid:
+  - "fn f() { tracing::info!(\"ready\"); }"
+  - "fn f() { let s = format!(\"{}\", 1); }"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn f() { println!("ready"); }
+    }
+  - |
+    #[allow(clippy::disallowed_macros)]
+    fn f() { println!("ready"); }
+  - |
+    #![allow(clippy::disallowed_macros)]
+    fn f() { dbg!(1); }
+  - "// println!(\"ready\")"
+invalid:
+  - "fn f() { println!(\"ready\"); }"
+  - "fn f() { eprintln!(\"ready\"); }"
+  - "fn f() { print!(\"ready\"); }"
+  - "fn f() { eprint!(\"ready\"); }"
+  - "fn f() { let x = dbg!(1); }"
+  - "fn f() { std::println!(\"ready\"); }"
+  - |
+    #[allow(dead_code)]
+    fn f() { println!("ready"); }

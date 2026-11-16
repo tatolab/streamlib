@@ -50,7 +50,7 @@ struct HelperResponse {
 
 // A test fixture the harness spawns and reads stderr from, with no tracing
 // subscriber installed — `tracing::error!` here would go nowhere, so stderr is
-// the mechanism rather than a lapse. `xtask lint-logging` already exempts this
+// the mechanism rather than a lapse. The `no-print-macro` rule already ignores this
 // file by its `tests/` path; the allow is what makes clippy agree, now that
 // clippy runs in CI.
 #[allow(

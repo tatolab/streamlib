@@ -3,8 +3,8 @@
 
 // A build-time codegen binary run by hand or by `control-plane-client.yml`, never inside a
 // runtime: it has no `tracing` subscriber to emit through, and its one line of
-// output tells the operator where the artifact landed. The engine's
-// `lint-logging` gate honours this attribute as its sanctioned allowance.
+// output tells the operator where the artifact landed. The `no-print-macro`
+// ast-grep rule honours this attribute as its sanctioned allowance.
 #![allow(clippy::disallowed_macros)]
 
 //! Writes the control plane's OpenAPI spec to `dist/schemas/openapi.json`.

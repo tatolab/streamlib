@@ -411,7 +411,6 @@
 1 no-inline-test-module xtask/src/check_workspace_version_pins.rs
 1 no-inline-test-module xtask/src/generate_module_host_table_c_header.rs
 1 no-inline-test-module xtask/src/generate_runtime_client.rs
-1 no-inline-test-module xtask/src/lint_logging.rs
 1 no-inline-test-module xtask/src/psnr.rs
 1 no-inline-test-module xtask/src/runtime_client_zod_schemas.rs
 1 no-inline-test-module xtask/src/sign_the_carried_packages_with_a_developer_id.rs
