@@ -107,11 +107,6 @@ impl VulkanTextureReadback {
         let queue_family_index = vulkan_device.queue_family_index();
         let device = vulkan_device.device().clone();
 
-        // ---- Staging buffer (VMA default allocator, HOST_VISIBLE | HOST_COHERENT, persistent-mapped) ----
-        // Non-export readback — no DMA-BUF, no custom pool. The VMA
-        // default allocator is the right fit; the export pool isolation
-        // pattern in `vma-export-pools.md` is for exportable
-        // allocations only.
         let buffer_info = vk::BufferCreateInfo::builder()
             .size(bytes)
             .usage(vk::BufferUsageFlags::TRANSFER_DST)
@@ -276,10 +271,6 @@ impl VulkanTextureReadback {
             });
         }
 
-        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
-        // panics under `host_callbacks().is_some()`. Route through the
-        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
-        // trip the panic guard.
         let host_texture =
             texture
                 .host_vulkan_texture_arc()

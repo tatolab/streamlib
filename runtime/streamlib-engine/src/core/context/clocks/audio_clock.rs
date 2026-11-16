@@ -371,7 +371,6 @@ mod tests {
         clock_name: &str,
     ) {
         let tick_timestamp_ns = run_until_first_tick_then_stop(clock);
-        // The call the engine's default frame stamp makes (`iceoryx2/output.rs`).
         let frame_timestamp_ns = MediaClock::now().as_nanos() as i64;
 
         let frame_minus_tick_ns = frame_timestamp_ns - tick_timestamp_ns;

@@ -434,19 +434,6 @@ impl std::fmt::Debug for RhiColorConverterInner {
 // Public handle
 // =============================================================================
 
-/// Stateless color converter — a `(src, dst)`-keyed handle that knows
-/// how to convert pixel buffers / textures of the source format into
-/// the destination format, with per-frame [`ResolvedColorInfo`] driving
-/// the math via push constants.
-///
-/// Layout-stable: `#[repr(C)] (handle, vtable, methods_vtable)`. Cdylibs
-/// can hold, refcount, and drop without sharing rustc-version or dep-
-/// graph with the host. The opaque handle points at an
-/// `Arc<RhiColorConverterInner>`; lifecycle dispatches through the
-/// host-installed FullAccess vtable's `clone_color_converter` /
-/// `drop_color_converter` callbacks, and method calls
-/// (`prepare_buffer_to_image_storage`) dispatch through the per-type
-/// `methods_vtable` (Phase E sub-lift slice A).
 #[repr(C)]
 pub struct RhiColorConverter {
     /// Opaque handle to the host's `Arc<RhiColorConverterInner>`.

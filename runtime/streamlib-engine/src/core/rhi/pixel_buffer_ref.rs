@@ -72,13 +72,6 @@ impl PixelBufferRef {
         self.bytes_per_pixel
     }
 
-    /// Number of DMA-BUF planes backing this pixel buffer.
-    ///
-    /// `1` for VMA-allocated buffers and single-plane DMA-BUF imports.
-    /// `N` for multi-plane imports — mirror of
-    /// `slpn_gpu_surface_plane_count` / `sldn_gpu_surface_plane_count`
-    /// on the polyglot shim side. On an unsupported platform this always
-    /// reports `1`.
     pub fn plane_count(&self) -> u32 {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {

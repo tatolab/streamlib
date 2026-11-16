@@ -706,8 +706,6 @@ impl HelperProcessGpuExchangeClient {
         )))
     }
 
-    /// One frame checked out over `pool_slot_import`, owing
-    /// `release_check_out_to_surface_share`.
     fn frame_checked_out_over_a_pool_slot_import(
         self: &Arc<Self>,
         surface_id: &str,

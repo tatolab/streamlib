@@ -124,10 +124,6 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
             session.produce_done.as_ref(),
             session.signal_value,
         ) {
-            // Submit failed; clear write_held. State.current_release_value
-            // stays advanced — monotonicity is preserved (the next
-            // attempt picks a higher value); only a single value-gap is
-            // left in the timeline sequence, which is harmless.
             self.surfaces.rollback_write(id);
             return Err(e);
         }

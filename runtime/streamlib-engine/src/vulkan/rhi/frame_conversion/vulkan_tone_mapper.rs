@@ -91,37 +91,6 @@ impl VulkanToneMapper {
         kernel.dispatch(dispatch_x, dispatch_y, 1)
     }
 
-    /// Apply tone curve with caller-declared current layouts, recording
-    /// the `→ GENERAL` pre-barriers + dispatch + post-barriers in one
-    /// engine-owned command buffer; submits and waits before returning.
-    /// Each texture's terminal layout is chosen from its create-time
-    /// usage — `SHADER_READ_ONLY_OPTIMAL` when the image is
-    /// sampled-capable, `GENERAL` otherwise (SROO on an image without
-    /// `SAMPLED` / `INPUT_ATTACHMENT` usage violates
-    /// VUID-VkImageMemoryBarrier2-oldLayout-01211) — and returned as
-    /// [`ToneMapperFinalTextureLayouts`].
-    ///
-    /// Used by [`crate::core::context::GpuContext`] consumers (e.g.,
-    /// the `BlendingCompositor` per-acquire conversion) that don't
-    /// already own a surrounding [`RhiCommandRecorder`] but do need
-    /// honest layout management around the dispatch.
-    ///
-    /// Caller contract:
-    /// - `src` and `dst` must reference distinct VkImages — in-place
-    ///   tone-map is not supported; passing the same handle returns
-    ///   `Err(Error::Configuration)`.
-    /// - The declared current layouts must be layouts the images'
-    ///   usage permits — `SHADER_READ_ONLY_OPTIMAL` declared for an
-    ///   image without `SAMPLED` / `INPUT_ATTACHMENT` usage returns
-    ///   `Err(Error::Configuration)`.
-    /// - The helper does not touch
-    ///   [`crate::core::context::TextureRegistration`]; the caller
-    ///   updates any associated registration with the returned
-    ///   terminal layouts after the call.
-    ///
-    /// For consumers that already drive their own recorder, prefer
-    /// [`Self::prepare`] + their recorder's `record_image_barrier` +
-    /// `record_dispatch` to avoid the extra submit/wait round-trip.
     pub(crate) fn apply_with_layouts(
         &self,
         src: &Texture,

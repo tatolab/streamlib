@@ -653,14 +653,6 @@ fn a_host_with_an_out_of_process_transport_is_recognised_as_a_subprocess() {
     assert!(out_of_process_link_wiring_of(&graph, &engine_hosted_id.as_str().into()).is_none());
 }
 
-/// A link with one endpoint in each world reclaims each end its own way —
-/// the branch is per endpoint, not per link. This is the shape the MVP
-/// graph is actually made of: a Python helper wired to a native built-in.
-///
-/// Revert lock: key either branch off the *other* endpoint (or off
-/// `source_is_subprocess || dest_is_subprocess`) and one side is reclaimed
-/// through machinery it does not own — the engine-side publisher survives,
-/// or the helper is never told.
 #[test]
 fn a_link_between_an_engine_endpoint_and_a_helper_reclaims_each_its_own_way() {
     use crate::core::test_support::MockOutputOnlyNode;

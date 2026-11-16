@@ -4,9 +4,6 @@
 1 no-inline-test-module adapters/streamlib-adapter-opengl/src/egl.rs
 1 no-inline-test-module adapters/streamlib-surface-adapter/src/registry.rs
 1 no-inline-test-module adapters/streamlib-surface-adapter/src/surface.rs
-1 no-inline-test-module packages/clap/nodes/parameter_automation.rs
-1 no-inline-test-module packages/clap/nodes/parameter_modulation.rs
-1 no-inline-test-module packages/clap/nodes/plugin_info.rs
 1 no-inline-test-module packages/streamlib-webrtc/src/h264_rtp_depacketiser.rs
 1 no-inline-test-module packages/streamlib-webrtc/src/h264_sequence_parameter_set.rs
 2 no-inline-test-module packages/streamlib-webrtc/src/http_signalling.rs
@@ -418,8 +415,6 @@
 1 no-inline-test-module xtask/src/stage_runtime_unit_carried_packages.rs
 1 no-inline-test-module xtask/src/stage_runtime_unit_uv.rs
 1 no-inline-test-module xtask/src/stage_sample_projects.rs
-6 no-path-attribute packages/clap/_generated_rust_crate_root_/lib.rs
-1 no-path-attribute packages/screen-capture/_generated_rust_crate_root_/lib.rs
 9 no-path-attribute packages/test-fixtures/src/lib.rs
 1 no-path-attribute runtime/streamlib-engine/src/core/test_support.rs
 1 no-path-attribute runtime/streamlib-project-repository/src/project_store.rs

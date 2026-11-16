@@ -39,23 +39,6 @@ use super::{
 };
 
 impl HostVulkanDevice {
-    /// Create the engine's Vulkan device on the first physical device it can
-    /// build on, in the loader's order with CPU-type devices last, logging
-    /// every device passed over and why.
-    ///
-    /// On macOS/iOS, this loads MoltenVK and enables VK_EXT_metal_objects
-    /// for Metal interoperability.
-    ///
-    /// Returns the device wrapped in [`Arc`] because construction runs
-    /// engine init-time invariants that need [`Arc<Self>`] to call back
-    /// into the public RHI constructors — most importantly, every
-    /// export-capable VMA pool (DMA-BUF + OPAQUE_FD) is pre-warmed so
-    /// the underlying [`vk::DeviceMemory`] block exists before any
-    /// swapchain is created. NVIDIA's Linux driver caps fresh
-    /// exportable allocations after a swapchain has been bound (see
-    /// NVIDIA's DMA-BUF export cap after a swapchain
-    /// and `nvidia-opaque-fd-after-swapchain.md`); pre-warming here
-    /// removes that footgun for every consumer at the engine layer.
     pub fn new() -> Result<Arc<Self>> {
         let vulkan_instance = Arc::new(HostVulkanInstance::new()?);
 

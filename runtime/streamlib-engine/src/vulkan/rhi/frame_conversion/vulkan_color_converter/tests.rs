@@ -47,61 +47,6 @@ fn new_rejects_unsupported_dst_format() {
     assert!(matches!(err, Error::NotSupported(_)));
 }
 
-// ---- GPU-output bit-exact regression coverage ----
-//
-// Restores the regression coverage deleted with
-// `VulkanFormatConverter::tests::nv12_full_range_to_bgra_matches_cpu_reference`
-// in #823. The deleted test's CPU reference used hardcoded
-// BT.601-Full coefficients (1.402 / 0.344136 / 0.714136 / 1.772),
-// which made it independent of any production matrix code — a
-// bug in the production matrix would fail the test. This file
-// preserves that property: each test passes its hardcoded
-// matrix + offset into [`cpu_reference_rgba`] as plain `[f32; 9]`
-// + `[f32; 3]`, NOT through `yuv_to_rgb_matrix`. The shader-side
-// values come from `yuv_to_rgb_matrix` via push constants, so a
-// regression in the Rust matrix shifts only the GPU side and the
-// test fails.
-//
-// Transfer functions stay routed through `core::color::transfer`
-// because the Slang has independent closed-form implementations
-// in `color_convert_common.slang` — Rust-vs-Slang drift is the
-// failure mode the transfer-path test below catches, and that
-// requires both implementations to be independently authored.
-//
-// The math chain mirrors `convert_color` in
-// `vulkan/rhi/shaders/color_convert_common.slang`:
-//   1. `c = ycbcr_byte - range_offset`
-//   2. `rgb_byte = M * c` (3×3 row-major matrix)
-//   3. `rgb = clamp(rgb_byte / 255, 0, 1)`
-//   4. if `transfer_in != transfer_out`:
-//         `rgb = from_linear(out, to_linear(in, rgb))`  per channel
-//
-// What these tests catch:
-//   - `ColorConverterPushConstants` std430 field ORDER / SIZE
-//     drift. Confirmed by negative-test: zeroing the Y component
-//     of `range_offset` in `from_resolved` fails the BT.709-limited
-//     and BT.709→sRGB tests with thousands of pixel mismatches.
-//   - `yuv_to_rgb_matrix` / `range_scaling` coefficient
-//     regressions — CPU reference is hardcoded, GPU pulls
-//     through the production path, any divergence is caught.
-//   - Shader's NV12 stride math (`read_byte` packed-uint
-//     extraction + `plane0_stride_bytes` / `plane1_stride_bytes`
-//     / `plane1_offset_bytes` walks).
-//   - Slang ↔ Rust drift in the transfer functions
-//     (`color_convert_common.slang` vs `core::color::transfer`).
-//   - `imageStore` correctness on `rgba8` storage image (UNORM
-//     rounding within ±1 of the CPU reference).
-//   - The `UNDEFINED → GENERAL` layout transition on the output
-//     texture (without it the dispatch is spec-illegal).
-//
-// Out of scope (locked by their own unit-test layers):
-//   - `core::color::matrix::tests` independently locks matrix
-//     coefficients with hardcoded golden values per
-//     (matrix, range) tuple — the source of truth this file's
-//     hardcoded matrices were taken from.
-//   - `core::color::transfer::tests` locks Rust-side transfer
-//     math via round-trip + known-points.
-
 /// Hardcoded matrix + offset for a `(MatrixId, RangeId)` tuple.
 /// Source: H.273 / ITU-T canonical coefficients (same numbers
 /// `core::color::matrix::tests` independently locks).
@@ -212,13 +157,6 @@ fn build_deterministic_nv12(width: u32, height: u32) -> Vec<u8> {
     buf
 }
 
-/// Allocate an `Rgba8Unorm` storage texture with `STORAGE | COPY_SRC
-/// | COPY_DST` usage, transition it from `UNDEFINED` to `GENERAL` so
-/// the converter's `imageStore` is spec-legal, and return it.
-///
-/// Mirrors the `make_filled_texture` UNDEFINED→GENERAL one-shot in
-/// `vulkan_texture_readback.rs::tests`; this variant skips the fill
-/// step because the converter dispatch will write every pixel.
 fn allocate_storage_target_in_general(
     device: &Arc<HostVulkanDevice>,
     width: u32,

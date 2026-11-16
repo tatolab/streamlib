@@ -114,12 +114,6 @@ impl HostVulkanTexture {
             ..Default::default()
         };
 
-        // Prefer the dedicated tiled DMA-BUF image pool; fall back to the
-        // default allocator (still with the export-info pNext chain) only
-        // when external memory isn't supported. The pool's underlying
-        // `VkDeviceMemory` block is pre-warmed at `HostVulkanDevice::new()`
-        // (see `nvidia-dma-buf-after-swapchain.md`), so the post-swapchain
-        // NVIDIA cap doesn't apply to the pooled path.
         let (image, allocation) = vulkan_device
             .create_frame_image_within_the_device_memory_budget(
                 admission,

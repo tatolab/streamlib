@@ -5,7 +5,6 @@
 3 CLAUDE.md  # the glossary line that bans the word
 2 THIRD-PARTY-NOTICES.appendix.md  # third-party licence text
 3 THIRD-PARTY-NOTICES.md  # third-party licence text
-15 packages/clap/nodes/host.rs  # the clack host API's audio processor (StartedPluginAudioProcessor, AudioProcessor)
 8 packages/streamlib-webrtc/CHANGELOG.md  # release history, written before the rename
 2 packages/tatolab-browser/streams/page-mixes-inputs/page_mixing_inputs.html  # the WebCodecs MediaStreamTrackProcessor API
 19 scripts/check_processor_word.py  # the lint itself

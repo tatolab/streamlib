@@ -149,11 +149,6 @@ pub trait CpuReadbackCopyTrigger<P: DevicePrivilege>: Send + Sync {
     ) -> Result<u64, AdapterError>;
 }
 
-/// CPU-readback `SurfaceAdapter`, generic over device flavor.
-///
-/// Construct with the appropriate trigger:
-/// - In-process Rust caller (host flavor): `CpuReadbackSurfaceAdapter::new(host_device, Arc::new(InProcessCpuReadbackCopyTrigger::new(host_device)))`.
-/// - Subprocess cdylib (consumer flavor): `CpuReadbackSurfaceAdapter::new(consumer_device, Arc::new(EscalateTrigger::new(escalate_pipe)))`.
 pub struct CpuReadbackSurfaceAdapter<D: VulkanRhiDevice> {
     device: Arc<D>,
     surfaces: Registry<SurfaceState<D::Privilege>>,

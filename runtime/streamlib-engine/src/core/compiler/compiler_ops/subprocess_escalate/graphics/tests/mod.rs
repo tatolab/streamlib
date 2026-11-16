@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Host-Rust unit tests for the `register_graphics_kernel` /
-//! `run_graphics_draw` escalate handlers.
-//!
-//! Mirrors `compute_kernel_dispatch`: the binding planner and the wire→RHI
-//! pipeline-state translation are pure functions that run everywhere CI
-//! does, and only the tests that build a real pipeline need a device.
-
 use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::{SPIRV_MAGIC_LE, registered_shader_stage_source};

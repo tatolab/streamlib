@@ -496,7 +496,6 @@ fn test_ring_texture_lifecycle() {
     let desc = TextureDescriptor::new(1920, 1080, TextureFormat::Rgba8Unorm)
         .with_usage(TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING);
 
-    // Create 2 ring textures (matches RING_TEXTURE_COUNT)
     let t0 = HostVulkanTexture::new(&device, &desc).expect("ring texture 0 failed");
     let t1 = HostVulkanTexture::new(&device, &desc).expect("ring texture 1 failed");
 

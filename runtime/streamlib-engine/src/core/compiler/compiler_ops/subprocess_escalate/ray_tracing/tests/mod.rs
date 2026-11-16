@@ -1,14 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Host-Rust unit tests for the acceleration-structure and ray-tracing
-//! escalate handlers.
-//!
-//! Mirrors `graphics_kernel_dispatch`: the wire validation that raises
-//! before the device gate runs everywhere CI does, and everything that
-//! builds a structure or a pipeline gates on a device that exposes the
-//! ray-tracing extension chain.
-
 use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::SPIRV_MAGIC_LE;

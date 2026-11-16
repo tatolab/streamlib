@@ -1,22 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Same-thread reentrance contract for `EglRuntime::lock_make_current`
-//! and `EglRuntime::arc_lock_make_current`.
-//!
-//! Nested acquire patterns surface in real consumers: e.g.
-//! AvatarCharacter Linux's `acquire_write(out)` → `_ensure_render_state`
-//! → `acquire_read_external_oes(camera)` chain takes an outer EGL lock
-//! through the cdylib's per-acquire `arc_lock_make_current`, then the
-//! inner `register_external_oes_host_surface` calls `lock_make_current`
-//! again on the same thread. The non-reentrant `parking_lot::Mutex`
-//! that previously backed `make_current_lock` deadlocked that pattern
-//! before #626's fix.
-//!
-//! These tests pin the same-thread reentrance contract so any future
-//! refactor of the lock primitive surfaces a regression here instead
-//! of in a downstream subprocess pipeline.
-
 #![cfg(target_os = "linux")]
 
 #[path = "common.rs"]

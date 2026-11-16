@@ -291,10 +291,6 @@ mod tests {
         strip_every_debug_name_from_spirv_module,
     };
 
-    // SPIR-V test fixtures live next to `vulkan_compute_kernel.rs` and are
-    // built by `libs/streamlib/build.rs`. Reflection is a host-architecture
-    // operation (no GPU required), so these tests run anywhere `streamlib`
-    // builds.
     fn blend_spv(input_count: u32) -> &'static [u8] {
         match input_count {
             1 => include_bytes!(concat!(env!("OUT_DIR"), "/test_blend_1.spv")),

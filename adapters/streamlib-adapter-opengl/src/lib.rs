@@ -1,33 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! OpenGL/EGL surface adapter — host-allocated `VkImage` consumed as a
-//! render-target-capable `GL_TEXTURE_2D`.
-//!
-//! The adapter imports a DMA-BUF FD with the host-chosen DRM modifier
-//! via `EGL_EXT_image_dma_buf_import_modifiers` and binds the resulting
-//! `EGLImage` via `glEGLImageTargetTexture2DOES`. The customer sees only
-//! a `gl_texture_id: u32` and uses it as both a sampler and an FBO color
-//! attachment — the NVIDIA `external_only=TRUE` quirk for linear
-//! DMA-BUFs
-//! never reaches them because the host allocator already picked a
-//! tiled, render-target-capable modifier.
-//!
-//! **Y-axis convention** — the imported `GL_TEXTURE_2D` is backed by a
-//! `VkImage` that downstream Vulkan consumers (display, encoders) read
-//! with origin at top-left, while GL writes to an FBO with origin at
-//! bottom-left. Producers MUST render Vulkan-conventional or the
-//! consumer sees an upside-down image (#621). See [`OpenGlWriteView`]
-//! for the full convention and the `pose_overlay_renderer.py` example
-//! for an in-tree reference.
-//!
-//! **Absent on macOS.** The seam is EGL and DMA-BUF, and OpenGL is
-//! deprecated there; a native macOS consumer takes
-//! `streamlib-adapter-vulkan`. Any GL on macOS, Zink included, would
-//! still need an IOSurface interop arm — the Vulkan adapter behind a
-//! translation layer — so the tier is absent, not deferred. Off Linux
-//! the crate compiles to nothing.
-
 #![cfg(target_os = "linux")]
 
 mod adapter;

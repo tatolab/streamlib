@@ -91,16 +91,6 @@ impl EscalateGate {
         self.cv.notify_one();
     }
 
-    /// Enter the gate and return an RAII guard that releases on drop.
-    /// Suited for the engine-internal in-process
-    /// [`GpuContextLimitedAccess::escalate`] path, where the scope
-    /// lives within a single Rust stack frame. The cdylib
-    /// vtable-dispatched path uses bare [`Self::enter`] /
-    /// [`Self::exit`] via the
-    /// [`escalate_scope_registry`](super::escalate_scope_registry)
-    /// (the FFI boundary precludes RAII across it).
-    ///
-    /// [`GpuContextLimitedAccess::escalate`]: super::gpu_context::GpuContextLimitedAccess::escalate
     pub(crate) fn enter_scoped(&self) -> EscalateGateGuard<'_> {
         self.enter();
         EscalateGateGuard { gate: self }

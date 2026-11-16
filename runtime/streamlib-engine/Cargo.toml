@@ -56,12 +56,6 @@ streamlib-error = { path = "../../sdk/streamlib-error", version = "0.68.82" }
 # Procedural macros
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.68.82" }
 
-# Plugin ABI wire-protocol header. Dep direction reversed in #877:
-# streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
-# cyclic dep this dep used to dodge (engine → plugin-abi → sdk → engine)
-# is gone. The engine's dlopen loader uses `PluginDeclaration` and
-# `STREAMLIB_ABI_VERSION` from this crate directly.
-
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.68.82" }
 

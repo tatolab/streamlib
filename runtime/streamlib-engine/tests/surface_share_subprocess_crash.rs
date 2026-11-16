@@ -25,10 +25,6 @@ use tempfile::TempDir;
 
 /// Locate the test helper binary built by `cargo test` under `target/<profile>/`.
 fn locate_helper_binary() -> PathBuf {
-    // CARGO_MANIFEST_DIR is libs/streamlib; the binary lands in
-    // target/{debug,release}/surface_share_crash_helper. cargo sets
-    // CARGO_BIN_EXE_<name> automatically for tests in the same package
-    // — prefer that when present, fall back to a manual lookup.
     if let Some(p) = option_env!("CARGO_BIN_EXE_surface_share_crash_helper") {
         return PathBuf::from(p);
     }

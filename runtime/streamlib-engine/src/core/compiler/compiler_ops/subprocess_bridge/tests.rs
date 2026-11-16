@@ -674,19 +674,6 @@ fn log_frame() -> serde_json::Value {
     })
 }
 
-// Regression gate for the fire-and-forget classification in `reader_loop`
-// (`if is_escalate_request { … } else { lifecycle_tx.send(msg) }`).
-//
-// Before the fix, `process_bridge_message` returning `None` for log ops
-// was indistinguishable from "this frame isn't an escalate request", so
-// the reader forwarded every log frame to the lifecycle channel. The
-// first host-side `bridge_recv()` after `setup` then saw the log frame
-// in place of `{"rpc":"ready"}` and reported `setup failed: unknown`.
-//
-// This test drives a real reader_loop over a `UnixStream::pair()` and
-// asserts that a log frame arriving on the bridge does not leak to
-// `lifecycle_rx`. Reverting the reader_loop classification change will
-// turn this test red.
 #[test]
 fn log_frame_does_not_leak_to_lifecycle_channel() {
     const TEST: &str = "log_frame_does_not_leak_to_lifecycle_channel";

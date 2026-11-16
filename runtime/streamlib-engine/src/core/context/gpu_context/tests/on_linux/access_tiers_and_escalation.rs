@@ -100,9 +100,6 @@ fn test_kernel_drops_cleanly_after_escalate_end() {
         })
         .expect("escalate must succeed");
 
-    // Scope ended. Drop the kernel; this dispatches through
-    // `drop_compute_kernel` on the parent FullAccess vtable. If
-    // the drop path required a live scope, it would crash here.
     drop(kernel_arc);
 
     // A subsequent escalate must succeed too — proves the drop

@@ -1,27 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Engine-wide per-surface texture registration record.
-//!
-//! Layout-stable `(handle, vtable)` shape so the type crosses the
-//! plugin ABI. The handle is
-//! `Arc::into_raw(Arc<TextureRegistrationInner>)`; the vtable's
-//! `clone_texture_registration` / `drop_texture_registration`
-//! callbacks manage the Arc refcount in host-compiled code.
-//!
-//! Stored in [`crate::core::context::GpuContext`]'s same-process texture
-//! cache, keyed by `surface_id`. Mirrors the per-surface state pattern
-//! the surface adapters already use (see
-//! `streamlib-adapter-vulkan::SurfaceState::current_layout`) but lifted
-//! to the engine-wide cache so consumers reaching textures via
-//! `resolve_texture_registration_by_surface_id` get the same lifecycle
-//! metadata adapter consumers do.
-//!
-//! Wherever the Vulkan RHI compiles, the registration carries the texture's
-//! last-known `VkImageLayout` so consumers can issue a correct
-//! `vkCmdPipelineBarrier2` source layout. On a platform with no Vulkan RHI
-//! only the texture is held.
-
 use std::ffi::c_void;
 use std::sync::Arc;
 
