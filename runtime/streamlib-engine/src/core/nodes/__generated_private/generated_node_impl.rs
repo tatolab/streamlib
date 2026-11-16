@@ -1001,8 +1001,7 @@ impl OutOfProcessLinkWiringEnvelope {
                  island; it keeps evaluating it until it restarts"
             );
         }
-        let runs_a_function_node_as_a_standalone_node =
-            recorded.runs_a_function_node_as_a_standalone_node;
+        let runs_a_standalone_node = recorded.runs_a_function_node_as_a_standalone_node;
         let breadcrumb_numbers_still_carried: std::collections::HashSet<u64> = recorded
             .function_node_islands_feeding_its_input_ports
             .iter()
@@ -1013,7 +1012,7 @@ impl OutOfProcessLinkWiringEnvelope {
         recorded
             .stateful_function_nodes_its_far_side_calls
             .retain(|stateful| {
-                (runs_a_function_node_as_a_standalone_node
+                (runs_a_standalone_node
                     && stateful.breadcrumb_number
                         == crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE)
                     || breadcrumb_numbers_still_carried
