@@ -70,16 +70,11 @@ doesn't state, the owner wants to make that call (§Asking the owner).
   are stated in the engine and proven by engine tests and fixtures.
 - **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
-  editable work.** An engine change that breaks one files a Linear backlog issue for that consumer and
-  never blocks the engine change; fixing it in-stream is reserved for the rare case where the
-  consumer is the deliberate canary of the in-flight work.
-- File a Linear issue only when something blocks the milestone in flight. Non-blocking findings
-  go in the PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
+  editable work.**
 - **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) keeps the old treatment:
   written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
   manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
-  wired to the RHI, what a capture path must handle), never for form; breakage is expected, not
-  a defect, and gets no issue. It converts or deletes only as its own issue, never in passing.
+  wired to the RHI, what a capture path must handle), never for form.
 
 ## Reading the Python surface
 
@@ -127,9 +122,7 @@ built-in publishes on means you skipped it.
 - A node is one unit in a stream's graph. "Processor" is not a word in this tree: say node
   (`scripts/check_processor_word.py` fails on it; `lint-exceptions/processor-word.txt` only shrinks).
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
-  surfaced them. Pattern migrations cover the engine tree only — consumers are never in a
-  migration's scope; a broken *converted* consumer gets a Linear backlog issue, a held
-  pre-pivot one just lags.
+  surfaced them.
 - A missing architecture decision goes to the owner — as a question or a stated assumption.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
