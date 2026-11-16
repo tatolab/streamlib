@@ -711,6 +711,7 @@ impl std::fmt::Display for ProjectActionIdempotencyKey {
 
 /// The part of a recorded transaction every format shares, read before the rest so a record
 /// in a newer format is refused by name rather than by what it holds.
+#[cfg(feature = "history")]
 #[derive(Deserialize)]
 pub(crate) struct ProjectTransactionEnvelopeHeader {
     #[serde(default = "project_transaction_format_version_before_it_was_recorded")]

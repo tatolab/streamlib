@@ -4,13 +4,17 @@
 //! Each node of a `tatolab-ops` type in a project's stream documents, moved to the Core Nodes
 //! type that replaced it: the same function under the same name, ports and config.
 
+#[cfg(feature = "history")]
 use uuid::Uuid;
 
 use crate::core_project_import::CORE_PROJECT_IMPORT_FOLDER;
 use crate::project_asset::PROJECT_IMPORTS_DIRECTORY;
+#[cfg(feature = "history")]
 use crate::project_transaction::{ProjectOperation, StreamGraphOperationOnAStream};
+use crate::stream_graph_document::PREVIOUS_VALUE_NODE_TYPE;
+#[cfg(feature = "history")]
 use crate::stream_graph_document::{
-    PREVIOUS_VALUE_NODE_TYPE, StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
+    StreamGraphDocument, StreamGraphDocumentNode, StreamGraphOperation,
 };
 
 /// The key a project's history records the move under, so it is made once and an undo holds.
@@ -85,6 +89,7 @@ pub fn the_type_that_replaced_a_tatolab_ops_type(node_type: &str) -> Option<Stri
 /// asset `stream` that `document` holds to the type that replaced it: the node taken out with
 /// its links and placed again under its UUID, name, config, pins and studio fields with its new
 /// type and the same links, so an undo puts back exactly what was there.
+#[cfg(feature = "history")]
 pub(crate) fn operations_moving_each_tatolab_ops_node_to_core_nodes(
     stream: Uuid,
     document: &StreamGraphDocument,
@@ -120,7 +125,6 @@ pub(crate) fn operations_moving_each_tatolab_ops_node_to_core_nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn each_tatolab_ops_type_is_replaced_by_its_core_nodes_type() {
@@ -161,111 +165,124 @@ mod tests {
         }
     }
 
-    fn a_document_with_an_lfo_driving_a_tone() -> StreamGraphDocument {
-        StreamGraphDocument::from_value(json!({
-            "nodes": [
-                {
-                    "id": "00000000-0000-0000-0000-000000000001",
-                    "name": "lfo",
-                    "type": "tatolab.ops:Lfo",
-                    "config": {},
-                    "pins": {"rate_hz": 0.5},
-                    "studio": {"position": {"x": 10.0, "y": 20.0}}
-                },
-                {
+    #[cfg(feature = "history")]
+    mod moving_each_tatolab_ops_node {
+        use super::*;
+        use serde_json::json;
+
+        fn a_document_with_an_lfo_driving_a_tone() -> StreamGraphDocument {
+            StreamGraphDocument::from_value(json!({
+                "nodes": [
+                    {
+                        "id": "00000000-0000-0000-0000-000000000001",
+                        "name": "lfo",
+                        "type": "tatolab.ops:Lfo",
+                        "config": {},
+                        "pins": {"rate_hz": 0.5},
+                        "studio": {"position": {"x": 10.0, "y": 20.0}}
+                    },
+                    {
+                        "id": "00000000-0000-0000-0000-000000000002",
+                        "name": "tone",
+                        "type": "nodes.tone:Tone",
+                        "config": {}
+                    }
+                ],
+                "links": [
+                    {
+                        "source": {"node": "00000000-0000-0000-0000-000000000001", "port": "out"},
+                        "target": {"node": "00000000-0000-0000-0000-000000000002", "port": "pitch"}
+                    }
+                ]
+            }))
+            .expect("the document")
+        }
+
+        #[test]
+        fn a_tatolab_ops_node_is_placed_again_under_its_core_nodes_type_with_everything_else_kept()
+        {
+            let mut document = a_document_with_an_lfo_driving_a_tone();
+            let lfo_before = document.node_named("lfo").expect("the lfo before the move");
+            let links_before = document.links();
+            let stream = Uuid::from_u128(7);
+
+            let operations =
+                operations_moving_each_tatolab_ops_node_to_core_nodes(stream, &document);
+            assert_eq!(operations.len(), 2);
+            for operation in &operations {
+                let ProjectOperation::StreamGraph(on_the_stream) = operation else {
+                    panic!("a move edits a stream's graph, not {operation:?}");
+                };
+                assert_eq!(on_the_stream.stream, stream);
+                document
+                    .apply(&on_the_stream.graph_operation)
+                    .expect("the move applies");
+            }
+
+            let lfo_after = document.node_named("lfo").expect("the lfo after the move");
+            assert_eq!(
+                lfo_after,
+                StreamGraphDocumentNode {
+                    node_type: "imports/core-nodes/core_nodes.animation:Lfo".to_owned(),
+                    ..lfo_before
+                }
+            );
+            assert_eq!(document.links(), links_before);
+            assert_eq!(
+                document.node_named("tone").expect("the tone").node_type,
+                "nodes.tone:Tone"
+            );
+        }
+
+        #[test]
+        fn the_inverse_of_a_move_puts_the_tatolab_ops_node_back() {
+            let mut document = a_document_with_an_lfo_driving_a_tone();
+            let lfo_before = document.node_named("lfo").expect("the lfo before the move");
+            let links_before = document.links();
+            let operations = operations_moving_each_tatolab_ops_node_to_core_nodes(
+                Uuid::from_u128(7),
+                &document,
+            );
+            let graph_operations: Vec<StreamGraphOperation> = operations
+                .iter()
+                .filter_map(|operation| match operation {
+                    ProjectOperation::StreamGraph(on_the_stream) => {
+                        Some(on_the_stream.graph_operation.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for graph_operation in &graph_operations {
+                document.apply(graph_operation).expect("the move applies");
+            }
+            for graph_operation in graph_operations.iter().rev() {
+                document
+                    .apply(&graph_operation.inverse())
+                    .expect("its inverse applies");
+            }
+            assert_eq!(document.node_named("lfo"), Some(lfo_before));
+            assert_eq!(document.links(), links_before);
+        }
+
+        #[test]
+        fn a_document_holding_no_tatolab_ops_node_needs_no_operation() {
+            let document = StreamGraphDocument::from_value(json!({
+                "nodes": [{
                     "id": "00000000-0000-0000-0000-000000000002",
                     "name": "tone",
                     "type": "nodes.tone:Tone",
                     "config": {}
-                }
-            ],
-            "links": [
-                {
-                    "source": {"node": "00000000-0000-0000-0000-000000000001", "port": "out"},
-                    "target": {"node": "00000000-0000-0000-0000-000000000002", "port": "pitch"}
-                }
-            ]
-        }))
-        .expect("the document")
-    }
-
-    #[test]
-    fn a_tatolab_ops_node_is_placed_again_under_its_core_nodes_type_with_everything_else_kept() {
-        let mut document = a_document_with_an_lfo_driving_a_tone();
-        let lfo_before = document.node_named("lfo").expect("the lfo before the move");
-        let links_before = document.links();
-        let stream = Uuid::from_u128(7);
-
-        let operations = operations_moving_each_tatolab_ops_node_to_core_nodes(stream, &document);
-        assert_eq!(operations.len(), 2);
-        for operation in &operations {
-            let ProjectOperation::StreamGraph(on_the_stream) = operation else {
-                panic!("a move edits a stream's graph, not {operation:?}");
-            };
-            assert_eq!(on_the_stream.stream, stream);
-            document
-                .apply(&on_the_stream.graph_operation)
-                .expect("the move applies");
-        }
-
-        let lfo_after = document.node_named("lfo").expect("the lfo after the move");
-        assert_eq!(
-            lfo_after,
-            StreamGraphDocumentNode {
-                node_type: "imports/core-nodes/core_nodes.animation:Lfo".to_owned(),
-                ..lfo_before
-            }
-        );
-        assert_eq!(document.links(), links_before);
-        assert_eq!(
-            document.node_named("tone").expect("the tone").node_type,
-            "nodes.tone:Tone"
-        );
-    }
-
-    #[test]
-    fn the_inverse_of_a_move_puts_the_tatolab_ops_node_back() {
-        let mut document = a_document_with_an_lfo_driving_a_tone();
-        let lfo_before = document.node_named("lfo").expect("the lfo before the move");
-        let links_before = document.links();
-        let operations =
-            operations_moving_each_tatolab_ops_node_to_core_nodes(Uuid::from_u128(7), &document);
-        let graph_operations: Vec<StreamGraphOperation> = operations
-            .iter()
-            .filter_map(|operation| match operation {
-                ProjectOperation::StreamGraph(on_the_stream) => {
-                    Some(on_the_stream.graph_operation.clone())
-                }
-                _ => None,
-            })
-            .collect();
-        for graph_operation in &graph_operations {
-            document.apply(graph_operation).expect("the move applies");
-        }
-        for graph_operation in graph_operations.iter().rev() {
-            document
-                .apply(&graph_operation.inverse())
-                .expect("its inverse applies");
-        }
-        assert_eq!(document.node_named("lfo"), Some(lfo_before));
-        assert_eq!(document.links(), links_before);
-    }
-
-    #[test]
-    fn a_document_holding_no_tatolab_ops_node_needs_no_operation() {
-        let document = StreamGraphDocument::from_value(json!({
-            "nodes": [{
-                "id": "00000000-0000-0000-0000-000000000002",
-                "name": "tone",
-                "type": "nodes.tone:Tone",
-                "config": {}
-            }],
-            "links": []
-        }))
-        .expect("the document");
-        assert!(
-            operations_moving_each_tatolab_ops_node_to_core_nodes(Uuid::from_u128(7), &document)
+                }],
+                "links": []
+            }))
+            .expect("the document");
+            assert!(
+                operations_moving_each_tatolab_ops_node_to_core_nodes(
+                    Uuid::from_u128(7),
+                    &document
+                )
                 .is_empty()
-        );
+            );
+        }
     }
 }

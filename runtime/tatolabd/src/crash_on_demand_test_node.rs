@@ -29,11 +29,7 @@ pub(crate) enum CrashOnDemandSignal {
 /// The node's config: what file arms it and how it crashes.
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
-#[allow(
-    unreachable_pub,
-    reason = "the processor macro names the config in a trait impl, which needs it public"
-)]
-pub struct CrashOnDemandTestNodeConfig {
+pub(crate) struct CrashOnDemandTestNodeConfig {
     /// While this file exists, the check of this config crashes the runtime.
     pub crash_while_this_file_exists: PathBuf,
     /// The signal the runtime crashes on.
@@ -83,7 +79,7 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
     execution = manual,
     config = crate::crash_on_demand_test_node::CrashOnDemandTestNodeConfig,
 )]
-pub struct CrashOnDemandTestNode;
+pub(crate) struct CrashOnDemandTestNode;
 
 impl ManualProcessor for CrashOnDemandTestNode::Processor {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
