@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: GPL-3.0-only
 #
 # The structure lints from tatolab/lint-config, pinned at LINT_CONFIG_COMMIT, and
-# this repository's own: the ast-grep rules (through sgconfig.yml), their tests
-# and the suppressions they allow, the 1,000-line file-size limit, the module-file convention and the
-# workspace lint table. Findings not fixed yet are
-# listed under lint-exceptions/, and each list may only shrink from the one at the
-# compared ref: `--compare-to <git-ref>`, or origin/main when none is given and it
-# exists. A list the ref doesn't have yet is not compared. Run by
+# this repository's own: the ast-grep rules (through sgconfig.yml), their tests,
+# the suppressions they allow and the matches they require, the 1,000-line
+# file-size limit, the module-file convention and the workspace lint table.
+# Findings not fixed yet are listed under lint-exceptions/, and each list may only
+# shrink from the one at the compared ref: `--compare-to <git-ref>`, or
+# origin/main when none is given and it exists. A list the ref doesn't have yet is
+# not compared. Run by
 # `.github/workflows/ci.yml`'s lint job and by `cargo xtask run-local-ci-gates`;
 # `bash scripts/run-structure-lints.sh` is the entry point, not a bare
 # `ast-grep scan`. lint-config's rules are tested in its CI; the rules in
@@ -82,7 +83,12 @@ run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_com
   --exceptions lint-exceptions/ast-grep.txt $(compare_arguments_for lint-exceptions/ast-grep.txt)
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
+for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py; do
+  run_lint "${script_test}" "${python_command[@]}" "${script_test}"
+done
 run_lint "ast-grep suppressions" "${python_command[@]}" scripts/check_ast_grep_suppressions.py
+run_lint "ast-grep required matches" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
+  scripts/check_ast_grep_required_matches.py
 # shellcheck disable=SC2046
 run_lint "file size" "${python_command[@]}" "${lint_config_directory}/file-size/check_file_sizes.py" \
   --exceptions lint-exceptions/file-size.txt $(compare_arguments_for lint-exceptions/file-size.txt)

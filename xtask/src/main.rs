@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 pub mod build_runtime;
 pub mod check_boundaries;
 pub mod check_bounded_apt_install;
-pub mod check_clock_usage;
 pub mod check_control_contract_compatibility;
 pub mod check_graph_document_node_types;
 pub mod check_module_host_table_surface;
@@ -126,38 +125,6 @@ pub fn ensure_source_walking_gate_read_source(
     Ok(())
 }
 
-/// Workspace-relative paths git tracks under `scan_roots`.
-///
-/// A filesystem walk would descend `sdk/streamlib-python-wheel/.venv-pyright`
-/// and every other build tree, gating third-party sources the project does not
-/// own. `git ls-files` sees exactly what CI checks out.
-pub fn tracked_files_under_scan_roots(
-    workspace_root: &Path,
-    scan_roots: &[&str],
-    gate_name: &str,
-) -> Result<Vec<PathBuf>> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "-z", "--"])
-        .args(scan_roots)
-        .current_dir(workspace_root)
-        .output()
-        .with_context(|| format!("failed to run `git ls-files` for {gate_name}"))?;
-
-    anyhow::ensure!(
-        output.status.success(),
-        "`git ls-files` failed ({}) — {gate_name} cannot enumerate its scan roots",
-        output.status
-    );
-
-    let listing =
-        String::from_utf8(output.stdout).context("`git ls-files` emitted a non-UTF-8 path")?;
-    Ok(listing
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .collect())
-}
-
 /// A gate that walks the source tree under the given root and reports violations.
 type SourceWalkingGate = fn(&Path) -> Result<()>;
 
@@ -178,7 +145,6 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
         "generate-module-host-table-c-header --check",
         generate_module_host_table_c_header::check,
     ),
-    ("check-clock-usage", check_clock_usage::run),
     ("check-bounded-apt-install", check_bounded_apt_install::run),
     (
         "check-workspace-version-pins",
@@ -470,18 +436,6 @@ enum Commands {
     /// depends on no engine crate. See [`check_module_host_table_surface`].
     CheckModuleHostTableSurface,
 
-    /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
-    /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
-    /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
-    /// outside the surfaces the plan permits it on: log record `host_ts` and
-    /// `source_ts` and log file naming. Monotonic is the
-    /// only legal clock on the data plane — a wall-clock value and a media
-    /// timestamp share a unit and are different quantities, so subtracting
-    /// across them is always a bug. There is no per-line pragma: widening the
-    /// list is a plan change. See
-    /// the one-monotonic-clock rule.
-    CheckClockUsage,
-
     /// CI gate keeping every apt install in CI behind
     /// `.github/actions/install-linux-engine-build-dependencies`. Fails on any
     /// `apt-get` under `.github/workflows/`, and on any step calling that
@@ -675,7 +629,6 @@ fn main() -> Result<()> {
         Commands::CheckModuleHostTableSurface => {
             check_module_host_table_surface::run(&workspace_root()?)?
         }
-        Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
         Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredTrees => check_vendored_trees::run(&workspace_root()?)?,
         Commands::CheckWorkspaceVersionPins { fix } => {

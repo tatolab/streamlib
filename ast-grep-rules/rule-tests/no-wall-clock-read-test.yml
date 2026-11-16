@@ -1,0 +1,22 @@
+id: no-wall-clock-read
+valid:
+  - "let stamp = MediaClock::now().as_nanos() as u64;"
+  - "let started = Instant::now();"
+  - "/// Never `SystemTime::now()` on the data plane.\npub fn ok() {}"
+  - "pub fn ok() {} // never SystemTime::now()"
+  - "unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };"
+invalid:
+  - "fn stamp() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 }"
+  - "let stamp = std::time::SystemTime::now();"
+  - "unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut timespec) };"
+  - "let since_epoch = std::time::UNIX_EPOCH.elapsed().unwrap();"
+  - "let a = chrono::Utc::now();"
+  - "let b = Local::now();"
+  - "tracing::info!(at = ?SystemTime::now(), \"stamped\");"
+  - "let since = format!(\"{:?}\", UNIX_EPOCH.elapsed());"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn stamp() { let _ = SystemTime::now(); }
+    }
+  - "unsafe { libc::clock_gettime(libc::CLOCK_REALTIME_COARSE, &mut timespec) };"

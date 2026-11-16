@@ -14,8 +14,15 @@ import sys
 from pathlib import Path
 
 UNSUPPRESSIBLE_RULE_LIST = Path("ast-grep-rules/unsuppressible-rules.txt")
-EXEMPT_PREFIXES = ("ast-grep-rules/", "vendor/", "scripts/check_ast_grep_suppressions.py")
-SUPPRESSION_COMMENT = re.compile(r"ast-grep-ignore(?P<rules>:[^\n]*)?")
+EXEMPT_PREFIXES = (
+    "ast-grep-rules/",
+    "vendor/",
+    "scripts/check_ast_grep_suppressions.py",
+    "scripts/test_check_ast_grep_suppressions.py",
+)
+SUPPRESSION_COMMENT = re.compile(
+    r"(?://|#|/\*)[^\w\n]*ast-grep-ignore(?P<rules>:[^\n]*)?"
+)
 
 
 def unsuppressible_rule_ids() -> set[str]:
@@ -23,16 +30,24 @@ def unsuppressible_rule_ids() -> set[str]:
     return {line.strip() for line in lines if line.strip() and not line.startswith("#")}
 
 
-def refused_suppressions(text: str, refused_rule_ids: set[str]) -> list[tuple[int, str]]:
+def refused_suppressions(
+    text: str, refused_rule_ids: set[str]
+) -> list[tuple[int, str]]:
     """Each refused suppression in `text`, as its 1-based line and the reason."""
     refusals = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         for comment in SUPPRESSION_COMMENT.finditer(line):
-            named_rules = set(re.findall(r"[a-z0-9][a-z0-9-]*", comment.group("rules") or ""))
+            named_rules = set(
+                re.findall(r"[a-z0-9][a-z0-9-]*", comment.group("rules") or "")
+            )
             if not named_rules:
-                refusals.append((line_number, "names no rule, so it silences every rule"))
+                refusals.append(
+                    (line_number, "names no rule, so it silences every rule")
+                )
             for rule_id in sorted(named_rules & refused_rule_ids):
-                refusals.append((line_number, f"names {rule_id}, which takes no ast-grep-ignore"))
+                refusals.append(
+                    (line_number, f"names {rule_id}, which takes no ast-grep-ignore")
+                )
     return refusals
 
 
@@ -52,7 +67,9 @@ def main() -> int:
         if "ast-grep-ignore" not in text:
             continue
         for line_number, reason in refused_suppressions(text, refused_rule_ids):
-            failures.append(f"{tracked_path}:{line_number}: this ast-grep-ignore {reason}")
+            failures.append(
+                f"{tracked_path}:{line_number}: this ast-grep-ignore {reason}"
+            )
     for failure in failures:
         print(failure, file=sys.stderr)
     return 1 if failures else 0
