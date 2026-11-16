@@ -1,0 +1,37 @@
+id: no-privileged-vulkan-call-outside-the-rhi
+language: rust
+severity: error
+message: >-
+  allocate_memory, get_memory_fd_khr and create_compute_pipelines are privileged
+  primitives the host RHI owns; call the RHI instead.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - vendor/**/*.rs
+  - examples/**/*.rs
+  - packages/**/*.rs
+ignores:
+  - runtime/streamlib-engine/src/vulkan/**
+  # Calls allocate_memory only with an ImportMemoryFdInfoKHR chained: the import-side
+  # carve-out, which no pattern can tell from raw allocation.
+  - runtime/streamlib-consumer-rhi/**
+  # Builds its own colour-conversion pipelines on whichever device it codes on.
+  - runtime/streamlib-vulkan-video/**
+  # Tests bring up real Vulkan devices for end-to-end validation.
+  - "**/tests/**"
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        kind: field_expression
+        has:
+          field: field
+          regex: '^(allocate_memory|get_memory_fd_khr|create_compute_pipelines)$'
+    - kind: identifier
+      regex: '^(allocate_memory|get_memory_fd_khr|create_compute_pipelines)$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^\.$'

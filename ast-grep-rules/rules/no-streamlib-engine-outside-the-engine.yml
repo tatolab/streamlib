@@ -1,0 +1,20 @@
+id: no-streamlib-engine-outside-the-engine
+language: rust
+severity: error
+message: >-
+  Only the engine and the SDK facade name streamlib_engine; consumer code routes through
+  streamlib::sdk::* (engine extensions through streamlib::sdk::engine::*).
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - vendor/**/*.rs
+  - examples/**/*.rs
+  - packages/**/*.rs
+ignores:
+  - runtime/streamlib-engine/**
+  # The SDK facade re-exports engine items as streamlib::*.
+  - sdk/streamlib-sdk/src/lib.rs
+rule:
+  kind: identifier
+  regex: '^streamlib_engine$'

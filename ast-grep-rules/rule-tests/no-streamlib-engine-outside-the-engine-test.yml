@@ -1,0 +1,9 @@
+id: no-streamlib-engine-outside-the-engine
+valid:
+  - "use streamlib::sdk::Texture;"
+  - "// see streamlib_engine::core"
+  - "use streamlib_engine_free::Thing;"
+invalid:
+  - "use streamlib_engine::core::Texture;"
+  - "fn f(t: streamlib_engine::core::Texture) {}"
+  - "extern crate streamlib_engine;"

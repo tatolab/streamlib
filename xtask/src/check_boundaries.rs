@@ -4,21 +4,14 @@
 //! Boundary-grep CI check — Layer 6 of the regression-prevention defense for
 //! the Vulkan RHI capability split.
 //!
-//! Four checks, each over the workspace, allowlists driven by data:
-//!
-//! 1. **No `ash`** — fully replaced by `vulkanalia` (per #252). Any new `ash`
-//!    import or Cargo dep is a regression.
-//! 2. **`use vulkanalia` confined to RHI / consumer-rhi / adapter / codec
-//!    crates** — anyone reaching for raw `vulkanalia` outside those allowlisted
-//!    paths is breaking the RHI boundary.
-//! 3. **Cdylibs and adapter crates depend on `streamlib-consumer-rhi`, NOT
-//!    the full `streamlib` crate** in runtime deps — `streamlib` may appear
-//!    only under `[dev-dependencies]` (or `[target.*.dev-dependencies]`).
-//!    The `FullAccess` capability boundary is type-system enforced by the
-//!    cdylib's dep graph excluding `streamlib`.
-//! 4. **Raw privileged Vulkan calls outside the RHI** — `vkAllocateMemory`,
-//!    `vkGetMemoryFdKHR`, `vkCreateComputePipelines` etc. The privileged set
-//!    lives in the RHI, period.
+//! Cargo-manifest and dependency-graph checks, each over the workspace,
+//! allowlists driven by data: no `ash` or out-of-place `vulkanalia` Cargo dep,
+//! cdylibs and adapter crates on `streamlib-consumer-rhi` rather than the full
+//! `streamlib` crate, every `vulkanalia*` dep inherited from the workspace
+//! fork, no full facade in a package, and no engine reachable from the trunk
+//! crates or the engine-free clients. The source-pattern halves (imports,
+//! privileged Vulkan calls, top-level shortcuts, engine reach from packages)
+//! are ast-grep rules in `ast-grep-rules/rules/`.
 //!
 //! The check is grep-shaped on purpose: sub-second on a clean runner, no
 //! Cargo build needed. Allowlists are explicit and carry per-entry rationale
@@ -114,12 +107,8 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_no_ash(project_root, &mut violations, &mut files_scanned)?;
     check_vulkanalia_confined(project_root, &mut violations, &mut files_scanned)?;
     check_cdylib_and_adapter_runtime_deps(project_root, &mut violations, &mut files_scanned)?;
-    check_privileged_vk_calls(project_root, &mut violations, &mut files_scanned)?;
     check_vulkanalia_uses_workspace_fork(project_root, &mut violations, &mut files_scanned)?;
-    check_streamlib_engine_confined(project_root, &mut violations, &mut files_scanned)?;
-    check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
     check_packages_facade_runtime_dep(project_root, &mut violations, &mut files_scanned)?;
-    check_packages_engine_reach(project_root, &mut violations, &mut files_scanned)?;
     check_trunk_set_no_engine_dep(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport {
         violations,
@@ -189,22 +178,6 @@ const SCAN_ROOTS: &[&str] = &[
     "runtime", "sdk", "adapters", "vendor", "examples", "packages",
 ];
 
-fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
-    SCAN_ROOTS
-        .iter()
-        .map(move |r| project_root.join(r))
-        .filter(|p| p.exists())
-        .flat_map(|root| {
-            WalkDir::new(root)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("rs"))
-                .map(|e| e.into_path())
-                .collect::<Vec<_>>()
-        })
-}
-
 fn walk_cargo_toml(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     SCAN_ROOTS
         .iter()
@@ -239,28 +212,6 @@ fn check_no_ash(
     violations: &mut Vec<Violation>,
     files_scanned: &mut usize,
 ) -> Result<()> {
-    for path in walk_rs(project_root) {
-        *files_scanned += 1;
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (idx, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("use ash::") || trimmed.starts_with("extern crate ash;") {
-                violations.push(Violation {
-                    path: rel_to_root(&path, project_root).to_path_buf(),
-                    line_no: idx + 1,
-                    line_text: line.to_string(),
-                    matched_pattern: trimmed
-                        .split_whitespace()
-                        .take(2)
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    check: CHECK_NO_ASH,
-                    rationale: ASH_RATIONALE,
-                });
-            }
-        }
-    }
     for path in walk_cargo_toml(project_root) {
         *files_scanned += 1;
         let content =
@@ -293,113 +244,11 @@ const CHECK_VULKANALIA: &str = "vulkanalia-only-in-rhi";
 
 const VULKANALIA_RATIONALE: &str = "raw vulkanalia must stay inside the RHI / consumer-rhi / adapter crates and a small set of documented-exception files";
 
-const VULKANALIA_ALLOWLIST: &[AllowEntry] = &[
-    // Core RHI host side — owns every privileged Vulkan primitive.
-    AllowEntry {
-        path: "runtime/streamlib-engine/src/vulkan/",
-        kind: AllowKind::PathPrefix,
-        rationale: "host RHI lives here",
-    },
-    // Consumer-side carve-out — DMA-BUF FD import + bind + map only.
-    AllowEntry {
-        path: "runtime/streamlib-consumer-rhi/",
-        kind: AllowKind::PathPrefix,
-        rationale: "consumer-rhi is the import-side carve-out (#560)",
-    },
-    // Every surface adapter crate (vulkan, opengl, cpu-readback, ...) and
-    // their dedicated test-helper crates.
-    AllowEntry {
-        path: "adapters/streamlib-adapter-",
-        kind: AllowKind::PathPrefix,
-        rationale: "adapter crates ride consumer-rhi for import + bind",
-    },
-    // Vulkan Video encode and decode — the RHI's codec tier, minted on the
-    // engine's device or on the owned device a codec module codes on.
-    AllowEntry {
-        path: "runtime/streamlib-vulkan-video/",
-        kind: AllowKind::PathPrefix,
-        rationale: "Vulkan Video codec tier of the RHI, over any VulkanVideoCodecDevice",
-    },
-    //
-    // GpuContext is the wrapper layer between processors and the RHI;
-    // touches a small set of Vulkan handles to wire pools.
-    AllowEntry {
-        path: "runtime/streamlib-engine/src/core/context/gpu_context/",
-        kind: AllowKind::PathPrefix,
-        rationale: "RHI wrapper layer; bridges processors to the RHI",
-    },
-    // Subprocess cdylibs are NOT allowlisted — post-#550/#553/#572
-    // they no longer use `vulkanalia` directly; consumer-side device
-    // construction lives in `streamlib-consumer-rhi`, layout enums
-    // come typed from the cpu-readback adapter, and any reintroduction
-    // of `use vulkanalia` or a `vulkanalia` Cargo dep in the cdylibs
-    // is a regression of the FullAccess capability boundary.
-    //
-    // Polyglot example/scenario binaries are NOT allowlisted post-#583
-    // — every host-side per-frame readback rides the host RHI's
-    // `VulkanTextureReadback` primitive; any reintroduction of raw
-    // `vulkanalia` in those crates means an example bypassed the RHI.
-    //
-    // Test code in any crate is allowed to use vulkanalia directly to
-    // bring up real devices for end-to-end validation.
-    AllowEntry {
-        path: "tests",
-        kind: AllowKind::PathSegment,
-        rationale: "tests bring up real Vulkan devices for end-to-end validation",
-    },
-    // The vendored fork crates themselves — vendored fork source; it IS the
-    // Vulkan surface the RHI rides. Anchored to the three EXACT dirs
-    // (trailing slash) so a future vendor/tatolab-vulkanalia-extras/ crate
-    // does not silently inherit the exemption.
-    AllowEntry {
-        path: "vendor/tatolab-vulkanalia/",
-        kind: AllowKind::PathPrefix,
-        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
-    },
-    AllowEntry {
-        path: "vendor/tatolab-vulkanalia-sys/",
-        kind: AllowKind::PathPrefix,
-        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
-    },
-    AllowEntry {
-        path: "vendor/tatolab-vulkanalia-vma/",
-        kind: AllowKind::PathPrefix,
-        rationale: "vendored vulkanalia fork source — it IS the Vulkan surface",
-    },
-];
-
 fn check_vulkanalia_confined(
     project_root: &Path,
     violations: &mut Vec<Violation>,
     files_scanned: &mut usize,
 ) -> Result<()> {
-    for path in walk_rs(project_root) {
-        *files_scanned += 1;
-        let rel = rel_to_root(&path, project_root);
-        if matches_allow(rel, VULKANALIA_ALLOWLIST) {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (idx, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // Only flag actual `use vulkanalia` import statements; not
-            // doc comments or strings that happen to mention the crate.
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            if trimmed.starts_with("use vulkanalia::") || trimmed == "use vulkanalia;" {
-                violations.push(Violation {
-                    path: rel.to_path_buf(),
-                    line_no: idx + 1,
-                    line_text: line.to_string(),
-                    matched_pattern: "use vulkanalia".to_string(),
-                    check: CHECK_VULKANALIA,
-                    rationale: VULKANALIA_RATIONALE,
-                });
-            }
-        }
-    }
     // Defense in depth: a non-allowlisted crate could add `vulkanalia` to
     // its Cargo.toml without a `use` statement (qualified paths,
     // re-exports, build.rs only) and slip past the import-statement scan.
@@ -556,104 +405,6 @@ fn section_is_dev_only(section: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Check 4 — raw privileged Vulkan calls outside the RHI
-// ---------------------------------------------------------------------------
-
-const CHECK_PRIVILEGED_VK: &str = "no-privileged-vk-outside-rhi";
-
-const PRIVILEGED_VK_RATIONALE: &str = "vkAllocateMemory / vkGetMemoryFdKHR / vkCreateComputePipelines are privileged primitives owned by the host RHI";
-
-/// Privileged vulkanalia method names (snake_case form). A bare `\.<name>\(`
-/// match is enough — these are unambiguous when called on a Device handle.
-const PRIVILEGED_METHODS: &[&str] = &[
-    "allocate_memory",
-    "get_memory_fd_khr",
-    "create_compute_pipelines",
-];
-
-const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
-    // Host RHI — defines and owns the privileged calls.
-    AllowEntry {
-        path: "runtime/streamlib-engine/src/vulkan/",
-        kind: AllowKind::PathPrefix,
-        rationale: "host RHI owns privileged primitives",
-    },
-    // Consumer-rhi calls allocate_memory ONLY with VkImportMemoryFdInfoKHR
-    // chained via push_next — that is the carve-out, not raw allocation.
-    // The pattern can't be distinguished syntactically from raw allocation
-    // without an AST walk; allowlist the crate and rely on code review +
-    // the subprocess RHI parity rule to keep it honest.
-    AllowEntry {
-        path: "runtime/streamlib-consumer-rhi/",
-        kind: AllowKind::PathPrefix,
-        rationale: "consumer-rhi import-side carve-out chains ImportMemoryFdInfoKHR",
-    },
-    // The Vulkan Video codec tier builds its RGB → NV12 and NV12 → RGBA
-    // compute pipelines on whichever device it codes on — the engine's, or a
-    // codec module's owned device, where no engine kernel exists.
-    AllowEntry {
-        path: "runtime/streamlib-vulkan-video/",
-        kind: AllowKind::PathPrefix,
-        rationale: "Vulkan Video codec tier of the RHI builds its own conversion pipelines",
-    },
-    //
-    // Subprocess cdylibs are NOT allowlisted post-#572 — their entire
-    // privileged-vk surface lives in `streamlib-consumer-rhi`'s
-    // import-side carve-out and `streamlib-adapter-*`. A privileged
-    // call appearing inside a cdylib means a regression of the
-    // FullAccess capability boundary.
-    //
-    // Polyglot example/scenario binaries are NOT allowlisted post-#583
-    // — host-side readback rides `VulkanTextureReadback` via the
-    // streamlib host RHI; raw privileged-vk inside them indicates the
-    // example bypassed the RHI.
-    //
-    // Tests bring up real devices for end-to-end validation.
-    AllowEntry {
-        path: "tests",
-        kind: AllowKind::PathSegment,
-        rationale: "tests bring up real Vulkan devices for end-to-end validation",
-    },
-];
-
-fn check_privileged_vk_calls(
-    project_root: &Path,
-    violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
-    for path in walk_rs(project_root) {
-        *files_scanned += 1;
-        let rel = rel_to_root(&path, project_root);
-        if matches_allow(rel, PRIVILEGED_VK_ALLOWLIST) {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (idx, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            for method in PRIVILEGED_METHODS {
-                let needle = format!(".{}(", method);
-                if line.contains(&needle) {
-                    violations.push(Violation {
-                        path: rel.to_path_buf(),
-                        line_no: idx + 1,
-                        line_text: line.to_string(),
-                        matched_pattern: format!(".{}(", method),
-                        check: CHECK_PRIVILEGED_VK,
-                        rationale: PRIVILEGED_VK_RATIONALE,
-                    });
-                    break;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Check 5 — every member crate's vulkanalia* dep is workspace-inherited
 // ---------------------------------------------------------------------------
 
@@ -753,198 +504,6 @@ fn is_vulkanalia_dep(name: &str) -> bool {
         || name.starts_with("tatolab-vulkanalia")
 }
 
-// ---------------------------------------------------------------------------
-// Check 6 — `streamlib_engine` direct imports confined to the engine + SDK
-// ---------------------------------------------------------------------------
-//
-// The SDK / engine split (#731) makes `streamlib` the universal facade for
-// all consumer code — apps, examples, domain packages, adapter crates,
-// adapter helpers, engine tooling. The only places that legitimately import
-// `streamlib_engine::*` directly are:
-//
-// 1. The engine itself (`runtime/streamlib-engine/`) — its own bins, tests,
-//    benches link to its lib by the engine's published Cargo name.
-// 2. The SDK's facade source (`sdk/streamlib-sdk/src/lib.rs`) — the one
-//    file that pub-uses items from engine to expose them through
-//    `streamlib::*`.
-//
-// Anywhere else, `use streamlib_engine` or `streamlib_engine::PATH`
-// references mean someone is bypassing the SDK boundary visually — even if
-// the Cargo dep graph is correct, a future reader can't tell whether the
-// SDK is doing anything. Engine-bridge access (host_rhi, Host*Ext, etc.)
-// goes through `streamlib::sdk::engine::*` instead.
-
-const CHECK_STREAMLIB_ENGINE: &str = "streamlib-engine-only-in-sdk-or-engine";
-
-const STREAMLIB_ENGINE_RATIONALE: &str = "direct streamlib_engine::* imports must stay in the engine itself or in sdk/streamlib-sdk/src/lib.rs (the SDK facade); consumer code routes through streamlib::* (with engine extensions via streamlib::sdk::engine::*)";
-
-const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "runtime/streamlib-engine/",
-        kind: AllowKind::PathPrefix,
-        rationale: "engine itself — its own bins/tests/benches link to its lib by name",
-    },
-    AllowEntry {
-        path: "sdk/streamlib-sdk/src/lib.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
-    },
-];
-
-// ---------------------------------------------------------------------------
-// Check 7 — `streamlib::*` top-level shortcuts forbidden
-// ---------------------------------------------------------------------------
-//
-// All consumer code must route through the SDK's three-tier path system:
-//
-//   - `streamlib::sdk::*`            (default — public SDK API)
-//   - `streamlib::sdk::engine::*`    (curated engine-bridge surface)
-//   - `streamlib::engine_internal::*`(direct passthrough — rare; signals
-//                                     "I'm reaching past the curated boundary")
-//
-// Top-level `streamlib::Foo` shortcuts (e.g., `use streamlib::StreamRuntime`)
-// are forbidden because they hide which boundary tier the consumer is in.
-// Path segments are the documentation: a future reader scans the import
-// and immediately knows which tier is being used.
-//
-// The engine itself uses `extern crate self as streamlib;` and references
-// items through that alias for proc-macro path resolution. Those uses
-// are exempt — the engine's lib.rs and its own internal modules legitimately
-// reach internal items through `streamlib::*`.
-
-const CHECK_TOP_LEVEL_SHORTCUT: &str = "streamlib-top-level-shortcut-forbidden";
-
-const TOP_LEVEL_SHORTCUT_RATIONALE: &str = "use streamlib::sdk::* (or sdk::engine::* / engine_internal::* for engine-side access); top-level streamlib::Foo shortcuts hide the boundary tier";
-
-const TOP_LEVEL_SHORTCUT_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "runtime/streamlib-engine/",
-        kind: AllowKind::PathPrefix,
-        rationale: "engine itself — `extern crate self as streamlib;` aliases the engine; internal modules reach items through this alias for proc-macro path resolution",
-    },
-    AllowEntry {
-        path: "sdk/streamlib-sdk/src/lib.rs",
-        kind: AllowKind::ExactFile,
-        rationale: "SDK facade — defines the streamlib::sdk::* / engine_internal::* tree",
-    },
-    AllowEntry {
-        path: "sdk/streamlib-macros/",
-        kind: AllowKind::PathPrefix,
-        rationale: "proc-macro emit-paths for downstream consumers; not consumer code",
-    },
-];
-
-// Path-prefix allowlist for the FIRST segment after `streamlib::`. A
-// `streamlib::FOO` reference is OK only if FOO is one of these segments.
-const TOP_LEVEL_ALLOWED_SEGMENTS: &[&str] = &["sdk", "engine_internal"];
-
-fn check_streamlib_top_level_shortcut(
-    project_root: &Path,
-    violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
-    // Hand-rolled scanner — match `streamlib::FOO` where FOO starts at
-    // a word boundary and is an identifier.
-    for path in walk_rs(project_root) {
-        *files_scanned += 1;
-        let rel = rel_to_root(&path, project_root);
-        if matches_allow(rel, TOP_LEVEL_SHORTCUT_ALLOWLIST) {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (line_no, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
-                continue; // skip comments (incl. `///` and `//!`)
-            }
-            // Walk every occurrence of "streamlib::" in the line, check the
-            // segment that follows.
-            let bytes = line.as_bytes();
-            let mut i = 0;
-            while let Some(found) = line[i..].find("streamlib::") {
-                let start = i + found;
-                // Boundary check: char before must NOT be ident/_ (avoid
-                // matching `streamlib_engine::...`, `streamlib_consumer_rhi::...` etc.)
-                if start > 0 {
-                    let prev = bytes[start - 1] as char;
-                    if prev.is_ascii_alphanumeric() || prev == '_' {
-                        i = start + "streamlib::".len();
-                        continue;
-                    }
-                }
-                let after = start + "streamlib::".len();
-                // Read the segment ident
-                let mut end = after;
-                while end < bytes.len() {
-                    let c = bytes[end] as char;
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        end += 1;
-                    } else {
-                        break;
-                    }
-                }
-                if end > after {
-                    let segment = &line[after..end];
-                    if !TOP_LEVEL_ALLOWED_SEGMENTS.contains(&segment) {
-                        violations.push(Violation {
-                            path: rel.to_path_buf(),
-                            line_no: line_no + 1,
-                            line_text: line.to_string(),
-                            matched_pattern: format!("streamlib::{} (top-level)", segment),
-                            check: CHECK_TOP_LEVEL_SHORTCUT,
-                            rationale: TOP_LEVEL_SHORTCUT_RATIONALE,
-                        });
-                    }
-                }
-                i = end;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn check_streamlib_engine_confined(
-    project_root: &Path,
-    violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
-    for path in walk_rs(project_root) {
-        *files_scanned += 1;
-        let rel = rel_to_root(&path, project_root);
-        if matches_allow(rel, STREAMLIB_ENGINE_ALLOWLIST) {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (line_no, line) in content.lines().enumerate() {
-            // Skip comment-only lines (doc-comment intra-doc links are not
-            // type-checked but still encourage future authors to reach for
-            // the engine path; flag them too).
-            if !line.contains("streamlib_engine") {
-                continue;
-            }
-            // Trim leading whitespace to detect the line-shape.
-            let trimmed = line.trim_start();
-            // We flag any non-comment line that mentions `streamlib_engine`.
-            // Comment lines (//, ///, //!) we skip — doc-link rewriting is
-            // handled by docs sweep and not boundary-relevant.
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            violations.push(Violation {
-                path: rel.to_path_buf(),
-                line_no: line_no + 1,
-                line_text: line.to_string(),
-                matched_pattern: "streamlib_engine".to_string(),
-                check: CHECK_STREAMLIB_ENGINE,
-                rationale: STREAMLIB_ENGINE_RATIONALE,
-            });
-        }
-    }
-    Ok(())
-}
-
 fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
     value
         .as_table()
@@ -1014,118 +573,6 @@ fn check_packages_facade_runtime_dep(
                     matched_pattern: format!("streamlib facade dep in [{}]", section),
                     check: CHECK_PACKAGES_FACADE_DEP,
                     rationale: PACKAGES_FACADE_DEP_RATIONALE,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Check 9 — `packages/*` source must not reach the engine bridge / host device
-// ---------------------------------------------------------------------------
-//
-// A separately-built source-only package can have a binary that diverges from
-// the host's even at a matched version. GPU code that grabs the raw host device
-// and hand-rolls RHI on it corrupts the driver in that scenario — package GPU
-// code must go through the FullAccess primitives.
-//
-// No raw host device crosses a DSO boundary: the raw-`Arc` transit slots were
-// deleted, so `host_vulkan_device_arc` survives only as an engine-internal
-// host-mode accessor (runtime/streamlib-engine/src/core/context/gpu_context/).
-// A package can name it only by pulling the engine
-// facade in-workspace; `streamlib::sdk::engine::*` is the curated surface that
-// hands out those raw primitives. Both patterns stay policed as a ratchet
-// against reintroducing the transit.
-//
-// Grep-shaped (comment lines skipped): the engine-bridge path substring and the
-// bare `host_vulkan_device_arc` identifier. Seeded to the current reachers (see
-// PACKAGES_ENGINE_REACH_ALLOWLIST below); `test-fixtures` is permanent
-// (host-side, exercises the bridge by design), the rest shrink as conversions
-// land.
-//
-// A package's TOP-LEVEL `tests/` and `benches/` dirs are EXEMPT: an
-// engine-backed integration test / benchmark legitimately reaches the bridge,
-// and check 8 already blesses the `streamlib` dev-dep those targets link
-// against. Only the cargo target dir directly under the package root is
-// exempt — a nested `tests/` helper dir stays covered. Every root a package
-// authors under (`processors/`, or `src/` for a host rlib package) stays strict
-// EVERYWHERE, including `#[cfg(test)]` mods — for a tooling reason, NOT because
-// the reach ships: the package build is `cargo build -p <crate>`, never
-// `--tests`, so the `test` cfg is OFF and a
-// `#[cfg(test)]` reach is compiled out — it does NOT ship in the cdylib. It
-// stays flagged because this grep is line-based and cannot reliably scope a
-// reach to a `#[cfg(test)]` mod; engine-backed tests belong in the top-level
-// `tests/` target (blessed by check 8). A hit under an authored root is told to
-// move the engine-backed test to `tests/`.
-
-const CHECK_PACKAGES_ENGINE_REACH: &str = "packages-no-engine-bridge-reach";
-
-const PACKAGES_ENGINE_REACH_RATIONALE: &str = "packages/* source must not reach the engine bridge (`streamlib::sdk::engine::*`) or the engine-internal `host_vulkan_device_arc` accessor — a separately-built source-only package whose GPU code hand-rolls RHI on the raw host device corrupts the driver. The raw-`Arc` transit slots were deleted, so no host device crosses a DSO boundary; this stays policed as a ratchet against reintroducing it. Package GPU code goes through the FullAccess primitives";
-
-/// Engine-bridge module path — the curated surface that hands packages raw
-/// engine primitives. A substring match is enough; it is unambiguous.
-const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
-
-/// Engine-internal accessor that returns the raw host `VulkanDevice`. Matched
-/// as a bare identifier (word boundaries) so a longer lookalike does not trip
-/// it.
-const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
-
-/// The `packages/*` dirs whose source may reach the engine bridge or the host
-/// device. `test-fixtures` is the only permitted reacher (host-side, exercises
-/// the bridge by design); a distributable package's GPU code goes through the
-/// cdylib-safe FullAccess primitives instead.
-const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[AllowEntry {
-    path: "packages/test-fixtures/",
-    kind: AllowKind::PathPrefix,
-    rationale: "permanent: test-fixtures run host-side and exercise the engine bridge directly by design",
-}];
-
-fn check_packages_engine_reach(
-    project_root: &Path,
-    violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
-    for path in walk_rs(project_root) {
-        let rel = rel_to_root(&path, project_root);
-        if !rel_starts_with(rel, "packages/") {
-            continue;
-        }
-        // A package's TOP-LEVEL tests/ or benches/ dir is exempt — engine-backed
-        // integration tests / benchmarks belong there (check 8 blesses the
-        // dev-dep). Every other root a package authors under (`processors/`, or
-        // `src/` for a host package) stays strict, including a nested `tests/`
-        // helper dir and `#[cfg(test)]` mods.
-        if package_top_level_test_or_bench_dir(rel) {
-            continue;
-        }
-        *files_scanned += 1;
-        if matches_allow(rel, PACKAGES_ENGINE_REACH_ALLOWLIST) {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        for (idx, line) in content.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") {
-                continue;
-            }
-            let matched = if line.contains(ENGINE_BRIDGE_PATH) {
-                Some(ENGINE_BRIDGE_PATH)
-            } else if line_has_bare_ident(line, HOST_DEVICE_ARC_IDENT) {
-                Some(HOST_DEVICE_ARC_IDENT)
-            } else {
-                None
-            };
-            if let Some(pattern) = matched {
-                violations.push(Violation {
-                    path: rel.to_path_buf(),
-                    line_no: idx + 1,
-                    line_text: line.to_string(),
-                    matched_pattern: pattern.to_string(),
-                    check: CHECK_PACKAGES_ENGINE_REACH,
-                    rationale: PACKAGES_ENGINE_REACH_RATIONALE,
                 });
             }
         }
@@ -1447,45 +894,6 @@ fn rel_starts_with(rel: &Path, prefix: &str) -> bool {
     rel.to_string_lossy().replace('\\', "/").starts_with(prefix)
 }
 
-/// True iff `rel` sits under a package's TOP-LEVEL `tests/` or `benches/` cargo
-/// target dir — i.e. its path components are `packages / <pkg> / (tests|benches)
-/// / …`. A deeper `src/tests/` helper dir does NOT match: only the target dir
-/// directly under the package root is a cargo test / bench target, so only it
-/// gets the engine-reach exemption.
-fn package_top_level_test_or_bench_dir(rel: &Path) -> bool {
-    let comps: Vec<&str> = rel
-        .components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(s) => s.to_str(),
-            _ => None,
-        })
-        .collect();
-    comps.len() >= 3 && comps[0] == "packages" && (comps[2] == "tests" || comps[2] == "benches")
-}
-
-/// True iff `line` contains `ident` as a bare identifier — the characters
-/// immediately before and after the match are not identifier characters, so a
-/// longer lookalike (`host_vulkan_device_arc_cached`) does not trip it.
-fn line_has_bare_ident(line: &str, ident: &str) -> bool {
-    let bytes = line.as_bytes();
-    let mut from = 0;
-    while let Some(off) = line[from..].find(ident) {
-        let start = from + off;
-        let end = start + ident.len();
-        let before_ok = start == 0 || !is_ident_char(bytes[start - 1]);
-        let after_ok = end >= bytes.len() || !is_ident_char(bytes[end]);
-        if before_ok && after_ok {
-            return true;
-        }
-        from = end;
-    }
-    false
-}
-
-fn is_ident_char(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
-}
-
 // ---------------------------------------------------------------------------
 // Cargo.toml dep iteration
 // ---------------------------------------------------------------------------
@@ -1604,34 +1012,6 @@ mod tests {
     // ----- Check 1: no ash -----
 
     #[test]
-    fn rejects_use_ash_in_rust_file() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/lib.rs",
-            "use ash::vk;\nfn main() {}\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report.violations.iter().any(|v| v.check == CHECK_NO_ASH),
-            "expected no-ash violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn rejects_extern_crate_ash() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/lib.rs",
-            "extern crate ash;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(report.violations.iter().any(|v| v.check == CHECK_NO_ASH));
-    }
-
-    #[test]
     fn rejects_ash_in_cargo_toml_runtime_dep() {
         let dir = empty_workspace();
         write_fixture(
@@ -1650,12 +1030,6 @@ mod tests {
     #[test]
     fn ignores_ahash_lookalike() {
         let dir = empty_workspace();
-        // Lookalike substring should NOT trip the check.
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/lib.rs",
-            "use ahash::AHashMap;\nlet h: Hash = todo!();\n",
-        );
         // Cargo.toml with ahash dep.
         write_fixture(
             dir.path(),
@@ -1676,84 +1050,6 @@ mod tests {
     }
 
     // ----- Check 2: vulkanalia confined -----
-
-    #[test]
-    fn rejects_use_vulkanalia_outside_allowlist() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/core/some_unrelated.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_VULKANALIA),
-            "expected vulkanalia confinement violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn allows_use_vulkanalia_in_rhi() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/vulkan/rhi/example.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_VULKANALIA)
-            .collect();
-        assert!(vk.is_empty(), "vulkanalia in RHI should pass: {:?}", vk);
-    }
-
-    #[test]
-    fn allows_use_vulkanalia_in_consumer_rhi() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-consumer-rhi/src/lib.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_VULKANALIA)
-            .collect();
-        assert!(
-            vk.is_empty(),
-            "vulkanalia in consumer-rhi should pass: {:?}",
-            vk
-        );
-    }
-
-    #[test]
-    fn allows_use_vulkanalia_in_adapter_crate() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "adapters/streamlib-adapter-vulkan/src/lib.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_VULKANALIA)
-            .collect();
-        assert!(
-            vk.is_empty(),
-            "vulkanalia in adapter crate should pass: {:?}",
-            vk
-        );
-    }
 
     #[test]
     fn rejects_vulkanalia_cargo_dep_outside_allowlist() {
@@ -1938,11 +1234,6 @@ edition = "2021"
 vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", default-features = false }
 "#,
         );
-        write_fixture(
-            dir.path(),
-            "vendor/tatolab-vulkanalia-vma/src/lib.rs",
-            "use vulkanalia::vk::*;\n",
-        );
         let report = scan_all(dir.path()).unwrap();
         let hits: Vec<_> = report
             .violations
@@ -1962,11 +1253,6 @@ vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tato
         // The vendored-dir exemptions are anchored to the three EXACT dirs;
         // a hypothetical vendor/tatolab-vulkanalia-extras/ crate must NOT
         // silently inherit them in either check 2 or check 5.
-        write_fixture(
-            dir.path(),
-            "vendor/tatolab-vulkanalia-extras/src/lib.rs",
-            "use vulkanalia::vk;\n",
-        );
         write_fixture(
             dir.path(),
             "vendor/tatolab-vulkanalia-extras/Cargo.toml",
@@ -2112,23 +1398,6 @@ vulkanalia.workspace = true
         assert!(fork.is_empty(), "dotted-key form should pass: {:?}", fork);
     }
 
-    #[test]
-    fn allows_use_vulkanalia_in_tests() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "adapters/streamlib-adapter-opengl/tests/common.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let vk: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_VULKANALIA)
-            .collect();
-        assert!(vk.is_empty(), "vulkanalia in tests/ should pass: {:?}", vk);
-    }
-
     // ----- Check 3: cdylib + adapter runtime deps -----
 
     #[test]
@@ -2213,111 +1482,12 @@ streamlib = { path = "../streamlib" }
 
     // ----- Check 4: privileged vk calls -----
 
-    #[test]
-    fn rejects_allocate_memory_outside_rhi() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/core/some_other.rs",
-            "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PRIVILEGED_VK),
-            "expected privileged-vk violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn rejects_create_compute_pipelines_outside_rhi() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "adapters/streamlib-adapter-vulkan/src/state.rs",
-            "fn f() { unsafe { dev.create_compute_pipelines(cache, &[info], None).unwrap(); } }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PRIVILEGED_VK),
-            "expected privileged-vk violation in adapter crate, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn allows_privileged_call_in_rhi() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
-            "fn f() { unsafe { self.device.allocate_memory(&info, None).unwrap(); } }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let pv: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PRIVILEGED_VK)
-            .collect();
-        assert!(
-            pv.is_empty(),
-            "privileged call in RHI should pass: {:?}",
-            pv
-        );
-    }
-
-    #[test]
-    fn allows_privileged_call_in_consumer_rhi_for_carve_out() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-consumer-rhi/src/consumer_vulkan_device.rs",
-            "fn f() { unsafe { self.device.allocate_memory(&alloc_info, None).unwrap(); } }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let pv: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PRIVILEGED_VK)
-            .collect();
-        assert!(
-            pv.is_empty(),
-            "consumer-rhi import-side carve-out should pass: {:?}",
-            pv
-        );
-    }
-
     // ----- Cdylib tightening (#572) -----
     //
     // Post-#550/#553, neither cdylib needs raw `vulkanalia` access. These
     // tests prove the path-prefix exemption is gone — any reintroduction
     // of `use vulkanalia`, a `vulkanalia` Cargo dep, or a privileged-vk
     // call inside the wheel trips a violation rather than slipping through.
-
-    #[test]
-    fn rejects_use_vulkanalia_in_the_wheel() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "sdk/streamlib-python-wheel/src/lib.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_VULKANALIA),
-            "expected vulkanalia confinement violation in the wheel, got {:?}",
-            report.violations,
-        );
-    }
 
     #[test]
     fn rejects_vulkanalia_cargo_dep_in_the_wheel() {
@@ -2345,51 +1515,7 @@ vulkanalia = { workspace = true }
         );
     }
 
-    #[test]
-    fn rejects_allocate_memory_in_the_wheel() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "sdk/streamlib-python-wheel/src/some_module.rs",
-            "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PRIVILEGED_VK),
-            "expected privileged-vk violation in the wheel, got {:?}",
-            report.violations,
-        );
-    }
-
     // ----- Comment-line skip -----
-
-    #[test]
-    fn skips_commented_use_ash() {
-        // After `trim_start()` the line begins with `//`, so
-        // `starts_with("use ash::")` is false and the check correctly
-        // ignores commented-out imports. Locks the behavior so a future
-        // refactor to `line.contains("use ash::")` would fail loudly.
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "runtime/streamlib-engine/src/lib.rs",
-            "// use ash::vk; — kept for historical reference only\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let no_ash: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_NO_ASH)
-            .collect();
-        assert!(
-            no_ash.is_empty(),
-            "commented import should not match: {:?}",
-            no_ash
-        );
-    }
 
     // ----- Check 8: packages/* facade-dep ban -----
 
@@ -2482,113 +1608,6 @@ streamlib = { version = "0.6.0" }
     }
 
     // ----- Check 9: packages/* engine-bridge / host-device reach ban -----
-
-    #[test]
-    fn rejects_engine_bridge_reach_in_new_package() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/lib.rs",
-            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH
-                    && v.matched_pattern == "streamlib::sdk::engine::"),
-            "expected engine-bridge reach violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn rejects_host_vulkan_device_arc_reach_in_new_package() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/gpu.rs",
-            "fn f() { let host_device = full.host_vulkan_device_arc().unwrap(); }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH
-                    && v.matched_pattern == "host_vulkan_device_arc"),
-            "expected host-device reach violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn allows_engine_reach_in_allowlisted_package() {
-        let dir = empty_workspace();
-        // packages/test-fixtures is the permanent host-side reacher — both
-        // reach forms pass.
-        write_fixture(
-            dir.path(),
-            "packages/test-fixtures/processors/gpu_fixture.rs",
-            "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "allowlisted package engine reach should pass: {:?}",
-            hits
-        );
-    }
-
-    #[test]
-    fn skips_commented_engine_reach_in_package() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/lib.rs",
-            "// host_vulkan_device_arc() and streamlib::sdk::engine:: are off-limits here\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "commented engine reach should not match: {:?}",
-            hits
-        );
-    }
-
-    #[test]
-    fn ignores_host_vulkan_device_arc_lookalike_in_package() {
-        let dir = empty_workspace();
-        // A longer identifier that merely contains the banned name as a
-        // substring must NOT trip the bare-identifier match.
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/lib.rs",
-            "fn f() { let x = obj.host_vulkan_device_arc_cached(); }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "lookalike identifier should not match: {:?}",
-            hits
-        );
-    }
 
     // ----- Check 10: examples/* cdylib facade-dep ban -----
 
@@ -2717,97 +1736,6 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
     }
 
     // ----- Check 9 exemption: package top-level tests/ + benches/ dirs -----
-
-    #[test]
-    fn allows_engine_reach_in_package_top_level_tests_dir() {
-        let dir = empty_workspace();
-        // A NON-allowlisted package's TOP-LEVEL tests/ dir may reach the engine
-        // bridge — engine-backed integration tests belong there (check 8
-        // blesses the dev-dep). Locks the exemption.
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/tests/integration.rs",
-            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "top-level tests/ engine reach should pass: {:?}",
-            hits
-        );
-    }
-
-    #[test]
-    fn allows_engine_reach_in_package_top_level_benches_dir() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/benches/bench.rs",
-            "fn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_PACKAGES_ENGINE_REACH)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "top-level benches/ engine reach should pass: {:?}",
-            hits
-        );
-    }
-
-    #[test]
-    fn rejects_engine_reach_in_package_src_cfg_test_mod() {
-        let dir = empty_workspace();
-        // `src/` stays strict EVERYWHERE, including a `#[cfg(test)]` mod — not
-        // because the reach ships (under `cargo build` the `test` cfg is OFF, so
-        // it is compiled out) but because this line-based grep cannot reliably
-        // scope a reach to a `#[cfg(test)]` mod; engine-backed tests belong in
-        // `tests/` (blessed by check 8).
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/lib.rs",
-            "#[cfg(test)]\nmod tests {\n    use streamlib::sdk::engine::HostSurfaceStoreExt;\n}\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
-            "src/ #[cfg(test)] engine reach must still fail, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn rejects_engine_reach_in_package_src_tests_helper_dir() {
-        let dir = empty_workspace();
-        // A `src/tests/` helper dir is NOT a cargo test target — only the
-        // package's TOP-LEVEL tests/ dir is exempt, so this deeper dir stays
-        // covered. Locks the top-level-only distinction.
-        write_fixture(
-            dir.path(),
-            "packages/newly-carved/src/tests/helpers.rs",
-            "use streamlib::sdk::engine::HostSurfaceStoreExt;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_PACKAGES_ENGINE_REACH),
-            "src/tests/ helper dir must stay covered, got {:?}",
-            report.violations,
-        );
-    }
 
     // ----- Check 12: transitive trunk-set -> engine walk (synthetic metadata) -----
 

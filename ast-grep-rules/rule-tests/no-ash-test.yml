@@ -1,0 +1,10 @@
+id: no-ash
+valid:
+  - "use ahash::AHashMap;"
+  - "// use ash::vk;"
+  - "use crate::ash_tree::Tree;"
+invalid:
+  - "use ash::vk;"
+  - "pub use ash::{vk, Device};"
+  - "use ::ash::vk;"
+  - "extern crate ash;"

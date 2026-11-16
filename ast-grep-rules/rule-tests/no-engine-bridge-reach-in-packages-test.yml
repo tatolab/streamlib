@@ -1,0 +1,10 @@
+id: no-engine-bridge-reach-in-packages
+valid:
+  - "use streamlib::sdk::Texture;"
+  - "fn f() { ctx.host_vulkan_device_arc_cached(); }"
+  - "// streamlib::sdk::engine::GpuContext"
+invalid:
+  - "use streamlib::sdk::engine::GpuContext;"
+  - "use streamlib::sdk::engine::{GpuContext, HostRhi};"
+  - "fn f() { let d = ctx.host_vulkan_device_arc(); }"
+  - "fn f() { m!(streamlib::sdk::engine::GpuContext); }"

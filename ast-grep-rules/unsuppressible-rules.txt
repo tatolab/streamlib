@@ -1,6 +1,7 @@
-# Rules that take no `ast-grep-ignore`, one id per line. They guard against
-# faults that fail silently or only in a grandchild process, so none has a
-# per-line way past it. scripts/check_ast_grep_suppressions.py refuses a
+# Rules that take no `ast-grep-ignore`, one id per line. Each guards a fault
+# that fails silently, only in a grandchild process, or only on a CI runner, or a
+# boundary whose exceptions are the rule's own ignores, so none has a per-line
+# way past it. scripts/check_ast_grep_suppressions.py refuses a
 # suppression comment naming one; ast-grep can't, since a comment suppresses
 # its own line.
 no-inheritable-descriptor
@@ -11,3 +12,12 @@ no-publish-subscribe-service-outside-the-engine-wrapper
 no-escalate-in-lifecycle
 no-wall-clock-read
 no-wall-clock-read-in-python
+no-unbounded-apt-install-in-ci
+no-unbounded-apt-install-in-ci-shell
+bounded-apt-install-step-without-timeout
+no-ash
+no-vulkanalia-outside-the-rhi
+no-privileged-vulkan-call-outside-the-rhi
+no-streamlib-engine-outside-the-engine
+no-streamlib-top-level-shortcut
+no-engine-bridge-reach-in-packages

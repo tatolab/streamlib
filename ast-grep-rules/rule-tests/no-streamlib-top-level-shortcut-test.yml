@@ -1,0 +1,15 @@
+id: no-streamlib-top-level-shortcut
+valid:
+  - "use streamlib::sdk::Texture;"
+  - "use streamlib::engine_internal::Runtime;"
+  - "use streamlib::sdk::engine::GpuContext;"
+  - "use streamlib::{sdk, engine_internal};"
+  - "use streamlib::{sdk::Texture, engine_internal::Runtime};"
+  - "use streamlib_engine::Thing;"
+  - "fn f() { let t = streamlib::sdk::Texture::new(); }"
+  - "fn f() { m!(streamlib::sdk::Texture); }"
+invalid:
+  - "use streamlib::StreamRuntime;"
+  - "use streamlib::{sdk, StreamRuntime};"
+  - "fn f() { let r = streamlib::StreamRuntime::new(); }"
+  - "fn f() { m!(streamlib::StreamRuntime); }"

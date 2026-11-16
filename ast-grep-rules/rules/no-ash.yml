@@ -1,0 +1,21 @@
+id: no-ash
+language: rust
+severity: error
+message: ash is fully replaced by vulkanalia; reintroducing it splits the workspace's GPU API surface.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - vendor/**/*.rs
+  - examples/**/*.rs
+  - packages/**/*.rs
+rule:
+  any:
+    - kind: use_declaration
+      has:
+        field: argument
+        regex: '^(::)?ash(::|\s|$)'
+    - kind: extern_crate_declaration
+      has:
+        field: name
+        regex: '^ash$'
