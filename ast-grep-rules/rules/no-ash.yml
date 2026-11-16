@@ -19,3 +19,10 @@ rule:
       has:
         field: name
         regex: '^ash$'
+    - kind: identifier
+      regex: '^ash$'
+      inside:
+        kind: token_tree
+        stopBy: end
+      follows:
+        regex: '^(use|crate)$'

@@ -22,3 +22,7 @@ invalid:
   - "fn e<T: streamlib::Processor>() {}"
   - "fn g() { ::streamlib::StreamRuntime::new(); }"
   - "use ::streamlib::StreamRuntime;"
+  - |
+    macro_rules! m {
+        ($($name:ident),*) => { $(use streamlib::StreamRuntime as $name;)* };
+    }

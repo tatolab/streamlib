@@ -1,0 +1,18 @@
+id: no-example-or-usage-section-in-doc-comment
+language: rust
+severity: error
+message: A doc comment holds no `# Example` or `# Usage` section; the code and its tests show how an item is used.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - packages/test-fixtures/**/*.rs
+  - xtask/**/*.rs
+rule:
+  any:
+    - kind: line_comment
+      regex: '^//(/[^/]|!)[ \t]*#{1,6}[ \t]+(?i:examples?|usage)\b'
+    - kind: block_comment
+      all:
+        - regex: '^/\*([*][^*/]|!)'
+        - regex: '(?m)^[ \t]*(/\*[*!])?[ \t]*\*?[ \t]*#{1,6}[ \t]+(?i:examples?|usage)\b'

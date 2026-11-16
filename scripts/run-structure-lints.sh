@@ -85,6 +85,20 @@ for ast_grep_scan_path in "${ast_grep_scan_paths[@]}"; do
   ast_grep_scan_path_arguments+=(--path "${ast_grep_scan_path}")
 done
 
+# ast-grep also skips what .gitignore matches, so a tracked source file under a
+# directory name like output/ or build/ would escape every rule unseen.
+tracked_sources_git_ignores() {
+  local ignored_tracked_sources
+  ignored_tracked_sources="$(git ls-files -ci --exclude-standard -- \
+    '*.rs' '*.py' '*.yml' '*.yaml' '*.sh' '*.bash')"
+  if [[ -n "${ignored_tracked_sources}" ]]; then
+    echo "Tracked source files that .gitignore hides from ast-grep; add a negation to .gitignore:" >&2
+    echo "${ignored_tracked_sources}" >&2
+    return 1
+  fi
+}
+run_lint "ast-grep sees every tracked source" tracked_sources_git_ignores
+
 # shellcheck disable=SC2046 # compare_arguments_for prints nothing or two words.
 run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
   "${lint_config_directory}/ast-grep/check_ast_grep_scan.py" \

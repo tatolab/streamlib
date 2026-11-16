@@ -2,21 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! Resolve sparse per-axis engine-ID inputs into a [`ResolvedColorInfo`]
-//! by filling missing axes from the V4L2 / libplacebo default table.
+//! by filling missing axes from the V4L2 / libplacebo per-kind defaults.
 
 use super::resolved::{ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo};
 use super::transfer::TransferId;
 
 /// Resolve every missing axis to its per-kind default. The defaults
 /// mirror V4L2's `V4L2_MAP_*_DEFAULT` macros and libplacebo's
-/// `pl_color_space_infer`:
-///
-/// | axis | RGB default | YCbCr default |
-/// |---|---|---|
-/// | `primaries` | `Bt709` | `Bt709` |
-/// | `transfer` | `Srgb` | `Bt709` |
-/// | `matrix` | `Identity` | `Smpte170m` (BT.601, the UVC convention) |
-/// | `range` | `Full` | `Limited` |
+/// `pl_color_space_infer`. An RGB source defaults to `Bt709` primaries, the
+/// `Srgb` transfer, the `Identity` matrix and `Full` range. A YCbCr source
+/// defaults to `Bt709` primaries, the `Bt709` transfer, the `Smpte170m` matrix
+/// (BT.601, the UVC convention) and `Limited` range.
 ///
 /// RGB-encoded sources also override the matrix axis to `Identity`
 /// regardless of the on-wire value, since matrix is meaningless when
@@ -60,7 +56,7 @@ mod tests {
     /// All-None inputs for an RGB source resolve to
     /// `Bt709 / Srgb / Identity / Full`.
     #[test]
-    fn rgb_all_none_defaults_match_table() {
+    fn rgb_all_none_defaults_match_v4l2_defaults() {
         let r = resolve_color_defaults(None, None, None, None, ColorSpaceKind::Rgb);
         assert_eq!(r.primaries, PrimariesId::Bt709);
         assert_eq!(r.transfer, TransferId::Srgb);
@@ -71,7 +67,7 @@ mod tests {
     /// All-None inputs for a YCbCr source resolve to the UVC
     /// convention: `Bt709 / Bt709 / Smpte170m / Limited`.
     #[test]
-    fn yuv_all_none_defaults_match_table() {
+    fn yuv_all_none_defaults_match_v4l2_defaults() {
         let r = resolve_color_defaults(None, None, None, None, ColorSpaceKind::Yuv);
         assert_eq!(r.primaries, PrimariesId::Bt709);
         assert_eq!(r.transfer, TransferId::Bt709);

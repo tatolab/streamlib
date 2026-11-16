@@ -8,3 +8,7 @@ invalid:
   - "fn f() { device.get_memory_fd_khr(&info); }"
   - "fn f() { device.create_compute_pipelines(cache, &infos, None); }"
   - "fn f() { let m = check!(device.allocate_memory(&info, None)); }"
+  - |
+    macro_rules! m {
+        ($($d:expr),*) => { $($d.allocate_memory(info, None);)* };
+    }

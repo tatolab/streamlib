@@ -52,6 +52,7 @@ rule:
         regex: '^(sdk|engine_internal)$'
       inside:
         kind: token_tree
+        stopBy: end
       follows:
         regex: '^::$'
         follows:

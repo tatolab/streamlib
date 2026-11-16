@@ -1,0 +1,23 @@
+id: no-todo-macro
+language: rust
+severity: error
+message: Library code never ships `todo!()` or `unimplemented!()`; return a typed error or finish the code path.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - packages/test-fixtures/**/*.rs
+  - xtask/**/*.rs
+ignores:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "**/benches/**"
+  - "**/examples/**"
+rule:
+  kind: macro_invocation
+  has:
+    field: macro
+    regex: '^(::)?(core::|std::)?(todo|unimplemented)$'
+  not:
+    matches: inside-rust-test-code

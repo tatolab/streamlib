@@ -50,40 +50,14 @@ use gop::ReorderEntry;
 //
 // High-level encoder that owns the complete Vulkan encode pipeline: instance,
 // device, video session, DPB, bitstream buffer, staging, source image, and
-// GOP-driven frame type selection.  Callers can encode raw NV12 frames or
-// GPU-resident RGBA images in under 20 lines.
+// GOP-driven frame type selection. Callers encode raw NV12 frames or
+// GPU-resident RGBA images.
 
 /// High-level encoder that handles all Vulkan boilerplate automatically.
 ///
 /// Owns the complete Vulkan Video encode pipeline including video session,
 /// DPB, bitstream buffer, staging buffer, source image, and GOP-driven
 /// frame type selection.
-///
-/// # Example
-///
-/// ```ignore
-/// let config = SimpleEncoderConfig {
-///     width: 1920,
-///     height: 1080,
-///     fps: 30,
-///     codec: Codec::H264,
-///     preset: Preset::Medium,
-///     ..Default::default()
-/// };
-///
-/// let mut enc = SimpleEncoder::new(config)?;
-/// let header = enc.header();
-///
-/// for nv12_frame in frames {
-///     let packet = enc.submit_frame(&nv12_frame)?;
-///     output.write_all(&packet.data)?;
-/// }
-///
-/// let trailing = enc.finish()?;
-/// for pkt in trailing {
-///     output.write_all(&pkt.data)?;
-/// }
-/// ```
 pub struct SimpleEncoder {
     pub(crate) device: vulkanalia::Device,
 

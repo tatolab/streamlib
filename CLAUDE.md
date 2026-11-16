@@ -119,7 +119,7 @@ built-in publishes on means you skipped it.
   `MACOSX_DEPLOYMENT_TARGET`, `LSMinimumSystemVersion`, and doc that names our floor. Never 15.0
   or anything lower, in this repo or in Tato Studio. A third-party binary's own `minos` and a
   dated research note stay as recorded.
-- No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
+- No back-compat shims (pre-1.0).
 - New Rust and Python files carry the GPL-3.0-only header, except in the vendored trees §Licensing lists, where
   a change is a recorded patch against upstream and never a drive-by edit. Never touch the
   licence files.
