@@ -4,7 +4,7 @@
 """Opus encode and decode for StreamLib: `OpusEncoder` and `OpusDecoder`.
 
 An extension wheel that links no engine crate; each node runs in its own
-processor interpreter like any other Python node, and is defined here so its
+node interpreter like any other Python node, and is defined here so its
 type is `tatolab.opus:OpusEncoder` and `tatolab.opus:OpusDecoder`.
 
 Both carry bare Opus packets, one per message, each opening its own group and

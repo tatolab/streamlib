@@ -20,8 +20,8 @@ use super::*;
 fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
     use uuid::Uuid;
 
+    use crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY;
     use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
-    use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
 
     let Ok(gpu) = GpuContext::init_for_platform_sync() else {
@@ -36,15 +36,11 @@ fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
     let node_b_pool_key = format!("node-b-pool-{}", Uuid::new_v4().simple());
     let consumer = live_service.check_out_leases().mint_holder_id();
 
-    let node_a_frames_the_consumer_holds: Vec<String> = (0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+    let node_a_frames_the_consumer_holds: Vec<String> = (0..NODE_OUTPUT_SURFACE_POOL_CAPACITY)
         .map(|_| {
-            let frame = next_processor_output_frame_over_the_escalate_op(
-                &sandbox,
-                &node_a,
-                &node_a_pool_key,
-                2,
-            )
-            .expect("node A's output pool grows while a consumer holds its frames");
+            let frame =
+                next_node_output_frame_over_the_escalate_op(&sandbox, &node_a, &node_a_pool_key, 2)
+                    .expect("node A's output pool grows while a consumer holds its frames");
             live_service
                 .check_out_leases()
                 .record_check_out_lease(&frame, consumer)
@@ -53,7 +49,7 @@ fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
         })
         .collect();
     let node_a_pool_refusal =
-        next_processor_output_frame_over_the_escalate_op(&sandbox, &node_a, &node_a_pool_key, 2)
+        next_node_output_frame_over_the_escalate_op(&sandbox, &node_a, &node_a_pool_key, 2)
             .expect_err("node A's seventeenth held frame is refused");
     assert!(
         node_a_pool_refusal.contains(&node_a_pool_key),
@@ -73,7 +69,7 @@ fn one_nodes_held_frames_never_refuse_another_nodes_frames_of_the_same_shape() {
         "the refusal names the shape and the count: {node_a_one_off_refusal}"
     );
 
-    next_processor_output_frame_over_the_escalate_op(&sandbox, &node_b, &node_b_pool_key, 2)
+    next_node_output_frame_over_the_escalate_op(&sandbox, &node_b, &node_b_pool_key, 2)
         .expect("node B's pooled frame of the same shape is served while node A holds its own");
     acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(&sandbox, &node_b)
         .expect("node B's one-off of the same shape is served while node A holds its own");
@@ -112,7 +108,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
         EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireStorageBuffer,
-        EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
+        EscalateRequestAcquireTexture, EscalateRequestNodeOutputPool,
     };
     use crate::core::context::texture_pools_and_rings::one_off_acquisitions_held_for_one_node::ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
@@ -151,7 +147,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
             request_id: "req-tensor-at-the-budget".to_string(),
             shape,
             dtype: "float32".to_string(),
-            processor_output_pool: pool_key.map(|pool_key| EscalateRequestProcessorOutputPool {
+            node_output_pool: pool_key.map(|pool_key| EscalateRequestNodeOutputPool {
                 pool_key,
                 rotation_depth: 2,
             }),
@@ -169,7 +165,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
                 width: 96,
                 height: 48,
                 format: "rgba8_unorm".to_string(),
-                processor_output_pool: Some(EscalateRequestProcessorOutputPool {
+                node_output_pool: Some(EscalateRequestNodeOutputPool {
                     pool_key: format!("budget-texture-pool-{}", Uuid::new_v4().simple()),
                     rotation_depth: 2,
                 }),
@@ -229,7 +225,7 @@ fn an_acquisition_at_the_budget_refuses_at_once_and_never_waits() {
                 let answer = handle_id_or_refusal_of(super::super::super::handle_escalate_op(
                     &requesting_sandbox,
                     &requesting_registry,
-                    &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+                    &WhatAHelperPlacedNodeReaches::default(),
                     request,
                 ));
                 if answer_tx
@@ -439,7 +435,7 @@ fn a_render_target_image_is_held_and_counted_under_its_shape_until_the_helper_re
     let handle_id = handle_id_or_refusal_of(super::super::super::handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
             request_id: "req-render-target-image".to_string(),
             width: 64,
@@ -498,7 +494,7 @@ fn releasing_a_one_off_pixel_buffer_evicts_its_lookup_and_leaves_its_slots_publi
     let handle_id = handle_id_or_refusal_of(super::super::super::handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer {
             request_id: "req-one-off-pixel-buffer".to_string(),
             width: 64,
@@ -600,7 +596,7 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
         "the refusal names the shape and the count: {refusal_text}"
     );
     assert!(
-        !refusal_text.contains("processor output pool"),
+        !refusal_text.contains("node output pool"),
         "a one-off refusal is not the output pool's: {refusal_text}"
     );
 
@@ -632,7 +628,7 @@ fn a_one_off_64x32_rgba8_unorm_texture_request()
         format: crate::core::rhi::TextureFormat::Rgba8Unorm
             .wire_name()
             .to_string(),
-        processor_output_pool: None,
+        node_output_pool: None,
         usage: vec!["texture_binding".to_string()],
     })
 }
@@ -662,7 +658,7 @@ fn acquire_a_one_off_64x32_rgba8_unorm_texture_over_the_escalate_op(
     handle_id_or_refusal_of(super::super::super::handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         a_one_off_64x32_rgba8_unorm_texture_request(),
     ))
 }

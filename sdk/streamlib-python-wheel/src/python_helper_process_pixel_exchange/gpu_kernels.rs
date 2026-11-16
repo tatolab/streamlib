@@ -9,7 +9,7 @@ use super::{
     HelperProcessGpuExchangeClient, escalate_round_trip_to_parent,
     hand_a_release_handle_to_the_release_worker, response_field,
 };
-use crate::python_processor_context::ReflectedKernelBinding;
+use crate::python_node_context::ReflectedKernelBinding;
 
 /// The binding shape a `register_*_kernel` response carries, in slot order.
 ///

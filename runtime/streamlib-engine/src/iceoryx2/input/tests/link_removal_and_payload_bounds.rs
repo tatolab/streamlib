@@ -248,7 +248,7 @@ fn clone_balances_drop() {
 }
 
 #[test]
-fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex() {
+fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_node_mutex() {
     const RACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
     const RACE_HARD_CAP: std::time::Duration = std::time::Duration::from_secs(30);
     const WIRE_AND_UNWIRE_CYCLES_FLOOR: u64 = 100;

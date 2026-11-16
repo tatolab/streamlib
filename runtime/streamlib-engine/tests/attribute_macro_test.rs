@@ -1,20 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::schemars::JsonSchema;
-use streamlib_engine::core::GeneratedProcessor;
+use streamlib_engine::core::GeneratedNode;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     input("video_in", delivery_profile = "newest", family = Image),
     output("video_out", family = Image),
 )]
-pub struct TestProcessor;
+pub struct TestNode;
 
-impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
+impl streamlib_engine::ManualNode for TestNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -30,22 +29,22 @@ impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
 
 #[test]
 fn test_module_structure_generated() {
-    fn assert_processor_type<T: streamlib_engine::core::ManualProcessor>() {}
-    assert_processor_type::<TestProcessor::Processor>();
+    fn assert_node_type<T: streamlib_engine::core::ManualNode>() {}
+    assert_node_type::<TestNode::Node>();
 }
 
 #[test]
 fn test_input_link_module_exists() {
     // Verify InputLink module has the expected port marker
     fn assert_input_marker<T: streamlib_engine::core::InputPortMarker>() {}
-    assert_input_marker::<TestProcessor::InputLink::video_in>();
+    assert_input_marker::<TestNode::InputLink::video_in>();
 }
 
 #[test]
 fn test_output_link_module_exists() {
     // Verify OutputLink module has the expected port marker
     fn assert_output_marker<T: streamlib_engine::core::OutputPortMarker>() {}
-    assert_output_marker::<TestProcessor::OutputLink::video_out>();
+    assert_output_marker::<TestNode::OutputLink::video_out>();
 }
 
 #[test]
@@ -54,25 +53,25 @@ fn test_port_marker_names() {
     use streamlib_engine::core::{InputPortMarker, OutputPortMarker};
 
     assert_eq!(
-        <TestProcessor::InputLink::video_in as InputPortMarker>::PORT_NAME,
+        <TestNode::InputLink::video_in as InputPortMarker>::PORT_NAME,
         "video_in"
     );
     assert_eq!(
-        <TestProcessor::OutputLink::video_out as OutputPortMarker>::PORT_NAME,
+        <TestNode::OutputLink::video_out as OutputPortMarker>::PORT_NAME,
         "video_out"
     );
 }
 
 #[test]
-fn test_processor_instantiation() {
-    let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
+fn test_node_instantiation() {
+    let node = TestNode::Node::from_config(EmptyConfig).unwrap();
 
     // Verify it has the expected name from YAML schema
-    assert_eq!(processor.name(), "TestProcessor");
+    assert_eq!(node.name(), "TestNode");
 }
 
 #[test]
-fn a_processor_declaring_no_config_takes_none_and_says_which_key_had_nowhere_to_go() {
+fn a_node_declaring_no_config_takes_none_and_says_which_key_had_nowhere_to_go() {
     let refusal = serde_json::from_value::<EmptyConfig>(serde_json::json!({ "leftover": 1 }))
         .expect_err("a populated configuration must be refused, not discarded");
     assert!(
@@ -88,13 +87,13 @@ fn a_processor_declaring_no_config_takes_none_and_says_which_key_had_nowhere_to_
     serde_json::from_value::<EmptyConfig>(serde_json::Value::Null)
         .expect("a nil configuration is still no configuration");
 
-    let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
-    assert_eq!(processor.name(), "TestProcessor");
+    let node = TestNode::Node::from_config(EmptyConfig).unwrap();
+    assert_eq!(node.name(), "TestNode");
 }
 
 #[test]
-fn a_processor_declaring_no_config_publishes_an_empty_object_schema() {
-    let descriptor = TestProcessor::Processor::descriptor().expect("a descriptor");
+fn a_node_declaring_no_config_publishes_an_empty_object_schema() {
+    let descriptor = TestNode::Node::descriptor().expect("a descriptor");
     let config_schema = descriptor
         .config_schema
         .expect("every macro-emitted descriptor carries a document");
@@ -103,10 +102,10 @@ fn a_processor_declaring_no_config_publishes_an_empty_object_schema() {
     assert!(config_schema.get("properties").is_none());
 }
 
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
-pub struct ConfiguredProbeProcessorConfig {
+pub struct ConfiguredProbeNodeConfig {
     #[description = PROBE_WIDTH_DESCRIPTION]
     #[serde(default = "default_probe_width")]
     pub width: u32,
@@ -124,7 +123,7 @@ fn default_probe_width() -> u32 {
     1280
 }
 
-impl Default for ConfiguredProbeProcessorConfig {
+impl Default for ConfiguredProbeNodeConfig {
     fn default() -> Self {
         Self {
             width: default_probe_width(),
@@ -134,15 +133,15 @@ impl Default for ConfiguredProbeProcessorConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
-    config = crate::ConfiguredProbeProcessorConfig,
+    config = crate::ConfiguredProbeNodeConfig,
     output("video_out", family = Image, description = "Frames as *recorded*."),
 )]
 #[meta(category = "Probes/Recording", description = PROBE_NODE_DESCRIPTION)]
-pub struct ConfiguredProbeProcessor;
+pub struct ConfiguredProbeNode;
 
-impl streamlib_engine::ManualProcessor for ConfiguredProbeProcessor::Processor {
+impl streamlib_engine::ManualNode for ConfiguredProbeNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -150,10 +149,10 @@ impl streamlib_engine::ManualProcessor for ConfiguredProbeProcessor::Processor {
 
 #[test]
 fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
-    let descriptor = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
+    let descriptor = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
     let config_schema = descriptor
         .config_schema
-        .expect("a configured processor carries its config type's document");
+        .expect("a configured node carries its config type's document");
 
     assert_eq!(config_schema["properties"]["width"]["type"], "integer");
     assert_eq!(
@@ -180,24 +179,24 @@ fn the_descriptor_carries_the_config_types_schema_rather_than_its_name() {
     assert!(config_schema.get("$schema").is_none());
     assert_ne!(
         config_schema,
-        serde_json::json!("ConfiguredProbeProcessorConfig")
+        serde_json::json!("ConfiguredProbeNodeConfig")
     );
 }
 
 #[test]
 fn a_key_a_config_leaves_out_is_filled_from_the_structs_default() {
-    let config: ConfiguredProbeProcessorConfig =
+    let config: ConfiguredProbeNodeConfig =
         serde_json::from_value(serde_json::json!({"width": 640})).expect("deserializes");
     assert_eq!(
         config,
-        ConfiguredProbeProcessorConfig {
+        ConfiguredProbeNodeConfig {
             width: 640,
-            ..ConfiguredProbeProcessorConfig::default()
+            ..ConfiguredProbeNodeConfig::default()
         }
     );
-    let empty: ConfiguredProbeProcessorConfig =
+    let empty: ConfiguredProbeNodeConfig =
         serde_json::from_value(serde_json::json!({})).expect("deserializes");
-    assert_eq!(empty, ConfiguredProbeProcessorConfig::default());
+    assert_eq!(empty, ConfiguredProbeNodeConfig::default());
 }
 
 #[test]
@@ -205,18 +204,18 @@ fn the_class_short_name_is_the_authored_struct_ident() {
     // `NAME` is the display-name default's only carrier. It comes off the item
     // the attribute is attached to — never a string in the attribute, and never
     // recovered by splitting the import path.
-    assert_eq!(TestProcessor::Processor::NAME, "TestProcessor");
+    assert_eq!(TestNode::Node::NAME, "TestNode");
     assert_eq!(
-        BareProcessor::Processor::NAME,
-        "BareProcessor",
-        "a bare `#[processor]` still names its class"
+        BareNode::Node::NAME,
+        "BareNode",
+        "a bare `#[node]` still names its class"
     );
 }
 
-#[streamlib::sdk::processor(execution = manual)]
-pub struct BareProcessor;
+#[streamlib::sdk::node(execution = manual)]
+pub struct BareNode;
 
-impl streamlib_engine::ManualProcessor for BareProcessor::Processor {
+impl streamlib_engine::ManualNode for BareNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -231,13 +230,13 @@ impl streamlib_engine::ManualProcessor for BareProcessor::Processor {
 }
 
 #[test]
-fn a_bare_processor_is_named_by_its_import_path() {
+fn a_bare_node_is_named_by_its_import_path() {
     // The org/package synthesis is gone with the grammar. The class path is
     // the whole identity, and it names the module the macro expanded in —
     // nothing is synthesized and no file is read.
     assert_eq!(
-        BareProcessor::processor_class_import_path().as_str(),
-        "attribute_macro_test::BareProcessor"
+        BareNode::node_class_import_path().as_str(),
+        "attribute_macro_test::BareNode"
     );
 }
 
@@ -260,12 +259,12 @@ pub struct CfgGatedFieldAlwaysCompiledState {
     pub always_compiled_marker: u32,
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     input("video_in", delivery_profile = "newest", family = Image),
     output("video_out", family = Image),
 )]
-pub struct CfgGatedFieldProcessor {
+pub struct CfgGatedFieldNode {
     #[cfg(any())]
     never_compiled_state: ThisTypeIsDeliberatelyUndeclared,
     // The forwarded `allow` is load-bearing twice over: it silences
@@ -284,7 +283,7 @@ pub struct CfgGatedFieldProcessor {
     non_linux_only_state: CfgGatedFieldNonLinuxOnlyState,
 }
 
-impl streamlib_engine::ManualProcessor for CfgGatedFieldProcessor::Processor {
+impl streamlib_engine::ManualNode for CfgGatedFieldNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -299,44 +298,41 @@ impl streamlib_engine::ManualProcessor for CfgGatedFieldProcessor::Processor {
 }
 
 #[test]
-fn cfg_gated_processor_field_survives_onto_both_generated_sites() {
-    let processor = CfgGatedFieldProcessor::Processor::from_config(EmptyConfig).unwrap();
-    assert_eq!(processor.always_compiled_state.always_compiled_marker, 0);
+fn cfg_gated_node_field_survives_onto_both_generated_sites() {
+    let node = CfgGatedFieldNode::Node::from_config(EmptyConfig).unwrap();
+    assert_eq!(node.always_compiled_state.always_compiled_marker, 0);
     #[cfg(target_os = "linux")]
-    assert_eq!(processor.linux_only_state.linux_only_marker, 0);
+    assert_eq!(node.linux_only_state.linux_only_marker, 0);
     #[cfg(not(target_os = "linux"))]
-    assert_eq!(processor.non_linux_only_state.non_linux_only_marker, 0);
+    assert_eq!(node.non_linux_only_state.non_linux_only_marker, 0);
 }
 
 #[test]
-fn cfg_gated_processor_still_declares_its_port_fields_unconditionally() {
+fn cfg_gated_node_still_declares_its_port_fields_unconditionally() {
     // The `inputs` / `outputs` handle fields are emitted ahead of the
     // custom fields and are patched by name in `set_iceoryx2_resources` — the
     // field-attribute filter must never reach them. Naming both fields here is
     // the compile-level half; `is_configured()` is false until the host wires
     // them after `from_config` returns.
-    let processor = CfgGatedFieldProcessor::Processor::from_config(EmptyConfig).unwrap();
-    assert!(!processor.inputs.is_configured());
-    assert!(!processor.outputs.is_configured());
+    let node = CfgGatedFieldNode::Node::from_config(EmptyConfig).unwrap();
+    assert!(!node.inputs.is_configured());
+    assert!(!node.outputs.is_configured());
 }
 
 #[test]
 fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
     // Two fields, two jobs: the path is identity, the short name is only the
     // display default. Collapsing either into the other is the regression.
-    let descriptor = <TestProcessor::Processor as GeneratedProcessor>::descriptor()
-        .expect("the macro emits a descriptor");
+    let descriptor =
+        <TestNode::Node as GeneratedNode>::descriptor().expect("the macro emits a descriptor");
+    assert_eq!(descriptor.node_class_short_name.as_str(), "TestNode");
     assert_eq!(
-        descriptor.processor_class_short_name.as_str(),
-        "TestProcessor"
-    );
-    assert_eq!(
-        descriptor.processor_class_import_path.as_str(),
-        "attribute_macro_test::TestProcessor"
+        descriptor.node_class_import_path.as_str(),
+        "attribute_macro_test::TestNode"
     );
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = reactive,
     input(
         "audio",
@@ -354,7 +350,7 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
 )]
 pub struct WindowedAudioConsumer;
 
-impl streamlib_engine::ReactiveProcessor for WindowedAudioConsumer::Processor {
+impl streamlib_engine::ReactiveNode for WindowedAudioConsumer::Node {
     fn process(
         &mut self,
         _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
@@ -365,7 +361,7 @@ impl streamlib_engine::ReactiveProcessor for WindowedAudioConsumer::Processor {
 
 #[test]
 fn the_descriptor_carries_the_window_contract_its_port_declared() {
-    let descriptor = <WindowedAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <WindowedAudioConsumer::Node as GeneratedNode>::descriptor()
         .expect("the macro emits a descriptor");
     let audio = descriptor
         .inputs
@@ -392,7 +388,7 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
 // A windowed consumer that names no channel count: its windows carry whatever
 // its source sends, which is what lets a graph grow a source without editing
 // every consumer downstream of it.
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = reactive,
     input(
         "audio",
@@ -403,7 +399,7 @@ fn the_descriptor_carries_the_window_contract_its_port_declared() {
 )]
 pub struct SourceFollowingAudioConsumer;
 
-impl streamlib_engine::ReactiveProcessor for SourceFollowingAudioConsumer::Processor {
+impl streamlib_engine::ReactiveNode for SourceFollowingAudioConsumer::Node {
     fn process(
         &mut self,
         _ctx: &streamlib_engine::core::RuntimeContextLimitedAccess<'_>,
@@ -414,7 +410,7 @@ impl streamlib_engine::ReactiveProcessor for SourceFollowingAudioConsumer::Proce
 
 #[test]
 fn a_port_declaring_no_channel_count_carries_the_source_following_contract() {
-    let descriptor = <SourceFollowingAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <SourceFollowingAudioConsumer::Node as GeneratedNode>::descriptor()
         .expect("the macro emits a descriptor");
     let audio = descriptor
         .inputs
@@ -440,7 +436,7 @@ fn a_port_declaring_no_channel_count_carries_the_source_following_contract() {
 
 #[test]
 fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
-    let descriptor = <WindowedAudioConsumer::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <WindowedAudioConsumer::Node as GeneratedNode>::descriptor()
         .expect("the macro emits a descriptor");
 
     assert!(
@@ -450,8 +446,8 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
             .all(|port| port.audio_window.is_none()),
         "an output port declares no contract"
     );
-    let unwindowed = <TestProcessor::Processor as GeneratedProcessor>::descriptor()
-        .expect("the macro emits a descriptor");
+    let unwindowed =
+        <TestNode::Node as GeneratedNode>::descriptor().expect("the macro emits a descriptor");
     assert!(
         unwindowed
             .inputs
@@ -461,7 +457,7 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
     );
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     input("signals", delivery_profile = "ordered", family = Channels, requires = ["rpm"]),
     output(
@@ -473,9 +469,9 @@ fn a_port_declaring_no_window_contract_carries_none_into_the_descriptor() {
     ),
     output("packets", family = Packets, codec = "h264"),
 )]
-pub struct PortFamilyTestProcessor;
+pub struct PortFamilyTestNode;
 
-impl streamlib_engine::ManualProcessor for PortFamilyTestProcessor::Processor {
+impl streamlib_engine::ManualNode for PortFamilyTestNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -496,7 +492,7 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
         PortFamily,
     };
 
-    let descriptor = PortFamilyTestProcessor::Processor::descriptor().expect("a descriptor");
+    let descriptor = PortFamilyTestNode::Node::descriptor().expect("a descriptor");
     let signals = &descriptor.inputs[0].family;
     assert_eq!(signals.family, PortFamily::Channels);
     assert_eq!(signals.requires, vec!["rpm".to_string()]);
@@ -517,22 +513,22 @@ fn a_ports_family_reaches_the_descriptor_the_macro_emits() {
 
 #[test]
 fn a_node_and_a_port_description_reach_the_descriptor_as_written_from_a_const_or_a_literal() {
-    let descriptor = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
+    let descriptor = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
     assert_eq!(descriptor.description, PROBE_NODE_DESCRIPTION);
     assert_eq!(descriptor.outputs[0].description, "Frames as *recorded*.");
 }
 
 #[test]
 fn a_node_category_reaches_the_descriptor_as_the_path_written_and_none_when_undeclared() {
-    let described = ConfiguredProbeProcessor::Processor::descriptor().expect("a descriptor");
+    let described = ConfiguredProbeNode::Node::descriptor().expect("a descriptor");
     assert_eq!(described.category.as_deref(), Some("Probes/Recording"));
-    let undescribed = TestProcessor::Processor::descriptor().expect("a descriptor");
+    let undescribed = TestNode::Node::descriptor().expect("a descriptor");
     assert_eq!(undescribed.category, None);
 }
 
 #[test]
 fn a_node_declaring_no_description_carries_the_empty_string() {
-    let descriptor = TestProcessor::Processor::descriptor().expect("a descriptor");
+    let descriptor = TestNode::Node::descriptor().expect("a descriptor");
     assert_eq!(descriptor.description, "");
     assert_eq!(descriptor.inputs[0].description, "");
 }

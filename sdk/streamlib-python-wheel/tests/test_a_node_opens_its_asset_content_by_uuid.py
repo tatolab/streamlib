@@ -45,7 +45,7 @@ def both_contexts_of_a_node_in(project_directory: Path, monkeypatch: pytest.Monk
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
     )
     return (
         full_access_context,

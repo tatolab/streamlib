@@ -29,8 +29,8 @@ COUNT_TIMEOUT_SECONDS = 30.0
 HELPER_LINK_CEILING_BYTES = 64 * 1024
 OVERSIZED_BAG_PADDING_BYTES = 256 * 1024
 
-LOSS_COUNTING_PROCESSORS_MODULE = "processors.loss_counting"
-LOSS_COUNTING_PROCESSORS_SOURCE = f'''\
+LOSS_COUNTING_NODES_MODULE = "nodes.loss_counting"
+LOSS_COUNTING_NODES_SOURCE = f'''\
 """A source faster than its ordered consumer, and a port that writes past its ceiling."""
 
 import json
@@ -131,7 +131,7 @@ class NewestSink:
 LOSS_COUNTING_STREAM_SOURCE = f'''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
+from {LOSS_COUNTING_NODES_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 
 
 @graph_generator
@@ -203,8 +203,8 @@ def launch_the_loss_counting_node(
 ) -> LossCountingStreamRunning:
     project_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/loss_counting.py": LOSS_COUNTING_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/loss_counting.py": LOSS_COUNTING_NODES_SOURCE,
             "stream.py": LOSS_COUNTING_STREAM_SOURCE,
         }
     )

@@ -18,13 +18,13 @@ use super::shader_node_program::ShaderNodeInputValueType;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, InputLinkPortRef, Link, LinkState,
-    LinkStateComponent, LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics, ProcessorNode,
-    ProcessorPauseGateComponent, ProcessorUniqueId, ShaderNodeFusedGroupComponent,
+    Graph, GraphEdgeWithComponents, GraphNode, GraphNodeWithComponents, InputLinkPortRef, Link,
+    LinkState, LinkStateComponent, LinkUniqueId, NodeInstanceComponent, NodeMetrics,
+    NodePauseGateComponent, NodeRunId, ShaderNodeFusedGroupComponent,
     ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
     StepProgressOfOneNodeComponent, cast_exposed_name_to_url_safe,
 };
-use crate::core::processors::ProcessorState;
+use crate::core::nodes::NodeState;
 
 /// The island a shader node evaluates, on the node whose Image leaves it.
 pub(crate) struct ShaderNodeIslandHostedHereComponent {
@@ -36,7 +36,7 @@ pub(crate) struct ShaderNodeIslandHostedHereComponent {
 pub(crate) struct ShaderNodeFusedIntoTheIslandOfAnotherComponent;
 
 /// Whether `node_id` is a shader node.
-pub(crate) fn is_a_shader_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+pub(crate) fn is_a_shader_node(graph: &Graph, node_id: &NodeRunId) -> bool {
     graph
         .traversal()
         .v(node_id)
@@ -48,8 +48,8 @@ pub(crate) fn is_a_shader_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bo
 /// Image, when nothing else reads it.
 fn the_shader_node_a_shader_node_is_fused_into(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> Option<ProcessorUniqueId> {
+    node_id: &NodeRunId,
+) -> Option<NodeRunId> {
     if !is_a_shader_node(graph, node_id) {
         return None;
     }
@@ -57,21 +57,21 @@ fn the_shader_node_a_shader_node_is_fused_into(
     let [only_link_out] = links_out.as_slice() else {
         return None;
     };
-    let reader = only_link_out.to_port().processor_id();
+    let reader = only_link_out.to_port().node_run_id();
     is_a_shader_node(graph, reader).then(|| reader.clone())
 }
 
 /// Whether `link` is a call inside one shader node island.
 pub(crate) fn is_a_call_inside_a_shader_node_island(graph: &Graph, link: &Link) -> bool {
-    the_shader_node_a_shader_node_is_fused_into(graph, link.source().processor_id()).is_some()
+    the_shader_node_a_shader_node_is_fused_into(graph, link.source().node_run_id()).is_some()
 }
 
 /// The node evaluating the island `node_id` belongs to; `node_id` itself when
 /// its Image leaves its island.
 pub(crate) fn the_host_of_the_shader_node_island_of(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> ProcessorUniqueId {
+    node_id: &NodeRunId,
+) -> NodeRunId {
     let mut host = node_id.clone();
     let mut visited = HashSet::new();
     while visited.insert(host.clone()) {
@@ -86,7 +86,7 @@ pub(crate) fn the_host_of_the_shader_node_island_of(
 /// Whether `node_id` is a shader node another node evaluates in its island.
 pub(crate) fn is_fused_into_the_shader_node_island_of_another(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
+    node_id: &NodeRunId,
 ) -> bool {
     the_shader_node_a_shader_node_is_fused_into(graph, node_id).is_some()
 }
@@ -95,8 +95,8 @@ pub(crate) fn is_fused_into_the_shader_node_island_of_another(
 /// `node_id` is read at, spelled in the cast form every mailbox read casts a
 /// port name to.
 pub(crate) fn the_host_input_port_a_fused_shader_node_input_is_read_at(
-    host_id: &ProcessorUniqueId,
-    node_id: &ProcessorUniqueId,
+    host_id: &NodeRunId,
+    node_id: &NodeRunId,
     port: &str,
 ) -> InputLinkPortRef {
     let port_name = format!("shader_node_island_input_{node_id}_{port}");
@@ -112,7 +112,7 @@ pub(crate) fn where_a_link_into_a_fused_shader_node_is_read(
     graph: &Graph,
     link: &Link,
 ) -> Option<InputLinkPortRef> {
-    let reader = link.to_port().processor_id();
+    let reader = link.to_port().node_run_id();
     if is_a_call_inside_a_shader_node_island(graph, link)
         || !is_fused_into_the_shader_node_island_of_another(graph, reader)
     {
@@ -129,10 +129,10 @@ pub(crate) fn where_a_link_into_a_fused_shader_node_is_read(
 /// member's inputs in signature order, with the node each member is.
 pub(crate) fn the_shader_node_island_hosted_by(
     graph: &Graph,
-    host_id: &ProcessorUniqueId,
-) -> Result<(ShaderNodeIslandProgram, Vec<ProcessorUniqueId>)> {
+    host_id: &NodeRunId,
+) -> Result<(ShaderNodeIslandProgram, Vec<NodeRunId>)> {
     let mut members: Vec<ShaderNodeIslandMember> = Vec::new();
-    let mut member_nodes_in_evaluation_order: Vec<ProcessorUniqueId> = Vec::new();
+    let mut member_nodes_in_evaluation_order: Vec<NodeRunId> = Vec::new();
     add_the_member_after_every_member_it_reads(
         graph,
         host_id,
@@ -146,23 +146,23 @@ pub(crate) fn the_shader_node_island_hosted_by(
 
 fn add_the_member_after_every_member_it_reads(
     graph: &Graph,
-    host_id: &ProcessorUniqueId,
-    node_id: &ProcessorUniqueId,
+    host_id: &NodeRunId,
+    node_id: &NodeRunId,
     members: &mut Vec<ShaderNodeIslandMember>,
-    member_nodes_in_evaluation_order: &mut Vec<ProcessorUniqueId>,
+    member_nodes_in_evaluation_order: &mut Vec<NodeRunId>,
 ) -> Result<usize> {
     let node = graph
         .traversal()
         .v(node_id)
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(node_id.to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(node_id.to_string()))?;
     let program = graph
         .node_types_this_stream_resolves()
-        .shader_node_program_of(&node.processor_type)
+        .shader_node_program_of(&node.node_type)
         .ok_or_else(|| {
             Error::Configuration(format!(
                 "shader node `{}` is of type `{}`, which this stream holds no shader program for",
-                node.display_name, node.processor_type
+                node.display_name, node.node_type
             ))
         })?;
     let links_in: Vec<&Link> = graph.traversal().v(node_id).in_e().iter().collect();
@@ -189,7 +189,7 @@ fn add_the_member_after_every_member_it_reads(
                         add_the_member_after_every_member_it_reads(
                             graph,
                             host_id,
-                            link.source().processor_id(),
+                            link.source().node_run_id(),
                             members,
                             member_nodes_in_evaluation_order,
                         )?,
@@ -218,7 +218,7 @@ fn add_the_member_after_every_member_it_reads(
 
 /// The value input `port` of shader node `node` takes while nothing arrives
 /// on it: its pin value, else its declared default, else zero.
-pub(crate) fn pin_value_of_a_shader_node_input(node: &ProcessorNode, port: &str) -> f32 {
+pub(crate) fn pin_value_of_a_shader_node_input(node: &GraphNode, port: &str) -> f32 {
     node.pins
         .get(port)
         .or_else(|| {
@@ -234,11 +234,11 @@ pub(crate) fn pin_value_of_a_shader_node_input(node: &ProcessorNode, port: &str)
 
 pub(crate) fn place_each_shader_node_island_on_its_host(
     graph: &mut Graph,
-    processors_to_add: &[ProcessorUniqueId],
-) -> Result<HashSet<ProcessorUniqueId>> {
-    let mut fused_into_another: HashSet<ProcessorUniqueId> = HashSet::new();
+    nodes_to_add: &[NodeRunId],
+) -> Result<HashSet<NodeRunId>> {
+    let mut fused_into_another: HashSet<NodeRunId> = HashSet::new();
     let mut islands_read = Vec::new();
-    for node_id in processors_to_add {
+    for node_id in nodes_to_add {
         if !is_a_shader_node(graph, node_id) {
             continue;
         }
@@ -296,7 +296,7 @@ pub(crate) fn place_each_shader_node_island_on_its_host(
 /// again, and the links rewired with them.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct RunningShaderNodesALiveEditRestarts {
-    pub(crate) nodes: Vec<ProcessorUniqueId>,
+    pub(crate) nodes: Vec<NodeRunId>,
     pub(crate) links: Vec<LinkUniqueId>,
 }
 
@@ -318,20 +318,19 @@ impl RunningShaderNodesALiveEditRestarts {
 /// node, whose wiring into an island is placed once, when its reader starts.
 pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
     graph: &Graph,
-    processors_to_add: &[ProcessorUniqueId],
-    processors_to_remove: &[ProcessorUniqueId],
+    nodes_to_add: &[NodeRunId],
+    nodes_to_remove: &[NodeRunId],
     links_changed: &[LinkUniqueId],
 ) -> Result<RunningShaderNodesALiveEditRestarts> {
-    let already_running = |node_id: &ProcessorUniqueId| {
-        !processors_to_add.contains(node_id) && !processors_to_remove.contains(node_id)
-    };
-    let mut shader_nodes_to_visit: Vec<ProcessorUniqueId> = Vec::new();
+    let already_running =
+        |node_id: &NodeRunId| !nodes_to_add.contains(node_id) && !nodes_to_remove.contains(node_id);
+    let mut shader_nodes_to_visit: Vec<NodeRunId> = Vec::new();
     for link_id in links_changed {
         let Some(link) = graph.traversal().e(link_id).first() else {
             continue;
         };
-        let (source_id, reader_id) = (link.source().processor_id(), link.to_port().processor_id());
-        if processors_to_remove.contains(source_id) || processors_to_remove.contains(reader_id) {
+        let (source_id, reader_id) = (link.source().node_run_id(), link.to_port().node_run_id());
+        if nodes_to_remove.contains(source_id) || nodes_to_remove.contains(reader_id) {
             continue;
         }
         let ends_in_a_running_island = [source_id, reader_id].into_iter().any(|node_id| {
@@ -353,11 +352,10 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
         }
     }
 
-    let mut shader_nodes_visited: HashSet<ProcessorUniqueId> = HashSet::new();
+    let mut shader_nodes_visited: HashSet<NodeRunId> = HashSet::new();
     let mut nodes = Vec::new();
     while let Some(node_id) = shader_nodes_to_visit.pop() {
-        if processors_to_remove.contains(&node_id) || !shader_nodes_visited.insert(node_id.clone())
-        {
+        if nodes_to_remove.contains(&node_id) || !shader_nodes_visited.insert(node_id.clone()) {
             continue;
         }
         if already_running(&node_id) {
@@ -368,14 +366,14 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
             .v(&node_id)
             .out_e()
             .iter()
-            .map(|link| link.to_port().processor_id().clone())
+            .map(|link| link.to_port().node_run_id().clone())
             .chain(
                 graph
                     .traversal()
                     .v(&node_id)
                     .in_e()
                     .iter()
-                    .map(|link| link.source().processor_id().clone()),
+                    .map(|link| link.source().node_run_id().clone()),
             )
             .filter(|linked| is_a_shader_node(graph, linked))
             .collect::<Vec<_>>();
@@ -397,9 +395,8 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
                 continue;
             }
             let (source_id, reader_id) =
-                (link.source().processor_id(), link.to_port().processor_id());
-            if processors_to_remove.contains(source_id) || processors_to_remove.contains(reader_id)
-            {
+                (link.source().node_run_id(), link.to_port().node_run_id());
+            if nodes_to_remove.contains(source_id) || nodes_to_remove.contains(reader_id) {
                 continue;
             }
             let function_node_joined =
@@ -409,7 +406,7 @@ pub(crate) fn the_running_shader_nodes_a_live_edit_restarts(
                     })
                 });
             if let Some(function_node_id) = function_node_joined {
-                let name_of = |node_id: &ProcessorUniqueId| {
+                let name_of = |node_id: &NodeRunId| {
                     graph
                         .traversal()
                         .v(node_id)
@@ -446,8 +443,8 @@ pub(crate) fn unwire_each_link_of_the_shader_nodes_restarted(
         let Some((source_id, reader_id, reader_port)) =
             graph.traversal().e(link_id).first().map(|link| {
                 (
-                    link.source().processor_id().clone(),
-                    link.to_port().processor_id().clone(),
+                    link.source().node_run_id().clone(),
+                    link.to_port().node_run_id().clone(),
                     link.to_port().port_name().to_string(),
                 )
             })
@@ -455,7 +452,7 @@ pub(crate) fn unwire_each_link_of_the_shader_nodes_restarted(
             continue;
         };
         let was_placed_fused_into_another =
-            |node_id: &ProcessorUniqueId| {
+            |node_id: &NodeRunId| {
                 graph.traversal().v(node_id).first().is_some_and(|node| {
                     node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>()
                 })
@@ -489,8 +486,8 @@ pub(crate) fn unwire_each_link_of_the_shader_nodes_restarted(
 /// its start, read off the fused group they share.
 fn the_host_the_island_of_a_fused_node_was_placed_on(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> Option<ProcessorUniqueId> {
+    node_id: &NodeRunId,
+) -> Option<NodeRunId> {
     let fused_group = Arc::clone(
         &graph
             .traversal()
@@ -519,22 +516,22 @@ fn the_host_the_island_of_a_fused_node_was_placed_on(
 
 pub(crate) fn forget_the_build_of_each_shader_node_restarted(
     graph: &mut Graph,
-    nodes: &[ProcessorUniqueId],
+    nodes: &[NodeRunId],
 ) {
     for node_id in nodes {
         let Some(node) = graph.traversal_mut().v(node_id).first_mut() else {
             continue;
         };
-        node.remove::<ProcessorInstanceComponent>();
-        node.remove::<ProcessorMetrics>();
+        node.remove::<NodeInstanceComponent>();
+        node.remove::<NodeMetrics>();
         node.remove::<ShutdownChannelComponent>();
-        node.remove::<ProcessorPauseGateComponent>();
+        node.remove::<NodePauseGateComponent>();
         node.remove::<StepProgressOfOneNodeComponent>();
         node.remove::<ShaderNodeIslandHostedHereComponent>();
         node.remove::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>();
         node.remove::<ShaderNodeFusedGroupComponent>();
         if let Some(state) = node.get::<StateComponent>() {
-            state.transition_to(ProcessorState::Pending);
+            state.transition_to(NodeState::Pending);
         }
     }
 }
@@ -546,21 +543,21 @@ mod tests {
     use super::super::shader_node_island_program::tests::shader_program;
     use super::*;
     use crate::core::descriptors::{
-        PortDescriptor, PortFamily, PortFamilyDeclaration, ProcessorClassImportPath,
-        ProcessorClassShortName, ProcessorDescriptor,
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
+        PortFamilyDeclaration,
     };
-    use crate::core::processors::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
+    use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves};
 
     fn a_descriptor(
         import_path: &str,
         node_kind: NodeKind,
         inputs: &[(&str, PortFamily)],
         outputs: &[&str],
-    ) -> ProcessorDescriptor {
-        let import_path = ProcessorClassImportPath::new(import_path).unwrap();
+    ) -> NodeDescriptor {
+        let import_path = NodeClassImportPath::new(import_path).unwrap();
         let short_name = import_path.as_str().rsplit(':').next().unwrap().to_string();
-        let mut descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new(short_name).unwrap(),
+        let mut descriptor = NodeDescriptor::new(
+            NodeClassShortName::new(short_name).unwrap(),
             import_path,
             "a node type for a test",
         );
@@ -582,11 +579,10 @@ mod tests {
         descriptor
     }
 
-    fn a_constructor_that_builds_nothing() -> crate::core::processors::DynamicProcessorConstructorFn
-    {
+    fn a_constructor_that_builds_nothing() -> crate::core::nodes::DynamicNodeConstructorFn {
         Box::new(|node| {
             Err(Error::Configuration(format!(
-                "`{}` builds no processor in this test",
+                "`{}` builds no node in this test",
                 node.id
             )))
         })
@@ -607,9 +603,9 @@ mod tests {
             ),
         ] {
             node_types
-                .register_a_type_described_in_this_streams_processor_interpreter(
+                .register_a_type_described_in_this_streams_node_interpreter(
                     descriptor,
-                    HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+                    HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                         a_constructor_that_builds_nothing(),
                     ),
                 )
@@ -641,7 +637,7 @@ mod tests {
                 .chain(float_ports.iter().map(|port| (*port, PortFamily::Channels)))
                 .collect();
             node_types
-                .register_a_type_described_in_this_streams_processor_interpreter(
+                .register_a_type_described_in_this_streams_node_interpreter(
                     a_descriptor(
                         &format!("test_shaders:{function_name}"),
                         NodeKind::Shader,
@@ -661,10 +657,10 @@ mod tests {
                 .unwrap();
         }
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 a_function_node_type("test_ops:lfo", &[], &["result"]),
                 HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
-                    processor_once_promoted_to_its_own_process: a_constructor_that_builds_nothing(),
+                    node_once_promoted_to_its_own_process: a_constructor_that_builds_nothing(),
                 },
             )
             .unwrap();
@@ -672,17 +668,17 @@ mod tests {
         Graph::new_resolving_node_types_through(Arc::new(node_types))
     }
 
-    fn add(graph: &mut Graph, import_path: &str) -> ProcessorUniqueId {
+    fn add(graph: &mut Graph, import_path: &str) -> NodeRunId {
         add_a_node(graph, import_path, serde_json::json!({}))
     }
 
     struct SourceIntoTintIntoBlurIntoTintIntoSink {
         graph: Graph,
-        source: ProcessorUniqueId,
-        tint: ProcessorUniqueId,
-        blur: ProcessorUniqueId,
-        tint_again: ProcessorUniqueId,
-        sink: ProcessorUniqueId,
+        source: NodeRunId,
+        tint: NodeRunId,
+        blur: NodeRunId,
+        tint_again: NodeRunId,
+        sink: NodeRunId,
         links: Vec<LinkUniqueId>,
     }
 
@@ -1052,12 +1048,12 @@ mod tests {
                 .v(node_id)
                 .first_mut()
                 .unwrap()
-                .insert(ProcessorMetrics::default());
+                .insert(NodeMetrics::default());
         }
         forget_the_build_of_each_shader_node_restarted(&mut stream.graph, &island);
         for node_id in &island {
             let node = stream.graph.traversal().v(node_id).first().unwrap();
-            assert!(!node.has::<ProcessorMetrics>());
+            assert!(!node.has::<NodeMetrics>());
             assert!(!node.has::<ShaderNodeIslandHostedHereComponent>());
             assert!(!node.has::<ShaderNodeFusedIntoTheIslandOfAnotherComponent>());
             assert!(!node.has::<ShaderNodeFusedGroupComponent>());
@@ -1067,8 +1063,8 @@ mod tests {
     #[test]
     fn the_host_input_port_of_a_fused_input_is_already_in_cast_form() {
         let port = the_host_input_port_a_fused_shader_node_input_is_read_at(
-            &ProcessorUniqueId::from("HostNodeId"),
-            &ProcessorUniqueId::from("Plh868rqg4MCMX"),
+            &NodeRunId::from("HostNodeId"),
+            &NodeRunId::from("Plh868rqg4MCMX"),
             "image",
         );
         assert_eq!(

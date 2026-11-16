@@ -8,8 +8,8 @@ members = [
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing service: Unix socket (Linux), raw Mach (macOS)
     "runtime/streamlib-gpu-frame-import-client", # Imports the frames a runtime's GPU pools publish into another process — the surface-sharing connection, pool claim tables and per-slot import cache a helper process and a viewer share
     "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, codecs, audio) — native blocks statically linked into `tatolabd`
-    "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
-    "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
+    "sdk/streamlib-node-schema", # Node schema types + YAML parser shared between the engine and streamlib-macros
+    "sdk/streamlib-macros",    # Procedural macros — owns the `#[node]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
     "runtime/streamlib-slang-shader-compiler", # The Slang shader compiler opened by path — the engine compiles kernel sources through it at run time and the build scripts the engine's own shaders
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import (Linux) or IOSurface host-memory import (macOS) + bind + map. Adapters depend on this NOT the full engine, so the FullAccess capability boundary is type-system enforced
@@ -23,7 +23,7 @@ members = [
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
     "sdk/tatolab-module-sdk-macros", # `#[function_node]` and `#[derive(FunctionNodeRecord)]`, which `tatolab-module-sdk`'s `function-node` feature re-exports
     "sdk/tatolab-module-sdk", # engine-free: the module host table a module's native half reaches its node's ports through, and the safe Rust over it
-    "sdk/streamlib-python-wheel", # `tatolab.runtime` — the processor-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
+    "sdk/streamlib-python-wheel", # `tatolab.runtime` — the node-interpreter bindings (`_engine`) and bootstrap a runtime unit lends; hosts no engine
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-runtime-client-contract", # engine-free: the contract a running runtime offers the clients on its machine — STREAMLIB_HOME, the runtime directory, the node registry, the JSONL runtime log, and its local API's wire names and tool result shapes
     "runtime/streamlib-control-contract", # engine-free: every control operation declared once, and the versioned contract file every adapter, SDK and reference page is generated from
@@ -49,7 +49,7 @@ members = [
     # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).
-    "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredProcessor)
+    "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredNode)
 ]
 
 [workspace.package]

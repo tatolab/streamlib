@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::num::NonZeroUsize;
 
 use proc_macro2::TokenStream;

@@ -290,7 +290,7 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
     if machines_level >= RuntimeShutdownEscalation::Forced {
         stream.this_streams_shutdown_escalation().raise_to_forced();
     }
-    stream.interrupt_every_processor_interpreter_describe();
+    stream.interrupt_every_node_interpreter_describe();
 }
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its

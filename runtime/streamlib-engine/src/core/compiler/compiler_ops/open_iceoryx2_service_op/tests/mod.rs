@@ -11,16 +11,14 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::Result;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
     Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, LinkState, LinkStateComponent,
     LinkUniqueId, OutputLinkPortRef,
 };
-use crate::core::processors::{
-    OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
-};
+use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DeliveryProfile, DeliveryResolution, Iceoryx2Node, InboundLinkName,
@@ -29,14 +27,14 @@ use crate::iceoryx2::{
 use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
 
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
+use crate::core::graph::NodeInstanceWithItsOutOfProcessLinkWiring;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
-use crate::core::processors::{DynGeneratedProcessor, OutOfProcessLinkWireOutcome, ProcessorSpec};
+use crate::core::nodes::{DynGeneratedNode, NodeSpec, OutOfProcessLinkWireOutcome};
 use crate::core::test_support::{
     CapturedTracingWarnings, ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
     add_mock_input_only, add_mock_output_only,
 };
-use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::{NodeDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::iceoryx2::MessageGroupBoundary;
 
 mod channel_service_naming_and_sizing_tests;
@@ -75,7 +73,7 @@ impl Default for OutOfProcessSpawnHostStub {
     }
 }
 
-impl DynGeneratedProcessor for OutOfProcessSpawnHostStub {
+impl DynGeneratedNode for OutOfProcessSpawnHostStub {
     fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -100,7 +98,7 @@ impl DynGeneratedProcessor for OutOfProcessSpawnHostStub {
     fn name(&self) -> &str {
         "OutOfProcessSpawnHostStub"
     }
-    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+    fn descriptor(&self) -> Option<NodeDescriptor> {
         None
     }
     fn execution_config(&self) -> ExecutionConfig {
@@ -144,12 +142,12 @@ impl DynGeneratedProcessor for OutOfProcessSpawnHostStub {
 
 /// Attach `instance` to `proc_id` through the attach the spawn op takes, so
 /// the wiring path can reach it.
-fn attach_processor_instance(
+fn attach_node_instance(
     graph: &mut Graph,
     proc_id: &str,
-    instance: ProcessorInstance,
-) -> Arc<Mutex<ProcessorInstance>> {
-    ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
+    instance: NodeInstance,
+) -> Arc<Mutex<NodeInstance>> {
+    NodeInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
         graph
             .traversal_mut()
             .v(proc_id)
@@ -160,7 +158,7 @@ fn attach_processor_instance(
 
 /// The input entry a helper stub was handed for `link_id`.
 fn input_entry_recorded_on(
-    instance: &Arc<Mutex<ProcessorInstance>>,
+    instance: &Arc<Mutex<NodeInstance>>,
     link_id: &LinkUniqueId,
 ) -> serde_json::Value {
     instance
@@ -180,15 +178,15 @@ fn attach_mock_instance<P>(
     graph: &mut Graph,
     proc_id: &str,
 ) -> (
-    Arc<Mutex<ProcessorInstance>>,
+    Arc<Mutex<NodeInstance>>,
     Option<Arc<crate::iceoryx2::OutputWriterInner>>,
     Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
 )
 where
-    P: crate::core::GeneratedProcessor + DynGeneratedProcessor + Send + 'static,
+    P: crate::core::GeneratedNode + DynGeneratedNode + Send + 'static,
     P::Config: Default,
 {
-    let mut instance = ProcessorInstance::new(Box::new(
+    let mut instance = NodeInstance::new(Box::new(
         P::from_config(Default::default()).expect("the mock constructs from its default config"),
     ));
     instance
@@ -196,7 +194,7 @@ where
         .expect("the mock accepts its iceoryx2 resources");
     let output_inner = instance.iceoryx2_output_writer_inner();
     let input_inner = instance.iceoryx2_input_mailboxes_inner();
-    let instance = attach_processor_instance(graph, proc_id, instance);
+    let instance = attach_node_instance(graph, proc_id, instance);
     (instance, output_inner, input_inner)
 }
 
@@ -254,15 +252,15 @@ fn wire_one_test_link<Destination>(
     Arc<crate::iceoryx2::InputMailboxesInner>,
 )
 where
-    Destination: crate::core::GeneratedProcessor + DynGeneratedProcessor + Send + 'static,
+    Destination: crate::core::GeneratedNode + DynGeneratedNode + Send + 'static,
     Destination::Config: Default,
 {
-    use crate::core::test_support::MockOutputOnlyProcessor;
+    use crate::core::test_support::MockOutputOnlyNode;
 
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let (source, source_output, _) =
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
     let source_output = source_output.expect("an output-only mock holds an output writer");
 
     let dest_id = if destination_is_reactive {
@@ -270,7 +268,7 @@ where
     } else {
         add_mock_input_only(&mut graph)
     };
-    let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+    let dest_unique_id: NodeRunId = dest_id.as_str().into();
     let (dest, _, dest_input) = attach_mock_instance::<Destination>(&mut graph, &dest_id);
     let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
 
@@ -315,8 +313,8 @@ where
 /// counted where `graph` reads them.
 struct NativeLinkWiredForLossCounting {
     graph: Graph,
-    source_id: ProcessorUniqueId,
-    dest_id: ProcessorUniqueId,
+    source_id: NodeRunId,
+    dest_id: NodeRunId,
     link_id: LinkUniqueId,
     source_output: Arc<crate::iceoryx2::OutputWriterInner>,
     dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
@@ -326,17 +324,17 @@ struct NativeLinkWiredForLossCounting {
 
 impl NativeLinkWiredForLossCounting {
     fn wire(tag: &str, dest_delivery: DeliveryResolution, source_ceiling_bytes: usize) -> Self {
-        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+        use crate::core::test_support::{MockInputOnlyNode, MockOutputOnlyNode};
 
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
         let (source, source_output, _) =
-            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+            attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
         let dest_id = add_mock_input_only(&mut graph);
         let (dest, _, dest_input) =
-            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
-        let source_id: ProcessorUniqueId = source_id.as_str().into();
-        let dest_id: ProcessorUniqueId = dest_id.as_str().into();
+            attach_mock_instance::<MockInputOnlyNode::Node>(&mut graph, &dest_id);
+        let source_id: NodeRunId = source_id.as_str().into();
+        let dest_id: NodeRunId = dest_id.as_str().into();
 
         let (channel, notify_service) =
             open_test_link_services(tag, DeliveryProfile::ORDERED_DEPTH);
@@ -383,12 +381,12 @@ impl NativeLinkWiredForLossCounting {
     }
 
     /// What `graph` renders under `metrics` for `proc_id`, or `None` for no key.
-    fn rendered_metrics_of(&mut self, proc_id: &ProcessorUniqueId) -> Option<serde_json::Value> {
+    fn rendered_metrics_of(&mut self, proc_id: &NodeRunId) -> Option<serde_json::Value> {
         self.graph
             .traversal_mut()
             .v(proc_id)
             .first()
-            .expect("the processor's node must be in the graph")
+            .expect("the node's node must be in the graph")
             .serialize_components()
             .get("metrics")
             .cloned()
@@ -451,14 +449,13 @@ fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
     crate::core::test_support::ensure_test_mocks_registered();
     graph
         .traversal_mut()
-        .add_v(ProcessorSpec::new(
-            crate::core::test_support::MockReactiveInputOnlyProcessor::processor_class_import_path(
-            ),
+        .add_v(NodeSpec::new(
+            crate::core::test_support::MockReactiveInputOnlyNode::node_class_import_path(),
             serde_json::Value::Null,
         ))
         .expect("the node is named")
         .first()
-        .expect("mock_reactive_input_only_processor must be in the registry")
+        .expect("mock_reactive_input_only_node must be in the registry")
         .id
         .to_string()
 }
@@ -467,12 +464,13 @@ fn add_mock_windowed_audio_consumer(graph: &mut Graph) -> String {
     crate::core::test_support::ensure_test_mocks_registered();
     graph
         .traversal_mut()
-        .add_v(ProcessorSpec::new(
-            crate::core::test_support::MockWindowedAudioConsumerProcessor::processor_class_import_path(),
+        .add_v(NodeSpec::new(
+            crate::core::test_support::MockWindowedAudioConsumerNode::node_class_import_path(),
             serde_json::Value::Null,
-        )).expect("the node is named")
+        ))
+        .expect("the node is named")
         .first()
-        .expect("mock_windowed_audio_consumer_processor must be in the registry")
+        .expect("mock_windowed_audio_consumer_node must be in the registry")
         .id
         .to_string()
 }
@@ -481,7 +479,7 @@ fn add_mock_windowed_audio_consumer(graph: &mut Graph) -> String {
 /// consumer, with the handles a test drives the link through.
 struct NativeLinkIntoAWindowedPort {
     graph: Graph,
-    dest_id: ProcessorUniqueId,
+    dest_id: NodeRunId,
     link_id: LinkUniqueId,
     source_output: Arc<crate::iceoryx2::OutputWriterInner>,
     dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
@@ -489,12 +487,12 @@ struct NativeLinkIntoAWindowedPort {
 
 impl NativeLinkIntoAWindowedPort {
     fn wire() -> Self {
-        use crate::core::test_support::MockOutputOnlyProcessor;
+        use crate::core::test_support::MockOutputOnlyNode;
 
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
         let (_, source_output, _) =
-            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+            attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
         let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
         open_iceoryx2_service(
             &mut graph,
@@ -535,11 +533,11 @@ fn add_a_windowed_consumer_linked_from_out1(
     graph: &mut Graph,
     source_id: &str,
 ) -> WindowedConsumerLinkedFromOut1 {
-    use crate::core::test_support::MockWindowedAudioConsumerProcessor;
+    use crate::core::test_support::MockWindowedAudioConsumerNode;
 
     let dest_id = add_mock_windowed_audio_consumer(graph);
     let (_, _, dest_input) =
-        attach_mock_instance::<MockWindowedAudioConsumerProcessor::Processor>(graph, &dest_id);
+        attach_mock_instance::<MockWindowedAudioConsumerNode::Node>(graph, &dest_id);
     let link_id = add_link_from_out1_to(graph, source_id, &dest_id, "audio");
     WindowedConsumerLinkedFromOut1 {
         dest_id,

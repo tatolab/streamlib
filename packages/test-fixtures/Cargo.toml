@@ -8,7 +8,7 @@ repository.workspace = true
 # Never published — test fixture. Also keeps this crate out of the release
 # closure (`compute_release_closure` requires a publishable crate).
 publish = false
-description = "Attribute-macro test fixtures (TestConfiguredProcessor) for streamlib SDK macro contract tests."
+description = "Attribute-macro test fixtures (TestConfiguredNode) for streamlib SDK macro contract tests."
 keywords = ["streamlib", "test-fixtures", "macros"]
 categories = ["development-tools::testing"]
 
@@ -17,7 +17,7 @@ name = "streamlib_test_fixtures"
 crate-type = ["rlib"]
 
 [dependencies]
-# Engine substrate — runtime context and processor traits.
+# Engine substrate — runtime context and node traits.
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.68.82" }
 
 

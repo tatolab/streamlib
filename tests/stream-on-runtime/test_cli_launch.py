@@ -32,7 +32,7 @@ from cli_launch_projects import (
     NODE_READY_TIMEOUT_SECONDS,
     STREAM_NAME_OF_EVERY_PROJECT,
     load_the_projects_stream,
-    project_files_with_helper_placed_processors,
+    project_files_with_helper_placed_nodes,
     stream_id_of_the_project,
     the_stream_stopped_log_line,
 )
@@ -359,7 +359,7 @@ def test_every_observation_verb_reaches_a_loaded_stream_through_the_local_api_so
     """`tatolab streams`, `graph` and `logs`, driven the way a user drives them:
     a separate process, naming the stream. `graph` counts the bags the source
     writes once a connect has wired its output."""
-    app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
+    app_directory = make_tatolab_project(project_files_with_helper_placed_nodes(1))
     tatolabd = start_tatolabd()
     stream_run = load_the_projects_stream(tatolabd, app_directory)
     stream_run.await_loaded(timeout=NODE_READY_TIMEOUT_SECONDS)
@@ -404,15 +404,15 @@ def iceoryx2_node_details_in(iceoryx2_domain_root: Path) -> "set[Path]":
     return set((iceoryx2_domain_root / "nodes").glob("*/*node.details"))
 
 
-def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_iceoryx2_domain(
+def test_the_runtime_and_its_node_interpreter_share_the_runtime_directorys_iceoryx2_domain(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The stream carries two Python processors, the test pattern and the reporter,
-    so a frame reaching the reporter proves `tatolabd` and both processor
+    """The stream carries two Python nodes, the test pattern and the reporter,
+    so a frame reaching the reporter proves `tatolabd` and both node
     interpreters opened their nodes in one iceoryx2 domain: the runtime
     directory's, where the surface socket sits too."""
-    app_directory = make_tatolab_project(project_files_with_helper_placed_processors(1))
+    app_directory = make_tatolab_project(project_files_with_helper_placed_nodes(1))
     tatolabd = start_tatolabd()
     runtime_directory = tatolabd.machine_directories.runtime_directory
     iceoryx2_node_details_before = iceoryx2_node_details_in(runtime_directory / "iox2")
@@ -425,7 +425,7 @@ def test_the_runtime_and_its_processor_interpreter_share_the_runtime_directorys_
 
     assert {details.name for details in new_node_details} == {f"sl{os.getuid()}_node.details"}
     assert len(new_node_details) == 2, (
-        f"each processor interpreter must open its node in the runtime directory's domain, "
+        f"each node interpreter must open its node in the runtime directory's domain, "
         f"beside tatolabd's; found {sorted(map(str, new_node_details))}"
     )
     assert len(iceoryx2_node_details_before) == 1, sorted(map(str, iceoryx2_node_details_before))

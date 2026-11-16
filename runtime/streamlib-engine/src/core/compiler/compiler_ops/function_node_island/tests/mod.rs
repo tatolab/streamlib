@@ -7,13 +7,13 @@ use std::sync::Arc;
 
 use super::*;
 use crate::core::descriptors::{
-    FunctionNodeLanguage, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    FunctionNodeLanguage, NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+    PortFamily, PortFamilyDeclaration,
 };
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-use crate::core::processors::{
-    HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves, OutOfProcessLinkWiringEnvelope,
-    ProcessorSpec,
+use crate::core::nodes::{
+    HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves,
+    OutOfProcessLinkWiringEnvelope,
 };
 
 mod class_node_reads_at_the_reader_tests;
@@ -23,11 +23,11 @@ pub(crate) fn a_function_node_type(
     import_path: &str,
     input_ports: &[&str],
     output_ports: &[&str],
-) -> ProcessorDescriptor {
-    let import_path = ProcessorClassImportPath::new(import_path).unwrap();
+) -> NodeDescriptor {
+    let import_path = NodeClassImportPath::new(import_path).unwrap();
     let short_name = import_path.as_str().rsplit(':').next().unwrap().to_string();
-    let mut descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short_name).unwrap(),
+    let mut descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short_name).unwrap(),
         import_path,
         "a function node type for a test",
     );
@@ -67,17 +67,17 @@ pub(crate) fn a_graph_resolving_three_function_node_types() -> Graph {
 
 /// A graph resolving each of `function_node_types`.
 pub(crate) fn a_graph_resolving_these_function_node_types(
-    function_node_types: impl IntoIterator<Item = ProcessorDescriptor>,
+    function_node_types: impl IntoIterator<Item = NodeDescriptor>,
 ) -> Graph {
     let node_types = NodeTypesOneStreamResolves::new();
     for descriptor in function_node_types {
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,
                 HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
-                    processor_once_promoted_to_its_own_process: Box::new(|node| {
+                    node_once_promoted_to_its_own_process: Box::new(|node| {
                         Err(Error::Configuration(format!(
-                            "`{}` builds no processor in this test",
+                            "`{}` builds no node in this test",
                             node.id
                         )))
                     }),
@@ -89,15 +89,11 @@ pub(crate) fn a_graph_resolving_these_function_node_types(
     Graph::new_resolving_node_types_through(Arc::new(node_types))
 }
 
-pub(crate) fn add_a_node(
-    graph: &mut Graph,
-    import_path: &str,
-    config: JsonValue,
-) -> ProcessorUniqueId {
+pub(crate) fn add_a_node(graph: &mut Graph, import_path: &str, config: JsonValue) -> NodeRunId {
     graph
         .traversal_mut()
-        .add_v(ProcessorSpec::new(
-            ProcessorClassImportPath::new(import_path).unwrap(),
+        .add_v(NodeSpec::new(
+            NodeClassImportPath::new(import_path).unwrap(),
             config,
         ))
         .unwrap()
@@ -109,8 +105,8 @@ pub(crate) fn add_a_node(
 
 pub(crate) fn link(
     graph: &mut Graph,
-    from: (&ProcessorUniqueId, &str),
-    to: (&ProcessorUniqueId, &str),
+    from: (&NodeRunId, &str),
+    to: (&NodeRunId, &str),
 ) -> LinkUniqueId {
     graph
         .traversal_mut()
@@ -124,7 +120,7 @@ pub(crate) fn link(
         .clone()
 }
 
-pub(crate) fn a_helper_reader_before_its_setup(graph: &mut Graph) -> ProcessorUniqueId {
+pub(crate) fn a_helper_reader_before_its_setup(graph: &mut Graph) -> NodeRunId {
     a_helper_reader_before_its_setup_driven_in(
         graph,
         ProcessExecution::Continuous { interval_ms: 10 },
@@ -134,10 +130,10 @@ pub(crate) fn a_helper_reader_before_its_setup(graph: &mut Graph) -> ProcessorUn
 pub(crate) fn a_helper_reader_before_its_setup_driven_in(
     graph: &mut Graph,
     far_side_process_execution: ProcessExecution,
-) -> ProcessorUniqueId {
+) -> NodeRunId {
     let reader_id = add_a_node(
         graph,
-        crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockInputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     graph
@@ -151,10 +147,7 @@ pub(crate) fn a_helper_reader_before_its_setup_driven_in(
     reader_id
 }
 
-pub(crate) fn reader_setup_command_ports(
-    graph: &Graph,
-    reader_id: &ProcessorUniqueId,
-) -> JsonValue {
+pub(crate) fn reader_setup_command_ports(graph: &Graph, reader_id: &NodeRunId) -> JsonValue {
     graph
         .traversal()
         .v(reader_id)
@@ -168,16 +161,16 @@ pub(crate) fn reader_setup_command_ports(
 
 fn the_refusal_of_a_commit(
     graph: &Graph,
-    processors_to_add: &[ProcessorUniqueId],
-    processors_to_remove: &[ProcessorUniqueId],
+    nodes_to_add: &[NodeRunId],
+    nodes_to_remove: &[NodeRunId],
     links_to_add: &[LinkUniqueId],
     links_to_remove: &[LinkUniqueId],
-    config_updates: &[(ProcessorUniqueId, JsonValue)],
+    config_updates: &[(NodeRunId, JsonValue)],
 ) -> Option<String> {
     refuse_an_edit_an_island_cannot_take(
         graph,
-        processors_to_add,
-        processors_to_remove,
+        nodes_to_add,
+        nodes_to_remove,
         links_to_add,
         links_to_remove,
         config_updates,
@@ -201,15 +194,10 @@ fn link_state_of(graph: &Graph, link_id: &LinkUniqueId) -> LinkState {
 /// and `remap` feeding a helper reader's `in1`.
 pub(crate) fn a_class_node_feeding_remap_into_a_helper_reader(
     graph: &mut Graph,
-) -> (
-    ProcessorUniqueId,
-    ProcessorUniqueId,
-    LinkUniqueId,
-    LinkUniqueId,
-) {
+) -> (NodeRunId, NodeRunId, LinkUniqueId, LinkUniqueId) {
     let source = add_a_node(
         graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     graph
@@ -232,7 +220,7 @@ pub(crate) fn a_class_node_feeding_remap_into_a_helper_reader(
 /// none is.
 fn the_reader_input_port_records_an_inbound_link_named(
     graph: &Graph,
-    reader: &ProcessorUniqueId,
+    reader: &NodeRunId,
     input_port: &str,
     inbound_link: &str,
 ) -> bool {
@@ -246,10 +234,10 @@ fn the_reader_input_port_records_an_inbound_link_named(
         .is_ok()
 }
 
-pub(crate) fn a_class_node_feeding(graph: &mut Graph) -> ProcessorUniqueId {
+pub(crate) fn a_class_node_feeding(graph: &mut Graph) -> NodeRunId {
     let source = add_a_node(
         graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     graph

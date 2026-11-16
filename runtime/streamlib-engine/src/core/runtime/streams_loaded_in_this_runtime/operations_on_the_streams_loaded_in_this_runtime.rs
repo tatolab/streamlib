@@ -10,10 +10,10 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DescribeRuntimeToolResult, ListSamplesToolResult,
 };
 
-use crate::core::ProcessorDescriptor;
+use crate::core::NodeDescriptor;
 use crate::core::context::StreamClockReading;
 use crate::core::error::Result;
-use crate::core::processors::InstalledModuleOfANodeType;
+use crate::core::nodes::InstalledModuleOfANodeType;
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::operations::RuntimeOperations;
 use crate::core::runtime::{
@@ -59,7 +59,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>>;
+    ) -> Result<Vec<NodeDescriptor>>;
 
     /// The node types described in the own interpreter of the loaded stream
     /// `stream_id` names that no installed module declares, with the same
@@ -67,7 +67,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>>;
+    ) -> Result<Vec<NodeDescriptor>>;
 
     /// The node types installed modules declare in the `tatolab.nodes`
     /// entry points of the loaded stream `stream_id` names, each with the
@@ -76,7 +76,7 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     fn node_types_installed_modules_declare_in_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)>>;
+    ) -> Result<Vec<(NodeDescriptor, InstalledModuleOfANodeType)>>;
 
     /// Run the project's graph generator `generator` over `promoted_settings` as a fragment
     /// named `fragment_name`, or its own name, in the own interpreter of the loaded stream
@@ -223,7 +223,7 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>> {
+    ) -> Result<Vec<NodeDescriptor>> {
         self.loaded_stream_of_the_id(stream_id)
             .map(|stream| stream.node_types_this_stream_resolves().node_catalog())
     }
@@ -231,18 +231,18 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>> {
+    ) -> Result<Vec<NodeDescriptor>> {
         self.loaded_stream_of_the_id(stream_id).map(|stream| {
             stream
                 .node_types_this_stream_resolves()
-                .descriptors_described_in_this_streams_processor_interpreter_no_installed_module_declares()
+                .descriptors_described_in_this_streams_node_interpreter_no_installed_module_declares()
         })
     }
 
     fn node_types_installed_modules_declare_in_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<(ProcessorDescriptor, InstalledModuleOfANodeType)>> {
+    ) -> Result<Vec<(NodeDescriptor, InstalledModuleOfANodeType)>> {
         self.loaded_stream_of_the_id(stream_id).map(|stream| {
             stream
                 .node_types_this_stream_resolves()

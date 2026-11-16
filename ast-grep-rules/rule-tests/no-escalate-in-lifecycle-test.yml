@@ -1,26 +1,26 @@
 id: no-escalate-in-lifecycle
 valid:
   - |
-    impl Processor for P {
+    impl Node for P {
         fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             assert!(self.flags.escalate);
             Ok(())
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
             ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             ctx.gpu_full_access().do_it()
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn start(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
             ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
         }
@@ -34,7 +34,7 @@ valid:
         ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
             expect_ok!(ctx.gpu_limited_access().escalate(|gpu| gpu.do_it()));
             Ok(())
@@ -42,7 +42,7 @@ valid:
     }
 invalid:
   - |
-    impl Processor for P {
+    impl Node for P {
         fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
         }
@@ -55,13 +55,13 @@ invalid:
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             ctx.gpu_limited_access().escalate::<()>(|gpu| gpu.do_it())
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn stop(
             &mut self,
             ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
@@ -70,21 +70,21 @@ invalid:
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             let run = || ctx.gpu_limited_access().escalate(|gpu| gpu.do_it());
             run()
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             assert!(ctx.gpu_limited_access().escalate(|_| true).is_ok());
             Ok(())
         }
     }
   - |
-    impl Processor for P {
+    impl Node for P {
         fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
             expect_ok!(ctx.gpu_limited_access().escalate::<()>(|gpu| gpu.do_it()));
             Ok(())

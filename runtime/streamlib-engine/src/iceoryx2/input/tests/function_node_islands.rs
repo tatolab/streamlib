@@ -291,7 +291,7 @@ fn an_unlinked_input_port_reads_its_pin_value_until_a_link_feeds_it() {
     mailboxes.read_each_unlinked_input_port_as_its_pin_value(HashMap::new(), stream_clock_now_ns);
     assert!(
         !mailboxes.has_port("level"),
-        "a port with no pin value and no link left is not one this processor reads"
+        "a port with no pin value and no link left is not one this node reads"
     );
 }
 

@@ -238,7 +238,7 @@ impl HelperProcessFunctionNodeStateBoardEntry {
     }
 }
 
-pub const BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR: u32 = 0;
+pub const BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE: u32 = 0;
 
 impl HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
     /// The breadcrumb number of the function node whose call is under way, or

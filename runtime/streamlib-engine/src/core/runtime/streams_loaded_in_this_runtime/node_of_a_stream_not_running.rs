@@ -4,7 +4,7 @@
 //! The refusal of a reach for a node of a stream that does not run, naming why.
 
 use crate::core::error::{Error, WhyANodeOfAStreamIsNotRunning};
-use crate::core::graph::{GraphNodeWithComponents, ProcessorNode, ProcessorState, StateComponent};
+use crate::core::graph::{GraphNode, GraphNodeWithComponents, NodeState, StateComponent};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::RuntimeStatus;
 
@@ -29,13 +29,13 @@ impl LoadedStreamInThisRuntime {
 /// The refusal of a reach for `node`, which does not run: `node_failed` when it failed, and
 /// `why_short_of_its_own_failure` otherwise, `runtime_words` led by what was refused.
 pub(crate) fn the_refusal_of_a_reach_for_a_node_not_running(
-    node: &ProcessorNode,
+    node: &GraphNode,
     why_short_of_its_own_failure: WhyANodeOfAStreamIsNotRunning,
     runtime_words: String,
 ) -> Error {
     let not_running_because = if node
         .get::<StateComponent>()
-        .is_some_and(|state| state.current() == ProcessorState::Error)
+        .is_some_and(|state| state.current() == NodeState::Error)
     {
         WhyANodeOfAStreamIsNotRunning::NodeFailed
     } else {

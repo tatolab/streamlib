@@ -55,7 +55,7 @@ pub(crate) struct EscalateRequestAcquireStorageBuffer {
     pub(crate) dtype: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) processor_output_pool: Option<EscalateRequestProcessorOutputPool>,
+    pub(crate) node_output_pool: Option<EscalateRequestNodeOutputPool>,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
@@ -76,7 +76,7 @@ pub(crate) struct EscalateRequestAcquireTexture {
     pub(crate) height: u32,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) processor_output_pool: Option<EscalateRequestProcessorOutputPool>,
+    pub(crate) node_output_pool: Option<EscalateRequestNodeOutputPool>,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
@@ -93,7 +93,7 @@ pub(crate) struct EscalateRequestAcquireTexture {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EscalateRequestProcessorOutputPool {
+pub(crate) struct EscalateRequestNodeOutputPool {
     /// The pool's name, minted by the helper's ring; acquires under one key
     /// share one pool, scoped to the helper that sent them.
     pub(crate) pool_key: String,

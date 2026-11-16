@@ -12,7 +12,7 @@ use crate::core::graph::{
     the_input_ports_of_the_exposed_config_fields,
 };
 use crate::core::json_schema::LabelledNodeGroup;
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 use super::{
@@ -312,11 +312,11 @@ pub(crate) fn the_ports_of_a_graph_document_node(
     node_name: &str,
     node: &GraphSnapshotNode,
 ) -> Result<Option<(Vec<PortInfo>, Vec<PortInfo>)>> {
-    let Some((mut inputs, outputs)) = node_types.port_info(&node.processor_type) else {
+    let Some((mut inputs, outputs)) = node_types.port_info(&node.node_type) else {
         return Ok(None);
     };
     if node_types
-        .placeholder_of_the_node_type_not_described(&node.processor_type)
+        .placeholder_of_the_node_type_not_described(&node.node_type)
         .is_some()
     {
         return Ok(Some((inputs, outputs)));
@@ -324,7 +324,7 @@ pub(crate) fn the_ports_of_a_graph_document_node(
     let declared_ports: Vec<PortInfo> = inputs.iter().chain(&outputs).cloned().collect();
     inputs.extend(the_input_ports_of_the_exposed_config_fields(
         node_name,
-        &node.processor_type,
+        &node.node_type,
         node_types,
         &declared_ports,
         &node.exposed_config_fields,

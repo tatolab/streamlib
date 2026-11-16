@@ -5,19 +5,19 @@ use std::collections::HashSet;
 
 use petgraph::graph::DiGraph;
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNodeWithComponents, Link, NodeNotReadyBecauseComponent,
-    ProcessRaisingBecauseComponent, ProcessorFailureReasonComponent, ProcessorNode,
-    ProcessorTraversalMut, ProcessorUniqueId, StateComponent, TraversalSourceMut,
+    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNode, GraphNodeWithComponents, Link,
+    NodeFailureReasonComponent, NodeNotReadyBecauseComponent, NodeRunId, NodeTraversalMut,
+    ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, the_input_ports_of_the_exposed_config_fields,
 };
-use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
+use crate::core::nodes::{NodeSpec, NodeState, NodeTypesOneStreamResolves};
 
 impl<'a> TraversalSourceMut<'a> {
-    pub fn add_v(self, spec: ProcessorSpec) -> Result<ProcessorTraversalMut<'a>> {
+    pub fn add_v(self, spec: NodeSpec) -> Result<NodeTraversalMut<'a>> {
         let node_types = self.node_types_this_stream_resolves;
         let resolved_ports = node_types.port_info(&spec.name);
 
@@ -37,7 +37,7 @@ impl<'a> TraversalSourceMut<'a> {
             && let Some(holder) = self
                 .graph
                 .node_weights()
-                .find(|node| node.processor_type == spec.name)
+                .find(|node| node.node_type == spec.name)
         {
             return Err(Error::GraphError(format!(
                 "node `{name}` cannot be of the view type `{}`: node `{}` ({}) of the stream \
@@ -48,7 +48,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         if registry_miss {
             tracing::error!(
-                "Processor type '{}' is not registered — node added in Error state and will not be compiled",
+                "Node type '{}' is not registered — node added in Error state and will not be compiled",
                 spec.name
             );
         }
@@ -79,7 +79,7 @@ impl<'a> TraversalSourceMut<'a> {
             )));
         }
         let node_kind = node_types.node_kind(&spec.name);
-        let mut node = ProcessorNode::new(
+        let mut node = GraphNode::new(
             spec.name,
             node_kind,
             name,
@@ -98,24 +98,24 @@ impl<'a> TraversalSourceMut<'a> {
 
         if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
             let state = StateComponent::new(if registry_miss {
-                ProcessorState::Error
+                NodeState::Error
             } else {
-                ProcessorState::Pending
+                NodeState::Pending
             });
             if let Some(placeholder) = &placeholder_of_its_type {
                 state.fail_with(format!(
                     "its type `{}` was not described, so the node is held as written and runs \
                      nothing: {}",
-                    node_mut.processor_type, placeholder.why_its_node_code_did_not_describe_it
+                    node_mut.node_type, placeholder.why_its_node_code_did_not_describe_it
                 ));
             }
-            node_mut.insert(ProcessorFailureReasonComponent(state.clone_inner()));
+            node_mut.insert(NodeFailureReasonComponent(state.clone_inner()));
             node_mut.insert(ProcessRaisingBecauseComponent(state.clone_inner()));
             node_mut.insert(NodeNotReadyBecauseComponent(state.clone_inner()));
             node_mut.insert(state);
         }
 
-        Ok(ProcessorTraversalMut {
+        Ok(NodeTraversalMut {
             graph: self.graph,
             ids: vec![node_idx],
         })
@@ -123,16 +123,12 @@ impl<'a> TraversalSourceMut<'a> {
 }
 
 impl TraversalSourceMut<'_> {
-    pub fn rename_v(
-        self,
-        processor_id: &ProcessorUniqueId,
-        requested_name: &str,
-    ) -> Result<String> {
+    pub fn rename_v(self, node_run_id: &NodeRunId, requested_name: &str) -> Result<String> {
         let node_index = self
             .graph
             .node_indices()
-            .find(|node_index| self.graph[*node_index].id == *processor_id)
-            .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+            .find(|node_index| self.graph[*node_index].id == *node_run_id)
+            .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
         let current_name = self.graph[node_index].display_name.clone();
         let cast = cast_exposed_name_to_url_safe(requested_name)?.into_owned();
         if cast == current_name {
@@ -158,7 +154,7 @@ impl TraversalSourceMut<'_> {
                 config,
                 config_keys_of_a_node_type_holding_a_node_reference(
                     self.node_types_this_stream_resolves,
-                    &node.processor_type,
+                    &node.node_type,
                 ),
             )? {
                 if cast_exposed_name_to_url_safe(&reference.edge.referenced_node)?.as_ref()
@@ -186,18 +182,18 @@ impl TraversalSourceMut<'_> {
 /// default name is not a reason to start parsing it.
 fn default_display_name_for(
     node_types: &NodeTypesOneStreamResolves,
-    processor_class_import_path: &ProcessorClassImportPath,
+    node_class_import_path: &NodeClassImportPath,
 ) -> String {
     node_types
-        .default_display_name(processor_class_import_path)
-        .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
+        .default_display_name(node_class_import_path)
+        .unwrap_or_else(|| node_class_import_path.as_str().to_string())
 }
 
 /// `requested_name` cast, or [`Error::NodeNameTaken`] when a node in `graph`
 /// or a graph-only node already has that name — a name the author typed is an
 /// address.
 fn the_requested_node_name_unless_taken(
-    graph: &DiGraph<ProcessorNode, Link>,
+    graph: &DiGraph<GraphNode, Link>,
     node_names_the_graph_only_nodes_hold: &HashSet<String>,
     requested_name: &str,
 ) -> Result<String> {
@@ -223,11 +219,11 @@ fn the_requested_node_name_unless_taken(
 /// suffix is fitted by truncating the name before it, so the result stays
 /// within [`EXPOSED_NAME_MAXIMUM_LENGTH`].
 pub(crate) fn the_name_a_new_node_takes(
-    graph: &DiGraph<ProcessorNode, Link>,
+    graph: &DiGraph<GraphNode, Link>,
     node_names_the_graph_only_nodes_hold: &HashSet<String>,
     node_types: &NodeTypesOneStreamResolves,
     requested_name: Option<&str>,
-    processor_class_import_path: &ProcessorClassImportPath,
+    node_class_import_path: &NodeClassImportPath,
 ) -> Result<String> {
     let is_taken = |candidate: &str| {
         node_names_the_graph_only_nodes_hold.contains(candidate)
@@ -244,7 +240,7 @@ pub(crate) fn the_name_a_new_node_takes(
         );
     }
 
-    the_default_name_a_new_node_takes(node_types, processor_class_import_path, is_taken)
+    the_default_name_a_new_node_takes(node_types, node_class_import_path, is_taken)
 }
 
 /// The class's short name cast, with the next free `-2`, `-3` … appended while `is_taken` holds
@@ -252,10 +248,10 @@ pub(crate) fn the_name_a_new_node_takes(
 /// [`EXPOSED_NAME_MAXIMUM_LENGTH`].
 pub(crate) fn the_default_name_a_new_node_takes(
     node_types: &NodeTypesOneStreamResolves,
-    processor_class_import_path: &ProcessorClassImportPath,
+    node_class_import_path: &NodeClassImportPath,
     is_taken: impl Fn(&str) -> bool,
 ) -> Result<String> {
-    let default_name = default_display_name_for(node_types, processor_class_import_path);
+    let default_name = default_display_name_for(node_types, node_class_import_path);
     let cast = cast_exposed_name_to_url_safe(&default_name)?;
     if !is_taken(&cast) {
         return Ok(cast.into_owned());
@@ -275,25 +271,25 @@ pub(crate) fn the_default_name_a_new_node_takes(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::descriptors::ProcessorClassImportPath;
+    use crate::core::descriptors::NodeClassImportPath;
     use crate::core::error::Error;
     use crate::core::graph::Graph;
-    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
     #[test]
     fn a_built_in_that_moved_to_a_module_is_refused_and_nothing_is_added() {
-        let moved_out = ProcessorClassImportPath::of_built_in_node("AddVTestMovedOut");
-        PROCESSOR_REGISTRY.register_built_in_node_type_moved_to_a_module(
+        let moved_out = NodeClassImportPath::of_built_in_node("AddVTestMovedOut");
+        NODE_REGISTRY.register_built_in_node_type_moved_to_a_module(
             moved_out.clone(),
-            ProcessorClassImportPath::new("tatolab.addvtest:AddVTestMovedOut").unwrap(),
+            NodeClassImportPath::new("tatolab.addvtest:AddVTestMovedOut").unwrap(),
             "tatolab-addvtest",
         );
         let mut graph = Graph::new();
 
         let refusal = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(moved_out, serde_json::json!({})))
+            .add_v(NodeSpec::new(moved_out, serde_json::json!({})))
             .map(|_| ())
             .unwrap_err();
 
@@ -313,8 +309,8 @@ mod tests {
 
         let refusal = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                MockSourceTakingOneSetting::processor_class_import_path(),
+            .add_v(NodeSpec::new(
+                MockSourceTakingOneSetting::node_class_import_path(),
                 serde_json::json!({"frame_widht": 640}),
             ))
             .map(|_| ())
@@ -341,8 +337,8 @@ mod tests {
             "mocksourcetakingonesetting".to_string(),
         ]));
         let a_mock_source = || {
-            ProcessorSpec::new(
-                MockSourceTakingOneSetting::processor_class_import_path(),
+            NodeSpec::new(
+                MockSourceTakingOneSetting::node_class_import_path(),
                 serde_json::json!({}),
             )
         };

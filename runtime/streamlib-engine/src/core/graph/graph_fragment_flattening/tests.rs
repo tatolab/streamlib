@@ -17,22 +17,22 @@ const TINT_NODE_TYPE: &str = "looks.nodes:Tint";
 /// node reference.
 fn node_types_describing_a_tint_that_reads_a_radius_by_reference() -> NodeTypesOneStreamResolves {
     let node_types = NodeTypesOneStreamResolves::new();
-    let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
-        crate::core::descriptors::ProcessorClassShortName::new("Tint").unwrap(),
-        crate::core::descriptors::ProcessorClassImportPath::new(TINT_NODE_TYPE).unwrap(),
+    let descriptor = crate::core::descriptors::NodeDescriptor::new(
+        crate::core::descriptors::NodeClassShortName::new("Tint").unwrap(),
+        crate::core::descriptors::NodeClassImportPath::new(TINT_NODE_TYPE).unwrap(),
         "fragment flattening test",
     )
     .with_config_schema(serde_json::json!({
         "type": "object",
         "properties": {
-            "reads_radius_of": {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+            "reads_radius_of": {streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
             "label_shaped_like_a_reference": {"type": "object"},
         }
     }));
     node_types
-        .register_a_type_described_in_this_streams_processor_interpreter(
+        .register_a_type_described_in_this_streams_node_interpreter(
             descriptor,
-            crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                 Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
             ),
         )
@@ -271,8 +271,8 @@ fn a_fragment_written_as_its_graph_document_reads_back_unchanged() {
     assert_eq!(GraphSnapshot::from_graph_document(document).unwrap(), graph);
 }
 
-fn rendered_as_running(node: &GraphSnapshotNode) -> ProcessorNodeOutput {
-    ProcessorNodeOutput {
+fn rendered_as_running(node: &GraphSnapshotNode) -> GraphNodeOutput {
+    GraphNodeOutput {
         components: serde_json::Map::from_iter([("running".to_string(), serde_json::json!(true))]),
         ..rendered_as_stored(node)
     }

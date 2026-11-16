@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use pyo3::prelude::*;
 
 #[cfg(target_os = "macos")]
@@ -27,11 +26,11 @@ mod python_logging;
 mod python_metal_framework_queue_synchronization;
 mod python_module_host_table;
 mod python_monotonic_timer;
+mod python_node_context;
+mod python_node_declaration;
+mod python_node_link_data_access;
 mod python_port_family_read_types;
 mod python_port_payload;
-mod python_processor_context;
-mod python_processor_declaration;
-mod python_processor_link_data_access;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
 
@@ -45,57 +44,57 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         "MODULE_HOST_TABLE_ABI_MINOR",
         tatolab_module_sdk::MODULE_HOST_TABLE_ABI_MINOR,
     )?;
-    module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
+    module.add_class::<python_node_link_data_access::PythonNodeLinkDataAccess>()?;
     module.add_class::<python_port_payload::PythonPortPayloadBorrow>()?;
     module.add_class::<python_port_payload::PythonPortPayloadLoan>()?;
     module.add_class::<python_port_family_read_types::PythonChannelsBlock>()?;
     module.add_class::<python_port_family_read_types::PythonPacketsUnit>()?;
     module.add_class::<python_port_family_read_types::PythonArrayFrameCpuAttribute>()?;
     module.add_function(wrap_pyfunction!(
-        python_processor_link_data_access::open_node_link_data_access_for_helper_process,
+        python_node_link_data_access::open_node_link_data_access_for_helper_process,
         module
     )?)?;
-    module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
+    module.add_class::<python_node_context::PythonRuntimeContextFullAccess>()?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::open_runtime_context_full_access_for_helper_process,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_processor_context::limited_access_view_of_runtime_context_for_helper_process,
+        python_node_context::open_runtime_context_full_access_for_helper_process,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::note_pause_state_from_parent_on_runtime_context,
+        python_node_context::limited_access_view_of_runtime_context_for_helper_process,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::note_stop_request_from_parent_on_runtime_context,
+        python_node_context::note_pause_state_from_parent_on_runtime_context,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::note_execution_mode_from_parent_on_runtime_context,
+        python_node_context::note_stop_request_from_parent_on_runtime_context,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::not_ready_report_on_runtime_context,
+        python_node_context::note_execution_mode_from_parent_on_runtime_context,
         module
     )?)?;
-    module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;
-    module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
-    module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;
-    module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
-    module.add_class::<python_processor_context::PythonGpuSurfaceDeviceTensorScope>()?;
-    module.add_class::<python_processor_context::PythonGpuSurfaceCheckOutLease>()?;
-    module.add_class::<python_processor_context::PythonOpaqueFdAllocationExport>()?;
-    module.add_class::<python_processor_context::PythonIOSurfaceMachPortExport>()?;
-    module.add_class::<python_processor_context::PythonComputeKernel>()?;
-    module.add_class::<python_processor_context::PythonGraphicsKernel>()?;
-    module.add_class::<python_processor_context::PythonRayTracingKernel>()?;
-    module.add_class::<python_processor_context::PythonAccelerationStructureHandle>()?;
-    module.add_class::<python_processor_context::PythonKernelDispatchBatch>()?;
-    module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
-    module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
-    module.add_class::<python_processor_context::PythonStoreScopedToThisNode>()?;
+    module.add_function(wrap_pyfunction!(
+        python_node_context::not_ready_report_on_runtime_context,
+        module
+    )?)?;
+    module.add_class::<python_node_context::PythonRuntimeContextLimitedAccess>()?;
+    module.add_class::<python_node_context::PythonGpuContextFullAccess>()?;
+    module.add_class::<python_node_context::PythonGpuContextLimitedAccess>()?;
+    module.add_class::<python_node_context::PythonGpuSurfaceHandle>()?;
+    module.add_class::<python_node_context::PythonGpuSurfaceDeviceTensorScope>()?;
+    module.add_class::<python_node_context::PythonGpuSurfaceCheckOutLease>()?;
+    module.add_class::<python_node_context::PythonOpaqueFdAllocationExport>()?;
+    module.add_class::<python_node_context::PythonIOSurfaceMachPortExport>()?;
+    module.add_class::<python_node_context::PythonComputeKernel>()?;
+    module.add_class::<python_node_context::PythonGraphicsKernel>()?;
+    module.add_class::<python_node_context::PythonRayTracingKernel>()?;
+    module.add_class::<python_node_context::PythonAccelerationStructureHandle>()?;
+    module.add_class::<python_node_context::PythonKernelDispatchBatch>()?;
+    module.add_class::<python_node_context::PythonLinkInputDataReader>()?;
+    module.add_class::<python_node_context::PythonLinkOutputDataWriter>()?;
+    module.add_class::<python_node_context::PythonStoreScopedToThisNode>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_class::<python_helper_stream_clock::PythonStreamClockReading>()?;
     #[cfg(unix)]
@@ -127,15 +126,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_input_port_pin_values::read_each_unlinked_input_port_as_its_pin_value,
         module
     )?)?;
-    module
-        .add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersProcessor>()?;
+    module.add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersNode>()?;
     module.add_class::<python_function_node_island::UnreadMessageAFunctionNodeHandsOn>()?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_processor_context::engine_build_id_compiled_into_this_extension,
+        python_node_context::engine_build_id_compiled_into_this_extension,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;

@@ -263,7 +263,7 @@ def write_a_one_stream_project_of_a_suite_stream_function(
         MODULE_NAME_PREFIXES_A_STREAM_FUNCTION_IS_NOT_RUN_FROM
     ):
         raise StreamFunctionNotRunnableFromTheSuiteProject(
-            f"the stream function {target} lives in `{module_name}`, which every processor "
+            f"the stream function {target} lives in `{module_name}`, which every node "
             f"interpreter of the project would have to import — pytest, the harness and every "
             f"skip with it; move it to one of the suite's `*_streams.py` modules"
         )
@@ -363,7 +363,7 @@ class HandWrittenGraphProject:
     graph_document_path: Path
     venv_interpreter: Path
     #: What the project's interpreter execs for every invocation.
-    processor_interpreter: Path
+    node_interpreter: Path
     #: The stream the graph document holds.
     stream_name: str
 
@@ -383,9 +383,9 @@ def write_a_hand_written_graph_project(
     graph: "dict[str, Any] | str",
     *,
     reported_project_directory: "Path | None" = None,
-    processor_interpreter: "Path | None" = None,
+    node_interpreter: "Path | None" = None,
 ) -> HandWrittenGraphProject:
-    processor_interpreter = processor_interpreter or SUITE_VENV_INTERPRETER
+    node_interpreter = node_interpreter or SUITE_VENV_INTERPRETER
     if reported_project_directory is None:
         project_directory.mkdir(parents=True)
         link_every_suite_directory_entry_into(project_directory)
@@ -396,7 +396,7 @@ def write_a_hand_written_graph_project(
     if not venv_interpreter.exists():
         venv_interpreter.parent.mkdir(parents=True)
         venv_interpreter.write_text(
-            f'#!/bin/sh\nexec {shlex.quote(str(processor_interpreter))} "$@"\n', encoding="utf-8"
+            f'#!/bin/sh\nexec {shlex.quote(str(node_interpreter))} "$@"\n', encoding="utf-8"
         )
         venv_interpreter.chmod(0o755)
     write_the_project_file_unless_there(project_directory)
@@ -406,7 +406,7 @@ def write_a_hand_written_graph_project(
         project_directory=project_directory,
         graph_document_path=graph_document_path,
         venv_interpreter=venv_interpreter,
-        processor_interpreter=processor_interpreter,
+        node_interpreter=node_interpreter,
         stream_name=stream_name,
     )
 

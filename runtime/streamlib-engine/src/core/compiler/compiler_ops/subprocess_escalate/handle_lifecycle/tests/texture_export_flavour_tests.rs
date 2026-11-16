@@ -59,13 +59,13 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     let acquired_texture = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-texture-edges".to_string(),
             width: 64,
             height: 32,
             format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
-            processor_output_pool: None,
+            node_output_pool: None,
             usage: vec!["texture_binding".to_string(), "storage_binding".to_string()],
         }),
     );
@@ -90,7 +90,7 @@ fn a_helpers_texture_and_image_carry_timeline_edges_exactly_where_the_device_exp
     let acquired_image = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireImage(EscalateRequestAcquireImage {
             request_id: "req-image-edges".to_string(),
             width: 64,
@@ -160,13 +160,13 @@ fn a_helpers_render_target_texture_registers_the_flavour_its_device_can_carry() 
     let handle_id = match handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-render-target-texture".to_string(),
             width: 64,
             height: 32,
             format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
-            processor_output_pool: None,
+            node_output_pool: None,
             usage: vec![
                 "render_attachment".to_string(),
                 "texture_binding".to_string(),
@@ -241,13 +241,13 @@ fn a_texture_no_opaque_fd_image_can_carry_is_refused_at_the_acquisition_where_dm
     let refusal = handle_id_or_refusal_of(handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-multi-plane-texture".to_string(),
             width: 64,
             height: 32,
             format: TextureFormat::Nv12.wire_name().to_string(),
-            processor_output_pool: None,
+            node_output_pool: None,
             usage: vec!["texture_binding".to_string()],
         }),
     ))

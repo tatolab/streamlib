@@ -61,24 +61,24 @@ pub mod logging {
     };
 }
 
-pub use streamlib_macros::{processor, processor_config};
+pub use streamlib_macros::{node, node_config};
 
 #[cfg(doctest)]
-pub struct ProcessorAttributeAcceptsNoIdentity;
+pub struct NodeAttributeAcceptsNoIdentity;
 
 pub use core::{
-    ContinuousProcessor,
+    ContinuousNode,
     Error,
     GpuContext,
     GraphSnapshot,
     InputPortMarker,
-    ManualProcessor,
+    ManualNode,
+    NODE_REGISTRY,
     NativeTextureHandle,
+    NodeSpec,
     OutputPortMarker,
-    PROCESSOR_REGISTRY,
     PooledTextureHandle,
-    ProcessorSpec,
-    ReactiveProcessor,
+    ReactiveNode,
     Result,
     RuntimeContext,
     RuntimeContextFullAccess,
@@ -229,7 +229,6 @@ pub mod platform {
     }
 }
 
-
 pub mod sdk {
     pub use crate::core::context;
     pub use crate::core::descriptors;
@@ -245,16 +244,14 @@ pub mod sdk {
     pub use crate::core::texture;
     pub use crate::core::utils;
 
-    pub mod processors {
-        pub use crate::core::processors::{
-            __generated_private, Config, ConfigValidationError, ContinuousProcessor,
-            DynGeneratedProcessor, DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor,
-            InstalledModuleOfANodeType, ManualProcessor, NodeTypesOneStreamResolves,
-            OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome,
-            OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, PROCESSOR_REGISTRY,
-            ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec, ProcessorState,
-            ProcessorStateComponent, ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME,
-            traits,
+    pub mod nodes {
+        pub use crate::core::nodes::{
+            __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
+            DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType,
+            ManualNode, NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeState,
+            NodeStateComponent, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
+            OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
+            ReactiveNode, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
         };
 
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
@@ -266,7 +263,7 @@ pub mod sdk {
     pub use crate::schemars;
     pub use crate::serde_json;
 
-    pub use streamlib_macros::{processor, processor_config};
+    pub use streamlib_macros::{node, node_config};
 
     pub mod permissions {
         pub use crate::{request_audio_permission, request_camera_permission};

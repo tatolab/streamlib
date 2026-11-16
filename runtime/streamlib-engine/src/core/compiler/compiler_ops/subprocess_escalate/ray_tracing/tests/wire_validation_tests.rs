@@ -20,7 +20,7 @@ fn register_blas_with_invalid_vertex_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                 "blas-bad-vertices",
                 "xyz123",
@@ -43,7 +43,7 @@ fn register_blas_with_invalid_index_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                 "blas-bad-indices",
                 &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
@@ -80,7 +80,7 @@ fn register_blas_with_a_partial_vertex_or_triangle_is_refused() {
             handle_escalate_op(
                 &sandbox,
                 &registry,
-                &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+                &WhatAHelperPlacedNodeReaches::default(),
                 EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                     request_id,
                     &vertices_hex,
@@ -109,7 +109,7 @@ fn register_tlas_with_no_instances_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -130,7 +130,7 @@ fn register_tlas_with_a_transform_that_is_not_a_row_major_3x4_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -151,7 +151,7 @@ fn register_tlas_with_a_mask_wider_than_eight_bits_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(req),
         )
         .expect("must produce a response"),
@@ -172,7 +172,7 @@ fn run_with_invalid_push_constants_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunRayTracingKernel(req),
         )
         .expect("must produce a response"),
@@ -251,7 +251,7 @@ fn register_with_invalid_stage_hex_returns_err() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterRayTracingKernel(req),
         )
         .expect("must produce a response"),

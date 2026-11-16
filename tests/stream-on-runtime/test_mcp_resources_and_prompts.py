@@ -39,7 +39,7 @@ ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
-from processors.marked_frame_sink import MarkedFrameSink
+from nodes.marked_frame_sink import MarkedFrameSink
 
 
 @graph_generator
@@ -214,7 +214,7 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
         ("newest", "ordered"),
     ],
 )
-def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_link(
+def test_a_client_following_the_insert_prompt_splices_a_node_into_a_live_link(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     sink_input_delivery_profile: str,
@@ -222,11 +222,11 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 ):
     app_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/frame_marking_effect.py": FRAME_MARKING_EFFECT_SOURCE_TEMPLATE.format(
+            "nodes/__init__.py": "",
+            "nodes/frame_marking_effect.py": FRAME_MARKING_EFFECT_SOURCE_TEMPLATE.format(
                 delivery_profile=inserted_input_delivery_profile
             ),
-            "processors/marked_frame_sink.py": MARKED_FRAME_SINK_SOURCE_TEMPLATE.format(
+            "nodes/marked_frame_sink.py": MARKED_FRAME_SINK_SOURCE_TEMPLATE.format(
                 delivery_profile=sink_input_delivery_profile
             ),
             "stream.py": STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK,
@@ -288,7 +288,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     catalog_paths = [
         entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]
     ] + [installed["node"]["type"] for installed in catalog_of_the_stream["installed"]]
-    inserted_type = "processors.frame_marking_effect:FrameMarkingEffect"
+    inserted_type = "nodes.frame_marking_effect:FrameMarkingEffect"
 
     # The prompt's three arguments, bound by the names the listing gave them:
     # the stream, the link's id, and a catalog import path.

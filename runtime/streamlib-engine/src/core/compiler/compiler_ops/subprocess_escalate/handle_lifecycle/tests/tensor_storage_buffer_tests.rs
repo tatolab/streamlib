@@ -12,11 +12,11 @@ fn acquire_tensor_storage_buffer_over_the_escalate_op(
     registry: &EscalateHandleRegistry,
     shape: &[u64],
     dtype: &str,
-    processor_output_pool: Option<(&str, u32)>,
+    node_output_pool: Option<(&str, u32)>,
 ) -> std::result::Result<String, String> {
     use super::super::super::handle_escalate_op;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
-        EscalateRequestAcquireStorageBuffer, EscalateRequestProcessorOutputPool,
+        EscalateRequestAcquireStorageBuffer, EscalateRequestNodeOutputPool,
     };
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
         EscalateRequest, EscalateResponse,
@@ -25,13 +25,13 @@ fn acquire_tensor_storage_buffer_over_the_escalate_op(
     match handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer {
             request_id: "req-tensor".to_string(),
             shape: shape.to_vec(),
             dtype: dtype.to_string(),
-            processor_output_pool: processor_output_pool.map(|(pool_key, rotation_depth)| {
-                EscalateRequestProcessorOutputPool {
+            node_output_pool: node_output_pool.map(|(pool_key, rotation_depth)| {
+                EscalateRequestNodeOutputPool {
                     pool_key: pool_key.to_string(),
                     rotation_depth,
                 }
@@ -114,7 +114,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     let released = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-release-tensor".to_string(),
             handle_id: surface_id.clone(),
@@ -207,7 +207,7 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
         let released = handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
                 request_id: "req-release-tensor".to_string(),
                 handle_id: surface_id.clone(),
@@ -240,7 +240,7 @@ fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_t
 fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
     use uuid::Uuid;
 
-    use super::super::release_processor_output_pool_slot;
+    use super::super::release_node_output_pool_slot;
     use crate::core::Error;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::pool_slot_key_of_surface_id;
@@ -317,12 +317,12 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
         .unwrap();
 
     let slot_keys: Vec<String> = registry
-        .processor_output_pools()
+        .node_output_pools()
         .drain_slots()
         .into_iter()
         .map(|released_slot| {
             let pool_slot_key = released_slot.pool_slot_key.clone();
-            release_processor_output_pool_slot(&sandbox, released_slot);
+            release_node_output_pool_slot(&sandbox, released_slot);
             pool_slot_key
         })
         .collect();

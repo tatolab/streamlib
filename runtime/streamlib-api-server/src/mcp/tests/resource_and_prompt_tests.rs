@@ -5,8 +5,8 @@
 //! wiring prompts, and the tool each prompt step calls.
 
 use super::*;
-use streamlib::sdk::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
+use streamlib::sdk::nodes::NODE_REGISTRY;
 
 /// The control vocabulary tells an agent to confirm `wired` in `graph`. A
 /// link onto a helper is not wired when `connect` returns, so the same text
@@ -60,12 +60,12 @@ fn stub_serving_two_linked_nodes() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
 fn register_a_virtual_camera_sink_probe_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| {
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(
-                ProcessorDescriptor::new(
-                    ProcessorClassShortName::new("VirtualCameraSink").unwrap(),
-                    ProcessorClassImportPath::new(
-                        crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+                NodeDescriptor::new(
+                    NodeClassShortName::new("VirtualCameraSink").unwrap(),
+                    NodeClassImportPath::new(
+                        crate::mcp_prompts::VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH,
                     )
                     .unwrap(),
                     "a virtual-camera probe",
@@ -202,11 +202,11 @@ async fn the_catalog_resource_renders_the_registry_as_it_stands_at_each_read() {
         "type": "object",
         "properties": { "strength": { "type": "number", "default": 0.5 } }
     });
-    PROCESSOR_REGISTRY
+    NODE_REGISTRY
         .register_descriptor_only(
-            ProcessorDescriptor::new(
-                ProcessorClassShortName::new("RegisteredBetweenReads").unwrap(),
-                ProcessorClassImportPath::new(class_import_path).unwrap(),
+            NodeDescriptor::new(
+                NodeClassShortName::new("RegisteredBetweenReads").unwrap(),
+                NodeClassImportPath::new(class_import_path).unwrap(),
                 "registered after the first read",
             )
             .with_config_schema(config_schema.clone())
@@ -411,11 +411,11 @@ async fn the_insert_prompt_splices_the_named_link_in_an_order_that_never_leaves_
 #[tokio::test]
 async fn a_registered_types_catalog_entry_is_rendered_into_the_prompt() {
     let class_import_path = "streamlib_api_server::prompt_catalog_probe::GrayscaleEffect";
-    PROCESSOR_REGISTRY
+    NODE_REGISTRY
         .register_descriptor_only(
-            ProcessorDescriptor::new(
-                ProcessorClassShortName::new("GrayscaleEffect").unwrap(),
-                ProcessorClassImportPath::new(class_import_path).unwrap(),
+            NodeDescriptor::new(
+                NodeClassShortName::new("GrayscaleEffect").unwrap(),
+                NodeClassImportPath::new(class_import_path).unwrap(),
                 "a prompt-rendering probe",
             )
             .with_config_schema(json!({
@@ -464,7 +464,7 @@ async fn the_virtual_camera_prompt_adds_the_registered_sink_on_its_own_input_por
         ["add_node", "connect", "graph"]
     );
     assert!(
-        text.contains(crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH),
+        text.contains(crate::mcp_prompts::VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH),
         "{text}"
     );
     assert!(
@@ -622,11 +622,11 @@ fn register_a_sole_input_probe_once(delivery_profile: &'static str) -> String {
     );
     let mut registered_profiles = REGISTERED_PROFILES.lock();
     if !registered_profiles.contains(&delivery_profile) {
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(
-                ProcessorDescriptor::new(
-                    ProcessorClassShortName::new("SoleInputProbe").unwrap(),
-                    ProcessorClassImportPath::new(&class_import_path).unwrap(),
+                NodeDescriptor::new(
+                    NodeClassShortName::new("SoleInputProbe").unwrap(),
+                    NodeClassImportPath::new(&class_import_path).unwrap(),
                     "a probe with one input",
                 )
                 .with_input(

@@ -8,7 +8,7 @@ pub(super) mod function_node_states_carried_across_loads;
 pub(super) mod graph_change_listener;
 pub(super) mod live_graph_reconciled_to_a_graph_document;
 pub(super) mod loaded_stream;
-pub(super) mod local_processor_type_registration;
+pub(super) mod local_node_type_registration;
 pub(super) mod machine_state_directory;
 pub(super) mod node_of_a_stream_not_running;
 pub(super) mod operations_on_the_streams_loaded_in_this_runtime;

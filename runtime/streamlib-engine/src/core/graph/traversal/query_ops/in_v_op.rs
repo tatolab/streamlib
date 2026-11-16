@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// The node each of these links carries into.
 fn every_destination_node_of(
-    graph: &DiGraph<ProcessorNode, Link>,
+    graph: &DiGraph<GraphNode, Link>,
     links: &[EdgeIndex],
 ) -> Vec<NodeIndex> {
     links
@@ -20,9 +20,9 @@ fn every_destination_node_of(
 
 impl<'a> LinkTraversal<'a> {
     /// Get the vertex each link carries into — its destination.
-    pub fn in_v(self) -> ProcessorTraversal<'a> {
+    pub fn in_v(self) -> NodeTraversal<'a> {
         let ids = every_destination_node_of(self.graph, &self.ids);
-        ProcessorTraversal {
+        NodeTraversal {
             graph: self.graph,
             ids,
         }
@@ -31,9 +31,9 @@ impl<'a> LinkTraversal<'a> {
 
 impl<'a> LinkTraversalMut<'a> {
     /// Get the vertex each link carries into — its destination.
-    pub fn in_v(self) -> ProcessorTraversalMut<'a> {
+    pub fn in_v(self) -> NodeTraversalMut<'a> {
         let ids = every_destination_node_of(self.graph, &self.ids);
-        ProcessorTraversalMut {
+        NodeTraversalMut {
             graph: self.graph,
             ids,
         }

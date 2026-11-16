@@ -16,7 +16,7 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 use crate::core::context::GpuContext;
 use crate::core::runtime::MachineName;
 use crate::core::runtime::RuntimeUniqueId;
-use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
+use crate::core::runtime::node_interpreters::node_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
     LoadedStreamInThisRuntime, LoadedStreamOutOfTheTableUntilItsEndIsRecorded,
 };
@@ -49,7 +49,7 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
     pub(super) gpu_context_created_by_the_first_stream_start: Mutex<Option<GpuContext>>,
     pub(super) setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
-    pub(crate) processor_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
+    pub(crate) node_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// The uv the host handed this runtime, which makes every project's `.venv`.
     pub(crate) runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce,
     /// What the host commits a created project's files with, as its history's first commit.

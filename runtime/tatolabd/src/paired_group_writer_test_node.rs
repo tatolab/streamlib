@@ -10,14 +10,14 @@
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::MessageGroupBoundary;
-use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
+use streamlib::sdk::nodes::{ContinuousNode, NODE_REGISTRY};
 
 use crate::numbered_message_writer_test_node::NANOSECONDS_BETWEEN_MESSAGE_STAMPS;
 
 /// How many one-message groups each write puts on the wire together.
 const GROUPS_WRITTEN_TOGETHER: u64 = 2;
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = continuous(interval_ms = 20),
     output("paired_groups", family = Records),
 )]
@@ -25,7 +25,7 @@ pub struct PairedGroupWriterTestNode {
     next_message_number: u64,
 }
 
-impl ContinuousProcessor for PairedGroupWriterTestNode::Processor {
+impl ContinuousNode for PairedGroupWriterTestNode::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         for _ in 0..GROUPS_WRITTEN_TOGETHER {
             let message_number = self.next_message_number;
@@ -43,7 +43,7 @@ impl ContinuousProcessor for PairedGroupWriterTestNode::Processor {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_paired_group_writer_test_node() {
-    PROCESSOR_REGISTRY.register::<PairedGroupWriterTestNode::Processor>();
+    NODE_REGISTRY.register::<PairedGroupWriterTestNode::Node>();
 }
 
 #[cfg(test)]
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn a_test_graph_names_the_node_by_its_class_import_path() {
         assert_eq!(
-            PairedGroupWriterTestNode::processor_class_import_path().as_str(),
+            PairedGroupWriterTestNode::node_class_import_path().as_str(),
             "tatolabd::paired_group_writer_test_node::PairedGroupWriterTestNode"
         );
     }

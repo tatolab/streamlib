@@ -6,7 +6,7 @@
 `tatolab` is PEP 420: no distribution ships `tatolab/__init__.py`, so a second
 distribution's `tatolab.<name>` lands beside these two rather than shadowing
 them. `tatolab.stream` and `tatolab.runtime` are regular packages. No public
-Python name either publishes, nor any public module beneath them, says "processor".
+Python name either publishes, nor any public module beneath them, says "node".
 """
 
 import importlib.util
@@ -24,17 +24,17 @@ import tatolab.runtime._engine as engine
 import tatolab.stream
 from tatolab.stream._runtime_lend import runtime_backed_protocol_registry
 
-ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = ("ProcessorLinkDataAccess",)
+ENGINE_CLASS_NAMES_THE_RENAME_RETIRED = ("NodeLinkDataAccess",)
 CLASS_NAMES_THE_RENAME_RETIRED = (
     *ENGINE_CLASS_NAMES_THE_RENAME_RETIRED,
-    "ProcessorOutputTextureRing",
+    "NodeOutputTextureRing",
 )
 ENGINE_CLASS_NAMES_IN_THEIR_PLACE = (
     "NodeLinkDataAccess",
 )
 GPU_CONTEXT_METHOD_NAMES_THE_RENAME_RETIRED = (
-    "acquire_texture_from_processor_output_pool",
-    "acquire_storage_buffer_from_processor_output_pool",
+    "acquire_texture_from_node_output_pool",
+    "acquire_storage_buffer_from_node_output_pool",
 )
 GPU_CONTEXT_METHOD_NAMES_IN_THEIR_PLACE = (
     "acquire_texture_from_node_output_pool",
@@ -68,8 +68,8 @@ def test_no_streamlib_module_is_importable():
 
 
 def test_the_retired_texture_ring_module_is_not_importable():
-    assert importlib.util.find_spec("tatolab.stream.processor_output_texture_ring") is None
-    assert importlib.util.find_spec("tatolab.runtime.processor_output_texture_ring") is None
+    assert importlib.util.find_spec("tatolab.stream.node_output_texture_ring") is None
+    assert importlib.util.find_spec("tatolab.runtime.node_output_texture_ring") is None
 
 
 def test_no_package_nor_the_engine_holds_a_class_name_the_rename_retired():
@@ -106,7 +106,7 @@ def _native_engine_class(class_name: str) -> type:
     return native_class
 
 
-def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
+def test_the_engine_publishes_none_of_the_node_names_the_rename_retired():
     for class_name in ENGINE_CLASS_NAMES_THE_RENAME_RETIRED:
         assert not hasattr(engine, class_name), class_name
     for gpu_context_class in (
@@ -119,8 +119,8 @@ def test_the_engine_publishes_none_of_the_processor_names_the_rename_retired():
         _native_engine_class("RuntimeContextFullAccess"),
         _native_engine_class("RuntimeContextLimitedAccess"),
     ):
-        assert not hasattr(runtime_context_class, "processor_id"), runtime_context_class
-    assert "processor_id" not in inspect.signature(
+        assert not hasattr(runtime_context_class, "node_run_id"), runtime_context_class
+    assert "node_run_id" not in inspect.signature(
         engine.open_runtime_context_full_access_for_helper_process
     ).parameters
 
@@ -183,7 +183,7 @@ def _public_names_tatolab_publishes() -> "list[tuple[str, object]]":
     return public_names
 
 
-def test_every_public_tatolab_module_is_swept_for_processor():
+def test_every_public_tatolab_module_is_swept_for_node():
     swept_module_names = {public_module.__name__ for public_module in _public_tatolab_modules()}
     assert {
         "tatolab.stream",
@@ -192,28 +192,28 @@ def test_every_public_tatolab_module_is_swept_for_processor():
     } <= swept_module_names
 
 
-def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_processor():
-    names_saying_processor: "list[str]" = [
+def test_no_name_tatolab_publishes_nor_any_public_member_of_one_says_node():
+    names_saying_node: "list[str]" = [
         public_module.__name__
         for public_module in _public_tatolab_modules()
-        if "processor" in public_module.__name__.rsplit(".", 1)[-1].lower()
+        if "node" in public_module.__name__.rsplit(".", 1)[-1].lower()
     ]
     for qualified_name, exported in _public_names_tatolab_publishes():
-        if "processor" in qualified_name.rsplit(".", 1)[1].lower():
-            names_saying_processor.append(qualified_name)
+        if "node" in qualified_name.rsplit(".", 1)[1].lower():
+            names_saying_node.append(qualified_name)
         if inspect.isclass(exported):
             member_names = [name for name in dir(exported) if not name.startswith("_")]
         elif inspect.ismodule(exported):
             member_names = list(getattr(exported, "__all__", ()))
         else:
             continue
-        names_saying_processor.extend(
+        names_saying_node.extend(
             f"{qualified_name}.{member_name}"
             for member_name in member_names
-            if "processor" in member_name.lower()
+            if "node" in member_name.lower()
         )
 
-    assert names_saying_processor == []
+    assert names_saying_node == []
 
 
 def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., object]]]":
@@ -241,28 +241,28 @@ def _public_callables_tatolab_publishes() -> "list[tuple[str, Callable[..., obje
     return public_callables
 
 
-def test_no_parameter_of_the_node_decorator_says_processor():
+def test_no_parameter_of_the_node_decorator_says_node():
     node_parameter_names = list(inspect.signature(tatolab.stream.node).parameters)
-    assert not [name for name in node_parameter_names if "processor" in name.lower()]
+    assert not [name for name in node_parameter_names if "node" in name.lower()]
 
 
-def test_no_parameter_of_a_public_callable_tatolab_publishes_says_processor():
-    parameters_saying_processor = [
+def test_no_parameter_of_a_public_callable_tatolab_publishes_says_node():
+    parameters_saying_node = [
         f"{qualified_name}({parameter_name})"
         for qualified_name, public_callable in _public_callables_tatolab_publishes()
         for parameter_name in inspect.signature(public_callable).parameters
-        if "processor" in parameter_name.lower()
+        if "node" in parameter_name.lower()
     ]
-    parameters_saying_processor.extend(
+    parameters_saying_node.extend(
         f"{qualified_name}[{key}]"
         for qualified_name, exported in _public_names_tatolab_publishes()
         if is_typeddict(exported)
         for key in getattr(exported, "__required_keys__")
         | getattr(exported, "__optional_keys__")
-        if "processor" in key.lower()
+        if "node" in key.lower()
     )
 
-    assert parameters_saying_processor == []
+    assert parameters_saying_node == []
 
 
 def test_every_native_class_a_tatolab_stream_protocol_declares_names_tatolab_stream_as_its_module():

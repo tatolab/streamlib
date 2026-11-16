@@ -3,10 +3,10 @@
 
 use crate::core::graph::{
     Component, GraphEdgeWithComponents, GraphNodeWithComponents, LinkTraversal, LinkTraversalMut,
-    ProcessorTraversal, ProcessorTraversalMut,
+    NodeTraversal, NodeTraversalMut,
 };
 
-impl<'a> ProcessorTraversal<'a> {
+impl<'a> NodeTraversal<'a> {
     /// Filter to nodes that have the specified component.
     pub fn has_component<C: Component>(self) -> Self {
         let ids = self
@@ -48,7 +48,7 @@ impl<'a> LinkTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
+impl<'a> NodeTraversalMut<'a> {
     /// Filter to nodes that have the specified component.
     pub fn has_component<C: Component>(self) -> Self {
         let ids = self

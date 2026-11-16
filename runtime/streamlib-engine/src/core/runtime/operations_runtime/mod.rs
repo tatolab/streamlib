@@ -9,22 +9,22 @@ use std::path::{Path, PathBuf};
 
 use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
+use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-use super::processor_interpreters::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    PendingDeletionComponent, ProcessorInstanceComponent, ProcessorUniqueId, StateComponent,
-    node_named_or_refused, refuse_a_link_between_ports_whose_families_do_not_match,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
+    NodeRunId, PendingDeletionComponent, StateComponent, node_named_or_refused,
+    refuse_a_link_between_ports_whose_families_do_not_match,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
-use crate::core::processors::{ProcessorSpec, ProcessorState};
+use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
@@ -45,15 +45,15 @@ pub(super) struct LiveGraphChangeOnOneStream {
 }
 
 thread_local! {
-    static IS_A_PROCESSOR_EXECUTION_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static IS_A_NODE_EXECUTION_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-pub(crate) fn mark_this_thread_as_a_processor_execution_thread() {
-    IS_A_PROCESSOR_EXECUTION_THREAD.with(|marker| marker.set(true));
+pub(crate) fn mark_this_thread_as_a_node_execution_thread() {
+    IS_A_NODE_EXECUTION_THREAD.with(|marker| marker.set(true));
 }
 
 fn this_thread_may_commit_inline() -> bool {
-    !IS_A_PROCESSOR_EXECUTION_THREAD.with(|marker| marker.get())
+    !IS_A_NODE_EXECUTION_THREAD.with(|marker| marker.get())
 }
 
 async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
@@ -85,12 +85,12 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             .filter(|link| link.has::<PendingDeletionComponent>())
             .map(|link| link.id.clone())
             .collect();
-        let nodes_pending_deletion: HashSet<ProcessorUniqueId> = this_streams_graph
+        let nodes_pending_deletion: HashSet<NodeRunId> = this_streams_graph
             .traversal()
             .v(())
             .iter()
             .filter(|node| {
-                node.has::<PendingDeletionComponent>() && !node.has::<ProcessorInstanceComponent>()
+                node.has::<PendingDeletionComponent>() && !node.has::<NodeInstanceComponent>()
             })
             .map(|node| node.id.clone())
             .collect();
@@ -98,8 +98,8 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
         for link_id in &links_pending_deletion {
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
-        for processor_id in &nodes_pending_deletion {
-            this_streams_graph.traversal_mut().v(processor_id).drop();
+        for node_run_id in &nodes_pending_deletion {
+            this_streams_graph.traversal_mut().v(node_run_id).drop();
         }
     });
 }
@@ -114,11 +114,11 @@ pub(super) enum ConfigReferencesOfTheAddedNode {
     ValidatedWithTheWholeGraphBeforeTheAdd,
 }
 
-pub(super) async fn add_processor_impl(
+pub(super) async fn add_node_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
-    processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
+    node_interpreter_launch_record: Arc<NodeInterpreterLaunchRecordOfOneStream>,
     lend_directory: Option<PathBuf>,
-    spec: ProcessorSpec,
+    spec: NodeSpec,
     config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
 ) -> Result<NodeInTheGraph> {
     let LiveGraphChangeOnOneStream {
@@ -126,15 +126,15 @@ pub(super) async fn add_processor_impl(
         live,
         stream,
     } = live_graph_change;
-    let emit_will_add = |id: &ProcessorUniqueId| {
-        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillAddProcessor {
-            processor_id: id.clone(),
+    let emit_will_add = |id: &NodeRunId| {
+        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillAddNode {
+            node_run_id: id.clone(),
         });
     };
 
-    let emit_did_add = |id: &ProcessorUniqueId| {
-        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidAddProcessor {
-            processor_id: id.clone(),
+    let emit_did_add = |id: &NodeRunId| {
+        stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidAddNode {
+            node_run_id: id.clone(),
         });
     };
 
@@ -143,15 +143,15 @@ pub(super) async fn add_processor_impl(
     // the module's import does.
     let a_load_holds_its_type_as_a_placeholder = config_references_of_the_added_node
         == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
-        && processor_interpreter_launch_record
+        && node_interpreter_launch_record
             .node_types_this_stream_resolves()
             .placeholder_of_the_node_type_not_described(&spec.name)
             .is_some();
     if !a_load_holds_its_type_as_a_placeholder
-        && processor_interpreter_launch_record.a_live_add_must_describe(&spec.name)
+        && node_interpreter_launch_record.a_live_add_must_describe(&spec.name)
     {
         let node_type = spec.name.clone();
-        let launch_record = Arc::clone(&processor_interpreter_launch_record);
+        let launch_record = Arc::clone(&node_interpreter_launch_record);
         tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
             launch_record.describe_and_register_a_type_a_live_add_names(
                 &node_type,
@@ -186,7 +186,7 @@ pub(super) async fn add_processor_impl(
             .v(&node_id)
             .first()
             .and_then(|node| node.get::<StateComponent>())
-            .map(|state_component| state_component.current() == ProcessorState::Error)
+            .map(|state_component| state_component.current() == NodeState::Error)
             .unwrap_or(false);
 
         if registry_miss {
@@ -194,11 +194,11 @@ pub(super) async fn add_processor_impl(
             emit_did_add(&node_id);
             if a_load_holds_its_type_as_a_placeholder {
                 return Ok(NodeInTheGraph {
-                    processor_id: node_id,
+                    node_run_id: node_id,
                     name: assigned_display_name,
                 });
             }
-            return Err(Error::UnknownProcessorType {
+            return Err(Error::UnknownNodeType {
                 ident: ident_for_err,
             });
         }
@@ -210,14 +210,14 @@ pub(super) async fn add_processor_impl(
                 graph.traversal().v(&node_id).first().map(|node| {
                     (
                         node.display_name.clone(),
-                        node.processor_type.clone(),
+                        node.node_type.clone(),
                         node.config.clone().unwrap_or_default(),
                     )
                 })
             else {
                 return Err(Error::GraphError("Could not create node".into()));
             };
-            let node_types = processor_interpreter_launch_record.node_types_this_stream_resolves();
+            let node_types = node_interpreter_launch_record.node_types_this_stream_resolves();
             if let Err(refusal) =
                 crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
                     &name_of_the_added_node,
@@ -240,10 +240,10 @@ pub(super) async fn add_processor_impl(
         }
 
         emit_will_add(&node_id);
-        tx.log(PendingOperation::AddProcessor(node_id.clone()));
+        tx.log(PendingOperation::AddNode(node_id.clone()));
         emit_did_add(&node_id);
         Ok(NodeInTheGraph {
-            processor_id: node_id,
+            node_run_id: node_id,
             name: assigned_display_name,
         })
     })?;
@@ -258,21 +258,21 @@ pub(super) async fn add_processor_impl(
 fn mark_the_node_and_each_of_its_links_pending_deletion(
     graph: &mut Graph,
     tx: &CompilerTransactionHandle,
-    processor_id: &ProcessorUniqueId,
+    node_run_id: &NodeRunId,
 ) -> Result<()> {
-    if !graph.traversal().v(processor_id).exists() {
-        return Err(Error::ProcessorNotFound(processor_id.to_string()));
+    if !graph.traversal().v(node_run_id).exists() {
+        return Err(Error::NodeNotFound(node_run_id.to_string()));
     }
     let inbound_links: Vec<LinkUniqueId> = graph
         .traversal_mut()
-        .v(processor_id)
+        .v(node_run_id)
         .in_e()
         .iter()
         .map(|link| link.id.clone())
         .collect();
     let outbound_links: Vec<LinkUniqueId> = graph
         .traversal_mut()
-        .v(processor_id)
+        .v(node_run_id)
         .out_e()
         .iter()
         .map(|link| link.id.clone())
@@ -283,16 +283,16 @@ fn mark_the_node_and_each_of_its_links_pending_deletion(
         }
         tx.log(PendingOperation::RemoveLink(link_id));
     }
-    if let Some(node) = graph.traversal_mut().v(processor_id).first_mut() {
+    if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
         node.insert(PendingDeletionComponent);
     }
-    tx.log(PendingOperation::RemoveProcessor(processor_id.clone()));
+    tx.log(PendingOperation::RemoveNode(node_run_id.clone()));
     Ok(())
 }
 
-pub(super) async fn remove_processor_impl(
+pub(super) async fn remove_node_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
-    processor_id: ProcessorUniqueId,
+    node_run_id: NodeRunId,
 ) -> Result<()> {
     let LiveGraphChangeOnOneStream {
         compiler,
@@ -300,21 +300,21 @@ pub(super) async fn remove_processor_impl(
         stream,
     } = live_graph_change;
     compiler.scope(|graph, tx| {
-        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &processor_id)
+        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
     })?;
 
     let removal_outcome = commit_live_graph_change(&compiler, live).await;
     if removal_outcome.is_err()
-        && compiler.scope(|graph, _tx| graph.traversal().v(&processor_id).exists())
+        && compiler.scope(|graph, _tx| graph.traversal().v(&node_run_id).exists())
     {
         return removal_outcome;
     }
 
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveProcessor {
-        processor_id: processor_id.clone(),
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveNode {
+        node_run_id: node_run_id.clone(),
     });
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveProcessor {
-        processor_id: processor_id.clone(),
+    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveNode {
+        node_run_id: node_run_id.clone(),
     });
     stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
 
@@ -374,7 +374,7 @@ fn the_node_this_stream_names(
 ) -> Result<NodeInTheGraph> {
     compiler.scope(|graph, _tx| {
         node_named_or_refused(graph, stream_id, node_name).map(|named| NodeInTheGraph {
-            processor_id: named.id.clone(),
+            node_run_id: named.id.clone(),
             name: named.display_name.clone(),
         })
     })
@@ -392,11 +392,9 @@ fn apply_a_link(
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
             refuse_a_link_between_ports_whose_families_do_not_match(graph, &from, &to)?;
 
-            let channel = crate::iceoryx2::source_channel_name(
-                from.processor_id().as_str(),
-                from.port_name(),
-            )
-            .map_err(|source| Error::InvalidLink(source.to_string()))?;
+            let channel =
+                crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
+                    .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
             let link_id = graph
                 .traversal_mut()
@@ -425,12 +423,12 @@ fn refuse_a_source_this_graph_cannot_take(
 ) -> Result<()> {
     let from_node = graph
         .traversal()
-        .v(from.processor_id())
+        .v(from.node_run_id())
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(from.processor_id().to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(from.node_run_id().to_string()))?;
     if !from_node.has_output(from.port_name()) {
-        return Err(Error::ProcessorPortNotFound {
-            processor_id: from.processor_id().to_string(),
+        return Err(Error::NodePortNotFound {
+            node_run_id: from.node_run_id().to_string(),
             port_name: from.port_name().to_string(),
             direction: PortDirection::Output,
         });
@@ -444,12 +442,12 @@ fn refuse_a_destination_this_graph_cannot_take(
 ) -> Result<()> {
     let to_node = graph
         .traversal()
-        .v(to.processor_id())
+        .v(to.node_run_id())
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(to.processor_id().to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(to.node_run_id().to_string()))?;
     if !to_node.has_input(to.port_name()) {
-        return Err(Error::ProcessorPortNotFound {
-            processor_id: to.processor_id().to_string(),
+        return Err(Error::NodePortNotFound {
+            node_run_id: to.node_run_id().to_string(),
             port_name: to.port_name().to_string(),
             direction: PortDirection::Input,
         });
@@ -523,12 +521,12 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    pub(super) async fn update_processor_config_compiled_right_away<C: Serialize>(
+    pub(super) async fn update_node_config_compiled_right_away<C: Serialize>(
         &self,
-        processor_id: &ProcessorUniqueId,
+        node_run_id: &NodeRunId,
         config: C,
     ) -> Result<()> {
-        self.log_a_processor_config_update_for_the_next_commit(processor_id, config)?;
+        self.log_a_node_config_update_for_the_next_commit(node_run_id, config)?;
         commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
@@ -542,7 +540,7 @@ impl LoadedStreamInThisRuntime {
 
     pub(super) fn lend_directory(&self) -> Option<PathBuf> {
         self.engine_resources_shared_by_every_stream()
-            .processor_interpreter_lend_directory
+            .node_interpreter_lend_directory
             .get()
             .map(Path::to_path_buf)
     }
@@ -579,10 +577,10 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
-        self.block_on_the_engines_tokio_runtime(add_processor_impl(
+    pub fn add_node_reporting_its_name(&self, spec: NodeSpec) -> Result<NodeInTheGraph> {
+        self.block_on_the_engines_tokio_runtime(add_node_impl(
             self.live_graph_change(),
-            Arc::clone(&self.processor_interpreter_launch_record),
+            Arc::clone(&self.node_interpreter_launch_record),
             self.lend_directory(),
             spec,
             ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
@@ -591,13 +589,13 @@ impl LoadedStreamInThisRuntime {
 
     /// Add one node of a graph load whose references were validated with the
     /// whole graph, so a reference may name a node the load adds later.
-    pub(crate) fn add_processor_of_a_validated_graph_load(
+    pub(crate) fn add_node_of_a_validated_graph_load(
         &self,
-        spec: ProcessorSpec,
+        spec: NodeSpec,
     ) -> Result<NodeInTheGraph> {
-        self.block_on_the_engines_tokio_runtime(add_processor_impl(
+        self.block_on_the_engines_tokio_runtime(add_node_impl(
             self.live_graph_change(),
-            Arc::clone(&self.processor_interpreter_launch_record),
+            Arc::clone(&self.node_interpreter_launch_record),
             self.lend_directory(),
             spec,
             ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
@@ -624,10 +622,10 @@ impl LoadedStreamInThisRuntime {
 // =============================================================================
 
 impl RuntimeOperations for LoadedStreamInThisRuntime {
-    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
-        self.in_this_streams_log_route(add_processor_impl(
+    fn add_node_async(&self, spec: NodeSpec) -> BoxFuture<'_, Result<NodeInTheGraph>> {
+        self.in_this_streams_log_route(add_node_impl(
             self.live_graph_change(),
-            Arc::clone(&self.processor_interpreter_launch_record),
+            Arc::clone(&self.node_interpreter_launch_record),
             self.lend_directory(),
             spec,
             ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
@@ -638,17 +636,14 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         the_node_this_stream_names(&self.compiler, self.stream_id(), node_name)
     }
 
-    fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+    fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>> {
         if let Err(refusal) = self.refuse_a_node_change_a_drawn_link_names(
-            &processor_id,
+            &node_run_id,
             NodeChangeADrawnLinkBlocks::Removal,
         ) {
             return Box::pin(std::future::ready(Err(refusal)));
         }
-        self.in_this_streams_log_route(remove_processor_impl(
-            self.live_graph_change(),
-            processor_id,
-        ))
+        self.in_this_streams_log_route(remove_node_impl(self.live_graph_change(), node_run_id))
     }
 
     fn connect_async(
@@ -686,9 +681,9 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         node_name: &str,
         config: &serde_json::Value,
     ) -> BoxFuture<'_, Result<()>> {
-        let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+        let launch_record = Arc::clone(&self.node_interpreter_launch_record);
         let lend_directory = self.lend_directory();
-        let node_type = ProcessorClassImportPath::new(node_type)
+        let node_type = NodeClassImportPath::new(node_type)
             .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")));
         let node_name = node_name.to_owned();
         let config = config.clone();
@@ -714,7 +709,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             }
             let node_types = launch_record.node_types_this_stream_resolves();
             if node_types.port_info(&node_type).is_none() {
-                return Err(Error::UnknownProcessorType { ident: node_type });
+                return Err(Error::UnknownNodeType { ident: node_type });
             }
             node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &config)?;
             crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
@@ -772,19 +767,19 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-        self.add_processor_reporting_its_name(spec)
-            .map(|added| added.processor_id)
+    fn add_node(&self, spec: NodeSpec) -> Result<NodeRunId> {
+        self.add_node_reporting_its_name(spec)
+            .map(|added| added.node_run_id)
     }
 
-    fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    fn remove_node(&self, node_run_id: &NodeRunId) -> Result<()> {
         self.refuse_a_node_change_a_drawn_link_names(
-            processor_id,
+            node_run_id,
             NodeChangeADrawnLinkBlocks::Removal,
         )?;
-        self.block_on_the_engines_tokio_runtime(remove_processor_impl(
+        self.block_on_the_engines_tokio_runtime(remove_node_impl(
             self.live_graph_change(),
-            processor_id.clone(),
+            node_run_id.clone(),
         ))
     }
 
@@ -806,8 +801,8 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
 
     fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
         &self,
-        function_node_id: &ProcessorUniqueId,
-        reader_id: &ProcessorUniqueId,
+        function_node_id: &NodeRunId,
+        reader_id: &NodeRunId,
         promotion_request_number: u64,
         reason: &str,
     ) -> Result<()> {

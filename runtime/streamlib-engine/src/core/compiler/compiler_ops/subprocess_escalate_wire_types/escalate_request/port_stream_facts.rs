@@ -32,5 +32,5 @@ pub(crate) struct EscalateRequestSetOutputPortStreamFacts {
     pub(crate) port: String,
 
     /// The facts, tagged by their family.
-    pub(crate) stream_facts: streamlib_processor_schema::PortStreamFacts,
+    pub(crate) stream_facts: streamlib_node_schema::PortStreamFacts,
 }

@@ -5,7 +5,7 @@
 
 from tatolab.stream import StreamBuilder, graph_generator
 
-from inbound_link_naming_processors import (
+from inbound_link_naming_nodes import (
     FeedsOneValueSource,
     ReportsEachAttributionSink,
     ReportsWhichLinkEachBagCameFrom,

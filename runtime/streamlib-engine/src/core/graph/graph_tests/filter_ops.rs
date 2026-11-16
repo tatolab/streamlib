@@ -5,29 +5,29 @@ use super::*;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
 
 #[test]
-fn test_filter_by_processor_type() {
+fn test_filter_by_node_type() {
     let mut graph = test_graph();
 
     graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named");
     graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named");
     graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named");
 
-    let mock_processors: Vec<_> = graph
+    let mock_nodes: Vec<_> = graph
         .traversal()
         .v(())
-        .filter(|n| n.processor_type == MockProcessor::Processor::processor_class_import_path())
+        .filter(|n| n.node_type == MockNode::Node::node_class_import_path())
         .ids();
 
-    assert_eq!(mock_processors.len(), 2);
+    assert_eq!(mock_nodes.len(), 2);
 }
 
 #[test]
@@ -36,15 +36,15 @@ fn test_has_component_filters_correctly() {
 
     let id1 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named");
 
     graph
@@ -66,26 +66,26 @@ fn test_filter_links_by_destination() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream1_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream2_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -101,7 +101,7 @@ fn test_filter_links_by_destination() {
     let to_downstream1: Vec<_> = graph
         .traversal()
         .e(())
-        .filter(|link| link.to_port().processor_id().as_str() == downstream1_id)
+        .filter(|link| link.to_port().node_run_id().as_str() == downstream1_id)
         .ids();
 
     assert_eq!(to_downstream1.len(), 1);

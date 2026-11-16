@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod audio_window_accumulator;
 mod channels_block_of_the_window_stage;
 mod device_matched_audio_window_contracts;

@@ -5,7 +5,7 @@
 
 from tatolab.stream import ScaledStreamClock, SteppedStreamClock, StreamBuilder, graph_generator
 
-from stream_clock_processors import (
+from stream_clock_nodes import (
     CROSSING_TICK_COUNTER_INTERVAL_MS,
     STEPPED_STREAM_STEP_MS,
     STEPPED_STREAM_STEPS,

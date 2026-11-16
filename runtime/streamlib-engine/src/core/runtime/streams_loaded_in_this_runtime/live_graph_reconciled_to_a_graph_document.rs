@@ -11,21 +11,20 @@ use uuid::Uuid;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
-    PendingDeletionComponent, ProcessorUniqueId, cast_exposed_name_to_url_safe,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
+    PendingDeletionComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
-use crate::core::processors::ProcessorSpec;
+use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, add_processor_impl, connect_impl, disconnect_impl,
-    remove_processor_impl,
+    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl, disconnect_impl, remove_node_impl,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -47,10 +46,10 @@ pub(in crate::core::runtime) struct LiveLinkAsGiven {
 
 /// One node the live graph holds, as a reconcile compares it to the document's.
 pub(in crate::core::runtime) struct LiveNodeAsTheGraphHoldsIt {
-    pub(in crate::core::runtime) processor_id: ProcessorUniqueId,
+    pub(in crate::core::runtime) node_run_id: NodeRunId,
     pub(in crate::core::runtime) node_uuid: Uuid,
     pub(in crate::core::runtime) display_name: String,
-    pub(in crate::core::runtime) processor_type: ProcessorClassImportPath,
+    pub(in crate::core::runtime) node_type: NodeClassImportPath,
     pub(in crate::core::runtime) config: Value,
     pub(in crate::core::runtime) pins: Map<String, Value>,
     pub(in crate::core::runtime) studio: Map<String, Value>,
@@ -135,14 +134,11 @@ impl LoadedStreamInThisRuntime {
             document_links.iter().collect();
 
         for live_node in self.the_live_nodes() {
-            let kept =
-                document_node_by_uuid
-                    .get(&live_node.node_uuid)
-                    .is_some_and(|document_node| {
-                        document_node.processor_type == live_node.processor_type
-                    });
+            let kept = document_node_by_uuid
+                .get(&live_node.node_uuid)
+                .is_some_and(|document_node| document_node.node_type == live_node.node_type);
             if !kept {
-                remove_processor_impl(self.live_graph_change(), live_node.processor_id).await?;
+                remove_node_impl(self.live_graph_change(), live_node.node_run_id).await?;
             }
         }
         for live_link in self.the_live_links_by_node_uuid() {
@@ -181,14 +177,14 @@ impl LoadedStreamInThisRuntime {
                         continue;
                     }
                     this_streams_graph.traversal_mut().rename_v(
-                        &live_node.processor_id,
+                        &live_node.node_run_id,
                         &a_name_no_document_node_holds_while_renames_swap(live_node.node_uuid),
                     )?;
                 }
                 for (live_node, document_node) in &kept_live_nodes_to_rename {
                     this_streams_graph
                         .traversal_mut()
-                        .rename_v(&live_node.processor_id, &document_node.name)?;
+                        .rename_v(&live_node.node_run_id, &document_node.name)?;
                 }
                 Ok(())
             })?;
@@ -201,17 +197,17 @@ impl LoadedStreamInThisRuntime {
             else {
                 continue;
             };
-            let spec = ProcessorSpec::new(
-                document_node.processor_type.clone(),
+            let spec = NodeSpec::new(
+                document_node.node_type.clone(),
                 document_node.config.clone(),
             )
             .with_display_name(document_node.name.clone())
             .with_pins_and_studio_fields(document_node.pins.clone(), document_node.studio.clone())
             .with_exposed_config_fields(document_node.exposed_config_fields.clone())
             .with_node_uuid(node_uuid);
-            add_processor_impl(
+            add_node_impl(
                 self.live_graph_change(),
-                Arc::clone(&self.processor_interpreter_launch_record),
+                Arc::clone(&self.node_interpreter_launch_record),
                 self.lend_directory(),
                 spec,
                 ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
@@ -221,15 +217,15 @@ impl LoadedStreamInThisRuntime {
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
             if live_node.config != document_node.config {
-                self.update_processor_config_compiled_right_away(
-                    &live_node.processor_id,
+                self.update_node_config_compiled_right_away(
+                    &live_node.node_run_id,
                     &document_node.config,
                 )
                 .await?;
             }
             if live_node.exposed_config_fields != document_node.exposed_config_fields {
                 self.set_exposed_config_fields(
-                    &live_node.processor_id,
+                    &live_node.node_run_id,
                     document_node.exposed_config_fields.clone(),
                 )?;
             }
@@ -237,7 +233,7 @@ impl LoadedStreamInThisRuntime {
                 self.compiler.scope(|this_streams_graph, _tx| {
                     if let Some(node) = this_streams_graph
                         .traversal_mut()
-                        .v(&live_node.processor_id)
+                        .v(&live_node.node_run_id)
                         .first_mut()
                     {
                         node.pins = document_node.pins.clone();
@@ -247,18 +243,18 @@ impl LoadedStreamInThisRuntime {
             }
         }
 
-        let processor_of_each_node_uuid: HashMap<Uuid, ProcessorUniqueId> = self
+        let node_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
             .the_live_nodes()
             .into_iter()
-            .map(|live_node| (live_node.node_uuid, live_node.processor_id))
+            .map(|live_node| (live_node.node_uuid, live_node.node_run_id))
             .collect();
         let live_links: HashSet<RunningLinkBetweenTwoNodesByUuid> = self
             .the_live_links_by_node_uuid()
             .into_iter()
             .map(|live_link| live_link.link_as_given)
             .collect();
-        let processor_of = |node_uuid: &Uuid| {
-            processor_of_each_node_uuid
+        let node_of = |node_uuid: &Uuid| {
+            node_of_each_node_uuid
                 .get(node_uuid)
                 .cloned()
                 .ok_or_else(|| {
@@ -272,11 +268,11 @@ impl LoadedStreamInThisRuntime {
             connect_impl(
                 self.live_graph_change(),
                 OutputLinkPortRef::new(
-                    processor_of(&document_link.source_node)?,
+                    node_of(&document_link.source_node)?,
                     &document_link.source_port,
                 ),
                 InputLinkPortRef::new(
-                    processor_of(&document_link.target_node)?,
+                    node_of(&document_link.target_node)?,
                     &document_link.target_port,
                 ),
             )
@@ -291,7 +287,7 @@ impl LoadedStreamInThisRuntime {
     async fn the_graph_document_described_resolved_and_validated(
         &self,
         graph_whose_every_node_holds_a_uuid: GraphSnapshot,
-        node_types_the_document_names: Vec<ProcessorClassImportPath>,
+        node_types_the_document_names: Vec<NodeClassImportPath>,
     ) -> Result<GraphDocumentAcceptedForAReconcile> {
         if let Some(why_none_of_its_node_code_is_read) = self
             .node_types_this_stream_resolves()
@@ -303,7 +299,7 @@ impl LoadedStreamInThisRuntime {
                     &why_none_of_its_node_code_is_read,
                 );
         } else {
-            let launch_record = Arc::clone(&self.processor_interpreter_launch_record);
+            let launch_record = Arc::clone(&self.node_interpreter_launch_record);
             let lend_directory = self.lend_directory();
             tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
                 launch_record.describe_and_register_every_type_a_load_names(
@@ -426,10 +422,10 @@ fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
         .iter()
         .filter(|node| node.get::<PendingDeletionComponent>().is_none())
         .map(|node| LiveNodeAsTheGraphHoldsIt {
-            processor_id: node.id.clone(),
+            node_run_id: node.id.clone(),
             node_uuid: node.node_uuid,
             display_name: node.display_name.clone(),
-            processor_type: node.processor_type.clone(),
+            node_type: node.node_type.clone(),
             config: node.config.clone().unwrap_or_default(),
             pins: node.pins.clone(),
             studio: node.studio.clone(),
@@ -442,7 +438,7 @@ fn the_live_nodes_of(graph: &Graph) -> Vec<LiveNodeAsTheGraphHoldsIt> {
 fn the_live_links_by_node_uuid_of(
     graph: &Graph,
 ) -> Vec<(LinkUniqueId, RunningLinkBetweenTwoNodesByUuid)> {
-    let node_uuid_of_each_processor: HashMap<ProcessorUniqueId, Uuid> = graph
+    let node_uuid_of_each_node: HashMap<NodeRunId, Uuid> = graph
         .traversal()
         .v(())
         .iter()
@@ -457,9 +453,9 @@ fn the_live_links_by_node_uuid_of(
             Some((
                 link.id.clone(),
                 RunningLinkBetweenTwoNodesByUuid {
-                    source_node: *node_uuid_of_each_processor.get(link.source.processor_id())?,
+                    source_node: *node_uuid_of_each_node.get(link.source.node_run_id())?,
                     source_port: link.source.port_name().to_owned(),
-                    target_node: *node_uuid_of_each_processor.get(link.target.processor_id())?,
+                    target_node: *node_uuid_of_each_node.get(link.target.node_run_id())?,
                     target_port: link.target.port_name().to_owned(),
                 },
             ))
@@ -474,7 +470,7 @@ pub(in crate::core::runtime) fn the_live_nodes_as_given_of(
 ) -> Vec<LiveNodeAsTheGraphHoldsIt> {
     the_live_nodes_of(graph)
         .into_iter()
-        .filter(|live_node| !is_the_function_node_pool_type(&live_node.processor_type))
+        .filter(|live_node| !is_the_function_node_pool_type(&live_node.node_type))
         .collect()
 }
 
@@ -541,8 +537,7 @@ mod tests {
     use crate::core::compiler::PendingOperation;
     use crate::core::runtime::Runner;
     use crate::core::test_support::{
-        MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor,
-        ensure_test_mocks_registered,
+        MockInputOnlyNode, MockNode, MockOutputOnlyNode, ensure_test_mocks_registered,
     };
 
     const NODE_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -553,14 +548,14 @@ mod tests {
     fn a_document_of_a_linked_into_b(
         a_name: &str,
         b_name: &str,
-        b_type: ProcessorClassImportPath,
+        b_type: NodeClassImportPath,
     ) -> Value {
         json!({
             "nodes": [
                 {
                     "id": NODE_A,
                     "name": a_name,
-                    "type": MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+                    "type": MockOutputOnlyNode::node_class_import_path().as_str(),
                     "config": {},
                 },
                 { "id": NODE_B, "name": b_name, "type": b_type.as_str(), "config": {} },
@@ -583,7 +578,7 @@ mod tests {
                 (
                     node.node_uuid.to_string(),
                     node.display_name,
-                    node.processor_type.as_str().to_owned(),
+                    node.node_type.as_str().to_owned(),
                 )
             })
             .collect();
@@ -638,9 +633,8 @@ mod tests {
     fn a_reconcile_compares_a_link_carried_through_the_pool_as_the_link_it_was_given() {
         let (graph, lfo, reader, lfo_into_the_reader) =
             crate::core::compiler::compiler_ops::function_node_pool::tests::a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
-        let node_uuid_of = |processor_id: &ProcessorUniqueId| {
-            graph.traversal().v(processor_id).first().unwrap().node_uuid
-        };
+        let node_uuid_of =
+            |node_run_id: &NodeRunId| graph.traversal().v(node_run_id).first().unwrap().node_uuid;
 
         let live_nodes = the_live_nodes_as_given_of(&graph);
         let live_links = the_live_links_as_given_by_node_uuid_of(&graph);
@@ -688,18 +682,11 @@ mod tests {
         let stream = a_stream_loaded_from(
             &runner,
             &project_directory,
-            a_document_of_a_linked_into_b(
-                "left",
-                "right",
-                MockProcessor::processor_class_import_path(),
-            ),
+            a_document_of_a_linked_into_b("left", "right", MockNode::node_class_import_path()),
         );
 
-        let swapped = a_document_of_a_linked_into_b(
-            "right",
-            "left",
-            MockProcessor::processor_class_import_path(),
-        );
+        let swapped =
+            a_document_of_a_linked_into_b("right", "left", MockNode::node_class_import_path());
         reconcile(&stream, swapped).expect("the swap applies");
 
         assert_eq!(
@@ -709,16 +696,14 @@ mod tests {
                     (
                         NODE_A.to_owned(),
                         "right".to_owned(),
-                        MockOutputOnlyProcessor::processor_class_import_path()
+                        MockOutputOnlyNode::node_class_import_path()
                             .as_str()
                             .to_owned()
                     ),
                     (
                         NODE_B.to_owned(),
                         "left".to_owned(),
-                        MockProcessor::processor_class_import_path()
-                            .as_str()
-                            .to_owned()
+                        MockNode::node_class_import_path().as_str().to_owned()
                     ),
                 ],
                 vec![format!("{NODE_A}/out1 -> {NODE_B}/in1")],
@@ -735,22 +720,18 @@ mod tests {
         let stream = a_stream_loaded_from(
             &runner,
             &project_directory,
-            a_document_of_a_linked_into_b("a", "b", MockProcessor::processor_class_import_path()),
+            a_document_of_a_linked_into_b("a", "b", MockNode::node_class_import_path()),
         );
-        let replaced_processor = stream
+        let replaced_node = stream
             .the_live_nodes()
             .into_iter()
             .find(|node| node.node_uuid.to_string() == NODE_B)
             .expect("node B is live")
-            .processor_id;
+            .node_run_id;
 
         reconcile(
             &stream,
-            a_document_of_a_linked_into_b(
-                "a",
-                "b",
-                MockInputOnlyProcessor::processor_class_import_path(),
-            ),
+            a_document_of_a_linked_into_b("a", "b", MockInputOnlyNode::node_class_import_path()),
         )
         .expect("the type change applies");
 
@@ -761,14 +742,14 @@ mod tests {
                     (
                         NODE_A.to_owned(),
                         "a".to_owned(),
-                        MockOutputOnlyProcessor::processor_class_import_path()
+                        MockOutputOnlyNode::node_class_import_path()
                             .as_str()
                             .to_owned()
                     ),
                     (
                         NODE_B.to_owned(),
                         "b".to_owned(),
-                        MockInputOnlyProcessor::processor_class_import_path()
+                        MockInputOnlyNode::node_class_import_path()
                             .as_str()
                             .to_owned()
                     ),
@@ -788,8 +769,8 @@ mod tests {
                 .iter()
                 .any(|operation| matches!(
                     operation,
-                    PendingOperation::AddProcessor(id) | PendingOperation::RemoveProcessor(id)
-                        if *id == replaced_processor
+                    PendingOperation::AddNode(id) | PendingOperation::RemoveNode(id)
+                        if *id == replaced_node
                 )),
             "the start builds nothing of the replaced node"
         );
@@ -813,7 +794,7 @@ mod tests {
         }
     }
 
-    fn a_describe_answer_of(described_node_types: &[(&ProcessorClassImportPath, &str)]) -> String {
+    fn a_describe_answer_of(described_node_types: &[(&NodeClassImportPath, &str)]) -> String {
         json!({
             "described_node_types": described_node_types
                 .iter()
@@ -842,11 +823,10 @@ mod tests {
     #[serial]
     fn a_refused_document_leaves_the_node_types_the_stream_resolves_as_they_were() {
         ensure_test_mocks_registered();
-        let kept_type = ProcessorClassImportPath::new("my_app.kept_across_a_refused_reload:Blur")
+        let kept_type = NodeClassImportPath::new("my_app.kept_across_a_refused_reload:Blur")
             .expect("the test path names a class");
-        let newly_named_type =
-            ProcessorClassImportPath::new("my_app.named_by_a_refused_reload:Blur")
-                .expect("the test path names a class");
+        let newly_named_type = NodeClassImportPath::new("my_app.named_by_a_refused_reload:Blur")
+            .expect("the test path names a class");
         let project_directory = tempfile::tempdir().expect("a project directory");
         let describe_answer = project_directory.path().join("describe-answer.json");
         std::fs::write(
@@ -858,7 +838,7 @@ mod tests {
             an_interpreter_answering_each_describe_from(&project_directory, &describe_answer);
         let runner = Runner::new().expect("Runner::new");
         runner
-            .set_processor_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into())
+            .set_node_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into())
             .expect("the runner's first lend directory");
         let stream = runner
             .load_stream_from_graph_snapshot(
@@ -883,7 +863,7 @@ mod tests {
                     { "id": NODE_B, "name": "added", "type": newly_named_type.as_str() },
                     {
                         "name": "source",
-                        "type": MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+                        "type": MockOutputOnlyNode::node_class_import_path().as_str(),
                     },
                 ],
                 "links": [{

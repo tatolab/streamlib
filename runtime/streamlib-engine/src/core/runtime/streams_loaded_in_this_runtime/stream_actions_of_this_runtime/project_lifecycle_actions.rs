@@ -480,7 +480,7 @@ impl Runner {
 
     pub(super) fn sample_projects_directory_of_this_runtime_unit(&self) -> Option<PathBuf> {
         self.engine_resources_shared_by_every_stream
-            .processor_interpreter_lend_directory
+            .node_interpreter_lend_directory
             .get()
             .and_then(sample_projects_directory_beside_the_lend)
     }

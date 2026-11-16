@@ -4,7 +4,7 @@
 """The behavioural gate on where a Python class node runs.
 
 Every `@node.process` class runs in its own child process of `tatolabd` — own
-interpreter, own GIL: `tatolabd` never imports the processor's module, and the
+interpreter, own GIL: `tatolabd` never imports the node's module, and the
 pid a bag was produced in is not `tatolabd`'s.
 """
 
@@ -22,7 +22,7 @@ from helper_placement_observation import (
     StartTatolabdRunningStream,
     the_first_value_batch_read_after,
 )
-from helper_placement_processors import (
+from helper_placement_nodes import (
     MODULE_IMPORT_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE,
     RAW_MESSAGE_PAYLOAD_BYTES,
     STEPPED_LFO_STEP_MS,
@@ -64,11 +64,11 @@ def importing_process_ids_recorded_in(module_import_record_directory: Path) -> "
     }
 
 
-def test_adding_a_processor_loads_nothing_into_the_app(
+def test_adding_a_node_loads_nothing_into_the_app(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
     tmp_path: Path,
 ):
-    """Every import of the processor's module is an interpreter `tatolabd` started.
+    """Every import of the node's module is an interpreter `tatolabd` started.
 
     The compile in the project's interpreter, the describe that learns its
     ports at load, and the helper hosting it are each a process `tatolabd`
@@ -77,7 +77,7 @@ def test_adding_a_processor_loads_nothing_into_the_app(
     frame, would pass the first check and fail the second.
 
     `tatolabd` maps no Python at all; that half is asserted by
-    `test_processor_interpreter_lend.py`.
+    `test_node_interpreter_lend.py`.
     """
     module_import_record_directory = tmp_path / "module-import-records"
     module_import_record_directory.mkdir()
@@ -95,19 +95,19 @@ def test_adding_a_processor_loads_nothing_into_the_app(
     tatolabd.await_clean_exit()
 
     assert imported_by_the_load, (
-        f"no processor interpreter recorded describing the module, so this proves nothing:\n"
+        f"no node interpreter recorded describing the module, so this proves nothing:\n"
         f"{tatolabd.recent_stderr()}"
     )
     assert tatolabd.pid not in imported_by_the_load, (
-        f"`tatolabd` imported the processor's module while loading the stream: "
+        f"`tatolabd` imported the node's module while loading the stream: "
         f"{imported_by_the_load}"
     )
     assert tatolabd.pid not in imported_while_running, (
-        f"`tatolabd` imported the processor's module while running the stream — a host "
+        f"`tatolabd` imported the node's module while running the stream — a host "
         f"constructing the class on its first frame would show here: {imported_while_running}"
     )
     assert set(imported_while_running.values()) == {tatolabd.pid}, (
-        f"every import of the processor's module is a processor interpreter `tatolabd` "
+        f"every import of the node's module is a node interpreter `tatolabd` "
         f"started; the importers' parents were {imported_while_running}"
     )
 
@@ -132,7 +132,7 @@ def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(
         f"the sink consumed the bag in tatolabd's own process ({tatolabd.pid})"
     )
     assert sink_pid != upstream_pid, (
-        f"both processors shared one process ({sink_pid}) — one processor, one helper"
+        f"both nodes shared one process ({sink_pid}) — one node, one helper"
     )
 
 
@@ -153,7 +153,7 @@ def test_a_payload_one_helper_writes_reaches_a_reader_in_another_helper_unchange
     tatolabd.await_clean_exit()
 
     assert source_pid != sink_pid, (
-        f"the writer and the reader shared one process ({sink_pid}) — one processor, one helper"
+        f"the writer and the reader shared one process ({sink_pid}) — one node, one helper"
     )
     assert payload_read["payload_type"] == "PortPayloadBorrow", (
         "an untyped read borrows the sample rather than copying it into bytes; "
@@ -211,10 +211,10 @@ def test_a_native_builtin_stays_in_the_app_process(
 ):
     """The other side of the boundary, discriminated.
 
-    Every Python processor is a child; a native built-in is not.
+    Every Python node is a child; a native built-in is not.
     `ChannelsToRecords` is statically linked into `tatolabd` and runs on an
     engine thread, in `tatolabd`'s own process — and the way to see that is
-    that nothing was spawned for it. A two-processor stream starts exactly one helper, and it
+    that nothing was spawned for it. A two-node stream starts exactly one helper, and it
     belongs to the sink.
 
     This is the clause that keeps the ban from reading as "nothing may run in
@@ -229,7 +229,7 @@ def test_a_native_builtin_stays_in_the_app_process(
     helper_pids = helper_process_ids_started_in(tatolabd.stderr_text)
 
     assert helper_pids == [sink_pid], (
-        f"a stream of one native built-in and one Python processor started {helper_pids} — "
+        f"a stream of one native built-in and one Python node started {helper_pids} — "
         f"the built-in must not get a process of its own, and the sink must:\n"
         f"{tatolabd.recent_stderr()}"
     )

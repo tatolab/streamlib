@@ -110,9 +110,9 @@ fn escalate_request_vectors_round_trip() {
         AcquirePixelBuffer => r#"{"op":"acquire_pixel_buffer","format":"acquire_pixel_buffer.format-5","height":6,"request_id":"acquire_pixel_buffer.request_id-7","width":8}"#,
         AcquireSharedNativeServiceLease => r#"{"op":"acquire_shared_native_service_lease","request_id":"acquire_shared_native_service_lease.request_id-277","service_name":"browser-host"}"#,
         AcquireStorageBuffer => r#"{"op":"acquire_storage_buffer","dtype":"float32","request_id":"acquire_storage_buffer.request_id-265","shape":[1,3,640,640]}"#,
-        AcquireStorageBuffer => r#"{"op":"acquire_storage_buffer","dtype":"float16","processor_output_pool":{"pool_key":"acquire_storage_buffer.processor_output_pool.pool_key-266","rotation_depth":3},"request_id":"acquire_storage_buffer.request_id-267","shape":[3,7,11]}"#,
+        AcquireStorageBuffer => r#"{"op":"acquire_storage_buffer","dtype":"float16","node_output_pool":{"pool_key":"acquire_storage_buffer.node_output_pool.pool_key-266","rotation_depth":3},"request_id":"acquire_storage_buffer.request_id-267","shape":[3,7,11]}"#,
         AcquireTexture => r#"{"op":"acquire_texture","format":"acquire_texture.format-9","height":10,"request_id":"acquire_texture.request_id-11","usage":["acquire_texture.usage[0]-12","acquire_texture.usage[1]-13"],"width":14}"#,
-        AcquireTexture => r#"{"op":"acquire_texture","format":"rgba8_unorm","height":10,"processor_output_pool":{"pool_key":"acquire_texture.processor_output_pool.pool_key-15","rotation_depth":2},"request_id":"acquire_texture.request_id-11","usage":["texture_binding"],"width":14}"#,
+        AcquireTexture => r#"{"op":"acquire_texture","format":"rgba8_unorm","height":10,"node_output_pool":{"pool_key":"acquire_texture.node_output_pool.pool_key-15","rotation_depth":2},"request_id":"acquire_texture.request_id-11","usage":["texture_binding"],"width":14}"#,
         CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
         CopySurfaceToSurface => r#"{"op":"copy_surface_to_surface","destination_surface_id":"copy_surface_to_surface.destination_surface_id-262","request_id":"copy_surface_to_surface.request_id-263","source_surface_id":"copy_surface_to_surface.source_surface_id-264"}"#,
         FailTheNode => r#"{"op":"fail_the_node","reason":"the page's renderer ended 6 times in 60s","request_id":"fail_the_node.request_id-282"}"#,
@@ -120,7 +120,7 @@ fn escalate_request_vectors_round_trip() {
         SetProcessRaisingBecause => r#"{"op":"set_process_raising_because","raising_because":null,"request_id":"set_process_raising_because.request_id-284"}"#,
         SetNotReadyBecause => r#"{"op":"set_not_ready_because","not_ready_because":"`riv_path` is not set","request_id":"set_not_ready_because.request_id-291"}"#,
         SetNotReadyBecause => r#"{"op":"set_not_ready_because","not_ready_because":null,"request_id":"set_not_ready_because.request_id-292"}"#,
-        Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","rhi_op":"log.rhi_op-244","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26","target":"log.target-245"}"#,
+        Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","node_run_id":"log.node_run_id-23","rhi_op":"log.rhi_op-244","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26","target":"log.target-245"}"#,
         OpenCpuReadbackStaging => r#"{"op":"open_cpu_readback_staging","request_id":"open_cpu_readback_staging.request_id-201","surface_id":"open_cpu_readback_staging.surface_id-202"}"#,
         OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
         ReadInboundLinkStreamFacts => r#"{"op":"read_inbound_link_stream_facts","request_id":"read_inbound_link_stream_facts.request_id-268","port":"read_inbound_link_stream_facts.port-269","inbound_link":"read_inbound_link_stream_facts.inbound_link-270"}"#,
@@ -418,7 +418,7 @@ fn absent_optionals_are_omitted_on_a_response() {
 /// call names neither, and its document is the one helpers have always sent.
 #[test]
 fn a_log_records_nullable_required_fields_encode_as_null() {
-    let golden = r#"{"op":"log","attrs":{},"channel":null,"intercepted":false,"level":"info","message":"hello","pipeline_id":null,"processor_id":null,"source":"python","source_seq":"1","source_ts":"2"}"#;
+    let golden = r#"{"op":"log","attrs":{},"channel":null,"intercepted":false,"level":"info","message":"hello","pipeline_id":null,"node_run_id":null,"source":"python","source_seq":"1","source_ts":"2"}"#;
     let decoded: EscalateRequest = serde_json::from_str(golden).unwrap();
     assert_eq!(serde_json::to_string(&decoded).unwrap(), golden);
 }

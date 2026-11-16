@@ -190,7 +190,7 @@ impl Runner {
             Ok(()) => {
                 if let Some(lend_directory) = self
                     .engine_resources_shared_by_every_stream
-                    .processor_interpreter_lend_directory
+                    .node_interpreter_lend_directory
                     .get()
                 {
                     warn_of_what_binds_the_project_to_one_floor(

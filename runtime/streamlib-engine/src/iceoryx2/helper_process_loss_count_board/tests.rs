@@ -139,7 +139,7 @@ fn the_last_counts_stay_readable_after_the_helpers_writer_is_gone() {
 
 #[test]
 fn slots_are_reused_lowest_first_and_every_wiring_gets_a_new_generation() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     assert_eq!(
         counts.assign_inbound_link_slot("L-a", false).unwrap(),
         slot_and_generation(0, 1)
@@ -180,7 +180,7 @@ fn slots_are_reused_lowest_first_and_every_wiring_gets_a_new_generation() {
 fn the_parent_reads_each_entry_only_for_the_wiring_it_assigned() {
     let (board, writer, _helper_node) =
         a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"], &[]);
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     counts.hold_the_board_of_this_spawn(board);
     let refused_bags_of_video = || counts.loss_count_snapshot().refused_bags_by_output_port;
     let written_bags_of_video = || counts.loss_count_snapshot().written_bags_by_output_port;
@@ -237,7 +237,7 @@ fn the_parent_reads_each_entry_only_for_the_wiring_it_assigned() {
 
 #[test]
 fn a_restarted_helpers_board_keeps_each_wirings_counts_cumulative() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
     let video_channel = counts.note_outbound_link("video", "L-out");
     let (dead_helpers_board, dead_helpers_writer, dead_helper_node) =
@@ -289,7 +289,7 @@ fn a_restarted_helpers_board_keeps_each_wirings_counts_cumulative() {
 fn a_links_taken_bags_are_read_off_its_slot_less_the_ones_counted_lost_after_taking() {
     let (board, writer, _helper_node) =
         a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     counts.hold_the_board_of_this_spawn(board);
     let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
     let mirror = writer.claim_inbound_link_slot(inbound).unwrap();
@@ -305,7 +305,7 @@ fn a_links_taken_bags_are_read_off_its_slot_less_the_ones_counted_lost_after_tak
 
 #[test]
 fn the_helpers_step_progress_is_what_its_parent_reads_off_the_current_board() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     assert_eq!(counts.step_progress_its_helper_wrote(), None);
     let (board, writer, _helper_node) =
         a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
@@ -347,7 +347,7 @@ fn the_helpers_step_progress_is_what_its_parent_reads_off_the_current_board() {
 
 #[test]
 fn a_function_node_call_breadcrumb_is_set_for_the_call_and_outlives_the_helper_that_set_it() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     assert_eq!(
         counts.function_node_call_breadcrumb_its_helper_wrote(),
         None
@@ -445,7 +445,7 @@ fn a_function_node_is_named_once_three_of_its_calls_running_overrun_the_frame_in
 /// neither clears nor replaces it.
 #[test]
 fn concurrent_function_node_calls_each_keep_their_breadcrumb_and_the_board_names_the_oldest() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     let (board, writer, _helper_node) =
         a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[], &[]);
     counts.hold_the_board_of_this_spawn(board);
@@ -487,7 +487,7 @@ fn concurrent_function_node_calls_each_keep_their_breadcrumb_and_the_board_names
 
 #[test]
 fn a_destination_past_the_slot_count_is_refused_by_name() {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     for link in 0..INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD {
         counts
             .assign_inbound_link_slot(&format!("L-{link}"), false)
@@ -505,7 +505,7 @@ fn a_destination_past_the_slot_count_is_refused_by_name() {
 #[test]
 fn an_output_port_keeps_its_generation_while_it_has_a_link_and_takes_a_new_one_after_its_last_goes()
 {
-    let counts = HelperPlacedProcessorLossCounts::default();
+    let counts = HelperPlacedNodeLossCounts::default();
     let first_channel = counts.note_outbound_link("video", "L-first");
     assert_eq!(
         counts.note_outbound_link("video", "L-second"),

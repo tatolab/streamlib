@@ -4,7 +4,7 @@
 //! What a refusal names about a node or a port: the reader an output port
 //! refused, why a node is not running, and a port's direction.
 
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_node_schema::NodeClassImportPath;
 
 /// An output port refused a reader from outside its stream: the port's level
 /// does not allow a reader where that reader reads from.
@@ -81,7 +81,7 @@ impl std::fmt::Display for PortDirection {
 }
 
 /// Node types as a refusal names them: each in backticks, comma-separated.
-pub(crate) fn node_types_listed_for_a_refusal(node_types: &[ProcessorClassImportPath]) -> String {
+pub(crate) fn node_types_listed_for_a_refusal(node_types: &[NodeClassImportPath]) -> String {
     node_types
         .iter()
         .map(|node_type| format!("`{node_type}`"))

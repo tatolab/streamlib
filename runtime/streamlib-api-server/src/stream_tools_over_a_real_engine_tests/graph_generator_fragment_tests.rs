@@ -49,8 +49,8 @@ impl ProjectWithGraphDocuments {
 
 /// A fragment of a source linked into a sink, and a spare sink when `with_a_spare` says so.
 fn a_source_into_a_sink_fragment(with_a_spare: bool) -> Value {
-    let source_type = StreamToolsTestSource::processor_class_import_path();
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let source_type = StreamToolsTestSource::node_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     let mut nodes = vec![
         json!({ "name": "pass-source", "type": source_type.as_str(), "config": {} }),
         json!({ "name": "pass-sink", "type": sink_type.as_str(), "config": {} }),
@@ -340,7 +340,7 @@ async fn a_link_connected_to_a_fragments_port_feeds_the_nodes_its_input_feeds() 
         .with_a_generator_run_printed_from_generator_run_json();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     project.next_look_run_places(json!({
         "nodes": [
             { "name": "graphinput", "type": "tatolab.stream:GraphInput",

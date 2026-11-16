@@ -16,12 +16,10 @@
 //! link's or port's only while the generation written there is the one the
 //! parent assigned.
 
-mod helper_placed_processor_loss_counts;
+mod helper_placed_node_loss_counts;
 mod helper_process_loss_count_board_writer;
 
-pub use helper_placed_processor_loss_counts::{
-    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot,
-};
+pub use helper_placed_node_loss_counts::{HelperPlacedNodeLossCounts, NodeLossCountSnapshot};
 pub use helper_process_loss_count_board_writer::{
     FunctionNodeCallUnderWayInThisHelper, HelperProcessLossCountBoardWriter,
     InboundLinkLossCountBoardSlotMirror, OutputPortBagCountBoardMirror,

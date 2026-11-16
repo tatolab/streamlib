@@ -41,7 +41,7 @@ use crate::opus_identification_header::{
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 
 /// The node's class name, which every refusal and notice names itself by.
-pub const OPUS_DECODER_PROCESSOR_NAME: &str = "OpusDecoder";
+pub const OPUS_DECODER_NODE_NAME: &str = "OpusDecoder";
 
 /// One message off the decoder's input link: a `tatolab.stream.Message`'s
 /// fields, borrowed.
@@ -110,7 +110,7 @@ impl MintedOpusDecoderInstance {
         ))
         .map_err(|failure| {
             OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused the packet: {failure}"
+                "{OPUS_DECODER_NODE_NAME}: libopus refused the packet: {failure}"
             ))
         })
     }
@@ -118,7 +118,7 @@ impl MintedOpusDecoderInstance {
     fn reset_state(&mut self) -> Result<()> {
         on_either_decoder_instance!(self, |decoder| decoder.reset_state()).map_err(|failure| {
             OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: libopus would not reset the decoder: {failure}"
+                "{OPUS_DECODER_NODE_NAME}: libopus would not reset the decoder: {failure}"
             ))
         })
     }
@@ -210,7 +210,7 @@ impl EncodedPacketToAudioBlockDecoder {
     ) -> Result<Option<DecodedAudioBlock>> {
         if message.payload_bytes.is_empty() {
             return Err(OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: an empty message is no Opus packet"
+                "{OPUS_DECODER_NODE_NAME}: an empty message is no Opus packet"
             )));
         }
         let stream_format = self
@@ -235,7 +235,7 @@ impl EncodedPacketToAudioBlockDecoder {
     ) -> Result<OpusIdentificationHeader> {
         let refused = |refusal: &dyn std::fmt::Display| {
             OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's stream facts describe no \
+                "{OPUS_DECODER_NODE_NAME}: the upstream port's stream facts describe no \
                  Opus stream — {refusal}"
             ))
         };
@@ -289,7 +289,7 @@ impl EncodedPacketToAudioBlockDecoder {
         }
         let channels = channels_coded_by_the_opus_packet_toc(opus_packet_bytes).ok_or_else(|| {
             OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: an empty packet has no TOC byte to read a channel \
+                "{OPUS_DECODER_NODE_NAME}: an empty packet has no TOC byte to read a channel \
                  count from"
             ))
         })?;
@@ -310,7 +310,7 @@ impl EncodedPacketToAudioBlockDecoder {
             MessageGroupLossRecoveryDisposition::EnterAtThisGroupStart => {
                 if self.group_loss_recovery_gate.group_starts_entered_at() > 1 {
                     self.notices.push(OpusCodecNotice::warn(format!(
-                        "{OPUS_DECODER_PROCESSOR_NAME}: the link lost packets — resetting and \
+                        "{OPUS_DECODER_NODE_NAME}: the link lost packets — resetting and \
                          re-entering here. Nothing is invented to bridge the loss; it stays \
                          derivable from the stamps either side, and the samples discarded to \
                          re-align on this packet's stamp are counted rather than dropped \
@@ -334,7 +334,7 @@ impl EncodedPacketToAudioBlockDecoder {
             .take_if(|minted| minted.minted_for_channels != stream_format.channels)
         {
             self.notices.push(OpusCodecNotice::info(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: the producer's channel count changed from {} to {} \
+                "{OPUS_DECODER_NODE_NAME}: the producer's channel count changed from {} to {} \
                  — re-minting the decoder",
                 stale.minted_for_channels, stream_format.channels
             )));
@@ -364,7 +364,7 @@ impl EncodedPacketToAudioBlockDecoder {
 
         if stream_format.pre_skip > HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES {
             return Err(OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: the OpusHead declares a `pre_skip` of {} samples, \
+                "{OPUS_DECODER_NODE_NAME}: the OpusHead declares a `pre_skip` of {} samples, \
                  past the {HIGHEST_CREDIBLE_PRE_SKIP_SAMPLES} one whole Opus packet spans — an \
                  encoder's lookahead at 48 kHz is 312. Refused rather than trimmed, because \
                  honouring it would emit nothing for the rest of the run without saying why",
@@ -432,7 +432,7 @@ fn mint_decoder_for_stream_format(
     let layout = OpusStreamLayoutForSourceChannelCount::resolve(stream_format.channels).map_err(
         |refusal| {
             OpusCodecRefusal(format!(
-                "{OPUS_DECODER_PROCESSOR_NAME}: this stream cannot be decoded — {refusal}"
+                "{OPUS_DECODER_NODE_NAME}: this stream cannot be decoded — {refusal}"
             ))
         },
     )?;
@@ -441,7 +441,7 @@ fn mint_decoder_for_stream_format(
             MintedOpusDecoderInstance::SingleStream(
                 opus::Decoder::new(OPUS_SAMPLE_RATE_HZ, channels).map_err(|failure| {
                     OpusCodecRefusal(format!(
-                        "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel decoder: {failure}",
+                        "{OPUS_DECODER_NODE_NAME}: libopus refused a {} channel decoder: {failure}",
                         stream_format.channels
                     ))
                 })?,
@@ -457,7 +457,7 @@ fn mint_decoder_for_stream_format(
                 )
                 .map_err(|failure| {
                     OpusCodecRefusal(format!(
-                        "{OPUS_DECODER_PROCESSOR_NAME}: libopus refused a {} channel multistream decoder: \
+                        "{OPUS_DECODER_NODE_NAME}: libopus refused a {} channel multistream decoder: \
                          {failure}",
                         stream_format.channels
                     ))
@@ -466,7 +466,7 @@ fn mint_decoder_for_stream_format(
         }
     };
     let notice = OpusCodecNotice::info(format!(
-        "{OPUS_DECODER_PROCESSOR_NAME}: minted the Opus decoder from the stream's channel count — \
+        "{OPUS_DECODER_NODE_NAME}: minted the Opus decoder from the stream's channel count — \
          channels={} channel_mapping_family={} pre_skip={}",
         stream_format.channels,
         layout.channel_mapping_family(),
@@ -944,8 +944,8 @@ mod tests {
             "names the value it was handed: {refusal}"
         );
         assert!(
-            refusal.contains(OPUS_DECODER_PROCESSOR_NAME),
-            "names the processor: {refusal}"
+            refusal.contains(OPUS_DECODER_NODE_NAME),
+            "names the node: {refusal}"
         );
 
         // The bound refuses only the incredible: a real lookahead still trims.
@@ -980,8 +980,8 @@ mod tests {
             .to_string();
         assert!(refusal.contains("12"), "names the count: {refusal}");
         assert!(
-            refusal.contains(OPUS_DECODER_PROCESSOR_NAME),
-            "names the processor: {refusal}"
+            refusal.contains(OPUS_DECODER_NODE_NAME),
+            "names the node: {refusal}"
         );
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
             .expect_err("refused")
             .to_string();
         assert!(refusal.contains("OpusHead"), "{refusal}");
-        assert!(refusal.contains(OPUS_DECODER_PROCESSOR_NAME), "{refusal}");
+        assert!(refusal.contains(OPUS_DECODER_NODE_NAME), "{refusal}");
     }
 
     #[test]

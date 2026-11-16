@@ -1,14 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+mod graph_node;
+mod graph_node_ports;
+mod node_run_id;
 mod port_info;
 mod port_kind;
-mod processor_node;
-mod processor_node_ports;
-mod processor_unique_id;
 
+pub use graph_node::GraphNode;
+pub use graph_node_ports::GraphNodePorts;
+pub use node_run_id::NodeRunId;
 pub use port_info::PortInfo;
 pub use port_kind::PortKind;
-pub use processor_node::ProcessorNode;
-pub use processor_node_ports::ProcessorNodePorts;
-pub use processor_unique_id::ProcessorUniqueId;

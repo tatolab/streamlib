@@ -12,10 +12,10 @@ impl<'a> TraversalSourceMut<'a> {
     ///
     /// Type-safe: `from` must be an output port, `to` must be an input port.
     pub fn add_e(self, from: OutputLinkPortRef, to: InputLinkPortRef) -> LinkTraversalMut<'a> {
-        let Some(from_idx) = node_index_of(self.graph, from.processor_id()) else {
+        let Some(from_idx) = node_index_of(self.graph, from.node_run_id()) else {
             return self.no_link();
         };
-        let Some(to_idx) = node_index_of(self.graph, to.processor_id()) else {
+        let Some(to_idx) = node_index_of(self.graph, to.node_run_id()) else {
             return self.no_link();
         };
 

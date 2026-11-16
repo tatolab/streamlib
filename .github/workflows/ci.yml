@@ -413,7 +413,7 @@ jobs:
           TEST_FILTER: ${{ github.event_name == 'pull_request' && 'not binary_id(streamlib-engine::compile_fail_config_without_json_schema)' || 'all()' }}
         run: >-
           cargo nextest run --locked --profile ci -E "$TEST_FILTER"
-          -p streamlib -p streamlib-macros -p streamlib-processor-schema
+          -p streamlib -p streamlib-macros -p streamlib-node-schema
           -p streamlib-ipc-types -p streamlib-surface-client -p streamlib-gpu-frame-import-client
           -p streamlib-error
           -p streamlib-runtime-client-contract -p streamlib-engine
@@ -493,7 +493,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
 
-  # The runtime unit — `tatolabd`, `tatolab`, and the lend a processor
+  # The runtime unit — `tatolabd`, `tatolab`, and the lend a node
   # interpreter borrows `tatolab.runtime` from — and every suite that runs on
   # it: the wheel's own, the integration suite (one `tatolabd` per test, each
   # fixture stream loaded with `tatolab open --play` and driven over its local API, on
@@ -622,7 +622,7 @@ jobs:
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
 
-      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # The wheel's own suite on the unit's own wheel: the casts, a node
       # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
@@ -811,7 +811,7 @@ jobs:
         if: github.event_name != 'pull_request'
         run: |
           cargo test --locked -p streamlib -p streamlib-macros \
-            -p streamlib-processor-schema -p streamlib-ipc-types \
+            -p streamlib-node-schema -p streamlib-ipc-types \
             -p streamlib-error --lib
           # The macOS machine runtime lock's takes, refusals and probes run here
           # and nowhere else.
@@ -1014,7 +1014,7 @@ jobs:
           mkdir -p target/tatolab-runtime
           tar -C target/tatolab-runtime -xzf "$RUNNER_TEMP/tatolab-runtime-unit.tar.gz"
 
-      # The wheel's own suite on the unit's own wheel: the casts, a processor
+      # The wheel's own suite on the unit's own wheel: the casts, a node
       # interpreter's bootstrap and helper process, and the
       # conformance gate that holds the binary to `tatolab.stream`'s Protocols.
       # stubtest compares the rest of `_engine.pyi` to the binary.
@@ -1073,7 +1073,7 @@ jobs:
 
       # Carries the portability gate over the built `.so`, and on macOS the
       # clock-parity test. The tests that import `tatolab.runtime` borrow it
-      # from the lend, as a processor interpreter does.
+      # from the lend, as a node interpreter does.
       - name: "Extension: stubs and tests, GPU-free"
         working-directory: packages/streamlib-webrtc
         run: |

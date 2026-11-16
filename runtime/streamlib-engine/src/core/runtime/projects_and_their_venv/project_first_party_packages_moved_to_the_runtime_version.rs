@@ -12,7 +12,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
+use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, run_a_child_process_to_its_exit_within,
 };
 use crate::core::error::Error;

@@ -8,9 +8,9 @@ pub use crate::core::{
     error::{Error, Result},
 
     // Graph
-    graph::{LinkUniqueId, ProcessorUniqueId},
+    graph::{LinkUniqueId, NodeRunId},
 
-    processors::{ContinuousProcessor, ManualProcessor, ReactiveProcessor},
+    nodes::{ContinuousNode, ManualNode, ReactiveNode},
 
     // Runtime
     runtime::Runner,

@@ -9,12 +9,13 @@ fn add_mock_device_matched_audio_consumer(graph: &mut Graph) -> String {
     crate::core::test_support::ensure_test_mocks_registered();
     graph
         .traversal_mut()
-        .add_v(ProcessorSpec::new(
-            crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor::processor_class_import_path(),
+        .add_v(NodeSpec::new(
+            crate::core::test_support::MockDeviceMatchedAudioConsumerNode::node_class_import_path(),
             serde_json::Value::Null,
-        )).expect("the node is named")
+        ))
+        .expect("the node is named")
         .first()
-        .expect("mock_device_matched_audio_consumer_processor must be in the registry")
+        .expect("mock_device_matched_audio_consumer_node must be in the registry")
         .id
         .to_string()
 }
@@ -64,7 +65,7 @@ fn a_match_device_contract_wires_awaiting_its_device_rather_than_refusing() {
 
     assert_eq!(
         windowing,
-        AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream
+        AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream
     );
 }
 
@@ -79,14 +80,15 @@ fn a_match_device_contract_wires_awaiting_its_device_rather_than_refusing() {
 /// can act on rather than the format it is actually converting to.
 #[test]
 fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
-    use crate::core::test_support::MockDeviceMatchedAudioConsumerProcessor;
+    use crate::core::test_support::MockDeviceMatchedAudioConsumerNode;
 
     let mut graph = Graph::new();
     let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
-    let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
-    let (dest, _, dest_input) = attach_mock_instance::<
-        MockDeviceMatchedAudioConsumerProcessor::Processor,
-    >(&mut graph, dest_unique_id.as_ref());
+    let dest_unique_id: NodeRunId = dest_id.as_str().into();
+    let (dest, _, dest_input) = attach_mock_instance::<MockDeviceMatchedAudioConsumerNode::Node>(
+        &mut graph,
+        dest_unique_id.as_ref(),
+    );
     let dest_input = dest_input.expect("a windowed consumer holds input mailboxes");
 
     let (channel, notify_service) =
@@ -101,7 +103,7 @@ fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
         DeliveryProfile::Ordered.resolve(),
         &channel,
         &notify_service,
-        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
+        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
     )
     .expect("a sentinel wires rather than refusing");
 
@@ -129,7 +131,7 @@ fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
                 hop_in_per_channel_samples: 441,
             },
         )
-        .expect("the processor's own setup() settles it");
+        .expect("the node's own setup() settles it");
 
     assert_eq!(
         rendered_audio_window_of(&mut graph, &dest_unique_id),
@@ -146,13 +148,13 @@ fn a_settled_contract_reaches_graph_on_the_port_that_settled_it() {
 }
 
 /// One node's `"audio"` input port as `graph` renders its window contract.
-fn rendered_audio_window_of(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> serde_json::Value {
+fn rendered_audio_window_of(graph: &mut Graph, proc_id: &NodeRunId) -> serde_json::Value {
     let node = graph
         .traversal_mut()
         .v(proc_id)
         .first()
         .expect("the node must be in the graph");
-    serde_json::to_value(crate::core::json_schema::ProcessorNodeOutput::from(node))
+    serde_json::to_value(crate::core::json_schema::GraphNodeOutput::from(node))
         .expect("a node renders")["ports"]["inputs"][0]["audio_window"]
         .clone()
 }
@@ -161,10 +163,10 @@ fn rendered_audio_window_of(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> s
 fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() {
     let mut graph = Graph::new();
     let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
-    attach_processor_instance(
+    attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
 
     let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
@@ -180,7 +182,7 @@ fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() 
         sizing_of_a_two_subscriber_test_channel(),
         1,
         &"L-helper-windowed".into(),
-        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
+        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream),
     )
     .expect_err("a helper child cannot settle a sentinel")
     .to_string();
@@ -199,10 +201,10 @@ fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() 
 fn a_settled_contract_reaches_a_helper_placed_destination_as_five_values() {
     let mut graph = Graph::new();
     let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
 
     let settled = crate::iceoryx2::ResolvedAudioWindowContract::from_a_device_stream_format(
@@ -278,7 +280,7 @@ fn a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_bot
         wired.push(link);
     }
 
-    let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+    let dest_unique_id: NodeRunId = dest_id.as_str().into();
     // The first link is fine on its own.
     let second_link: LinkUniqueId = wired[1].as_str().into();
     let refusal = refuse_a_second_inbound_link_into_a_windowed_port(

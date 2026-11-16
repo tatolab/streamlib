@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`MicrophoneSource` over a wired link with no runtime: the node's helper-side
-context opened directly, as a processor interpreter opens it.
+context opened directly, as a node interpreter opens it.
 
 Whatever audio arm this machine probes captures — a device, or the null
 backend's silence — so each test runs on a workstation and in a container
@@ -175,7 +175,7 @@ def test_start_before_setup_is_refused_by_name(microphone_wired_to_a_reader):
 
 
 def test_the_distribution_declares_the_node_for_the_node_catalog():
-    """The node type is the import path a processor interpreter imports the
+    """The node type is the import path a node interpreter imports the
     class back by, and the catalog reads it off the `tatolab.nodes` entry point."""
     from importlib.metadata import distribution
 

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod channel_trust_tier_label;
 #[cfg(target_os = "linux")]
 mod consumer_rhi_error_conversion;
@@ -19,7 +18,7 @@ pub use node_and_port_refusal_details::{
     OutputPortNotExposedToTheReader, PortDirection, WhyANodeOfAStreamIsNotRunning,
 };
 pub use privacy_gated_capture_device::PrivacyGatedCaptureDevice;
-use streamlib_processor_schema::{ExposedNameCastsToNothingError, ProcessorClassImportPath};
+use streamlib_node_schema::{ExposedNameCastsToNothingError, NodeClassImportPath};
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -99,21 +98,21 @@ pub enum Error {
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
 
-    #[error("Processor not found: {0}")]
-    ProcessorNotFound(String),
+    #[error("Node not found: {0}")]
+    NodeNotFound(String),
 
     #[error(
         "this runtime ({runtime_version}) has no node type `{ident}`",
         runtime_version = env!("CARGO_PKG_VERSION")
     )]
-    UnknownProcessorType { ident: ProcessorClassImportPath },
+    UnknownNodeType { ident: NodeClassImportPath },
 
     #[error(
         "cannot describe {}: {refusal}",
         node_types_listed_for_a_refusal(node_types)
     )]
     NodeTypesNotDescribed {
-        node_types: Vec<ProcessorClassImportPath>,
+        node_types: Vec<NodeClassImportPath>,
         refusal: String,
     },
 
@@ -122,42 +121,42 @@ pub enum Error {
          `pip install {module_distribution}` gives the stream"
     )]
     BuiltInNodeTypeMovedToAModule {
-        node_type: ProcessorClassImportPath,
-        module_node_type: ProcessorClassImportPath,
+        node_type: NodeClassImportPath,
+        module_node_type: NodeClassImportPath,
         module_distribution: String,
     },
 
     #[error("node `{node_name}` (`{node_type}`) does not take its config: {refusal}")]
     NodeConfigRefused {
         node_name: String,
-        node_type: ProcessorClassImportPath,
+        node_type: NodeClassImportPath,
         refusal: String,
     },
 
     #[error(
-        "processor `{processor_class_import_path}` declares the port `{port_name}`, which is \
-         not a cast name — a descriptor carries every port the way `#[processor]` and `@node.process` \
+        "node `{node_class_import_path}` declares the port `{port_name}`, which is \
+         not a cast name — a descriptor carries every port the way `#[node]` and `@node.process` \
          declare it: lowercase a-z 0-9 - . _ ~, no leading, trailing or doubled '-', at most \
          {max} characters",
-        max = streamlib_processor_schema::EXPOSED_NAME_MAXIMUM_LENGTH
+        max = streamlib_node_schema::EXPOSED_NAME_MAXIMUM_LENGTH
     )]
     DescriptorPortNameNotCast {
-        processor_class_import_path: ProcessorClassImportPath,
+        node_class_import_path: NodeClassImportPath,
         port_name: String,
     },
 
     #[error(
-        "processor `{processor_class_import_path}` declares the port `{port_name}` more than \
+        "node `{node_class_import_path}` declares the port `{port_name}` more than \
          once — every port, input or output, needs its own name"
     )]
     DescriptorPortNameDeclaredTwice {
-        processor_class_import_path: ProcessorClassImportPath,
+        node_class_import_path: NodeClassImportPath,
         port_name: String,
     },
 
     /// Stream facts stated for an output port of another family.
     #[error(transparent)]
-    StreamFactsOfAnotherFamily(#[from] streamlib_processor_schema::StreamFactsOfAnotherFamily),
+    StreamFactsOfAnotherFamily(#[from] streamlib_node_schema::StreamFactsOfAnotherFamily),
 
     /// A node named in a stream has no output port of the name given.
     #[error(
@@ -184,9 +183,9 @@ pub enum Error {
         runtime_words: String,
     },
 
-    #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
-    ProcessorPortNotFound {
-        processor_id: String,
+    #[error("Node '{node_run_id}' has no {direction} port named '{port_name}'")]
+    NodePortNotFound {
+        node_run_id: String,
         port_name: String,
         direction: PortDirection,
     },
@@ -207,11 +206,11 @@ pub enum Error {
     },
 
     #[error(
-        "every one of the {pool_capacity} slots in processor output pool '{pool_key}' is held \
+        "every one of the {pool_capacity} slots in node output pool '{pool_key}' is held \
          by a consumer, so the producer drops this frame rather than overwriting one something \
          is still reading"
     )]
-    EverySlotInTheProcessorOutputPoolIsInUse {
+    EverySlotInTheNodeOutputPoolIsInUse {
         pool_key: String,
         pool_capacity: usize,
     },

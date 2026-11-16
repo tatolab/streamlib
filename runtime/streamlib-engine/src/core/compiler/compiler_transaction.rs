@@ -7,7 +7,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::PendingOperation;
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{LinkUniqueId, NodeRunId};
 
 /// Handle for logging operations to the compiler transaction.
 pub(crate) struct CompilerTransactionHandle {
@@ -25,14 +25,14 @@ impl CompilerTransactionHandle {
 
     pub(crate) fn retract_every_operation_naming(
         &self,
-        processors: &HashSet<ProcessorUniqueId>,
+        nodes: &HashSet<NodeRunId>,
         links: &HashSet<LinkUniqueId>,
     ) {
         self.inner.lock().retain(|operation| match operation {
-            PendingOperation::AddProcessor(processor_id)
-            | PendingOperation::RemoveProcessor(processor_id)
-            | PendingOperation::UpdateProcessorConfig { processor_id, .. } => {
-                !processors.contains(processor_id)
+            PendingOperation::AddNode(node_run_id)
+            | PendingOperation::RemoveNode(node_run_id)
+            | PendingOperation::UpdateNodeConfig { node_run_id, .. } => {
+                !nodes.contains(node_run_id)
             }
             PendingOperation::AddLink(link_id) | PendingOperation::RemoveLink(link_id) => {
                 !links.contains(link_id)
@@ -41,7 +41,7 @@ impl CompilerTransactionHandle {
                 function_node_id,
                 reader_id,
                 ..
-            } => !processors.contains(function_node_id) && !processors.contains(reader_id),
+            } => !nodes.contains(function_node_id) && !nodes.contains(reader_id),
         });
     }
 }

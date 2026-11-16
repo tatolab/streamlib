@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 use crate::core::context::GpuContext;
 use crate::core::runtime::MachineName;
 use crate::core::runtime::RuntimeUniqueId;
-use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
+use crate::core::runtime::node_interpreters::node_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -145,7 +145,7 @@ impl Runner {
                 streams_out_of_the_table_until_their_end_is_recorded: Mutex::new(Vec::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
-                processor_interpreter_lend_directory:
+                node_interpreter_lend_directory:
                     RuntimeUnitPathTheHostHandsTheEngineOnce::naming("the lend directory"),
                 runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
                     "the runtime unit's uv",

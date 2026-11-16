@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod acquisition;
 mod compute;
 mod device_idle;
@@ -28,7 +27,7 @@ mod surface_copy;
 mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
-pub(crate) use self::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
+pub(crate) use self::port_stream_facts::WhatAHelperPlacedNodeReaches;
 use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
@@ -108,7 +107,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -357,7 +356,7 @@ impl EscalateParseError {
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;

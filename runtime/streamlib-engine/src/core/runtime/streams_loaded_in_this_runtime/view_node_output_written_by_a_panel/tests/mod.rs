@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -15,15 +14,15 @@ use streamlib_project_repository::{
 };
 
 use super::*;
-use crate::core::descriptors::{PortFamily, ProcessorClassImportPath};
-use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
-use crate::core::processors::ProcessorSpec;
+use crate::core::descriptors::{NodeClassImportPath, PortFamily};
+use crate::core::graph::NodeInstanceWithItsOutOfProcessLinkWiring;
+use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::{Runner, RuntimeOperations};
 use crate::core::test_support::{
-    MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
 };
-use crate::core::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
+use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
 
 mod graph_input_tests;
@@ -112,14 +111,14 @@ impl AStreamOfAProjectBringingViews {
         }
     }
 
-    fn add_a_node(&self, node_type: &str, name: &str) -> Result<ProcessorUniqueId> {
-        self.stream.add_processor(
-            ProcessorSpec::new(ProcessorClassImportPath::new(node_type).unwrap(), json!({}))
+    fn add_a_node(&self, node_type: &str, name: &str) -> Result<NodeRunId> {
+        self.stream.add_node(
+            NodeSpec::new(NodeClassImportPath::new(node_type).unwrap(), json!({}))
                 .with_display_name(name.to_string()),
         )
     }
 
-    fn run(&self, node_id: &ProcessorUniqueId) -> String {
+    fn run(&self, node_id: &NodeRunId) -> String {
         let node_types = Arc::clone(self.stream.node_types_this_stream_resolves());
         self.stream.compiler.scope(|graph, _tx| {
             let node = graph
@@ -127,18 +126,16 @@ impl AStreamOfAProjectBringingViews {
                 .v(node_id)
                 .first_mut()
                 .expect("the node is in the stream");
-            let instance = node_types
-                .create(node)
-                .expect("the node's processor builds");
-            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(node);
+            let instance = node_types.create(node).expect("the node's node builds");
+            NodeInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(node);
             node.node_uuid.to_string()
         })
     }
 
-    fn the_output_writer_of(&self, node_id: &ProcessorUniqueId) -> Arc<OutputWriterInner> {
+    fn the_output_writer_of(&self, node_id: &NodeRunId) -> Arc<OutputWriterInner> {
         self.stream.compiler.scope(|graph, _tx| {
             let node = graph.traversal().v(node_id).first().unwrap();
-            node.get::<crate::core::graph::ProcessorInstanceComponent>()
+            node.get::<crate::core::graph::NodeInstanceComponent>()
                 .unwrap()
                 .0
                 .lock()
@@ -179,7 +176,7 @@ impl AStreamOfAProjectBringingViews {
 
     /// What the stream's graph holds of `node_id`: its config, pins and `studio` fields, and
     /// every link.
-    fn what_the_graph_holds_of(&self, node_id: &ProcessorUniqueId) -> Value {
+    fn what_the_graph_holds_of(&self, node_id: &NodeRunId) -> Value {
         let node = self.stream.compiler.scope(|graph, _tx| {
             let node = graph.traversal().v(node_id).first().unwrap();
             json!({ "config": node.config, "pins": node.pins, "studio": node.studio })

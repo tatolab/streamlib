@@ -187,7 +187,7 @@ def test_an_open_project_answers_at_once_and_its_action_makes_the_venv_loads_and
         records_of_the_action
     )
     assert any(
-        record.get("processor_id") == PROJECT_VENV_UV_SYNC_LOG_LABEL
+        record.get("node_run_id") == PROJECT_VENV_UV_SYNC_LOG_LABEL
         for record in records_of_the_action
     ), records_of_the_action
     assert any(

@@ -9,12 +9,12 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
-use crate::core::graph::ProcessorUniqueId;
-use crate::core::processors::ProcessorState;
+use crate::core::graph::NodeRunId;
+use crate::core::nodes::NodeState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 
-pub struct ObservableProcessorState {
-    current: Mutex<ProcessorState>,
+pub struct ObservableNodeState {
+    current: Mutex<NodeState>,
     changed: Condvar,
     failure_reason: Mutex<Option<String>>,
     /// The capture device whose access was never asked for, when that is why
@@ -25,11 +25,11 @@ pub struct ObservableProcessorState {
     /// Why the node, running, is not ready, in its own words, while it says
     /// so; the runtime keeps its outputs flowing meanwhile.
     not_ready_because: Mutex<Option<String>>,
-    state_changes_published_as: Mutex<Option<ProcessorStateChangesPublishedOnItsStreamsTopic>>,
+    state_changes_published_as: Mutex<Option<NodeStateChangesPublishedOnItsStreamsTopic>>,
 }
 
-struct ProcessorStateChangesPublishedOnItsStreamsTopic {
-    processor_id: ProcessorUniqueId,
+struct NodeStateChangesPublishedOnItsStreamsTopic {
+    node_run_id: NodeRunId,
     stream: LoadedStreamIdentity,
 }
 
@@ -41,8 +41,8 @@ pub struct HelperProcessRestartRecord {
     pub last_exit_reason: Option<String>,
 }
 
-impl ObservableProcessorState {
-    pub fn new(initial: ProcessorState) -> Self {
+impl ObservableNodeState {
+    pub fn new(initial: NodeState) -> Self {
         Self {
             current: Mutex::new(initial),
             changed: Condvar::new(),
@@ -55,14 +55,14 @@ impl ObservableProcessorState {
         }
     }
 
-    pub fn publish_each_change_as_a_processor_of(
+    pub fn publish_each_change_as_a_node_of(
         &self,
-        processor_id: ProcessorUniqueId,
+        node_run_id: NodeRunId,
         stream: LoadedStreamIdentity,
     ) {
         *self.state_changes_published_as.lock() =
-            Some(ProcessorStateChangesPublishedOnItsStreamsTopic {
-                processor_id,
+            Some(NodeStateChangesPublishedOnItsStreamsTopic {
+                node_run_id,
                 stream,
             });
     }
@@ -71,8 +71,8 @@ impl ObservableProcessorState {
     /// publish the change under that lock so the changes publish in the order they were made.
     fn write_the_state_and_publish_the_change(
         &self,
-        current: &mut ProcessorState,
-        new_state: ProcessorState,
+        current: &mut NodeState,
+        new_state: NodeState,
     ) {
         let old_state = std::mem::replace(current, new_state);
         if !new_state.holds_a_not_ready_report() {
@@ -83,21 +83,21 @@ impl ObservableProcessorState {
             return;
         }
         if let Some(published_as) = &*self.state_changes_published_as.lock() {
-            published_as.stream.publish_on_this_streams_topic(
-                RuntimeEvent::ProcessorStateDidChange {
-                    processor_id: published_as.processor_id.clone(),
+            published_as
+                .stream
+                .publish_on_this_streams_topic(RuntimeEvent::NodeStateDidChange {
+                    node_run_id: published_as.node_run_id.clone(),
                     old_state,
                     new_state,
-                },
-            );
+                });
         }
     }
 
-    pub fn current(&self) -> ProcessorState {
+    pub fn current(&self) -> NodeState {
         *self.current.lock()
     }
 
-    pub fn transition_to(&self, state: ProcessorState) {
+    pub fn transition_to(&self, state: NodeState) {
         self.write_the_state_and_publish_the_change(&mut self.current.lock(), state);
     }
 
@@ -124,7 +124,7 @@ impl ObservableProcessorState {
         let mut current = self.current.lock();
         *self.failure_reason.lock() = Some(reason);
         *self.capture_device_access_never_asked_for.lock() = capture_device_access_never_asked_for;
-        self.write_the_state_and_publish_the_change(&mut current, ProcessorState::Error);
+        self.write_the_state_and_publish_the_change(&mut current, NodeState::Error);
     }
 
     pub fn failure_reason(&self) -> Option<String> {
@@ -190,19 +190,15 @@ impl ObservableProcessorState {
         self.not_ready_because.lock().clone()
     }
 
-    pub fn transition_to_unless_already_failed(&self, state: ProcessorState) {
+    pub fn transition_to_unless_already_failed(&self, state: NodeState) {
         let mut current = self.current.lock();
-        if *current == ProcessorState::Error {
+        if *current == NodeState::Error {
             return;
         }
         self.write_the_state_and_publish_the_change(&mut current, state);
     }
 
-    pub fn transition_to_only_from(
-        &self,
-        only_from: ProcessorState,
-        state: ProcessorState,
-    ) -> bool {
+    pub fn transition_to_only_from(&self, only_from: NodeState, state: NodeState) -> bool {
         let mut current = self.current.lock();
         if *current != only_from {
             return false;
@@ -211,9 +207,9 @@ impl ObservableProcessorState {
         true
     }
 
-    pub fn wait_until_setup_resolved(&self, deadline: Instant) -> ProcessorState {
+    pub fn wait_until_setup_resolved(&self, deadline: Instant) -> NodeState {
         let mut current = self.current.lock();
-        while current.is_before_setup_completed() || *current == ProcessorState::Restarting {
+        while current.is_before_setup_completed() || *current == NodeState::Restarting {
             if self.changed.wait_until(&mut current, deadline).timed_out() {
                 break;
             }
@@ -222,18 +218,18 @@ impl ObservableProcessorState {
     }
 }
 
-pub struct StateComponent(Arc<ObservableProcessorState>);
+pub struct StateComponent(Arc<ObservableNodeState>);
 
 impl StateComponent {
-    pub fn new(initial: ProcessorState) -> Self {
-        Self(Arc::new(ObservableProcessorState::new(initial)))
+    pub fn new(initial: NodeState) -> Self {
+        Self(Arc::new(ObservableNodeState::new(initial)))
     }
 
-    pub fn current(&self) -> ProcessorState {
+    pub fn current(&self) -> NodeState {
         self.0.current()
     }
 
-    pub fn transition_to(&self, state: ProcessorState) {
+    pub fn transition_to(&self, state: NodeState) {
         self.0.transition_to(state);
     }
 
@@ -241,29 +237,24 @@ impl StateComponent {
         self.0.fail_with(reason);
     }
 
-    pub fn transition_to_only_from(
-        &self,
-        only_from: ProcessorState,
-        state: ProcessorState,
-    ) -> bool {
+    pub fn transition_to_only_from(&self, only_from: NodeState, state: NodeState) -> bool {
         self.0.transition_to_only_from(only_from, state)
     }
 
-    pub fn publish_each_change_as_a_processor_of(
+    pub fn publish_each_change_as_a_node_of(
         &self,
-        processor_id: ProcessorUniqueId,
+        node_run_id: NodeRunId,
         stream: LoadedStreamIdentity,
     ) {
-        self.0
-            .publish_each_change_as_a_processor_of(processor_id, stream);
+        self.0.publish_each_change_as_a_node_of(node_run_id, stream);
     }
 
-    pub fn clone_inner(&self) -> Arc<ObservableProcessorState> {
+    pub fn clone_inner(&self) -> Arc<ObservableNodeState> {
         Arc::clone(&self.0)
     }
 }
 
-pub struct HelperProcessRestartsComponent(pub Arc<ObservableProcessorState>);
+pub struct HelperProcessRestartsComponent(pub Arc<ObservableNodeState>);
 
 impl JsonSerializableComponent for HelperProcessRestartsComponent {
     fn json_key(&self) -> &'static str {
@@ -279,22 +270,22 @@ impl JsonSerializableComponent for HelperProcessRestartsComponent {
     }
 }
 
-pub struct ProcessorFailureReasonComponent(pub Arc<ObservableProcessorState>);
+pub struct NodeFailureReasonComponent(pub Arc<ObservableNodeState>);
 
-impl JsonSerializableComponent for ProcessorFailureReasonComponent {
+impl JsonSerializableComponent for NodeFailureReasonComponent {
     fn json_key(&self) -> &'static str {
         "failed_because"
     }
 
     fn to_json(&self) -> JsonValue {
-        if self.0.current() != ProcessorState::Error {
+        if self.0.current() != NodeState::Error {
             return JsonValue::Null;
         }
         serde_json::json!(self.0.failure_reason())
     }
 }
 
-pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableProcessorState>);
+pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableNodeState>);
 
 impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
     fn json_key(&self) -> &'static str {
@@ -308,7 +299,7 @@ impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
 
 /// Why a running node is not ready, rendered beside its state as
 /// `not_ready_because`: the node's own words while it says so, or `null`.
-pub struct NodeNotReadyBecauseComponent(pub Arc<ObservableProcessorState>);
+pub struct NodeNotReadyBecauseComponent(pub Arc<ObservableNodeState>);
 
 impl JsonSerializableComponent for NodeNotReadyBecauseComponent {
     fn json_key(&self) -> &'static str {
@@ -345,12 +336,12 @@ mod tests {
     /// fail this one's timing bound.
     #[test]
     fn a_wait_ends_on_the_transition_rather_than_on_the_deadline() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
+        let state = Arc::new(ObservableNodeState::new(NodeState::Idle));
 
         let transitioning = Arc::clone(&state);
         let transition = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(50));
-            transitioning.transition_to(ProcessorState::Running);
+            transitioning.transition_to(NodeState::Running);
         });
 
         let began_waiting = Instant::now();
@@ -358,7 +349,7 @@ mod tests {
         let waited = began_waiting.elapsed();
         transition.join().expect("the transition thread panicked");
 
-        assert_eq!(settled, ProcessorState::Running);
+        assert_eq!(settled, NodeState::Running);
         assert!(
             waited < Duration::from_secs(5),
             "waited {waited:?} for a transition that happened after 50ms — the wait is not \
@@ -368,16 +359,16 @@ mod tests {
 
     #[test]
     fn a_failed_setup_ends_the_wait() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
+        let state = Arc::new(ObservableNodeState::new(NodeState::Idle));
 
         let failing = Arc::clone(&state);
-        std::thread::spawn(move || failing.transition_to(ProcessorState::Error))
+        std::thread::spawn(move || failing.transition_to(NodeState::Error))
             .join()
             .expect("the transition thread panicked");
 
         assert_eq!(
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
-            ProcessorState::Error
+            NodeState::Error
         );
     }
 
@@ -385,43 +376,43 @@ mod tests {
     /// notification left to receive and the predicate alone has to end the wait.
     #[test]
     fn a_transition_that_already_happened_does_not_hang_the_wait() {
-        let state = ObservableProcessorState::new(ProcessorState::Pending);
-        state.transition_to(ProcessorState::Running);
+        let state = ObservableNodeState::new(NodeState::Pending);
+        state.transition_to(NodeState::Running);
 
         assert_eq!(
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
-            ProcessorState::Running
+            NodeState::Running
         );
     }
 
     #[test]
     fn a_failure_keeps_the_reason_it_failed_for() {
-        let state = ObservableProcessorState::new(ProcessorState::Pending);
+        let state = ObservableNodeState::new(NodeState::Pending);
         assert_eq!(state.failure_reason(), None);
 
         state.fail_with("setup failed: no permission to create a camera");
-        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+        state.transition_to_unless_already_failed(NodeState::Stopped);
 
-        assert_eq!(state.current(), ProcessorState::Error);
+        assert_eq!(state.current(), NodeState::Error);
         assert_eq!(
             state.failure_reason().as_deref(),
             Some("setup failed: no permission to create a camera")
         );
         assert_eq!(
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
-            ProcessorState::Error,
+            NodeState::Error,
             "a failure with a reason ends the wait like one without"
         );
     }
 
     #[test]
     fn a_not_ready_reason_is_held_while_the_node_runs_and_forgotten_once_it_stops() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
+        let state = Arc::new(ObservableNodeState::new(NodeState::Idle));
         let rendered = NodeNotReadyBecauseComponent(Arc::clone(&state));
         assert_eq!(rendered.to_json(), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
-        state.transition_to(ProcessorState::Running);
+        state.transition_to(NodeState::Running);
         assert_eq!(
             rendered.to_json(),
             serde_json::json!("`riv_path` is not set"),
@@ -435,7 +426,7 @@ mod tests {
             serde_json::json!("`riv_path` is not set")
         );
 
-        state.transition_to(ProcessorState::Paused);
+        state.transition_to(NodeState::Paused);
         assert_eq!(
             rendered.to_json(),
             serde_json::json!("`riv_path` is not set")
@@ -445,14 +436,14 @@ mod tests {
         assert_eq!(rendered.to_json(), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
-        state.transition_to(ProcessorState::Stopped);
+        state.transition_to(NodeState::Stopped);
         assert_eq!(rendered.to_json(), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
         assert_eq!(
             rendered.to_json(),
             JsonValue::Null,
-            "a processor that does not run holds no not-ready reason"
+            "a node that does not run holds no not-ready reason"
         );
     }
 
@@ -460,14 +451,14 @@ mod tests {
     /// device beside its words; any other refusal names no device.
     #[test]
     fn a_setup_refusing_a_capture_device_never_asked_for_keeps_the_device() {
-        let waiting_for_the_camera = ObservableProcessorState::new(ProcessorState::Pending);
+        let waiting_for_the_camera = ObservableNodeState::new(NodeState::Pending);
         waiting_for_the_camera.fail_with_the_setup_refusal(
             &Error::CaptureDeviceAccessNeverAskedFor {
                 device: PrivacyGatedCaptureDevice::Camera,
                 refusal: "Camera access has not been asked for yet".to_owned(),
             },
         );
-        assert_eq!(waiting_for_the_camera.current(), ProcessorState::Error);
+        assert_eq!(waiting_for_the_camera.current(), NodeState::Error);
         assert_eq!(
             waiting_for_the_camera.capture_device_access_never_asked_for(),
             Some(PrivacyGatedCaptureDevice::Camera)
@@ -477,10 +468,10 @@ mod tests {
             Some("setup failed: Camera access has not been asked for yet")
         );
 
-        let refused_otherwise = ObservableProcessorState::new(ProcessorState::Pending);
+        let refused_otherwise = ObservableNodeState::new(NodeState::Pending);
         refused_otherwise
             .fail_with_the_setup_refusal(&Error::Configuration("no such camera".to_owned()));
-        assert_eq!(refused_otherwise.current(), ProcessorState::Error);
+        assert_eq!(refused_otherwise.current(), NodeState::Error);
         assert_eq!(
             refused_otherwise.capture_device_access_never_asked_for(),
             None
@@ -488,68 +479,62 @@ mod tests {
     }
 
     #[test]
-    fn stopping_a_processor_does_not_bury_why_it_stopped() {
-        let failed = ObservableProcessorState::new(ProcessorState::Running);
-        failed.transition_to(ProcessorState::Error);
-        failed.transition_to_unless_already_failed(ProcessorState::Stopped);
-        assert_eq!(failed.current(), ProcessorState::Error);
+    fn stopping_a_node_does_not_bury_why_it_stopped() {
+        let failed = ObservableNodeState::new(NodeState::Running);
+        failed.transition_to(NodeState::Error);
+        failed.transition_to_unless_already_failed(NodeState::Stopped);
+        assert_eq!(failed.current(), NodeState::Error);
 
-        let clean = ObservableProcessorState::new(ProcessorState::Running);
-        clean.transition_to_unless_already_failed(ProcessorState::Stopped);
-        assert_eq!(clean.current(), ProcessorState::Stopped);
+        let clean = ObservableNodeState::new(NodeState::Running);
+        clean.transition_to_unless_already_failed(NodeState::Stopped);
+        assert_eq!(clean.current(), NodeState::Stopped);
     }
 
     #[test]
     fn a_transition_only_from_a_state_leaves_every_other_state_alone() {
-        let running = ObservableProcessorState::new(ProcessorState::Running);
-        assert!(running.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused));
-        assert_eq!(running.current(), ProcessorState::Paused);
+        let running = ObservableNodeState::new(NodeState::Running);
+        assert!(running.transition_to_only_from(NodeState::Running, NodeState::Paused));
+        assert_eq!(running.current(), NodeState::Paused);
 
-        for kept in [
-            ProcessorState::Idle,
-            ProcessorState::Error,
-            ProcessorState::Stopping,
-        ] {
-            let state = ObservableProcessorState::new(kept);
-            assert!(
-                !state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused)
-            );
+        for kept in [NodeState::Idle, NodeState::Error, NodeState::Stopping] {
+            let state = ObservableNodeState::new(kept);
+            assert!(!state.transition_to_only_from(NodeState::Running, NodeState::Paused));
             assert_eq!(state.current(), kept);
         }
     }
 
     #[test]
     fn an_expired_deadline_reports_the_state_it_gave_up_in() {
-        let state = ObservableProcessorState::new(ProcessorState::Pending);
+        let state = ObservableNodeState::new(NodeState::Pending);
 
         let settled = state.wait_until_setup_resolved(Instant::now() + Duration::from_millis(20));
 
-        assert_eq!(settled, ProcessorState::Pending);
+        assert_eq!(settled, NodeState::Pending);
         assert!(settled.is_before_setup_completed());
     }
 
     /// Readiness waits through a helper restart for the state the next start
     /// settles on.
     #[test]
-    fn a_restarting_processor_is_waited_on_until_its_next_start_resolves() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Restarting));
+    fn a_restarting_node_is_waited_on_until_its_next_start_resolves() {
+        let state = Arc::new(ObservableNodeState::new(NodeState::Restarting));
         let restarter = {
             let state = Arc::clone(&state);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(30));
-                state.transition_to(ProcessorState::Running);
+                state.transition_to(NodeState::Running);
             })
         };
 
         let settled = state.wait_until_setup_resolved(Instant::now() + Duration::from_secs(5));
         restarter.join().expect("the restarting thread finishes");
 
-        assert_eq!(settled, ProcessorState::Running);
+        assert_eq!(settled, NodeState::Running);
     }
 
     #[test]
     fn the_restart_record_renders_its_count_and_the_last_exit_reason() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let state = Arc::new(ObservableNodeState::new(NodeState::Running));
         let rendered = HelperProcessRestartsComponent(Arc::clone(&state));
         assert_eq!(
             rendered.to_json(),
@@ -557,7 +542,7 @@ mod tests {
         );
 
         state.note_a_helper_process_death("its helper process ended with exit status: 1".into());
-        state.transition_to(ProcessorState::Restarting);
+        state.transition_to(NodeState::Restarting);
         state.note_a_helper_process_restart();
 
         assert_eq!(
@@ -574,13 +559,13 @@ mod tests {
     }
 
     #[test]
-    fn the_failure_reason_renders_only_once_the_processor_has_failed() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
-        let rendered = ProcessorFailureReasonComponent(Arc::clone(&state));
+    fn the_failure_reason_renders_only_once_the_node_has_failed() {
+        let state = Arc::new(ObservableNodeState::new(NodeState::Running));
+        let rendered = NodeFailureReasonComponent(Arc::clone(&state));
         assert_eq!(rendered.to_json(), JsonValue::Null);
 
         state.fail_with("start() raised: no such file \"lower_third.riv\"");
-        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+        state.transition_to_unless_already_failed(NodeState::Stopped);
 
         assert_eq!(
             rendered.to_json(),
@@ -590,7 +575,7 @@ mod tests {
 
     #[test]
     fn a_raise_renders_beside_a_running_state_until_process_runs_cleanly() {
-        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let state = Arc::new(ObservableNodeState::new(NodeState::Running));
         let rendered = ProcessRaisingBecauseComponent(Arc::clone(&state));
         assert_eq!(rendered.to_json(), JsonValue::Null);
 
@@ -600,7 +585,7 @@ mod tests {
             rendered.to_json(),
             serde_json::json!("process() failed: the first raise")
         );
-        assert_eq!(state.current(), ProcessorState::Running);
+        assert_eq!(state.current(), NodeState::Running);
 
         state.note_that_process_ran_cleanly();
         assert_eq!(rendered.to_json(), JsonValue::Null);
@@ -615,7 +600,7 @@ mod tests {
     }
 
     struct EveryStateChangeHeardOnOneTopic(
-        std::sync::mpsc::Sender<(ProcessorUniqueId, ProcessorState, ProcessorState)>,
+        std::sync::mpsc::Sender<(NodeRunId, NodeState, NodeState)>,
     );
 
     impl crate::core::pubsub::EventListener for EveryStateChangeHeardOnOneTopic {
@@ -625,15 +610,15 @@ mod tests {
         ) -> crate::core::error::Result<()> {
             if let crate::core::pubsub::Event::OfALoadedStream {
                 event:
-                    RuntimeEvent::ProcessorStateDidChange {
-                        processor_id,
+                    RuntimeEvent::NodeStateDidChange {
+                        node_run_id,
                         old_state,
                         new_state,
                     },
                 ..
             } = event
             {
-                let _ = self.0.send((processor_id.clone(), *old_state, *new_state));
+                let _ = self.0.send((node_run_id.clone(), *old_state, *new_state));
             }
             Ok(())
         }
@@ -651,7 +636,7 @@ mod tests {
     #[test]
     fn each_write_that_changes_a_published_state_is_published_on_its_streams_topic() {
         let stream = LoadedStreamIdentity {
-            runtime_id: "processor-state-publication-test".to_string(),
+            runtime_id: "node-state-publication-test".to_string(),
             stream_id: "main".to_string(),
             stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(7),
         };
@@ -664,18 +649,18 @@ mod tests {
                 Arc::clone(&listener),
             )
             .expect("subscribe");
-        let processor_id = ProcessorUniqueId::from("camera");
-        let state = ObservableProcessorState::new(ProcessorState::Pending);
-        state.transition_to(ProcessorState::Pending);
-        state.publish_each_change_as_a_processor_of(processor_id.clone(), stream);
+        let node_run_id = NodeRunId::from("camera");
+        let state = ObservableNodeState::new(NodeState::Pending);
+        state.transition_to(NodeState::Pending);
+        state.publish_each_change_as_a_node_of(node_run_id.clone(), stream);
 
-        state.transition_to(ProcessorState::Idle);
-        state.transition_to(ProcessorState::Idle);
-        assert!(state.transition_to_only_from(ProcessorState::Idle, ProcessorState::Running));
-        assert!(!state.transition_to_only_from(ProcessorState::Idle, ProcessorState::Stopped));
-        state.transition_to_unless_already_failed(ProcessorState::Paused);
+        state.transition_to(NodeState::Idle);
+        state.transition_to(NodeState::Idle);
+        assert!(state.transition_to_only_from(NodeState::Idle, NodeState::Running));
+        assert!(!state.transition_to_only_from(NodeState::Idle, NodeState::Stopped));
+        state.transition_to_unless_already_failed(NodeState::Paused);
         state.fail_with("the camera went away");
-        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+        state.transition_to_unless_already_failed(NodeState::Stopped);
 
         let every_change: Vec<_> = (0..4)
             .map(|_| {
@@ -687,22 +672,10 @@ mod tests {
         assert_eq!(
             every_change,
             vec![
-                (
-                    processor_id.clone(),
-                    ProcessorState::Pending,
-                    ProcessorState::Idle
-                ),
-                (
-                    processor_id.clone(),
-                    ProcessorState::Idle,
-                    ProcessorState::Running
-                ),
-                (
-                    processor_id.clone(),
-                    ProcessorState::Running,
-                    ProcessorState::Paused
-                ),
-                (processor_id, ProcessorState::Paused, ProcessorState::Error),
+                (node_run_id.clone(), NodeState::Pending, NodeState::Idle),
+                (node_run_id.clone(), NodeState::Idle, NodeState::Running),
+                (node_run_id.clone(), NodeState::Running, NodeState::Paused),
+                (node_run_id, NodeState::Paused, NodeState::Error),
             ]
         );
         assert!(

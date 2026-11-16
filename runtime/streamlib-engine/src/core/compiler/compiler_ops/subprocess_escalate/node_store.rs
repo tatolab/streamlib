@@ -3,7 +3,7 @@
 
 //! A helper-placed node reading and writing its own keys of its project's store.
 
-use super::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::port_stream_facts::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestReadNodeStoreKey, EscalateRequestRemoveNodeStoreKey,
@@ -17,7 +17,7 @@ use crate::core::error::{Error, Result};
 
 /// Answer the value the node keeps under the key, absent when it keeps none.
 pub(super) fn handle_read_node_store_key(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestReadNodeStoreKey,
 ) -> EscalateResponse {
@@ -35,7 +35,7 @@ pub(super) fn handle_read_node_store_key(
 
 /// Keep the value under the key.
 pub(super) fn handle_write_node_store_key(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestWriteNodeStoreKey,
 ) -> EscalateResponse {
@@ -49,7 +49,7 @@ pub(super) fn handle_write_node_store_key(
 
 /// Stop keeping the key.
 pub(super) fn handle_remove_node_store_key(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestRemoveNodeStoreKey,
 ) -> EscalateResponse {
@@ -62,7 +62,7 @@ pub(super) fn handle_remove_node_store_key(
 }
 
 fn the_store_of_the_node(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
 ) -> Result<StoreScopedToThisNode> {
     what_the_node_reaches
         .store_of_the_node
@@ -100,8 +100,8 @@ mod tests {
         project_stores: &Arc<ProjectStoresOpenInThisRuntime>,
         project_directory: &std::path::Path,
         node_uuid: uuid::Uuid,
-    ) -> WhatTheNodeOfAHelperPlacedProcessorReaches {
-        WhatTheNodeOfAHelperPlacedProcessorReaches {
+    ) -> WhatAHelperPlacedNodeReaches {
+        WhatAHelperPlacedNodeReaches {
             store_of_the_node: Some(StoreOfOneNodeOpenedOnFirstUse {
                 project_stores: Arc::clone(project_stores),
                 project_directory: Arc::from(project_directory),
@@ -112,7 +112,7 @@ mod tests {
     }
 
     fn the_read_answer(
-        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
         key: &str,
     ) -> EscalateResponse {
         handle_read_node_store_key(
@@ -126,7 +126,7 @@ mod tests {
     }
 
     fn the_value_read_back(
-        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
         key: &str,
     ) -> Option<serde_json::Value> {
         match the_read_answer(what_the_node_reaches, key) {
@@ -234,10 +234,7 @@ mod tests {
 
     #[test]
     fn a_helper_no_nodes_context_spawned_is_refused_by_name() {
-        let answer = the_read_answer(
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
-            "calibration",
-        );
+        let answer = the_read_answer(&WhatAHelperPlacedNodeReaches::default(), "calibration");
         assert!(
             matches!(&answer, EscalateResponse::Err(refused) if refused.request_id == "r-read" && refused.message.contains("no store")),
             "{answer:?}"

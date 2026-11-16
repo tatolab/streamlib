@@ -7,11 +7,11 @@
 use super::*;
 
 impl AStreamOfAProjectBringingViews {
-    fn add_a_top_level_graph_input(&self, name: &str, config: Value) -> ProcessorUniqueId {
+    fn add_a_top_level_graph_input(&self, name: &str, config: Value) -> NodeRunId {
         self.stream
-            .add_processor(
-                ProcessorSpec::new(
-                    ProcessorClassImportPath::new(
+            .add_node(
+                NodeSpec::new(
+                    NodeClassImportPath::new(
                         crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                     )
                     .unwrap(),
@@ -29,22 +29,21 @@ impl AStreamOfAProjectBringingViews {
         )
     }
 
-    fn with_the_graph_inputs_processor<T>(
+    fn with_the_graph_inputs_node<T>(
         &self,
-        node_id: &ProcessorUniqueId,
-        call: impl FnOnce(&mut crate::core::processors::NodeWhoseOutputsAClientWritesProcessor) -> T,
+        node_id: &NodeRunId,
+        call: impl FnOnce(&mut crate::core::nodes::NodeWhoseOutputsAClientWrites) -> T,
     ) -> T {
         self.stream.compiler.scope(|graph, _tx| {
             let node = graph.traversal().v(node_id).first().unwrap();
-            let mut processor = node
-                .get::<crate::core::graph::ProcessorInstanceComponent>()
+            let mut node = node
+                .get::<crate::core::graph::NodeInstanceComponent>()
                 .unwrap()
                 .0
                 .lock();
             call(
-                processor
-                    .as_any_mut()
-                    .downcast_mut::<crate::core::processors::NodeWhoseOutputsAClientWritesProcessor>()
+                node.as_any_mut()
+                    .downcast_mut::<crate::core::nodes::NodeWhoseOutputsAClientWrites>()
                     .expect("a GraphInput runs as a node whose outputs a client writes"),
             )
         })
@@ -75,7 +74,7 @@ fn a_value_written_to_a_graph_input_twice_reaches_both_readers_and_the_graph_kee
     }
 
     assert_eq!(
-        stream.with_the_graph_inputs_processor(&cue_id, |processor| processor
+        stream.with_the_graph_inputs_node(&cue_id, |node| node
             .current_value_of_the_output("value")
             .cloned()),
         Some(json!({ "track": "drop" }))
@@ -118,8 +117,8 @@ fn a_graph_inputs_default_reaches_a_reader_its_last_send_missed() {
     let (_viewer, mut reader) = stream.a_reader_of(&cue_uuid, "value");
 
     stream
-        .with_the_graph_inputs_processor(&cue_id, |processor| {
-            processor.hand_each_current_value_to_a_reader_it_has_not_reached()
+        .with_the_graph_inputs_node(&cue_id, |node| {
+            node.hand_each_current_value_to_a_reader_it_has_not_reached()
         })
         .expect("the default is published");
 
@@ -157,7 +156,7 @@ fn a_write_to_an_input_no_graph_input_declares_or_of_the_wrong_shape_is_refused_
 impl AStreamOfAProjectBringingViews {
     fn play_the_graph_input(
         &self,
-        node_id: &ProcessorUniqueId,
+        node_id: &NodeRunId,
         project_stores: &crate::core::context::ProjectStoresOpenInThisRuntime,
     ) -> String {
         let node_uuid = self.run(node_id);
@@ -168,21 +167,19 @@ impl AStreamOfAProjectBringingViews {
             project_store,
             node_uuid.parse().expect("a node UUID"),
         );
-        self.with_the_graph_inputs_processor(node_id, |processor| {
-            processor.keep_the_graph_input_value_in(store)
-        });
+        self.with_the_graph_inputs_node(node_id, |node| node.keep_the_graph_input_value_in(store));
         node_uuid
     }
 
-    fn stop_the_graph_input(&self, node_id: &ProcessorUniqueId) {
-        self.with_the_graph_inputs_processor(node_id, |processor| {
-            processor.commit_the_kept_value_as_the_node_stops()
+    fn stop_the_graph_input(&self, node_id: &NodeRunId) {
+        self.with_the_graph_inputs_node(node_id, |node| {
+            node.commit_the_kept_value_as_the_node_stops()
         });
     }
 
-    fn the_graph_inputs_current_value(&self, node_id: &ProcessorUniqueId) -> Option<Value> {
-        self.with_the_graph_inputs_processor(node_id, |processor| {
-            processor.current_value_of_the_output("value").cloned()
+    fn the_graph_inputs_current_value(&self, node_id: &NodeRunId) -> Option<Value> {
+        self.with_the_graph_inputs_node(node_id, |node| {
+            node.current_value_of_the_output("value").cloned()
         })
     }
 }
@@ -216,8 +213,8 @@ fn a_kept_graph_inputs_value_survives_a_stop_and_a_play_and_a_reopened_store() {
     let lights_uuid = stream.play_the_graph_input(&lights_id, &project_stores_after_a_restart);
     let (_viewer, mut reader) = stream.a_reader_of(&lights_uuid, "value");
     stream
-        .with_the_graph_inputs_processor(&lights_id, |processor| {
-            processor.hand_each_current_value_to_a_reader_it_has_not_reached()
+        .with_the_graph_inputs_node(&lights_id, |node| {
+            node.hand_each_current_value_to_a_reader_it_has_not_reached()
         })
         .expect("the kept value is published");
     let read_back: Value =
@@ -289,7 +286,7 @@ fn a_kept_value_its_family_no_longer_takes_leaves_the_graph_input_at_its_default
 #[test]
 #[serial]
 fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
-    use crate::core::processors::DynGeneratedProcessor;
+    use crate::core::nodes::DynGeneratedNode;
 
     let stream = AStreamOfAProjectBringingViews::load();
     let fader_id = stream.add_a_top_level_graph_input(
@@ -312,8 +309,8 @@ fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
     assert_eq!(the_value_the_store_keeps(), None);
 
     stream
-        .with_the_graph_inputs_processor(&fader_id, |processor| {
-            processor.apply_config_json(
+        .with_the_graph_inputs_node(&fader_id, |node| {
+            node.apply_config_json(
                 &json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "kept" }),
             )
         })
@@ -323,8 +320,8 @@ fn a_running_graph_input_takes_a_new_lifetime_from_a_live_config_change() {
     assert_eq!(the_value_the_store_keeps(), Some(json!(0.6)));
 
     stream
-        .with_the_graph_inputs_processor(&fader_id, |processor| {
-            processor.apply_config_json(
+        .with_the_graph_inputs_node(&fader_id, |node| {
+            node.apply_config_json(
                 &json!({ "port": "fader", "family": "array", "default": 0.0, "lifetime": "reset" }),
             )
         })
@@ -365,9 +362,9 @@ fn a_runner_holding_the_stream_of_the_project_at(
 
 fn add_the_lights_input(stream: &LoadedStreamInThisRuntime, node_uuid: uuid::Uuid) {
     stream
-        .add_processor(
-            ProcessorSpec::new(
-                ProcessorClassImportPath::new(
+        .add_node(
+            NodeSpec::new(
+                NodeClassImportPath::new(
                     crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                 )
                 .unwrap(),
@@ -382,7 +379,7 @@ fn add_the_lights_input(stream: &LoadedStreamInThisRuntime, node_uuid: uuid::Uui
 fn play(stream: &Arc<LoadedStreamInThisRuntime>) {
     stream.start().expect("the stream plays");
     stream
-        .wait_until_every_processor_is_running(Duration::from_secs(30))
+        .wait_until_every_node_is_running(Duration::from_secs(30))
         .expect("the GraphInput runs");
 }
 
@@ -546,9 +543,9 @@ fn a_value_written_to_a_stopped_reset_graph_input_is_refused_saying_the_project_
         .unwrap();
     let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
     stream
-        .add_processor(
-            ProcessorSpec::new(
-                ProcessorClassImportPath::new(
+        .add_node(
+            NodeSpec::new(
+                NodeClassImportPath::new(
                     crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
                 )
                 .unwrap(),

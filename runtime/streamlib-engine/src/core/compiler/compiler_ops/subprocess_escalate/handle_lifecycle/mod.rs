@@ -4,17 +4,17 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
+mod node_output_pools_of_one_helper;
 mod one_off_acquisition_count_reservation;
-mod processor_output_pools_of_one_helper;
 #[cfg(test)]
 mod tests;
 
-use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
-pub(crate) use processor_output_pools_of_one_helper::{
-    ProcessorOutputFrameHandOff, ProcessorOutputFramePublished, ProcessorOutputFreshSlotHandOff,
-    ProcessorOutputPoolsOfOneHelper, ProcessorOutputSlotDescriptor,
-    ProcessorOutputTextureDescriptor, ReleasedProcessorOutputPoolSlot,
+pub(crate) use node_output_pools_of_one_helper::{
+    NodeOutputFrameHandOff, NodeOutputFramePublished, NodeOutputFreshSlotHandOff,
+    NodeOutputPoolsOfOneHelper, NodeOutputSlotDescriptor, NodeOutputTextureDescriptor,
+    ReleasedNodeOutputPoolSlot,
 };
+use one_off_acquisition_count_reservation::OneOffAcquisitionCountReservation;
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -151,7 +151,7 @@ pub(crate) struct EscalateHandleRegistry {
     /// than panics when poisoned, and is never held across an allocation.
     one_off_acquisitions_held_for_the_helper:
         Mutex<OneOffAcquisitionsHeldForOneNode<RegisteredHandle>>,
-    processor_output_pools: Mutex<ProcessorOutputPoolsOfOneHelper>,
+    node_output_pools: Mutex<NodeOutputPoolsOfOneHelper>,
     /// The colour conversions this helper asked for, and the sources they
     /// resolved, which go away with the helper.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -167,12 +167,12 @@ impl EscalateHandleRegistry {
 
     pub(crate) fn for_a_helper_whose_output_links_keep(
         output_frames_kept_by_its_output_links: Arc<
-            crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor,
+            crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode,
         >,
     ) -> Arc<Self> {
         Arc::new(Self {
-            processor_output_pools: Mutex::new(
-                ProcessorOutputPoolsOfOneHelper::sized_for_what_its_output_links_keep(
+            node_output_pools: Mutex::new(
+                NodeOutputPoolsOfOneHelper::sized_for_what_its_output_links_keep(
                     output_frames_kept_by_its_output_links,
                 ),
             ),
@@ -239,8 +239,8 @@ impl EscalateHandleRegistry {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub(crate) fn processor_output_pools(&self) -> MutexGuard<'_, ProcessorOutputPoolsOfOneHelper> {
-        self.processor_output_pools
+    pub(crate) fn node_output_pools(&self) -> MutexGuard<'_, NodeOutputPoolsOfOneHelper> {
+        self.node_output_pools
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -396,22 +396,21 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
         removed_handle.flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
         release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
-    let processor_output_pool_slots_drained_at_teardown =
-        registry.processor_output_pools().drain_slots();
-    for released_slot in processor_output_pool_slots_drained_at_teardown {
+    let node_output_pool_slots_drained_at_teardown = registry.node_output_pools().drain_slots();
+    for released_slot in node_output_pool_slots_drained_at_teardown {
         released_slot
             .registered_handle
             .flag_its_shared_pool_entry_freed_as_soon_as_unheld(sandbox);
-        release_processor_output_pool_slot(sandbox, released_slot);
+        release_node_output_pool_slot(sandbox, released_slot);
     }
 }
 
-pub(crate) fn release_processor_output_pool_slot(
+pub(crate) fn release_node_output_pool_slot(
     sandbox: &GpuContextLimitedAccess,
-    ReleasedProcessorOutputPoolSlot {
+    ReleasedNodeOutputPoolSlot {
         pool_slot_key,
         registered_handle,
-    }: ReleasedProcessorOutputPoolSlot,
+    }: ReleasedNodeOutputPoolSlot,
 ) {
     release_surface_share_and_parent_caches_for_handle(sandbox, &pool_slot_key, &registered_handle);
     sandbox.forget_lease_aware_pool_slot(&pool_slot_key);

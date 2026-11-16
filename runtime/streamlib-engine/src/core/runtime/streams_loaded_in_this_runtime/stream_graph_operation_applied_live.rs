@@ -10,12 +10,11 @@ use streamlib_project_repository::{
 
 use uuid::Uuid;
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::{
-    LinkUniqueId, ProcessorUniqueId, cast_exposed_name_to_url_safe,
-    the_default_name_a_new_node_takes,
+    LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe, the_default_name_a_new_node_takes,
 };
-use crate::core::processors::ProcessorSpec;
+use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -26,15 +25,15 @@ impl LoadedStreamInThisRuntime {
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
-        if self.the_operation_touches_a_node_no_processor_runs_as(&graph_operation) {
+        if self.the_operation_touches_a_node_no_node_runs_as(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                 .await;
         }
         match graph_operation {
             StreamGraphOperation::AddNode { mut node, links } => {
-                let mut spec = ProcessorSpec::new(
-                    ProcessorClassImportPath::new(&node.node_type).map_err(|refusal| {
+                let mut spec = NodeSpec::new(
+                    NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
                         Error::GraphError(format!("node {} `type`: {refusal}", node.id))
                     })?,
                     node.config.clone(),
@@ -46,8 +45,8 @@ impl LoadedStreamInThisRuntime {
                     spec = spec.with_display_name(node.name.clone());
                 }
                 let a_node_held_the_uuid_before_the_add =
-                    self.the_processor_of_the_node(node.id).is_ok();
-                let added = match self.add_processor_async(spec).await {
+                    self.the_node_of_the_node(node.id).is_ok();
+                let added = match self.add_node_async(spec).await {
                     Ok(added) => added,
                     Err(refusal) => {
                         if !a_node_held_the_uuid_before_the_add {
@@ -68,8 +67,8 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::AddNode { node, links })
             }
             StreamGraphOperation::RemoveNode { node, links } => {
-                let processor_id = self.the_processor_of_the_node(node.id)?;
-                self.remove_processor_async(processor_id).await?;
+                let node_run_id = self.the_node_of_the_node(node.id)?;
+                self.remove_node_async(node_run_id).await?;
                 Ok(StreamGraphOperation::RemoveNode { node, links })
             }
             StreamGraphOperation::Connect { link } => {
@@ -82,11 +81,8 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::Disconnect { link })
             }
             StreamGraphOperation::SetNodeConfig { node, from, to } => {
-                self.update_processor_config_compiled_right_away(
-                    &self.the_processor_of_the_node(node)?,
-                    &to,
-                )
-                .await?;
+                self.update_node_config_compiled_right_away(&self.the_node_of_the_node(node)?, &to)
+                    .await?;
                 Ok(StreamGraphOperation::SetNodeConfig { node, from, to })
             }
             StreamGraphOperation::SetPinValue {
@@ -95,7 +91,7 @@ impl LoadedStreamInThisRuntime {
                 from,
                 to,
             } => {
-                self.set_pin_value(&self.the_processor_of_the_node(node)?, &input, to.clone())?;
+                self.set_pin_value(&self.the_node_of_the_node(node)?, &input, to.clone())?;
                 Ok(StreamGraphOperation::SetPinValue {
                     node,
                     input,
@@ -104,7 +100,7 @@ impl LoadedStreamInThisRuntime {
                 })
             }
             StreamGraphOperation::RenameNode { node, from, to } => {
-                let renamed = self.rename_node(&self.the_processor_of_the_node(node)?, &to)?;
+                let renamed = self.rename_node(&self.the_node_of_the_node(node)?, &to)?;
                 Ok(StreamGraphOperation::RenameNode {
                     node,
                     from,
@@ -112,7 +108,7 @@ impl LoadedStreamInThisRuntime {
                 })
             }
             StreamGraphOperation::SetStudioFields { node, from, to } => {
-                self.set_studio_fields(&self.the_processor_of_the_node(node)?, to.to_map())?;
+                self.set_studio_fields(&self.the_node_of_the_node(node)?, to.to_map())?;
                 Ok(StreamGraphOperation::SetStudioFields { node, from, to })
             }
             StreamGraphOperation::RefreshFragment { .. }
@@ -129,17 +125,17 @@ impl LoadedStreamInThisRuntime {
                     .await
             }
             StreamGraphOperation::SetExposedConfigFields { node, from, to } => {
-                self.set_exposed_config_fields(&self.the_processor_of_the_node(node)?, to.clone())?;
+                self.set_exposed_config_fields(&self.the_node_of_the_node(node)?, to.clone())?;
                 Ok(StreamGraphOperation::SetExposedConfigFields { node, from, to })
             }
         }
     }
 
-    fn the_operation_touches_a_node_no_processor_runs_as(
+    fn the_operation_touches_a_node_no_node_runs_as(
         &self,
         graph_operation: &StreamGraphOperation,
     ) -> bool {
-        let no_processor_runs_as = |node: Uuid| self.the_processor_of_the_node(node).is_err();
+        let no_node_runs_as = |node: Uuid| self.the_node_of_the_node(node).is_err();
         match graph_operation {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
@@ -148,10 +144,10 @@ impl LoadedStreamInThisRuntime {
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
-                        .any(|end| end != node.id && no_processor_runs_as(end))
+                        .any(|end| end != node.id && no_node_runs_as(end))
             }
             StreamGraphOperation::Connect { link } | StreamGraphOperation::Disconnect { link } => {
-                no_processor_runs_as(link.source.node) || no_processor_runs_as(link.target.node)
+                no_node_runs_as(link.source.node) || no_node_runs_as(link.target.node)
             }
             StreamGraphOperation::RefreshFragment { .. }
             | StreamGraphOperation::AddGroup { .. }
@@ -163,7 +159,7 @@ impl LoadedStreamInThisRuntime {
             | StreamGraphOperation::AddNote { .. }
             | StreamGraphOperation::SetNoteFields { .. }
             | StreamGraphOperation::RemoveNote { .. } => true,
-            other => other.node().is_some_and(no_processor_runs_as),
+            other => other.node().is_some_and(no_node_runs_as),
         }
     }
 
@@ -238,7 +234,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<String> {
         the_default_name_a_new_node_takes(
             self.node_types_this_stream_resolves(),
-            &ProcessorClassImportPath::new(node_type).map_err(|refusal| {
+            &NodeClassImportPath::new(node_type).map_err(|refusal| {
                 Error::GraphError(format!("node type `{node_type}`: {refusal}"))
             })?,
             |candidate| names_at_the_level.contains(candidate),
@@ -250,20 +246,18 @@ impl LoadedStreamInThisRuntime {
     /// resolves places its node with nothing to compile, so that node is dropped as it stands;
     /// one the compile could not build is removed as any node is.
     async fn take_out_the_node_a_refused_add_left(&self, node: Uuid, refusal: &Error) {
-        let Ok(processor_id) = self.the_processor_of_the_node(node) else {
+        let Ok(node_run_id) = self.the_node_of_the_node(node) else {
             return;
         };
-        if matches!(refusal, Error::UnknownProcessorType { .. }) {
+        if matches!(refusal, Error::UnknownNodeType { .. }) {
             self.compiler.scope(|graph, _tx| {
-                graph.traversal_mut().v(&processor_id).drop();
+                graph.traversal_mut().v(&node_run_id).drop();
             });
-            self.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveProcessor {
-                processor_id,
-            });
+            self.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveNode { node_run_id });
             self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
             return;
         }
-        if let Err(not_removed) = self.remove_processor_async(processor_id).await {
+        if let Err(not_removed) = self.remove_node_async(node_run_id).await {
             tracing::error!(
                 %node,
                 %not_removed,
@@ -272,7 +266,7 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    fn the_processor_of_the_node(&self, node: Uuid) -> Result<ProcessorUniqueId> {
+    fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {
         self.compiler.scope(|graph, _tx| {
             let nodes: Vec<_> = graph.traversal().v(()).iter().collect();
             nodes
@@ -299,11 +293,11 @@ impl LoadedStreamInThisRuntime {
 
     async fn connect_the_link(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
         let from = OutputLinkPortRef::new(
-            self.the_processor_of_the_node(link.source.node)?,
+            self.the_node_of_the_node(link.source.node)?,
             &link.source.port,
         );
         let to = InputLinkPortRef::new(
-            self.the_processor_of_the_node(link.target.node)?,
+            self.the_node_of_the_node(link.target.node)?,
             &link.target.port,
         );
         self.connect_async(from, to).await
@@ -311,8 +305,8 @@ impl LoadedStreamInThisRuntime {
 
     /// The live link `link` names by its ends.
     fn the_link_between(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
-        let source = self.the_processor_of_the_node(link.source.node)?;
-        let target = self.the_processor_of_the_node(link.target.node)?;
+        let source = self.the_node_of_the_node(link.source.node)?;
+        let target = self.the_node_of_the_node(link.target.node)?;
         let end = |end: &StreamGraphDocumentLinkEnd| format!("{}/{}", end.node, end.port);
         let source_port = cast_exposed_name_to_url_safe(&link.source.port)?;
         let target_port = cast_exposed_name_to_url_safe(&link.target.port)?;
@@ -324,7 +318,7 @@ impl LoadedStreamInThisRuntime {
                 .iter()
                 .find(|held| {
                     held.source.port_name() == source_port
-                        && *held.target.processor_id() == target
+                        && *held.target.node_run_id() == target
                         && held.target.port_name() == target_port
                 })
                 .map(|held| held.id.clone())

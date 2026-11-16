@@ -38,40 +38,38 @@ static TICKS_IN_THE_SECOND_STREAM: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// What [`TickCountingInTheFirstStream`] logs on its first tick.
-const TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD: &str =
-    "token-of-the-first-streams-processor-thread";
+const TOKEN_OF_THE_FIRST_STREAMS_NODE_THREAD: &str = "token-of-the-first-streams-node-thread";
 
 /// What [`TickCountingInTheSecondStream`] logs on its first tick.
-const TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD: &str =
-    "token-of-the-second-streams-processor-thread";
+const TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD: &str = "token-of-the-second-streams-node-thread";
 
 /// A source that counts its own ticks, for the first stream.
-#[crate::processor(execution = continuous(interval_ms = 5))]
+#[crate::node(execution = continuous(interval_ms = 5))]
 pub(crate) struct TickCountingInTheFirstStream;
 
-impl crate::core::ContinuousProcessor for TickCountingInTheFirstStream::Processor {
+impl crate::core::ContinuousNode for TickCountingInTheFirstStream::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
         if TICKS_IN_THE_FIRST_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
-            tracing::info!("{TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD}");
+            tracing::info!("{TOKEN_OF_THE_FIRST_STREAMS_NODE_THREAD}");
         }
         Ok(())
     }
 }
 
 /// A source that counts its own ticks, for the second stream.
-#[crate::processor(execution = continuous(interval_ms = 5))]
+#[crate::node(execution = continuous(interval_ms = 5))]
 pub(crate) struct TickCountingInTheSecondStream;
 
-impl crate::core::ContinuousProcessor for TickCountingInTheSecondStream::Processor {
+impl crate::core::ContinuousNode for TickCountingInTheSecondStream::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
         if TICKS_IN_THE_SECOND_STREAM.fetch_add(1, Ordering::SeqCst) == 0 {
-            tracing::info!("{TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD}");
+            tracing::info!("{TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD}");
         }
         Ok(())
     }
@@ -84,10 +82,10 @@ impl crate::core::ContinuousProcessor for TickCountingInTheSecondStream::Process
 #[test]
 #[serial]
 fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other_processing() {
-    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 
-    PROCESSOR_REGISTRY.register::<TickCountingInTheFirstStream::Processor>();
-    PROCESSOR_REGISTRY.register::<TickCountingInTheSecondStream::Processor>();
+    NODE_REGISTRY.register::<TickCountingInTheFirstStream::Node>();
+    NODE_REGISTRY.register::<TickCountingInTheSecondStream::Node>();
     let project_directory =
         crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
     let runner = Runner::new().expect("Runner::new");
@@ -104,14 +102,14 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
     let project_log = first.jsonl_log_path().expect("first logs").to_path_buf();
     assert_eq!(second.jsonl_log_path(), Some(project_log.as_path()));
     first
-        .add_processor(ProcessorSpec::new(
-            TickCountingInTheFirstStream::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            TickCountingInTheFirstStream::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the first stream's source is added");
     second
-        .add_processor(ProcessorSpec::new(
-            TickCountingInTheSecondStream::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            TickCountingInTheSecondStream::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the second stream's source is added");
@@ -119,7 +117,7 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
     second.start().expect("the second stream starts");
     for stream in [&first, &second] {
         stream
-            .wait_until_every_processor_is_running(Duration::from_secs(30))
+            .wait_until_every_node_is_running(Duration::from_secs(30))
             .expect("the stream's source runs");
     }
 
@@ -149,7 +147,7 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
     assert_eq!(
         TICKS_IN_THE_FIRST_STREAM.load(Ordering::SeqCst),
         first_ticks_once_stopped,
-        "the stopped stream's processor kept running"
+        "the stopped stream's node kept running"
     );
     assert!(
         TICKS_IN_THE_SECOND_STREAM.load(Ordering::SeqCst) > second_ticks_once_the_first_stopped,
@@ -159,13 +157,13 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
     assert_eq!(runner.ids_of_the_loaded_streams(), ["second"]);
 
     second
-        .add_processor(ProcessorSpec::new(
-            TickCountingInTheSecondStream::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            TickCountingInTheSecondStream::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("a live add into the running stream");
     second
-        .wait_until_every_processor_is_running(Duration::from_secs(30))
+        .wait_until_every_node_is_running(Duration::from_secs(30))
         .expect("the live add commits on the running stream's own compiler");
     assert_eq!(
         second.to_json().unwrap()["nodes"].as_array().map(Vec::len),
@@ -179,13 +177,13 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
     for (stream_id, own_token, other_token) in [
         (
             "first",
-            TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
-            TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
+            TOKEN_OF_THE_FIRST_STREAMS_NODE_THREAD,
+            TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD,
         ),
         (
             "second",
-            TOKEN_OF_THE_SECOND_STREAMS_PROCESSOR_THREAD,
-            TOKEN_OF_THE_FIRST_STREAMS_PROCESSOR_THREAD,
+            TOKEN_OF_THE_SECOND_STREAMS_NODE_THREAD,
+            TOKEN_OF_THE_FIRST_STREAMS_NODE_THREAD,
         ),
     ] {
         let records: Vec<_> = project_records
@@ -195,12 +193,12 @@ fn two_started_streams_share_one_vulkan_device_and_one_shutdown_leaves_the_other
         for record in &records {
             assert_ne!(
                 record.message, other_token,
-                "the records of `{stream_id}` hold the other stream's processor record"
+                "the records of `{stream_id}` hold the other stream's node record"
             );
         }
         assert!(
             records.iter().any(|record| record.message == own_token),
-            "the records of `{stream_id}` lack its processor thread's record: {records:#?}"
+            "the records of `{stream_id}` lack its node thread's record: {records:#?}"
         );
     }
 }

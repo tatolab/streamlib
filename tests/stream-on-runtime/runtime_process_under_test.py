@@ -365,7 +365,7 @@ class RuntimeProcessUnderTest:
     def kill_every_process_it_started(self) -> None:
         """SIGKILL the process, its process group, and every descendant's group.
 
-        A processor interpreter, a describe and a compile each lead a process
+        A node interpreter, a describe and a compile each lead a process
         group of their own, so the group of every descendant is killed too.
         Leaves nothing holding a GPU context, a device or a socket.
         """
@@ -396,7 +396,7 @@ class MarkerLineParser:
 
     The marker is matched anywhere in the line, with whitespace or the line's
     end after its name. The pretty log mirror ends a record with its structured
-    fields — ` processor_id=<id>`, ` pipeline_id=<id>`, an attribute's
+    fields — ` node_run_id=<id>`, ` pipeline_id=<id>`, an attribute's
     ` key=value` — so the payload is the JSON value after the name, decoded up
     to where it ends; `None` when only those fields follow; or, when what
     follows is not JSON, that text with the trailing fields removed.

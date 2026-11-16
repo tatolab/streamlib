@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use crate::core::error::{Error, Result};
 use crate::core::runtime::address_chunk::{
     first_reason_this_is_not_one_address_chunk, what_one_address_chunk_may_be,
@@ -97,18 +96,18 @@ pub fn validate_channel_name(s: &str) -> Result<()> {
     validate_channel_chunks(s)
 }
 
-pub fn source_channel_name(source_processor: &str, source_output: &str) -> Result<ChannelName> {
-    let processor = source_processor.to_ascii_lowercase();
-    let name_before_any_shortening = format!("{processor}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
+pub fn source_channel_name(source_node: &str, source_output: &str) -> Result<ChannelName> {
+    let node = source_node.to_ascii_lowercase();
+    let name_before_any_shortening = format!("{node}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
     validate_channel_chunk(&name_before_any_shortening, source_output)?;
 
     let sep_len = CHANNEL_CHUNK_SEPARATOR.len_utf8();
     if name_before_any_shortening.len() <= MAX_CHANNEL_NAME_BYTES {
-        validate_channel_chunk(&name_before_any_shortening, &processor)?;
+        validate_channel_chunk(&name_before_any_shortening, &node)?;
         return Ok(ChannelName(name_before_any_shortening));
     }
 
-    let processor_budget = MAX_CHANNEL_NAME_BYTES
+    let node_budget = MAX_CHANNEL_NAME_BYTES
         .checked_sub(sep_len + source_output.len())
         .filter(|budget| *budget > CHANNEL_NAME_HASH_SUFFIX_HEX_LEN)
         .ok_or_else(|| Error::ChannelNameTooLong {
@@ -117,9 +116,9 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
             max: MAX_CHANNEL_NAME_BYTES - sep_len - (CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1),
         })?;
 
-    let processor_chunk = hash_legalize_chunk(&processor, processor_budget);
-    let name = format!("{processor_chunk}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
-    validate_channel_chunk(&name, &processor_chunk)?;
+    let node_chunk = hash_legalize_chunk(&node, node_budget);
+    let name = format!("{node_chunk}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
+    validate_channel_chunk(&name, &node_chunk)?;
     Ok(ChannelName(name))
 }
 
@@ -313,7 +312,7 @@ mod tests {
         );
         assert_ne!(
             a, other_proc,
-            "a different source processor is a different channel"
+            "a different source node is a different channel"
         );
     }
 
@@ -340,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn source_channel_name_lowercases_uppercase_leading_processor_id() {
+    fn source_channel_name_lowercases_uppercase_leading_node_run_id() {
         let name = source_channel_name("Pabc123def", "video_out").unwrap();
         assert_eq!(name.as_str(), "pabc123def/video_out");
         validate_channel_name(name.as_str()).unwrap();
@@ -385,8 +384,8 @@ mod tests {
     }
 
     #[test]
-    fn source_channel_name_over_bound_hashes_processor_chunk_not_port() {
-        let long_proc = "p".to_string() + &"processorname".repeat(6); // 79 bytes
+    fn source_channel_name_over_bound_hashes_node_chunk_not_port() {
+        let long_proc = "p".to_string() + &"nodename".repeat(6); // 79 bytes
         let a = source_channel_name(&long_proc, "output_port").unwrap();
         assert!(a.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
         validate_channel_name(a.as_str()).unwrap();
@@ -398,11 +397,11 @@ mod tests {
         );
         // Deterministic on the hashed path.
         assert_eq!(a, source_channel_name(&long_proc, "output_port").unwrap());
-        let long_proc2 = "p".to_string() + &"processornamex".repeat(6);
+        let long_proc2 = "p".to_string() + &"nodenamex".repeat(6);
         let b = source_channel_name(&long_proc2, "output_port").unwrap();
         assert_ne!(
             a, b,
-            "hash suffix must disambiguate prefix-colliding processor ids"
+            "hash suffix must disambiguate prefix-colliding node ids"
         );
     }
 
@@ -415,7 +414,7 @@ mod tests {
     /// was a proxy for.
     #[test]
     fn generated_source_channel_name_fits_the_wire() {
-        let long = "verylongprocessorname".repeat(4);
+        let long = "verylongnodename".repeat(4);
         let channel = source_channel_name(&long, "outputport")
             .expect("a grammar-legal source output port must produce a channel name");
         PortKey::new(channel.as_str())

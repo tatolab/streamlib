@@ -9,8 +9,8 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
-use super::processor_interpreter_spawn_host::{
+use super::node_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
+use super::node_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, StreamInterpreterExitAwaited,
     spawn_standard_error_reader_keeping_its_tail, standard_error_tail_as_a_refusal_quotes_it,
     stream_interpreter_command_in_its_project_directory, wait_for_a_stream_interpreter_to_exit,

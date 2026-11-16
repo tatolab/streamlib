@@ -5,7 +5,7 @@
 
 A standalone probe acquires its own surface and reports from `setup`, so its
 stream is the probe alone. The end-to-end scenarios put the test pattern module
-in front of one or two Python processors.
+in front of one or two Python nodes.
 """
 
 from tatolab.stream import StreamBuilder, graph_generator
@@ -71,7 +71,7 @@ def _add_the_cross_process_edit(stream_builder: StreamBuilder, *, skip_edit: boo
 @graph_generator
 def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> None:
     """Test pattern → Python effect, the user-facing story: the frames one
-    processor produces are edited in place by another one's interpreter."""
+    node produces are edited in place by another one's interpreter."""
     pattern = stream_builder.add(
         TestPatternSource, config={"width": 320, "height": 180}
     )
@@ -81,7 +81,7 @@ def a_test_pattern_into_an_inverting_effect(stream_builder: StreamBuilder) -> No
 
 @graph_generator
 def a_test_pattern_edited_then_digested_in_another_process(stream_builder: StreamBuilder) -> None:
-    """Native source → Python effect → a second Python processor: the edit
+    """Native source → Python effect → a second Python node: the edit
     one child makes is read back by another, through the engine's memory."""
     _add_the_cross_process_edit(stream_builder, skip_edit=False)
 

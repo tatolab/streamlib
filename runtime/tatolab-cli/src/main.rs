@@ -234,7 +234,7 @@ enum TatolabVerb {
     },
     #[command(
         long_about = "Pause the whole project at once, never waiting behind its queued \
-                      actions: every processor of each loaded stream holds its state and \
+                      actions: every node of each loaded stream holds its state and \
                       processes nothing, a scaled or stepped stream clock holds where it stands, and a graph \
                       edit made meanwhile compiles on `tatolab resume`. A stream `tatolab reload` \
                       or `tatolab dev` loads meanwhile starts paused. Pause is recorded, so a \
@@ -247,7 +247,7 @@ enum TatolabVerb {
         project_directory: Option<PathBuf>,
     },
     #[command(
-        long_about = "Resume the whole paused project at once: every processor carries on from \
+        long_about = "Resume the whole paused project at once: every node carries on from \
                       the state it held, and each stream compiles the graph edits made while it \
                       was paused. Prints `resumed <project>: <streams>`."
     )]

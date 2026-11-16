@@ -50,4 +50,4 @@ pub use loopback_http_listener::{
     ControlWebSocketRouteForTheLoopbackListener, LoopbackHttpListenerServedForAnEngine,
     serve_the_loopback_http_listener,
 };
-pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;
+pub use mcp_prompts::VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH;

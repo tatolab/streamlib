@@ -45,8 +45,8 @@ machine-directories-under-a-test-root = [
 # The surface-share wires (a Unix socket on Linux, raw Mach on macOS) and the
 # published frame id grammar, shared with the helper-process clients.
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.68.82" }
-# Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.82", features = ["utoipa"] }
+# Node schema types (shared with macros for code generation)
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
@@ -97,7 +97,7 @@ signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
 ctrlc = "3.4"  # Cross-platform Ctrl+C handler (works with GUI apps)
 petgraph = "0.8.3"  # Directed graph for GraphOptimizer topology analysis
 anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
-cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
+cuid2 = "0.1"  # Collision-resistant unique identifiers for node/link IDs
 uuid = { version = "1.11", features = ["v4", "v5", "serde"] }  # UUIDs: a node's in its graph document, a pixel buffer pool's
 libloading = "0.8"  # Opens shared libraries at run time
 streamlib-slang-shader-compiler = { path = "../streamlib-slang-shader-compiler", version = "0.68.82" }  # Compiles kernel sources at run time
@@ -176,7 +176,7 @@ v4l = "0.14"
 
 [dev-dependencies]
 # Self-alias via the SDK so engine tests / benches that use
-# `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`
+# `#[streamlib::node(...)]` resolve macro-emitted `::streamlib::*`
 # paths through the SDK (which transitively re-exports engine items).
 # Dev-dep cycles are permitted by Cargo because they don't propagate.
 streamlib = { path = "../../sdk/streamlib-sdk", features = ["test-support"] }

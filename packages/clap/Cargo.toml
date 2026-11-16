@@ -3,14 +3,14 @@ name = "streamlib-clap"
 version = "1.0.0"
 edition = "2024"
 authors = ["Tatolab LLC <hello@tatolab.com>"]
-description = "CLAP audio plugin host processor for streamlib (macOS / iOS)."
+description = "CLAP audio plugin host node for streamlib (macOS / iOS)."
 keywords = ["clap", "audio", "plugin", "effect", "vst"]
 categories = ["multimedia::audio", "multimedia"]
 repository = "https://github.com/tato123/streamlib"
 license = "GPL-3.0-only"
 
 [lib]
-# The crate root is generated from `processors/` before every cargo
+# The crate root is generated from `nodes/` before every cargo
 # invocation (`cargo xtask generate-crate-roots` in-tree; the build
 # orchestrator's pre-cargo staging step everywhere else). It is a build
 # artifact — gitignored, and excluded from the packed `.slpkg`.
@@ -20,11 +20,11 @@ crate-type = ["rlib", "cdylib"]
 
 
 [dependencies]
-# Engine-free authoring SDK (never the `streamlib` facade) — runtime context, processor traits, generated wire
+# Engine-free authoring SDK (never the `streamlib` facade) — runtime context, node traits, generated wire
 # types under `crate::_generated_::*` (AudioFrame).
 streamlib-plugin-sdk = {version = "0.16.0"}
 
-# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::node("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.16.0"}
 
@@ -39,10 +39,10 @@ serde = {version = "1.0", features = ["derive"]}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Path dep on the audio domain package (owns `ProcessorAudioConverter`, used by
+# Path dep on the audio domain package (owns `NodeAudioConverter`, used by
 # the macOS/iOS-gated `clap_effect`) ⇒ this package is non-distributable via the
 # shared `non_distributable_path_offenders` predicate. Re-enabled when
-# `ProcessorAudioConverter` moves to the authoring SDK and resolves by version.
+# `NodeAudioConverter` moves to the authoring SDK and resolves by version.
 streamlib-audio = { path = "../audio" }
 
 # CLAP plugin host bindings — not available on Linux/Windows in this

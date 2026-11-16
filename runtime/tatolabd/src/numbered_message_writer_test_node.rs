@@ -10,7 +10,7 @@
 use streamlib::sdk::context::RuntimeContextLimitedAccess;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::MessageGroupBoundary;
-use streamlib::sdk::processors::{ContinuousProcessor, PROCESSOR_REGISTRY};
+use streamlib::sdk::nodes::{ContinuousNode, NODE_REGISTRY};
 
 /// Every how many messages one opens a group.
 pub(crate) const MESSAGES_PER_GROUP: u64 = 3;
@@ -18,7 +18,7 @@ pub(crate) const MESSAGES_PER_GROUP: u64 = 3;
 /// The stamp of the message after one, the interval the node writes at.
 pub(crate) const NANOSECONDS_BETWEEN_MESSAGE_STAMPS: i64 = 10_000_000;
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = continuous(interval_ms = 10),
     output("numbers", family = Records),
     output("more_numbers", family = Records),
@@ -27,7 +27,7 @@ pub struct NumberedMessageWriterTestNode {
     next_message_number: u64,
 }
 
-impl ContinuousProcessor for NumberedMessageWriterTestNode::Processor {
+impl ContinuousNode for NumberedMessageWriterTestNode::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         let message_number = self.next_message_number;
         self.next_message_number += 1;
@@ -50,7 +50,7 @@ impl ContinuousProcessor for NumberedMessageWriterTestNode::Processor {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_numbered_message_writer_test_node() {
-    PROCESSOR_REGISTRY.register::<NumberedMessageWriterTestNode::Processor>();
+    NODE_REGISTRY.register::<NumberedMessageWriterTestNode::Node>();
 }
 
 #[cfg(test)]
@@ -60,7 +60,7 @@ mod tests {
     #[test]
     fn a_test_graph_names_the_node_by_its_class_import_path() {
         assert_eq!(
-            NumberedMessageWriterTestNode::processor_class_import_path().as_str(),
+            NumberedMessageWriterTestNode::node_class_import_path().as_str(),
             "tatolabd::numbered_message_writer_test_node::NumberedMessageWriterTestNode"
         );
     }

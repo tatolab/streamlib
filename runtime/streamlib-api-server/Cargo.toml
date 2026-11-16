@@ -16,7 +16,7 @@ publish = false
 [lib]
 name = "streamlib_api_server"
 # `rlib` only. The api-server is a host (it drives RuntimeOperations, the
-# processor registry, pubsub, and the graph API), not a loadable plugin — a
+# node registry, pubsub, and the graph API), not a loadable plugin — a
 # host cannot be dlopen'd across the plugin ABI, so it emits no `cdylib`.
 crate-type = ["rlib"]
 

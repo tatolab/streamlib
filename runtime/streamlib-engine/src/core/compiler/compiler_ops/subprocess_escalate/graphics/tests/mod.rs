@@ -19,7 +19,7 @@ use super::linux_and_macos::{
     graphics_binding_kind_to_wire, graphics_pipeline_state_from_wire,
     surface_bound_graphics_binding_kind,
 };
-use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateGraphicsBindingKind, EscalateRequestRegisterGraphicsKernel,
     EscalateRequestRegisterGraphicsKernelBinding,
@@ -238,7 +238,7 @@ fn register_graphics_kernel_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(req),
     )
     .expect("must produce a response");

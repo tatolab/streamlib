@@ -6,9 +6,7 @@
 
 use crate::core::error::{Error, Result};
 
-pub use streamlib_processor_schema::{
-    DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA,
-};
+pub use streamlib_node_schema::{DEFAULT_INPUT_PORT_BORROW_QUOTA, MAX_INPUT_PORT_BORROW_QUOTA};
 
 /// `declared` as an input port's borrow quota, or the default when it states
 /// none, refused past [`MAX_INPUT_PORT_BORROW_QUOTA`].

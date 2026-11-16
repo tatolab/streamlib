@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -47,7 +46,7 @@ impl OutputWriter {
         self.host_inner().ok_or_else(|| {
             Error::Link(format!(
                 "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
+                 resources on this node instance"
             ))
         })
     }

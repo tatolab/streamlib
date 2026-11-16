@@ -105,6 +105,7 @@ pub enum ListedStreamState {
     /// Open with its playback stopped, nothing running, until `start_playback`; its graph is
     /// loaded to read and edit while `node_count` is set.
     Stopped,
+    /// Open with its playback paused: its nodes process nothing until `resume_playback`.
     Paused,
     /// Closed with its project, not loaded, until `open_project`.
     Closed,

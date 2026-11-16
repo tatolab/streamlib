@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::core::error::{Error, PortDirection, Result};
-use crate::core::processors::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireReply};
+use crate::core::nodes::{OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireReply};
 
 use super::{
     ParentSideOfOneSubprocessBridgeSharedByItsThreads,
@@ -16,7 +16,7 @@ use super::{
 /// How links wired after a subprocess's setup command reach it: `wire_link`
 /// and `unwire_link` frames written straight onto its bridge's socket.
 pub struct SubprocessBridgeLinkDelivery {
-    pub(super) processor_display_name: String,
+    pub(super) node_display_name: String,
     pub(super) parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
 }
 
@@ -33,16 +33,16 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Err(Error::Runtime(
                 refusal_of_a_link_into_a_helper_process_that_failed(
-                    &self.processor_display_name,
-                    &self.parent_side.processor_id,
+                    &self.node_display_name,
+                    &self.parent_side.node_run_id,
                 ),
             ));
         }
         let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
             return Err(Error::Configuration(format!(
-                "the wiring handed to processor '{}' ({}) names no link, so its helper \
+                "the wiring handed to node '{}' ({}) names no link, so its helper \
                  process could not answer for one",
-                self.processor_display_name, self.parent_side.processor_id
+                self.node_display_name, self.parent_side.node_run_id
             )));
         };
         // Registered before the send: the subprocess can answer the moment the
@@ -93,8 +93,8 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Err(Error::Runtime(
                 refusal_of_a_link_into_a_helper_process_that_failed(
-                    &self.processor_display_name,
-                    &self.parent_side.processor_id,
+                    &self.node_display_name,
+                    &self.parent_side.node_run_id,
                 ),
             ));
         }
@@ -103,9 +103,9 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
             .and_then(|id| id.as_str())
         else {
             return Err(Error::Configuration(format!(
-                "the function node island handed to processor '{}' ({}) names no link, so its \
+                "the function node island handed to node '{}' ({}) names no link, so its \
                  helper process could not answer for it",
-                self.processor_display_name, self.parent_side.processor_id
+                self.node_display_name, self.parent_side.node_run_id
             )));
         };
         self.parent_side

@@ -1,15 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::nodes::NodeSpec;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeStatus};
-use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
+use streamlib_engine::core::nodes::NODE_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
 /// How long the host's wait is allowed to run before the test gives up on the
@@ -17,12 +16,12 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 /// is that the wait ends because of the request, not because of this bound.
 const SHUTDOWN_OBSERVED_WATCHDOG: Duration = Duration::from_secs(5);
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
 )]
-pub struct ShutdownRequestingTestProcessor;
+pub struct ShutdownRequestingTestNode;
 
-impl streamlib_engine::ManualProcessor for ShutdownRequestingTestProcessor::Processor {
+impl streamlib_engine::ManualNode for ShutdownRequestingTestNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -32,9 +31,8 @@ impl streamlib_engine::ManualProcessor for ShutdownRequestingTestProcessor::Proc
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        ctx.runtime().request_this_streams_shutdown(
-            "integration test: the processor decided the run is over",
-        )
+        ctx.runtime()
+            .request_this_streams_shutdown("integration test: the node decided the run is over")
     }
 }
 
@@ -93,18 +91,18 @@ fn assert_the_wait_ends_before_the_watchdog(
 
 #[test]
 #[serial]
-fn a_processor_shutdown_request_ends_the_hosts_wait_on_its_stream() {
-    PROCESSOR_REGISTRY.register::<ShutdownRequestingTestProcessor::Processor>();
+fn a_node_shutdown_request_ends_the_hosts_wait_on_its_stream() {
+    NODE_REGISTRY.register::<ShutdownRequestingTestNode::Node>();
 
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(
-            ShutdownRequestingTestProcessor::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            ShutdownRequestingTestNode::node_class_import_path(),
             serde_json::json!({}),
         ))
-        .expect("add the shutdown-requesting processor");
+        .expect("add the shutdown-requesting node");
     stream.start().expect("stream start");
 
     let waiting_runner = Arc::clone(&runner);
@@ -112,7 +110,7 @@ fn a_processor_shutdown_request_ends_the_hosts_wait_on_its_stream() {
     assert_the_wait_ends_before_the_watchdog(
         &runner,
         &stream,
-        "the processor's shutdown request",
+        "the node's shutdown request",
         move || waiting_runner.wait_until_the_stream_ends(&waited_on),
     );
 }

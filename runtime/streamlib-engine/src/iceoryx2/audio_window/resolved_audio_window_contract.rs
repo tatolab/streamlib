@@ -1,8 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_node_schema::NodeClassImportPath;
 
 use super::audio_window_accumulator::SourceAudioFormat;
 use super::device_matched_audio_window_contracts::AudioWindowContractMatchingADeviceStream;
@@ -12,7 +11,7 @@ use crate::core::descriptors::{
     AudioWindowContractDeclaredValues,
 };
 use crate::core::error::{Error, Result};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::iceoryx2::{ChannelsBlockSampleType, DeliveryProfile};
 
 /// A window contract with every value settled — what the stage reads.
@@ -131,7 +130,7 @@ impl ResolvedAudioWindowContract {
 
     pub(crate) fn read_declaration(
         contract: &AudioWindowContract,
-        processor_type: &ProcessorClassImportPath,
+        node_type: &NodeClassImportPath,
         port_name: &str,
     ) -> Result<AudioWindowDeclarationOfAnInputPort> {
         match contract {
@@ -139,11 +138,11 @@ impl ResolvedAudioWindowContract {
                 .map(AudioWindowDeclarationOfAnInputPort::StatedOutright)
                 .map_err(|refusal| {
                     Error::Configuration(format!(
-                        "input port '{port_name}' on '{processor_type}' declared {refusal}"
+                        "input port '{port_name}' on '{node_type}' declared {refusal}"
                     ))
                 }),
             AudioWindowContract::MatchDevice {} => {
-                Ok(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream)
+                Ok(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream)
             }
             // Rendering-only, and this reads declarations: `graph` uses it to
             // say five values came from a device rather than from an author.
@@ -151,10 +150,10 @@ impl ResolvedAudioWindowContract {
             // a rendering, which is a wiring error and not a contract the stage
             // may quietly run on.
             AudioWindowContract::Device(_) => Err(Error::Configuration(format!(
-                "input port '{port_name}' on '{processor_type}' declares an `audio_window` \
+                "input port '{port_name}' on '{node_type}' declares an `audio_window` \
                  resolved from a device, which is how `graph` renders a settled contract \
                  and not something a port may declare. State the values, or \
-                 `match_device` to take them from the device this processor opens"
+                 `match_device` to take them from the device this node opens"
             ))),
         }
     }
@@ -246,29 +245,29 @@ fn audio_window_declared_dtype_of(sample_type: ChannelsBlockSampleType) -> &'sta
 pub(crate) enum AudioWindowDeclarationOfAnInputPort {
     /// The author wrote the values, and these are they.
     StatedOutright(ResolvedAudioWindowContract),
-    MatchesItsProcessorsDeviceStream,
+    MatchesItsNodesDeviceStream,
 }
 
 pub(crate) fn refuse_an_unsettled_match_device_sentinel(
-    processor_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     port_name: &str,
 ) -> Error {
     Error::Configuration(format!(
-        "input port '{port_name}' on '{processor_type}' declares \
+        "input port '{port_name}' on '{node_type}' declares \
          `audio_window = match_device`, which resolves at `setup()` from the format \
-         of the device stream the declaring processor opened — and nothing has \
-         resolved it. Only a processor that opens a device stream can satisfy the \
-         sentinel; declare the values outright, or give this port a processor \
+         of the device stream the declaring node opened — and nothing has \
+         resolved it. Only a node that opens a device stream can satisfy the \
+         sentinel; declare the values outright, or give this port a node \
          that opens one"
     ))
 }
 
 pub(crate) fn audio_windowing_declared_by_input_port(
     node_types: &NodeTypesOneStreamResolves,
-    processor_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     port_name: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Some((inputs, _outputs)) = node_types.port_info(processor_type) else {
+    let Some((inputs, _outputs)) = node_types.port_info(node_type) else {
         return Ok(None);
     };
     let Some(port) = inputs.iter().find(|port| port.name == port_name) else {
@@ -278,7 +277,7 @@ pub(crate) fn audio_windowing_declared_by_input_port(
         return Ok(None);
     };
 
-    ResolvedAudioWindowContract::read_declaration(contract, processor_type, port_name).map(Some)
+    ResolvedAudioWindowContract::read_declaration(contract, node_type, port_name).map(Some)
 }
 
 #[cfg(test)]
@@ -295,15 +294,14 @@ mod tests {
         }
     }
 
-    fn a_processor_type() -> ProcessorClassImportPath {
-        ProcessorClassImportPath::new("tests.WindowedConsumer").expect("a legal import path")
+    fn a_node_type() -> NodeClassImportPath {
+        NodeClassImportPath::new("tests.WindowedConsumer").expect("a legal import path")
     }
 
     fn resolve(contract: &AudioWindowContract) -> Result<ResolvedAudioWindowContract> {
-        match ResolvedAudioWindowContract::read_declaration(contract, &a_processor_type(), "audio")?
-        {
+        match ResolvedAudioWindowContract::read_declaration(contract, &a_node_type(), "audio")? {
             AudioWindowDeclarationOfAnInputPort::StatedOutright(resolved) => Ok(resolved),
-            AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream => {
+            AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream => {
                 panic!("this declaration states its five values")
             }
         }
@@ -325,21 +323,21 @@ mod tests {
     fn the_sentinel_reads_as_a_port_awaiting_its_device_rather_than_as_five_values() {
         let windowing = ResolvedAudioWindowContract::read_declaration(
             &AudioWindowContract::MatchDevice {},
-            &a_processor_type(),
+            &a_node_type(),
             "audio",
         )
         .expect("reading a sentinel declaration is not itself an error");
 
         assert_eq!(
             windowing,
-            AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream
+            AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream
         );
     }
 
     #[test]
     fn an_unsettled_sentinel_is_refused_naming_the_resolution_mechanism() {
         let rendered =
-            refuse_an_unsettled_match_device_sentinel(&a_processor_type(), "audio").to_string();
+            refuse_an_unsettled_match_device_sentinel(&a_node_type(), "audio").to_string();
 
         assert!(
             rendered.contains("match_device")
@@ -357,7 +355,7 @@ mod tests {
     fn a_contract_rendered_as_a_devices_is_refused_when_read_as_a_declaration() {
         let refusal = ResolvedAudioWindowContract::read_declaration(
             &AudioWindowContract::Device(declared_values()),
-            &a_processor_type(),
+            &a_node_type(),
             "audio",
         )
         .expect_err("a rendering is not a declaration")

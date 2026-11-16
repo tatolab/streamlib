@@ -3,9 +3,9 @@
 
 //! A node's config held to the config schema its node type publishes in the catalog.
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 /// Refuse `config` for node `node_name` of type `node_type` when the config schema the
 /// type's descriptor carries refuses it, naming each field and what the schema states;
@@ -13,7 +13,7 @@ use crate::core::processors::NodeTypesOneStreamResolves;
 /// to the schema as the empty object it stands for.
 pub(crate) fn refuse_a_config_its_node_types_config_schema_refuses(
     node_name: &str,
-    node_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     node_types: &NodeTypesOneStreamResolves,
     config: &serde_json::Value,
 ) -> Result<()> {
@@ -28,7 +28,7 @@ pub(crate) fn refuse_a_config_its_node_types_config_schema_refuses(
 
 fn refuse_a_config_the_config_schema_refuses(
     node_name: &str,
-    node_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     config_schema: &serde_json::Value,
     config: &serde_json::Value,
 ) -> Result<()> {
@@ -88,7 +88,7 @@ mod tests {
     fn refusal_of(config: serde_json::Value) -> Result<()> {
         refuse_a_config_the_config_schema_refuses(
             "test-pattern",
-            &ProcessorClassImportPath::new(TEST_PATTERN).unwrap(),
+            &NodeClassImportPath::new(TEST_PATTERN).unwrap(),
             &test_pattern_config_schema(),
             &config,
         )
@@ -137,7 +137,7 @@ mod tests {
         );
         refuse_a_config_the_config_schema_refuses(
             "test-pattern",
-            &ProcessorClassImportPath::new(TEST_PATTERN).unwrap(),
+            &NodeClassImportPath::new(TEST_PATTERN).unwrap(),
             &json!({"type": "object", "properties": {}}),
             &serde_json::Value::Null,
         )
@@ -148,7 +148,7 @@ mod tests {
     fn a_schema_that_states_nothing_about_a_field_takes_any_value() {
         refuse_a_config_the_config_schema_refuses(
             "test-pattern",
-            &ProcessorClassImportPath::new(TEST_PATTERN).unwrap(),
+            &NodeClassImportPath::new(TEST_PATTERN).unwrap(),
             &json!({"type": "object", "properties": {"width": {}}}),
             &json!({"width": "wide", "anything": [1, 2]}),
         )

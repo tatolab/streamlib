@@ -1,8 +1,8 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The test pattern module on `tatolabd`: frames its processor renders on the device,
-read by another Python processor in an interpreter of its own.
+"""The test pattern module on `tatolabd`: frames its node renders on the device,
+read by another Python node in an interpreter of its own.
 
 The module's declaration, config and placement math are tested with no GPU in
 `packages/tatolab-testpattern/tests`.
@@ -21,12 +21,12 @@ from tatolab.stream import run_graph_generator
 
 
 @pytest.mark.requires_gpu
-def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
+def test_the_test_pattern_source_produces_frames_a_python_node_reads(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
-    """The module end to end: the installed module's class → its processor
+    """The module end to end: the installed module's class → its node
     rendering frames in an interpreter of its own → Image frame read by another
-    Python processor in its own interpreter — no camera, no window."""
+    Python node in its own interpreter — no camera, no window."""
     tatolabd = start_tatolabd_running_stream(a_test_pattern_into_an_image_frame_probe)
     frames_seen = tatolabd.await_marker("FRAMES_SEEN")
     tatolabd.interrupt()

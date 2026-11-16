@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
 /// The answers one link is waiting on from the out-of-process ends it was
 /// handed to, live rather than copied at wiring time — the far side answers on

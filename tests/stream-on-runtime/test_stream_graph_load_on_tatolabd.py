@@ -42,7 +42,7 @@ from tatolab.stream import _built_in_nodes
 from tatolab.stream._built_in_node import BuiltInNode
 
 #: The H.264 encoder module's node type, which the suite venv installs.
-H264_ENCODER_MODULE_TYPE = "tatolab.h264.processors:H264Encoder"
+H264_ENCODER_MODULE_TYPE = "tatolab.h264.nodes:H264Encoder"
 #: The test pattern module's node type, which the suite venv installs.
 TEST_PATTERN_MODULE_TYPE = "tatolab.testpattern:TestPatternSource"
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per texture-ring scenario: a Python frame producer and its
-consumer, each in a processor interpreter of its own."""
+consumer, each in a node interpreter of its own."""
 
 from tatolab.stream import StreamBuilder, graph_generator
 from texture_ring_producer_probes import (

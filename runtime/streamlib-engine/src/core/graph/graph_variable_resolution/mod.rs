@@ -12,17 +12,17 @@
 
 use std::collections::{HashMap, HashSet};
 
-use streamlib_processor_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references};
+use streamlib_node_schema::{NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references};
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
-    GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
-    ProcessorNodeOutput, ProcessorNodePortsOutput,
+    GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
+    PortInfoOutput, PortKindOutput,
 };
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
@@ -222,16 +222,16 @@ impl GraphVariablesAsDrawn {
                 family: None,
                 pin_default: None,
             };
-            let is_a_setter = variable_node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE;
+            let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,
-                ProcessorNodeOutput {
+                GraphNodeOutput {
                     id: variable_node
                         .id
                         .map(|node_uuid| node_uuid.to_string())
                         .unwrap_or_default(),
-                    processor_type: variable_node.processor_type.clone(),
+                    node_type: variable_node.node_type.clone(),
                     kind: None,
                     language: None,
                     name: variable_node_cast,
@@ -241,7 +241,7 @@ impl GraphVariablesAsDrawn {
                     exposed_config_fields: variable_node.exposed_config_fields.clone(),
                     studio: variable_node.studio.clone(),
                     inputs_waiting_for_a_value: Vec::new(),
-                    ports: ProcessorNodePortsOutput {
+                    ports: GraphNodePortsOutput {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
                         } else {
@@ -285,7 +285,7 @@ pub struct GraphSnapshotWithVariablesResolved {
 }
 
 /// Whether `node_type` is `SetVariable` or `GetVariable`.
-pub fn is_a_graph_variable_node_type(node_type: &ProcessorClassImportPath) -> bool {
+pub fn is_a_graph_variable_node_type(node_type: &NodeClassImportPath) -> bool {
     matches!(
         node_type.as_str(),
         SET_VARIABLE_NODE_TYPE | GET_VARIABLE_NODE_TYPE
@@ -331,7 +331,7 @@ impl GraphSnapshot {
         let variable_nodes: Vec<&GraphSnapshotNode> = self
             .nodes
             .iter()
-            .filter(|node| is_a_graph_variable_node_type(&node.processor_type))
+            .filter(|node| is_a_graph_variable_node_type(&node.node_type))
             .collect();
         if variable_nodes.is_empty() {
             return Ok(GraphSnapshotWithVariablesResolved {
@@ -345,7 +345,7 @@ impl GraphSnapshot {
         for node in &self.nodes {
             let cast = cast_of(&node.name)?;
             if type_of_each_node_by_cast
-                .insert(cast.clone(), node.processor_type.as_str())
+                .insert(cast.clone(), node.node_type.as_str())
                 .is_some()
             {
                 return Err(Error::NodeNameTaken {
@@ -368,7 +368,7 @@ impl GraphSnapshot {
             HashMap::new();
         for node in &variable_nodes {
             let variable = variable_a_node_names(node)?;
-            if node.processor_type.as_str() == GET_VARIABLE_NODE_TYPE {
+            if node.node_type.as_str() == GET_VARIABLE_NODE_TYPE {
                 refuse_a_key_a_variable_node_does_not_take(
                     node,
                     &[GRAPH_VARIABLE_NAME_CONFIG_KEY],
@@ -425,7 +425,7 @@ impl GraphSnapshot {
 
         for get_node in variable_nodes
             .iter()
-            .filter(|node| node.processor_type.as_str() == GET_VARIABLE_NODE_TYPE)
+            .filter(|node| node.node_type.as_str() == GET_VARIABLE_NODE_TYPE)
         {
             setter_of(&get_node.name, &variable_a_node_names(get_node)?)?;
         }
@@ -490,7 +490,7 @@ impl GraphSnapshot {
         let mut configs_naming_a_get_by_node_name = HashMap::new();
         let mut runtime_nodes = Vec::new();
         for node in &self.nodes {
-            if is_a_graph_variable_node_type(&node.processor_type) {
+            if is_a_graph_variable_node_type(&node.node_type) {
                 continue;
             }
             let Some(config_object) = node.config.as_object() else {
@@ -573,7 +573,7 @@ impl GraphSnapshot {
                     .nodes
                     .iter()
                     .enumerate()
-                    .filter(|(_, node)| is_a_graph_variable_node_type(&node.processor_type))
+                    .filter(|(_, node)| is_a_graph_variable_node_type(&node.node_type))
                     .map(|(position, _)| position)
                     .collect(),
                 variable_nodes: variable_nodes.into_iter().cloned().collect(),

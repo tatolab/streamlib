@@ -30,7 +30,7 @@ impl ProjectWithGraphDocuments {
                                 node: streamlib_project_repository::StreamGraphDocumentNode {
                                     id: Uuid::new_v4(),
                                     name: name.to_owned(),
-                                    node_type: StreamToolsTestSink::processor_class_import_path()
+                                    node_type: StreamToolsTestSink::node_class_import_path()
                                         .as_str()
                                         .to_owned(),
                                     config: json!({}),
@@ -297,7 +297,7 @@ async fn an_edit_to_a_stream_reaches_each_loaded_stream_holding_it_at_any_depth(
     };
     assert_eq!(main_in_top(&engine), ["source"]);
 
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),

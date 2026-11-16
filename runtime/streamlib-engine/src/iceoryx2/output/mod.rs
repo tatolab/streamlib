@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -183,7 +182,7 @@ impl OutputWriterInner {
             .ok_or_else(|| {
                 Error::Link(format!(
                     "output port '{output_port}' has no node to carry its stream facts — the \
-                     processor was not created for a node"
+                     node was not created for a node"
                 ))
             })?
             .replace_facts_of(output_port, stream_facts)

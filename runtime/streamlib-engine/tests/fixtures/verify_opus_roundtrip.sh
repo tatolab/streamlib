@@ -92,7 +92,7 @@ trap 'exit 130' INT TERM
 echo "starting the runtime" >&2
 # The recorder runs in its own helper process, and a stream takes no argv, so
 # where it writes and how much it records travel in the runtime's environment,
-# which every processor interpreter inherits.
+# which every node interpreter inherits.
 if ! STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     STREAMLIB_CAPTURED_WAVEFORM_SECONDS="$RECORD_SECONDS" \
         start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"; then
@@ -119,7 +119,7 @@ echo "the Opus round-trip stream runs as $STREAM_ID" >&2
 # channel count Opus cannot place.
 #
 # Two patterns because a refusal reaches the log two ways. A reactive
-# processor reports by returning `Err`, which the thread runner renders at
+# node reports by returning `Err`, which the thread runner renders at
 # WARN as `process() failed: <the refusal>` — the decoder's only channel, since
 # it calls `tracing::error!` nowhere. The encoder additionally logs its own
 # errors directly.

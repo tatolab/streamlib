@@ -35,18 +35,18 @@ use crate::tatolabd_command_line::TatolabdCommandLine;
 fn main() -> ExitCode {
     let TatolabdCommandLine {} = TatolabdCommandLine::parse();
 
-    let processor_interpreter_lend_directory =
-        match runtime_unit_lend::the_lend_beside_this_executable() {
-            Ok(lend_directory) => lend_directory,
-            Err(refusal) => return write_refusal_to_standard_error(&refusal),
-        };
+    let node_interpreter_lend_directory = match runtime_unit_lend::the_lend_beside_this_executable()
+    {
+        Ok(lend_directory) => lend_directory,
+        Err(refusal) => return write_refusal_to_standard_error(&refusal),
+    };
 
     // Before any thread or Vulkan instance exists: the loader reads the
     // variable once, and setting it later races every thread reading the
     // environment.
     if let Some(vk_add_driver_files) =
         bundled_vulkan_driver_environment::vk_add_driver_files_naming_the_bundled_icd_manifest(
-            &processor_interpreter_lend_directory,
+            &node_interpreter_lend_directory,
             |name| std::env::var_os(name),
         )
     {
@@ -84,7 +84,7 @@ fn main() -> ExitCode {
     let hosted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         machine_stream_hosting::host_the_machines_streams_until_a_machine_shutdown(
             &tatolab_state_directory,
-            processor_interpreter_lend_directory,
+            node_interpreter_lend_directory,
             runtime_run_in_progress_record,
             &how_the_previous_run_ended,
             loopback_http_listener_bound_by_the_machine_runtime_lock,

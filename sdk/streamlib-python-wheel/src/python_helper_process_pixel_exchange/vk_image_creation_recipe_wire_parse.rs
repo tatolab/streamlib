@@ -45,8 +45,8 @@ fn defaulted_u32_check_out_metadata_field(
 /// each field absent-defaulting to the service's documented value.
 pub(super) fn vk_image_creation_recipe_of_check_out(
     response: &serde_json::Value,
-) -> crate::python_processor_context::ExportedVkImageCreationRecipe {
-    crate::python_processor_context::ExportedVkImageCreationRecipe {
+) -> crate::python_node_context::ExportedVkImageCreationRecipe {
+    crate::python_node_context::ExportedVkImageCreationRecipe {
         vk_image_tiling: defaulted_i32_check_out_metadata_field(
             response,
             "vk_image_tiling",

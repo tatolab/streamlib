@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use crate::build_runtime::runtime_unit_lend_directory_in_the_workspace;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -41,7 +40,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     }
     for lend_path in &report.lend_paths_holding_an_init {
         failure_lines.push(format!(
-            "{}: the runtime unit's lend holds a `tatolab/__init__.py` — every processor \
+            "{}: the runtime unit's lend holds a `tatolab/__init__.py` — every node \
              interpreter borrowing it would lose the venv's `tatolab.stream`",
             lend_path.display()
         ));
@@ -109,7 +108,7 @@ pub fn ensure_lend_directory_keeps_tatolab_a_namespace(lend_directory: &Path) ->
     anyhow::ensure!(
         lend_paths_holding_an_init.is_empty(),
         "the lend at {} holds {} — `tatolab` must stay a PEP 420 namespace package, or every \
-         processor interpreter borrowing this lend loses the venv's `tatolab.stream`",
+         node interpreter borrowing this lend loses the venv's `tatolab.stream`",
         lend_directory.display(),
         lend_paths_holding_an_init
             .iter()

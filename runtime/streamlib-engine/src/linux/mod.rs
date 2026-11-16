@@ -18,4 +18,3 @@ pub(crate) mod v4l2_color;
 pub(crate) mod v4l2_video_device_backend;
 
 pub(crate) use audio_clock::LinuxTimerFdAudioClock;
-

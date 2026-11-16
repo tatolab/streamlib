@@ -14,14 +14,14 @@ use streamlib_gpu_frame_import_client::SurfaceShareTransferredHandle;
 
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse,
-    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
+    HelperSurfaceReleaseDebt, NodeOutputPoolRequest, escalate_round_trip_to_parent,
     required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
 use super::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceUseCountClaim, HelperPoolSlotImport,
     IOSurfaceLockRefused, IOSurfaceMachPortExportDescription,
 };
-use crate::python_processor_context::ExportedVkImageCreationRecipe;
+use crate::python_node_context::ExportedVkImageCreationRecipe;
 use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 
 /// A texture pool slot as this helper imported it, shared by every frame over
@@ -273,7 +273,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
-        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+        node_output_pool: Option<NodeOutputPoolRequest<'_>>,
     ) -> PyResult<HelperCheckedOutTextureSurface> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;
@@ -281,7 +281,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("height", height)?;
         op.set_item("format", wire_format_name)?;
         op.set_item("usage", usage)?;
-        ProcessorOutputPoolRequest::write_onto_escalate_op(processor_output_pool, python, &op)?;
+        NodeOutputPoolRequest::write_onto_escalate_op(node_output_pool, python, &op)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let handle_id: String = response
@@ -294,7 +294,7 @@ impl HelperProcessGpuExchangeClient {
             .extract()?;
         self.note_the_pooled_frame_an_acquire_answered(&handle_id, &response)?;
         let release_to_parent =
-            self.release_debt_unless_pooled(python, processor_output_pool, &handle_id);
+            self.release_debt_unless_pooled(python, node_output_pool, &handle_id);
         let checked_out = python
             .detach(|| self.check_out_and_import(&handle_id))
             .map_err(|check_out_failure| {

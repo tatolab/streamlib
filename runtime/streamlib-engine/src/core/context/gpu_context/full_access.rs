@@ -93,14 +93,12 @@ impl GpuContextFullAccess {
         self.host_inner().wait_device_idle()
     }
 
-    pub fn create_processor_output_pixel_buffer_pool_for_a_native_node(
+    pub fn create_node_output_pixel_buffer_pool_for_a_native_node(
         &self,
-        processor_id_of_the_owning_node: &str,
-    ) -> crate::core::context::ProcessorOutputPixelBufferPoolOfOneNativeNode {
+        node_run_id_of_the_owning_node: &str,
+    ) -> crate::core::context::NodeOutputPixelBufferPoolOfOneNativeNode {
         self.host_inner()
-            .create_processor_output_pixel_buffer_pool_for_a_native_node(
-                processor_id_of_the_owning_node,
-            )
+            .create_node_output_pixel_buffer_pool_for_a_native_node(node_run_id_of_the_owning_node)
     }
 
     /// Acquire a pixel buffer from the shared pool. LimitedAccess

@@ -80,8 +80,8 @@ VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "V
 #: The engine's refusal when the Vulkan loader finds no driver, on every platform.
 NO_VULKAN_DRIVER_REFUSAL = "No usable Vulkan driver (ICD) was found"
 
-STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
-    r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
+STREAM_UNLOAD_REMOVED_NODES_LOG_LINE_PATTERN = re.compile(
+    r"\[stop\] Queued removal of (?P<node_count>\d+) node\(s\)"
 )
 
 #: The line `tatolab open`, `play`, `reload`, `stop` and `rm` print for the stream action they
@@ -162,7 +162,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         pytest.exit(
             f"the suite venv at {SUITE_VENV_PREFIX} imports `tatolab.runtime` from "
             f"{lent_runtime_spec.origin or lent_runtime_spec.submodule_search_locations}: the "
-            f"integration suite's venv holds `tatolab-stream` only, and processor interpreters "
+            f"integration suite's venv holds `tatolab-stream` only, and node interpreters "
             f"borrow the runtime from the lend. Unset PYTHONPATH, or rebuild the venv with "
             f"`uv sync` in {STREAM_ON_RUNTIME_SUITE_DIRECTORY}.",
             returncode=4,
@@ -496,11 +496,11 @@ class TatolabCommandsOfThisTest:
         stream_or_graph: StreamOrGraph,
         *,
         project_directory: "Path | None" = None,
-        processor_interpreter: "Path | None" = None,
+        node_interpreter: "Path | None" = None,
     ) -> TatolabRunOfAProject:
         """The `tatolab open --play` that loads `stream_or_graph`; see the module docstring."""
         if isinstance(stream_or_graph, TatolabRunOfAProject):
-            assert project_directory is None and processor_interpreter is None, (
+            assert project_directory is None and node_interpreter is None, (
                 "a project run as it is names its own project"
             )
             return stream_or_graph
@@ -510,9 +510,9 @@ class TatolabCommandsOfThisTest:
                 self.scratch_directory / f"hand-written-graph-project-{self.written_project_count}",
                 stream_or_graph,
                 reported_project_directory=project_directory,
-                processor_interpreter=processor_interpreter,
+                node_interpreter=node_interpreter,
             ).tatolab_run
-        assert project_directory is None and processor_interpreter is None, (
+        assert project_directory is None and node_interpreter is None, (
             "a `@graph_generator` function of the suite runs in a one-stream project of its own; run "
             "another project's stream with `TatolabRunOfAProject`"
         )
@@ -586,14 +586,14 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         stream_or_graph: StreamOrGraph,
         *,
         project_directory: "Path | None" = None,
-        processor_interpreter: "Path | None" = None,
+        node_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
         verb: str = OPEN_AND_PLAY_VERB,
     ) -> TatolabRunOrDevOnTheRuntime:
         tatolab_run = self._tatolab_commands.tatolab_run_of(
             stream_or_graph,
             project_directory=project_directory,
-            processor_interpreter=processor_interpreter,
+            node_interpreter=node_interpreter,
         )
         stream_run = self._tatolab_commands.start_tatolab(
             *([verb, "--play"] if verb == OPEN_AND_PLAY_VERB else [verb]),

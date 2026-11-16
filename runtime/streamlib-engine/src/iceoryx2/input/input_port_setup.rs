@@ -66,7 +66,7 @@ fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled
             mailbox_depth = depth,
             "input port evicted a bag while its `audio_window = match_device` contract is \
              unsettled: with no contract to window by it hands its reader nothing, so this \
-             loss is not a consumer falling behind. If this port's processor already ran \
+             loss is not a consumer falling behind. If this port's node already ran \
              `setup()` without settling it — a link wired onto the port after the fact — \
              it stays this way for the rest of the run"
         );
@@ -170,7 +170,7 @@ impl InputMailboxesInner {
                 return Err(Error::Configuration(format!(
                     "input port '{port}' cannot be settled from a device stream: {refusal}. \
                      Only a port declaring `audio_window = match_device` resolves from the \
-                     device its processor opened"
+                     device its node opened"
                 )));
             }
             let mut settled = windowed_port_config(port, existing.mailbox.read_mode(), contract);

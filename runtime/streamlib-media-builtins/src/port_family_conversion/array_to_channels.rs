@@ -12,7 +12,7 @@ use streamlib::sdk::iceoryx2::{
     ChannelsBlockSampleType, DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind,
     array_frame_attribute_table_of,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::schemars::JsonSchema;
 
 use super::channels_to_array::CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME;
@@ -26,7 +26,7 @@ const ARRAY_INPUT_PORT: &str = "array";
 const CHANNELS_OUTPUT_PORT: &str = "channels";
 
 /// Configuration for [`ArrayToChannels`].
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
@@ -56,7 +56,7 @@ impl Default for ArrayToChannelsConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     config = crate::port_family_conversion::array_to_channels::ArrayToChannelsConfig,
@@ -87,7 +87,7 @@ pub struct ArrayToChannels {
     next_start_sample: u64,
 }
 
-impl ReactiveProcessor for ArrayToChannels::Processor {
+impl ReactiveNode for ArrayToChannels::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         refuse_a_channels_output_config(
             "ArrayToChannels",

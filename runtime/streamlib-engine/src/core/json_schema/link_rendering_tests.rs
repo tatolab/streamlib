@@ -20,7 +20,7 @@ fn a_wired_links_top_level_state_comes_from_its_wiring_component() {
     let rendered = |link: &Link| {
         serde_json::to_value(LinkOutput::of_a_link(
             link,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
+            &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
         ))
         .unwrap()
     };
@@ -39,7 +39,7 @@ fn a_wired_links_top_level_state_comes_from_its_wiring_component() {
 #[test]
 fn the_rendered_state_and_the_components_map_never_disagree() {
     use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
-    use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+    use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
     let mut link = Link::between(
         OutputLinkPortRef::new("Psrc", "out1"),
@@ -53,7 +53,7 @@ fn the_rendered_state_and_the_components_map_never_disagree() {
     let rendered = |link: &Link| {
         serde_json::to_value(LinkOutput::of_a_link(
             link,
-            &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
+            &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
         ))
         .unwrap()
     };
@@ -70,7 +70,7 @@ fn the_rendered_state_and_the_components_map_never_disagree() {
 #[test]
 fn a_refused_links_reason_rides_beside_a_state_both_renderings_agree_on() {
     use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
-    use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+    use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
     let mut link = Link::between(
         OutputLinkPortRef::new("Psrc", "out1"),
@@ -87,7 +87,7 @@ fn a_refused_links_reason_rides_beside_a_state_both_renderings_agree_on() {
 
     let rendered = serde_json::to_value(LinkOutput::of_a_link(
         &link,
-        &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
+        &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
     ))
     .unwrap();
     assert_eq!(rendered["state"], "error");
@@ -109,7 +109,7 @@ fn a_link_that_was_never_refused_renders_no_reason_key() {
     link.insert(LinkStateComponent(LinkState::Wired));
     let rendered = serde_json::to_value(LinkOutput::of_a_link(
         &link,
-        &crate::core::json_schema::NodeNamesByProcessorId::holding_no_node(),
+        &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
     ))
     .unwrap();
     assert!(

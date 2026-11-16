@@ -7,7 +7,7 @@
 // lazy `pthread_once` GLOBAL init the first time a pipeline that requires
 // real codegen is created in a process. That init is `pthread_once`, so it
 // runs exactly once per process — but when it first fires during concurrent
-// multi-plugin processor setup it double-frees its own heap and aborts.
+// multi-plugin node setup it double-frees its own heap and aborts.
 // `HostVulkanDevice::prewarm_pipeline_compiler` builds (and drops) this
 // pipeline single-threaded at device construction so the compiler comes
 // online in a controlled state; every later pipeline of any shape then

@@ -8,5 +8,5 @@ pub mod _generated_ {
 }
 
 #[cfg(any())]
-#[path = "../processors/_apple_impl_pending_/mod.rs"]
+#[path = "../nodes/_apple_impl_pending_/mod.rs"]
 pub mod _apple_impl_pending_;

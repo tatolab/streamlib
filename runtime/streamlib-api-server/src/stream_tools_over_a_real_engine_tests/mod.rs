@@ -23,10 +23,10 @@ use rmcp::RoleClient;
 use rmcp::service::RunningService;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::descriptors::ProcessorDescriptor;
+use streamlib::sdk::descriptors::NodeDescriptor;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
+use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
     ProjectOpenOrReloadRequest, Runner, RuntimeOperations, StreamActionQueued, StreamEnvironment,
@@ -58,10 +58,10 @@ mod stream_listing_actions_and_record_tests;
 mod venv_sync_stream_action_resource_tests;
 
 /// A native source with one output port, `video`, and nothing to do.
-#[streamlib::sdk::processor(execution = manual, output("video", family = Image))]
+#[streamlib::sdk::node(execution = manual, output("video", family = Image))]
 pub struct StreamToolsTestSource;
 
-impl ManualProcessor for StreamToolsTestSource::Processor {
+impl ManualNode for StreamToolsTestSource::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -69,7 +69,7 @@ impl ManualProcessor for StreamToolsTestSource::Processor {
 
 fn register_the_stream_tools_test_source_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestSource::Processor>());
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<StreamToolsTestSource::Node>());
 }
 
 /// The graph of a stream named `stream_name`: one [`StreamToolsTestSource`] named `source`.
@@ -78,7 +78,7 @@ fn the_graph_of_a_stream_named(stream_name: &str) -> Value {
         "stream": stream_name,
         "nodes": [{
             "name": "source",
-            "type": StreamToolsTestSource::processor_class_import_path().as_str(),
+            "type": StreamToolsTestSource::node_class_import_path().as_str(),
             "config": {},
         }],
         "links": [],
@@ -239,9 +239,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
         register_the_stream_tools_test_source_once();
         let engine = Runner::new().expect("the engine builds");
         engine
-            .set_processor_interpreter_lend_directory(PathBuf::from(
-                "/opt/tatolab/lib/tatolab/lend",
-            ))
+            .set_node_interpreter_lend_directory(PathBuf::from("/opt/tatolab/lib/tatolab/lend"))
             .expect("the lend directory is handed over");
         let state_directory = tempfile::tempdir().expect("a state directory");
         let streams_directory = state_directory.path().join("streams");
@@ -411,13 +409,13 @@ async fn the_stream_action_once(
 }
 
 /// A native sink with one input port, `video`, and nothing to do.
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     input("video", delivery_profile = "newest", family = Image)
 )]
 pub struct StreamToolsTestSink;
 
-impl ManualProcessor for StreamToolsTestSink::Processor {
+impl ManualNode for StreamToolsTestSink::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -425,7 +423,7 @@ impl ManualProcessor for StreamToolsTestSink::Processor {
 
 fn register_the_stream_tools_test_sink_once() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestSink::Processor>());
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<StreamToolsTestSink::Node>());
 }
 
 /// The UUID the graph document of [`a_project_whose_main_stream_holds_one_source`] gives its

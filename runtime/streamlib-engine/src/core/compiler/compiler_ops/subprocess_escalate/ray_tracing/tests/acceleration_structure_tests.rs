@@ -72,7 +72,7 @@ fn a_registered_acceleration_structure_is_released_through_release_handle() {
     let released = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "release-blas".to_string(),
             handle_id: blas.clone(),
@@ -89,7 +89,7 @@ fn a_registered_acceleration_structure_is_released_through_release_handle() {
     let released_twice = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "release-blas-again".to_string(),
             handle_id: blas,
@@ -111,7 +111,7 @@ fn a_tlas_instance_naming_an_unregistered_structure_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                 "tlas-unknown",
                 "definitely-not-a-registered-structure",
@@ -138,7 +138,7 @@ fn a_tlas_instance_naming_a_top_level_structure_is_refused() {
         handle_escalate_op(
             &scene.sandbox,
             &scene.registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                 "tlas-over-tlas",
                 &scene.tlas_id,

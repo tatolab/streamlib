@@ -17,7 +17,7 @@ use common::{
     SpawnedTatolabd, TatolabTestMachineRoot, TemporaryRuntimeUnit, run_to_exit_within,
     the_refusal_of,
 };
-use streamlib::sdk::processor_interpreter::lend_directory_in_the_runtime_unit;
+use streamlib::sdk::node_interpreter::lend_directory_in_the_runtime_unit;
 #[cfg(target_os = "macos")]
 use streamlib_runtime_client_contract::machine_directories_test_root::TEST_LOOPBACK_HTTP_PORT_ENVIRONMENT_VARIABLE;
 

@@ -271,9 +271,9 @@ fn an_interface_node_naming_no_family_takes_the_family_of_the_first_port_linked_
 #[test]
 fn an_output_following_an_input_fed_by_a_graph_input_naming_no_family_carries_that_inputs_family() {
     use crate::core::descriptors::{
-        PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
     };
-    use crate::core::processors::PROCESSOR_REGISTRY;
+    use crate::core::nodes::NODE_REGISTRY;
 
     const PASSER_TYPE: &str = "interface_resolution_fixtures.follows_its_input:Passer";
     const READER_TYPE: &str = "interface_resolution_fixtures.reads_channels:Reader";
@@ -282,14 +282,14 @@ fn an_output_following_an_input_fed_by_a_graph_input_naming_no_family_carries_th
             .rsplit(':')
             .next()
             .expect("the type names a class");
-        let mut descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new(class_name).expect("the class name is short"),
-            ProcessorClassImportPath::new(node_type).expect("the type is an import path"),
+        let mut descriptor = NodeDescriptor::new(
+            NodeClassShortName::new(class_name).expect("the class name is short"),
+            NodeClassImportPath::new(node_type).expect("the type is an import path"),
             class_name,
         );
         descriptor.inputs = inputs;
         descriptor.outputs = outputs;
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(descriptor)
             .expect("the fixture type registers");
     };
@@ -495,16 +495,16 @@ fn a_link_at_another_port_of_an_interface_node_is_refused() {
 fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
     let resolution =
         resolved(a_camera_offered_as_an_output_and_a_display_fed_by_an_input()).expect("resolves");
-    let a_rendered_node = |name: &str| ProcessorNodeOutput {
+    let a_rendered_node = |name: &str| GraphNodeOutput {
         id: format!("{name}-id"),
-        processor_type: crate::core::descriptors::ProcessorClassImportPath::new("my_app:Node")
+        node_type: crate::core::descriptors::NodeClassImportPath::new("my_app:Node")
             .expect("import path"),
         kind: None,
         language: None,
         name: name.to_string(),
         config: Some(serde_json::json!({})),
         config_checksum: 0,
-        ports: ProcessorNodePortsOutput {
+        ports: GraphNodePortsOutput {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },

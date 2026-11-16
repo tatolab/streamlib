@@ -6,7 +6,7 @@ use super::{
     ESCALATE_OP_ANSWERED_BY_NOTHING, ESCALATE_REQUEST_RPC, envelope_response, parse_op_for_tests,
     request_id, try_parse_escalate_request, *,
 };
-use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture, EscalateRequestReleaseHandle,
 };
@@ -133,7 +133,7 @@ fn log_frame_parses_as_escalate_request_log_variant() {
         "intercepted": false,
         "channel": serde_json::Value::Null,
         "pipeline_id": serde_json::Value::Null,
-        "processor_id": "p-1",
+        "node_run_id": "p-1",
         "attrs": {},
     });
     assert_eq!(
@@ -190,7 +190,7 @@ fn handle_escalate_op_end_to_end() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         acquire,
     )
     .expect("acquire_pixel_buffer must produce a response");
@@ -215,13 +215,13 @@ fn handle_escalate_op_end_to_end() {
         width: 256,
         height: 128,
         format: "rgba8_unorm".to_string(),
-        processor_output_pool: None,
+        node_output_pool: None,
         usage: vec!["texture_binding".to_string(), "copy_src".to_string()],
     });
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         acquire_tex,
     )
     .expect("acquire_texture must produce a response");
@@ -257,7 +257,7 @@ fn handle_escalate_op_end_to_end() {
     match handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         release_tex,
     )
     .expect("release_handle must produce a response")
@@ -279,7 +279,7 @@ fn handle_escalate_op_end_to_end() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         release,
     )
     .expect("release_handle must produce a response");
@@ -299,7 +299,7 @@ fn handle_escalate_op_end_to_end() {
     match handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         release_unknown,
     )
     .expect("release_handle must produce a response")
@@ -359,7 +359,7 @@ fn every_staging_op_and_acquire_image_refuse_on_macos_naming_the_reason() {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             op,
         )
         .unwrap_or_else(|| panic!("{op_name} is request/response"));

@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{LinkUniqueId, NodeRunId};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PendingOperation {
-    AddProcessor(ProcessorUniqueId),
+    AddNode(NodeRunId),
 
-    RemoveProcessor(ProcessorUniqueId),
+    RemoveNode(NodeRunId),
 
     /// Wire a link that exists in the Graph but isn't wired yet.
     AddLink(LinkUniqueId),
@@ -15,8 +15,8 @@ pub(crate) enum PendingOperation {
     /// Unwire and remove a link that is currently wired.
     RemoveLink(LinkUniqueId),
 
-    UpdateProcessorConfig {
-        processor_id: ProcessorUniqueId,
+    UpdateNodeConfig {
+        node_run_id: NodeRunId,
         config_to_apply: serde_json::Value,
     },
 
@@ -24,8 +24,8 @@ pub(crate) enum PendingOperation {
     /// and every function node downstream of it, out of that reader's islands
     /// into a helper process of its own.
     PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
-        function_node_id: ProcessorUniqueId,
-        reader_id: ProcessorUniqueId,
+        function_node_id: NodeRunId,
+        reader_id: NodeRunId,
         promotion_request_number: u64,
         reason: String,
     },
@@ -34,12 +34,12 @@ pub(crate) enum PendingOperation {
 impl std::fmt::Display for PendingOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PendingOperation::AddProcessor(id) => write!(f, "AddProcessor({})", id),
-            PendingOperation::RemoveProcessor(id) => write!(f, "RemoveProcessor({})", id),
+            PendingOperation::AddNode(id) => write!(f, "AddNode({})", id),
+            PendingOperation::RemoveNode(id) => write!(f, "RemoveNode({})", id),
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
-            PendingOperation::UpdateProcessorConfig { processor_id, .. } => {
-                write!(f, "UpdateProcessorConfig({})", processor_id)
+            PendingOperation::UpdateNodeConfig { node_run_id, .. } => {
+                write!(f, "UpdateNodeConfig({})", node_run_id)
             }
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn test_pending_operation_display() {
-        let op = PendingOperation::AddProcessor("proc_1".into());
-        assert_eq!(format!("{}", op), "AddProcessor(proc_1)");
+        let op = PendingOperation::AddNode("proc_1".into());
+        assert_eq!(format!("{}", op), "AddNode(proc_1)");
     }
 }

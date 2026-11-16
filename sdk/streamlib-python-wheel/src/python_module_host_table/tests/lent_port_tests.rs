@@ -11,8 +11,8 @@ use streamlib::sdk::iceoryx2::DataChannelPayloadDescriptor;
 
 use super::*;
 use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_node_context::note_execution_mode_from_parent_on_runtime_context;
 use crate::python_port_payload::PythonPortPayloadBorrow;
-use crate::python_processor_context::note_execution_mode_from_parent_on_runtime_context;
 
 #[test]
 fn a_native_thread_writes_a_lent_output_with_no_python_attached_and_python_reads_it_in_order() {

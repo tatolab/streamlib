@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use streamlib_processor_schema::AudioWindowContractDeclaredValues;
+use streamlib_node_schema::AudioWindowContractDeclaredValues;
 
 use super::super::input::MessageReadFromInputPort;
 use super::super::{ChannelsBlockSampleType, DataChannelPayloadDescriptor, MessageGroupBoundary};

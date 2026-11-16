@@ -6,10 +6,10 @@ pub mod a_project_on_disk_for_a_test;
 pub(crate) mod address_chunk;
 mod operations;
 mod operations_runtime;
-pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
+pub(crate) use operations_runtime::mark_this_thread_as_a_node_execution_thread;
 pub(crate) use projects_and_their_venv::project_venv_made_with_the_runtime_unit_uv::the_projects_venv_interpreter;
 mod machine_state_and_process_end;
-mod processor_interpreters;
+mod node_interpreters;
 mod projects_and_their_venv;
 #[allow(
     clippy::module_inception,
@@ -22,8 +22,8 @@ pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_sour
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
     list_a_projects_node_types_and_graph_generators_from_source,
 };
-pub use crate::core::compiler::processor_thread_shutdown::{
-    DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
+pub use crate::core::compiler::node_thread_shutdown::{
+    DescriptionOfTheAbandonedNodeThreads, NodeDisplayNameAndId,
 };
 pub use address_chunk::what_one_address_chunk_may_be;
 pub(crate) use machine_state_and_process_end::end_the_process_at_once::{
@@ -58,21 +58,21 @@ pub use machine_state_and_process_end::runtime_shutdown_request::{
     the_machines_shutdown_escalation,
 };
 pub use machine_state_and_process_end::runtime_unique_id::RuntimeUniqueId;
-pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
-pub use processor_interpreters::helper_process_group_registry::{
+pub use node_interpreters::helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
-pub(crate) use processor_interpreters::helper_process_group_registry::{
+pub(crate) use node_interpreters::helper_process_group_registry::{
     kill_every_registered_helper_process_group,
     kill_every_registered_helper_process_group_of_one_stream,
 };
-pub use processor_interpreters::open_descriptor_soft_limit::{
+pub use node_interpreters::open_descriptor_soft_limit::{
     OpenDescriptorSoftLimitRaise, raise_the_open_descriptor_soft_limit_to_its_ceiling,
 };
-pub(crate) use processor_interpreters::open_descriptor_soft_limit::{
+pub(crate) use node_interpreters::open_descriptor_soft_limit::{
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
     the_open_descriptor_limit,
 };
+pub use operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 pub use projects_and_their_venv::project_first_party_packages_moved_to_the_runtime_version::ProjectHistoryRecordingFirstPartyPackageMoves;
 pub use projects_and_their_venv::project_venv_sync_progress::{
     ProjectVenvSyncPackage, ProjectVenvSyncPackageKind, ProjectVenvSyncPackageState,

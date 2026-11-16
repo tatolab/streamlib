@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::core::execution::processor_scheduling_loop::{
+use crate::core::execution::node_scheduling_loop::{
     ContinuousLoopWaitOutcome, PAUSE_CHECK_INTERVAL, ReactiveLoopFdWaiter, ReactiveLoopWakeOutcome,
     next_continuous_deadline_ns, wait_for_a_deadline_or_a_control,
 };
-use crate::core::graph::ShutdownChannelComponent;
+use crate::core::graph::{NodeState, ShutdownChannelComponent};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use iceoryx2::prelude::*;
 use std::os::fd::AsRawFd;
@@ -30,36 +30,35 @@ fn shutdown_channel_and_its_wake_fd() -> (ShutdownChannelComponent, OwnedFd) {
     (shutdown_channel, shutdown_wake_fd)
 }
 
-fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
-    processor
-        .lock()
+fn ports_would_return_something(node: &Arc<Mutex<NodeInstance>>) -> Option<bool> {
+    node.lock()
         .iceoryx2_input_mailboxes_inner()
         .map(|mailboxes| mailboxes.any_port_has_data())
 }
 
-fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
-    if let Some(mailboxes) = processor.lock().iceoryx2_input_mailboxes_inner() {
+fn drain_input_listener(node: &Arc<Mutex<NodeInstance>>) {
+    if let Some(mailboxes) = node.lock().iceoryx2_input_mailboxes_inner() {
         mailboxes.drain_listener();
     }
 }
 
 fn run_reactive_scheduling_loop_recording_callbacks(
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    node: &Arc<Mutex<NodeInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &AtomicBool,
-    mut make_callback: impl FnMut(ProcessorSchedulingCallback),
+    mut make_callback: impl FnMut(NodeSchedulingCallback),
 ) {
     let stream_clock = StreamClock::starting_now(crate::core::context::StreamClockSpec::Real);
     let step_progress = StepProgressOfOneNode::default();
-    let mut host = ProcessorSchedulingLoopHostOnAnEngineThread {
-        processor,
+    let mut host = NodeSchedulingLoopHostOnAnEngineThread {
+        node,
         shutdown_rx,
         shutdown_wake_fd,
         pause_gate,
         stream_clock: &stream_clock,
         step_progress: &step_progress,
-        call_processor: |callback, _counted_on_the_step_ledger| make_callback(callback),
+        call_node: |callback, _counted_on_the_step_ledger| make_callback(callback),
     };
     run_reactive_scheduling_loop("Preactive-scheduling", &mut host);
 }
@@ -72,17 +71,17 @@ fn wait_for_stream_time_or_shutdown(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     stops_waiting_early: impl Fn() -> bool,
 ) -> ContinuousLoopWaitOutcome {
-    let (processor, _mailboxes) = input_only_processor_with_plain_port(None);
+    let (node, _mailboxes) = input_only_node_with_plain_port(None);
     let step_progress = StepProgressOfOneNode::default();
     let pause_gate = AtomicBool::new(false);
-    let mut host = ProcessorSchedulingLoopHostOnAnEngineThread {
-        processor: &processor,
+    let mut host = NodeSchedulingLoopHostOnAnEngineThread {
+        node: &node,
         shutdown_rx,
         shutdown_wake_fd: None,
         pause_gate: &pause_gate,
         stream_clock,
         step_progress: &step_progress,
-        call_processor: |_, _| {},
+        call_node: |_, _| {},
     };
     wait_for_a_deadline_or_a_control(&mut host, stream_clock, deadline_ns, stops_waiting_early)
 }
@@ -94,12 +93,13 @@ fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc_threadsafe::
 
 #[test]
 fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner() {
-    use crate::core::test_support::MockWindowedAudioConsumerProcessor;
+    use crate::core::test_support::MockWindowedAudioConsumerNode;
 
-    let mut instance = ProcessorInstance::new(Box::new(
-        <MockWindowedAudioConsumerProcessor::Processor as crate::core::GeneratedProcessor>
-            ::from_config(Default::default())
-            .expect("the mock constructs from its default config"),
+    let mut instance = NodeInstance::new(Box::new(
+        <MockWindowedAudioConsumerNode::Node as crate::core::GeneratedNode>::from_config(
+            Default::default(),
+        )
+        .expect("the mock constructs from its default config"),
     ));
     instance
         .install_iceoryx2_resources()
@@ -112,10 +112,10 @@ fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner()
         crate::iceoryx2::ReadMode::ReadNextInOrder,
         windowed_mock_contract(),
     );
-    let processor = Arc::new(Mutex::new(instance));
+    let node = Arc::new(Mutex::new(instance));
 
     assert_eq!(
-        ports_would_return_something(&processor),
+        ports_would_return_something(&node),
         Some(false),
         "an empty windowed port must not dispatch"
     );
@@ -124,7 +124,7 @@ fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner()
     let link_into_audio = a_test_link_into(&mailboxes, "audio");
     link_into_audio.send(&one_mono_audio_frame_for(160, 0));
     assert_eq!(
-        ports_would_return_something(&processor),
+        ports_would_return_something(&node),
         Some(false),
         "160 of 512 samples is not a window, and dispatching here would hand \
          `process()` an empty read"
@@ -137,26 +137,24 @@ fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner()
         ));
     }
     assert_eq!(
-        ports_would_return_something(&processor),
+        ports_would_return_something(&node),
         Some(true),
         "640 samples completes a window, and a ready window must not sit latent"
     );
 }
 
 #[test]
-fn a_processor_with_no_input_mailboxes_is_not_gated_at_all() {
-    use crate::core::test_support::MockOutputOnlyProcessor;
+fn a_node_with_no_input_mailboxes_is_not_gated_at_all() {
+    use crate::core::test_support::MockOutputOnlyNode;
 
-    let instance = ProcessorInstance::new(Box::new(
-        <MockOutputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
-            Default::default(),
-        )
-        .expect("the mock constructs from its default config"),
+    let instance = NodeInstance::new(Box::new(
+        <MockOutputOnlyNode::Node as crate::core::GeneratedNode>::from_config(Default::default())
+            .expect("the mock constructs from its default config"),
     ));
-    let processor = Arc::new(Mutex::new(instance));
+    let node = Arc::new(Mutex::new(instance));
 
     assert_eq!(
-        ports_would_return_something(&processor),
+        ports_would_return_something(&node),
         None,
         "there is nothing to gate on, and each caller says what that means"
     );
@@ -188,7 +186,7 @@ fn one_mono_audio_frame_for(
 }
 
 struct ReactiveSchedulingLoopOnItsOwnThread {
-    processor_callbacks: Arc<Mutex<Vec<ProcessorSchedulingCallback>>>,
+    node_callbacks: Arc<Mutex<Vec<NodeSchedulingCallback>>>,
     shutdown_channel: ShutdownChannelComponent,
     pause_gate: Arc<AtomicBool>,
     loop_thread: std::thread::JoinHandle<()>,
@@ -203,12 +201,12 @@ enum PauseGateAtLoopStart {
 
 impl ReactiveSchedulingLoopOnItsOwnThread {
     fn start(
-        processor: Arc<Mutex<ProcessorInstance>>,
+        node: Arc<Mutex<NodeInstance>>,
         mailboxes: Arc<crate::iceoryx2::InputMailboxesInner>,
         each_dispatch_takes: std::time::Duration,
         pause_gate_at_loop_start: PauseGateAtLoopStart,
     ) -> Self {
-        let processor_callbacks: Arc<Mutex<Vec<ProcessorSchedulingCallback>>> = Arc::default();
+        let node_callbacks: Arc<Mutex<Vec<NodeSchedulingCallback>>> = Arc::default();
         let (mut shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
         let shutdown_receiver = shutdown_channel
             .take_receiver()
@@ -218,34 +216,34 @@ impl ReactiveSchedulingLoopOnItsOwnThread {
             PauseGateAtLoopStart::Closed
         )));
         let loop_thread = std::thread::spawn({
-            let processor_callbacks = Arc::clone(&processor_callbacks);
+            let node_callbacks = Arc::clone(&node_callbacks);
             let pause_gate = Arc::clone(&pause_gate);
             move || {
                 run_reactive_scheduling_loop_recording_callbacks(
-                    &processor,
+                    &node,
                     &shutdown_receiver,
                     Some(shutdown_wake_fd),
                     &pause_gate,
                     |callback| {
-                        if callback == ProcessorSchedulingCallback::Process {
+                        if callback == NodeSchedulingCallback::Process {
                             let _ = mailboxes.read_raw("in1");
                             std::thread::sleep(each_dispatch_takes);
                         }
-                        processor_callbacks.lock().push(callback);
+                        node_callbacks.lock().push(callback);
                     },
                 )
             }
         });
         Self {
-            processor_callbacks,
+            node_callbacks,
             shutdown_channel,
             pause_gate,
             loop_thread,
         }
     }
 
-    fn count_of(&self, callback: ProcessorSchedulingCallback) -> usize {
-        self.processor_callbacks
+    fn count_of(&self, callback: NodeSchedulingCallback) -> usize {
+        self.node_callbacks
             .lock()
             .iter()
             .filter(|made| **made == callback)
@@ -255,7 +253,7 @@ impl ReactiveSchedulingLoopOnItsOwnThread {
     /// Whether `callback` has been made `times` times within `deadline`.
     fn made_within(
         &self,
-        callback: ProcessorSchedulingCallback,
+        callback: NodeSchedulingCallback,
         times: usize,
         deadline: std::time::Duration,
     ) -> bool {
@@ -277,19 +275,17 @@ impl ReactiveSchedulingLoopOnItsOwnThread {
     }
 }
 
-fn input_only_processor_with_plain_port(
+fn input_only_node_with_plain_port(
     listener: Option<iceoryx2::port::listener::Listener<ipc_threadsafe::Service>>,
 ) -> (
-    Arc<Mutex<ProcessorInstance>>,
+    Arc<Mutex<NodeInstance>>,
     Arc<crate::iceoryx2::InputMailboxesInner>,
 ) {
-    use crate::core::test_support::MockInputOnlyProcessor;
+    use crate::core::test_support::MockInputOnlyNode;
 
-    let mut instance = ProcessorInstance::new(Box::new(
-        <MockInputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
-            Default::default(),
-        )
-        .expect("the mock constructs from its default config"),
+    let mut instance = NodeInstance::new(Box::new(
+        <MockInputOnlyNode::Node as crate::core::GeneratedNode>::from_config(Default::default())
+            .expect("the mock constructs from its default config"),
     ));
     instance
         .install_iceoryx2_resources()
@@ -332,19 +328,19 @@ fn open_one_listener_event_service(
 }
 
 #[test]
-fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
+fn a_node_slower_than_its_upstream_keeps_every_notify_deliverable() {
     const FRAMES_AT_ONE_KILOHERTZ: usize = 1000;
 
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = open_one_listener_event_service(&node, "slow-consumer");
     let notifier = service.notifier_builder().create().unwrap();
-    let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
+    let (node, mailboxes) = input_only_node_with_plain_port(Some(
         crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
             .unwrap(),
     ));
     let link_into_in1 = a_test_link_into(&mailboxes, "in1");
     let running = ReactiveSchedulingLoopOnItsOwnThread::start(
-        processor,
+        node,
         Arc::clone(&mailboxes),
         std::time::Duration::from_millis(2),
         PauseGateAtLoopStart::Open,
@@ -358,7 +354,7 @@ fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    let dispatches = running.count_of(ProcessorSchedulingCallback::Process);
+    let dispatches = running.count_of(NodeSchedulingCallback::Process);
     running.stop();
 
     assert!(
@@ -376,20 +372,20 @@ fn bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = open_one_listener_event_service(&node, "paused-consumer");
     let notifier = service.notifier_builder().create().unwrap();
-    let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
+    let (node, mailboxes) = input_only_node_with_plain_port(Some(
         crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
             .unwrap(),
     ));
     let link_into_in1 = a_test_link_into(&mailboxes, "in1");
     let running = ReactiveSchedulingLoopOnItsOwnThread::start(
-        processor,
+        node,
         Arc::clone(&mailboxes),
         std::time::Duration::ZERO,
         PauseGateAtLoopStart::Closed,
     );
     assert!(
         running.made_within(
-            ProcessorSchedulingCallback::OnPause,
+            NodeSchedulingCallback::OnPause,
             1,
             std::time::Duration::from_secs(5)
         ),
@@ -405,11 +401,11 @@ fn bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing
     running.pause_gate.store(false, Ordering::Release);
 
     let dispatched = running.made_within(
-        ProcessorSchedulingCallback::Process,
+        NodeSchedulingCallback::Process,
         3,
         std::time::Duration::from_secs(2),
     );
-    let dispatches = running.count_of(ProcessorSchedulingCallback::Process);
+    let dispatches = running.count_of(NodeSchedulingCallback::Process);
     running.stop();
     assert!(
         dispatched,
@@ -428,7 +424,7 @@ fn bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing
 fn a_bag_queued_before_the_listener_existed_is_dispatched_with_no_notify() {
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = open_one_listener_event_service(&node, "first-link-gap");
-    let (processor, mailboxes) = input_only_processor_with_plain_port(None);
+    let (node, mailboxes) = input_only_node_with_plain_port(None);
     let link_into_in1 = a_test_link_into(&mailboxes, "in1");
     link_into_in1.send(&one_frame_for_in1());
     mailboxes.set_listener(
@@ -437,13 +433,13 @@ fn a_bag_queued_before_the_listener_existed_is_dispatched_with_no_notify() {
     );
 
     let running = ReactiveSchedulingLoopOnItsOwnThread::start(
-        processor,
+        node,
         mailboxes,
         std::time::Duration::ZERO,
         PauseGateAtLoopStart::Open,
     );
     let dispatched = running.made_within(
-        ProcessorSchedulingCallback::Process,
+        NodeSchedulingCallback::Process,
         1,
         std::time::Duration::from_secs(2),
     );
@@ -462,17 +458,15 @@ fn a_bag_queued_before_the_listener_existed_is_dispatched_with_no_notify() {
 /// reads readable after the drain.
 #[test]
 fn a_drained_listener_waits_for_the_next_send_however_many_came_before() {
-    use crate::core::test_support::MockInputOnlyProcessor;
+    use crate::core::test_support::MockInputOnlyNode;
 
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = open_one_listener_event_service(&node, "drain-then-wait");
     let notifier = service.notifier_builder().create().unwrap();
 
-    let mut instance = ProcessorInstance::new(Box::new(
-        <MockInputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
-            Default::default(),
-        )
-        .expect("the mock constructs from its default config"),
+    let mut instance = NodeInstance::new(Box::new(
+        <MockInputOnlyNode::Node as crate::core::GeneratedNode>::from_config(Default::default())
+            .expect("the mock constructs from its default config"),
     ));
     instance
         .install_iceoryx2_resources()
@@ -492,12 +486,12 @@ fn a_drained_listener_waits_for_the_next_send_however_many_came_before() {
         None,
     )
     .expect("the readiness queue registers the listener fd");
-    let processor = Arc::new(Mutex::new(instance));
+    let node = Arc::new(Mutex::new(instance));
 
     for _ in 0..8192 {
         notifier.notify().unwrap();
     }
-    drain_input_listener(&processor);
+    drain_input_listener(&node);
     let outcome_after_the_drain = waiter.wait(std::time::Duration::ZERO);
     assert!(
         matches!(outcome_after_the_drain, ReactiveLoopWakeOutcome::TimedOut),
@@ -622,7 +616,7 @@ fn a_wait_with_nothing_to_report_times_out() {
 fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = open_one_listener_event_service(&node, "loop-wake-fd-shutdown");
-    let (processor, _mailboxes) = input_only_processor_with_plain_port(Some(
+    let (node, _mailboxes) = input_only_node_with_plain_port(Some(
         crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
             .unwrap(),
     ));
@@ -631,7 +625,7 @@ fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {
     let (loop_exited_sender, loop_exited_receiver) = crossbeam_channel::bounded(1);
     let loop_thread = std::thread::spawn(move || {
         run_reactive_scheduling_loop_recording_callbacks(
-            &processor,
+            &node,
             &withheld_shutdown_receiver,
             Some(shutdown_wake_fd),
             &AtomicBool::new(false),
@@ -657,8 +651,8 @@ fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {
 
 #[test]
 fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
-    let id = ProcessorUniqueId::from("Pblur");
-    let state = ObservableProcessorState::new(ProcessorState::Running);
+    let id = NodeRunId::from("Pblur");
+    let state = ObservableNodeState::new(NodeState::Running);
     let mut restart_backoff = ChildProcessRestartBackoff::new();
 
     for death in 1..=4 {
@@ -670,7 +664,7 @@ fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
             Duration::from_millis(200),
         );
         assert!(next_start.is_some(), "death {death} gave up");
-        assert_eq!(state.current(), ProcessorState::Restarting);
+        assert_eq!(state.current(), NodeState::Restarting);
     }
     let fifth = after_a_helper_process_death(
         &id,
@@ -681,7 +675,7 @@ fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
     );
 
     assert!(fifth.is_none());
-    assert_eq!(state.current(), ProcessorState::Error);
+    assert_eq!(state.current(), NodeState::Error);
     let failure_reason = state.failure_reason().expect("the failure is explained");
     assert!(
         failure_reason.contains("died 5 times in a row")
@@ -699,8 +693,8 @@ fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
 
 #[test]
 fn a_helper_that_ran_healthily_before_dying_starts_again_after_the_first_wait() {
-    let id = ProcessorUniqueId::from("Pblur");
-    let state = ObservableProcessorState::new(ProcessorState::Running);
+    let id = NodeRunId::from("Pblur");
+    let state = ObservableNodeState::new(NodeState::Running);
     let mut restart_backoff = ChildProcessRestartBackoff::new();
     let before = Instant::now();
 
@@ -713,7 +707,7 @@ fn a_helper_that_ran_healthily_before_dying_starts_again_after_the_first_wait() 
     )
     .expect("a healthy helper is never given up on");
 
-    assert_eq!(state.current(), ProcessorState::Restarting);
+    assert_eq!(state.current(), NodeState::Restarting);
     assert!(next_start >= before + Duration::from_secs(1));
     assert!(next_start < before + Duration::from_secs(2));
 }

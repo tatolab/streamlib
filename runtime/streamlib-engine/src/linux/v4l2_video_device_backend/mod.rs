@@ -148,7 +148,7 @@ struct V4l2VideoCaptureStream {
     stream_format: VideoCaptureStreamFormat,
     capture_fourcc: FourCC,
     gpu_context: GpuContextLimitedAccess,
-    processor_id_of_the_capturing_node: String,
+    node_run_id_of_the_capturing_node: String,
     failure_recorder: DeviceStreamFailureRecorder,
     liveness_report: DeviceStreamLivenessReport,
     capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
@@ -237,7 +237,7 @@ impl V4l2VideoCaptureStream {
             },
             capture_fourcc: fmt.fourcc,
             gpu_context: request.gpu_context.clone(),
-            processor_id_of_the_capturing_node: request.processor_id_of_the_capturing_node.clone(),
+            node_run_id_of_the_capturing_node: request.node_run_id_of_the_capturing_node.clone(),
             failure_recorder,
             liveness_report,
             capture_instant_resolver,
@@ -280,7 +280,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         let is_capturing = Arc::new(AtomicBool::new(true));
         let is_capturing_in_the_thread = Arc::clone(&is_capturing);
         let gpu_context = self.gpu_context.clone();
-        let processor_id_of_the_capturing_node = self.processor_id_of_the_capturing_node.clone();
+        let node_run_id_of_the_capturing_node = self.node_run_id_of_the_capturing_node.clone();
         let camera_name = self.opened_device.name.clone();
         let VideoCaptureStreamFormat { width, height, .. } = self.stream_format;
         let capture_fourcc = self.capture_fourcc;
@@ -296,7 +296,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
                         is_capturing_in_the_thread,
                         hand_off,
                         gpu_context,
-                        processor_id_of_the_capturing_node,
+                        node_run_id_of_the_capturing_node,
                         camera_name,
                         width,
                         height,

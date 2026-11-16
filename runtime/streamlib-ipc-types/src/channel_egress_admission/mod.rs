@@ -139,7 +139,7 @@ pub fn emit_channel_egress_admission_tracing(
     admission: &ChannelEgressAdmission,
 ) {
     let prefix = match log_prefix {
-        Some((runtime_tag, processor_id)) => format!("[{}:{}] ", runtime_tag, processor_id),
+        Some((runtime_tag, node_run_id)) => format!("[{}:{}] ", runtime_tag, node_run_id),
         None => String::new(),
     };
 

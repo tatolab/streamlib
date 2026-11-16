@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::error::Result;
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
-use crate::core::processors::ProcessorSpec;
+use crate::core::graph::{LinkUniqueId, NodeRunId};
+use crate::core::nodes::NodeSpec;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -17,7 +17,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeInTheGraph {
     /// The node's per-run id.
-    pub processor_id: ProcessorUniqueId,
+    pub node_run_id: NodeRunId,
     /// The node's name.
     pub name: String,
 }
@@ -27,13 +27,13 @@ pub trait RuntimeOperations: Send + Sync {
     // Async Methods (primary implementation - safe from any context)
     // =========================================================================
 
-    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
+    fn add_node_async(&self, spec: NodeSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
 
     /// The node `node_name` names once cast, refused by name — listing the
     /// names the graph holds — when no node has it.
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph>;
 
-    fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>>;
+    fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>>;
 
     /// Connect two ports asynchronously. Returns the link ID.
     ///
@@ -124,9 +124,9 @@ pub trait RuntimeOperations: Send + Sync {
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================
 
-    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>;
+    fn add_node(&self, spec: NodeSpec) -> Result<NodeRunId>;
 
-    fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()>;
+    fn remove_node(&self, node_run_id: &NodeRunId) -> Result<()>;
 
     /// Connect two ports. Returns the link ID.
     ///
@@ -170,8 +170,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// link wiring still awaits.
     fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
         &self,
-        function_node_id: &ProcessorUniqueId,
-        reader_id: &ProcessorUniqueId,
+        function_node_id: &NodeRunId,
+        reader_id: &NodeRunId,
         promotion_request_number: u64,
         reason: &str,
     ) -> Result<()>;

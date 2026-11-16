@@ -17,7 +17,7 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
         .node_catalog();
     let deck = catalog
         .iter()
-        .find(|descriptor| descriptor.processor_class_import_path.as_str() == DECK_VIEW_TYPE)
+        .find(|descriptor| descriptor.node_class_import_path.as_str() == DECK_VIEW_TYPE)
         .expect("the catalog lists the project's view");
     assert_eq!(deck.description, "Cues a track at the drop.");
     assert_eq!(
@@ -40,7 +40,7 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
     assert!(
         !catalog
             .iter()
-            .any(|descriptor| descriptor.processor_class_import_path.as_str() == "acme-dj:broken"),
+            .any(|descriptor| descriptor.node_class_import_path.as_str() == "acme-dj:broken"),
         "a view that does not open is no type"
     );
 }
@@ -85,7 +85,7 @@ fn a_write_the_port_or_node_does_not_take_is_refused_naming_why() {
     let deck_uuid = stream.run(&deck_id);
     let camera_id = stream
         .add_a_node(
-            MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+            MockOutputOnlyNode::node_class_import_path().as_str(),
             "camera",
         )
         .unwrap();
@@ -139,11 +139,11 @@ fn a_view_nodes_config_its_views_settings_do_not_declare_or_type_is_refused_nami
 
     stream
         .stream
-        .update_processor_config(&level_id, json!({ "gain": 0.5 }))
+        .update_node_config(&level_id, json!({ "gain": 0.5 }))
         .expect("a setting the view declares, of its type, is taken");
     let refusal = stream
         .stream
-        .update_processor_config(&level_id, json!({ "gain": "loud", "colour": 3 }))
+        .update_node_config(&level_id, json!({ "gain": "loud", "colour": 3 }))
         .expect_err("a setting of the wrong type and one the view does not declare are refused")
         .to_string();
     assert!(refusal.contains("`gain`"), "{refusal}");
@@ -153,9 +153,9 @@ fn a_view_nodes_config_its_views_settings_do_not_declare_or_type_is_refused_nami
 
     let refusal = stream
         .stream
-        .add_processor(
-            ProcessorSpec::new(
-                ProcessorClassImportPath::new(DECK_VIEW_TYPE).unwrap(),
+        .add_node(
+            NodeSpec::new(
+                NodeClassImportPath::new(DECK_VIEW_TYPE).unwrap(),
                 json!({ "bpm": 120 }),
             )
             .with_display_name("deck".to_string()),
@@ -202,7 +202,7 @@ fn a_panel_reads_a_view_nodes_input_through_a_viewer_of_the_port_linked_into_it(
     let stream = AStreamOfAProjectBringingViews::load();
     let camera_id = stream
         .add_a_node(
-            MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+            MockOutputOnlyNode::node_class_import_path().as_str(),
             "camera",
         )
         .unwrap();

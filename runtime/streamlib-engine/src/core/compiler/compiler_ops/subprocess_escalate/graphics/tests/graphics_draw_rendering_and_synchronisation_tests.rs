@@ -99,7 +99,7 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RunGraphicsDraw(run),
     )
     .expect("must produce a response");
@@ -252,7 +252,7 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
     match handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RunGraphicsDraw(run),
     )
     .expect("must produce a response")
@@ -369,7 +369,7 @@ fn a_draw_every_frame_never_enters_the_escalate_gate() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(run),
         )
         .expect("must produce a response")
@@ -413,7 +413,7 @@ fn a_draw_waits_while_another_holder_stages_bindings_on_its_kernel() {
             handle_escalate_op(
                 &sandbox,
                 &registry,
-                &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+                &WhatAHelperPlacedNodeReaches::default(),
                 EscalateRequest::RunGraphicsDraw(run),
             )
             .expect("must produce a response")

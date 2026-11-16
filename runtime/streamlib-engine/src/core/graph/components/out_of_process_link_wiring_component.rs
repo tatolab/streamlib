@@ -5,32 +5,30 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use super::{HelperProcessRestartsComponent, ProcessorInstanceComponent, StateComponent};
-use crate::core::graph::{GraphNodeWithComponents, ProcessorNode};
-use crate::core::processors::{OutOfProcessLinkWiringEnvelope, ProcessorInstance};
+use super::{HelperProcessRestartsComponent, NodeInstanceComponent, StateComponent};
+use crate::core::graph::{GraphNode, GraphNodeWithComponents};
+use crate::core::nodes::{NodeInstance, OutOfProcessLinkWiringEnvelope};
 
 pub struct OutOfProcessLinkWiringComponent(pub Arc<OutOfProcessLinkWiringEnvelope>);
 
-pub(crate) struct ProcessorInstanceWithItsOutOfProcessLinkWiring {
-    pub(crate) processor_instance: Arc<Mutex<ProcessorInstance>>,
+pub(crate) struct NodeInstanceWithItsOutOfProcessLinkWiring {
+    pub(crate) node_instance: Arc<Mutex<NodeInstance>>,
     out_of_process_link_wiring: Option<Arc<OutOfProcessLinkWiringEnvelope>>,
 }
 
-impl From<ProcessorInstance> for ProcessorInstanceWithItsOutOfProcessLinkWiring {
-    fn from(processor_instance: ProcessorInstance) -> Self {
-        let out_of_process_link_wiring = processor_instance.out_of_process_link_wiring();
+impl From<NodeInstance> for NodeInstanceWithItsOutOfProcessLinkWiring {
+    fn from(node_instance: NodeInstance) -> Self {
+        let out_of_process_link_wiring = node_instance.out_of_process_link_wiring();
         Self {
-            processor_instance: Arc::new(Mutex::new(processor_instance)),
+            node_instance: Arc::new(Mutex::new(node_instance)),
             out_of_process_link_wiring,
         }
     }
 }
 
-impl ProcessorInstanceWithItsOutOfProcessLinkWiring {
-    pub(crate) fn attach_to(self, node: &mut ProcessorNode) -> Arc<Mutex<ProcessorInstance>> {
-        node.insert(ProcessorInstanceComponent(Arc::clone(
-            &self.processor_instance,
-        )));
+impl NodeInstanceWithItsOutOfProcessLinkWiring {
+    pub(crate) fn attach_to(self, node: &mut GraphNode) -> Arc<Mutex<NodeInstance>> {
+        node.insert(NodeInstanceComponent(Arc::clone(&self.node_instance)));
         if let Some(out_of_process_link_wiring) = self.out_of_process_link_wiring {
             node.insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
                 out_of_process_link_wiring,
@@ -42,6 +40,6 @@ impl ProcessorInstanceWithItsOutOfProcessLinkWiring {
                 node.insert(HelperProcessRestartsComponent(observable_state));
             }
         }
-        self.processor_instance
+        self.node_instance
     }
 }

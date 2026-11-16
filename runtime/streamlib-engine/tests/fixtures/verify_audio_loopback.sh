@@ -231,7 +231,7 @@ if ! STREAMLIB_AUDIO_SINK="$LOOPBACK_SINK" \
     exit 1
 fi
 # The fault and where the capture goes travel in the runtime's environment,
-# which every processor interpreter inherits.
+# which every node interpreter inherits.
 STREAMLIB_KNOWN_SIGNAL_INJECT="$INJECT_BUG" \
     STREAMLIB_CAPTURED_WAVEFORM="$CAPTURED_WAVEFORM" \
     start_the_fixture_runtime "$NODE_LOG" "$OUTPUT_DIR/runtime_state"

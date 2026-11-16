@@ -11,14 +11,14 @@ use serial_test::serial;
 use streamlib_ipc_types::{MessageReadFromAReservedSlot, OutputPortViewerReader};
 
 use super::*;
-use crate::core::graph::{GraphNodeWithComponents, ProcessorInstanceWithItsOutOfProcessLinkWiring};
-use crate::core::processors::{ProcessorInstance, ProcessorSpec};
+use crate::core::graph::{GraphNodeWithComponents, NodeInstanceWithItsOutOfProcessLinkWiring};
+use crate::core::nodes::{NodeInstance, NodeSpec};
 use crate::core::runtime::{Runner, RuntimeOperations};
 use crate::core::test_support::{
-    MockOutputOnlyProcessor, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
 };
 use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_node_schema::NodeClassImportPath;
 
 /// How long a message has to reach a viewer.
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
@@ -28,7 +28,7 @@ const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
 struct ARunningCameraWithNoLinks {
     _runner: Arc<Runner>,
     stream: Arc<LoadedStreamInThisRuntime>,
-    camera_id: crate::core::ProcessorUniqueId,
+    camera_id: crate::core::NodeRunId,
     camera_node_uuid: String,
     camera_output: Arc<OutputWriterInner>,
     async_runtime: tokio::runtime::Runtime,
@@ -37,14 +37,12 @@ struct ARunningCameraWithNoLinks {
 
 impl ARunningCameraWithNoLinks {
     fn load() -> Self {
-        Self::load_running::<MockOutputOnlyProcessor::Processor>(
-            MockOutputOnlyProcessor::processor_class_import_path(),
-        )
+        Self::load_running::<MockOutputOnlyNode::Node>(MockOutputOnlyNode::node_class_import_path())
     }
 
-    fn load_running<P>(import_path: ProcessorClassImportPath) -> Self
+    fn load_running<P>(import_path: NodeClassImportPath) -> Self
     where
-        P: crate::core::GeneratedProcessor + 'static,
+        P: crate::core::GeneratedNode + 'static,
         P::Config: Default,
     {
         ensure_test_mocks_registered();
@@ -57,12 +55,11 @@ impl ARunningCameraWithNoLinks {
             ))
             .expect("the stream loads");
         let camera_id = stream
-            .add_processor(
-                ProcessorSpec::new(import_path, Value::Null)
-                    .with_display_name("camera".to_string()),
+            .add_node(
+                NodeSpec::new(import_path, Value::Null).with_display_name("camera".to_string()),
             )
             .expect("the node is added");
-        let mut instance = ProcessorInstance::new(Box::new(
+        let mut instance = NodeInstance::new(Box::new(
             P::from_config(Default::default()).expect("the mock constructs"),
         ));
         instance
@@ -77,7 +74,7 @@ impl ARunningCameraWithNoLinks {
                 .v(&camera_id)
                 .first_mut()
                 .expect("the node is in the stream");
-            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(camera);
+            NodeInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(camera);
             camera.node_uuid.to_string()
         });
         Self {
@@ -292,12 +289,9 @@ fn a_viewer_of_a_node_that_does_not_run_is_refused_naming_why() {
     let camera = ARunningCameraWithNoLinks::load();
     let microphone_id = camera
         .stream
-        .add_processor(
-            ProcessorSpec::new(
-                MockOutputOnlyProcessor::processor_class_import_path(),
-                Value::Null,
-            )
-            .with_display_name("microphone".to_string()),
+        .add_node(
+            NodeSpec::new(MockOutputOnlyNode::node_class_import_path(), Value::Null)
+                .with_display_name("microphone".to_string()),
         )
         .expect("the node is added");
     let microphone_node_uuid = camera.stream.compiler.scope(|graph, _tx| {
@@ -349,7 +343,7 @@ fn a_viewer_of_a_node_that_does_not_run_is_refused_naming_why() {
             .first_mut()
             .expect("the node is in the stream")
             .insert(crate::core::graph::StateComponent::new(
-                crate::core::graph::ProcessorState::Error,
+                crate::core::graph::NodeState::Error,
             ));
     });
     assert_eq!(
@@ -415,10 +409,8 @@ fn a_viewer_of_a_channels_port_reads_every_block_and_any_other_port_the_latest()
     drop(records_camera);
 
     let tone = ARunningCameraWithNoLinks::load_running::<
-        crate::core::test_support::MockChannelsSourceProcessor::Processor,
-    >(
-        crate::core::test_support::MockChannelsSourceProcessor::processor_class_import_path(),
-    );
+        crate::core::test_support::MockChannelsSourceNode::Node,
+    >(crate::core::test_support::MockChannelsSourceNode::node_class_import_path());
     let viewer = tone.open_a_viewer("audio").unwrap();
     let hand_off = viewer.hand_off().clone();
     assert_eq!(hand_off.viewer_reads, OutputPortViewerReads::EveryMessage);

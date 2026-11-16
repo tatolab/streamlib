@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use serde_json::Value as JsonValue;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{Graph, Link, LinkUniqueId};
 
@@ -32,7 +32,7 @@ pub(crate) fn the_island_feeding_a_link(
     link_id: &LinkUniqueId,
 ) -> Result<JsonValue> {
     let link = link_in(graph, link_id)?;
-    let island_output_node_id = link.source().processor_id().clone();
+    let island_output_node_id = link.source().node_run_id().clone();
     let mut nodes_each_after_what_it_reads = Vec::new();
     let mut placed = HashSet::new();
     let mut read_at_the_last_evaluation_by_a_previous_value_node =
@@ -62,11 +62,11 @@ pub(crate) fn the_island_feeding_a_link(
 fn place_a_function_node_after_what_it_reads(
     graph: &Graph,
     island_link_id: &LinkUniqueId,
-    node_id: &ProcessorUniqueId,
-    placed: &mut HashSet<ProcessorUniqueId>,
-    on_the_path_from_the_output: &mut Vec<ProcessorUniqueId>,
+    node_id: &NodeRunId,
+    placed: &mut HashSet<NodeRunId>,
+    on_the_path_from_the_output: &mut Vec<NodeRunId>,
     nodes_each_after_what_it_reads: &mut Vec<JsonValue>,
-    read_at_the_last_evaluation_by_a_previous_value_node: &mut Vec<ProcessorUniqueId>,
+    read_at_the_last_evaluation_by_a_previous_value_node: &mut Vec<NodeRunId>,
 ) -> Result<()> {
     if placed.contains(node_id) {
         return Ok(());
@@ -91,8 +91,8 @@ fn place_a_function_node_after_what_it_reads(
         .traversal()
         .v(node_id)
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(node_id.to_string()))?;
-    let import_path = node.processor_type.to_string();
+        .ok_or_else(|| Error::NodeNotFound(node_id.to_string()))?;
+    let import_path = node.node_type.to_string();
     let node_name = node.display_name.clone();
     let config = node.config.clone().unwrap_or(JsonValue::Null);
     let pins = JsonValue::Object(node.pins.clone());
@@ -102,11 +102,11 @@ fn place_a_function_node_after_what_it_reads(
         .traversal()
         .e(())
         .iter()
-        .filter(|link| link.to_port().processor_id() == node_id)
+        .filter(|link| link.to_port().node_run_id() == node_id)
         .collect();
     let mut links_into: Vec<JsonValue> = Vec::with_capacity(links_into_this_node.len());
     for link_into in links_into_this_node {
-        let upstream_id = link_into.source().processor_id();
+        let upstream_id = link_into.source().node_run_id();
         if !runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
             links_into.push(serde_json::json!({
                 "port": link_into.to_port().port_name(),
@@ -152,7 +152,7 @@ fn place_a_function_node_after_what_it_reads(
         "pins": pins,
         "links_into": links_into,
     });
-    let state_fields = the_state_fields_of_a_function_node(graph, &node.processor_type);
+    let state_fields = the_state_fields_of_a_function_node(graph, &node.node_type);
     if !state_fields.is_empty() {
         island_node["node_uuid"] = serde_json::json!(node.node_uuid);
         island_node["state_fields"] = serde_json::json!(state_fields);
@@ -168,7 +168,7 @@ fn place_a_function_node_after_what_it_reads(
 /// stateless one.
 pub(crate) fn the_state_fields_of_a_function_node(
     graph: &Graph,
-    node_type: &crate::core::descriptors::ProcessorClassImportPath,
+    node_type: &crate::core::descriptors::NodeClassImportPath,
 ) -> Vec<String> {
     graph
         .node_types_this_stream_resolves()

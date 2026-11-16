@@ -13,25 +13,25 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::sdk::descriptors::ProcessorClassImportPath;
+use crate::sdk::descriptors::NodeClassImportPath;
 use crate::sdk::error::{Error, Result};
-use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
-use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
+use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::sdk::nodes::{Config, GeneratedNode, NodeSpec};
 use crate::sdk::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLocation,
 };
 
-pub type AppPortEndpoint<'a> = (&'a AddedProcessor, &'a str);
+pub type AppPortEndpoint<'a> = (&'a AddedNode, &'a str);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AddedProcessor {
-    processor_id: ProcessorUniqueId,
+pub struct AddedNode {
+    node_run_id: NodeRunId,
     display_name: String,
 }
 
-impl AddedProcessor {
-    pub fn processor_id(&self) -> &ProcessorUniqueId {
-        &self.processor_id
+impl AddedNode {
+    pub fn node_run_id(&self) -> &NodeRunId {
+        &self.node_run_id
     }
 
     pub fn display_name(&self) -> &str {
@@ -62,32 +62,26 @@ impl App {
 
     pub fn add(
         &self,
-        processor_class_import_path: ProcessorClassImportPath,
+        node_class_import_path: NodeClassImportPath,
         config: impl Serialize,
         display_name: Option<&str>,
-    ) -> Result<AddedProcessor> {
+    ) -> Result<AddedNode> {
         let config = to_config_value(config)?;
-        self.add_spec(
-            ProcessorSpec::new(processor_class_import_path, config),
-            display_name,
-        )
+        self.add_spec(NodeSpec::new(node_class_import_path, config), display_name)
     }
 
     pub fn add_local<P>(
         &self,
         config: impl Serialize,
         display_name: Option<&str>,
-    ) -> Result<AddedProcessor>
+    ) -> Result<AddedNode>
     where
-        P: GeneratedProcessor + 'static,
+        P: GeneratedNode + 'static,
         P::Config: Config,
     {
         let config = to_config_value(config)?;
-        let processor_class_import_path = self.stream.add_local::<P>(config.clone())?;
-        self.add_spec(
-            ProcessorSpec::new(processor_class_import_path, config),
-            display_name,
-        )
+        let node_class_import_path = self.stream.add_local::<P>(config.clone())?;
+        self.add_spec(NodeSpec::new(node_class_import_path, config), display_name)
     }
 
     pub fn connect(
@@ -96,8 +90,8 @@ impl App {
         to: AppPortEndpoint<'_>,
     ) -> Result<LinkUniqueId> {
         self.stream.connect(
-            OutputLinkPortRef::new(from.0.processor_id(), from.1),
-            InputLinkPortRef::new(to.0.processor_id(), to.1),
+            OutputLinkPortRef::new(from.0.node_run_id(), from.1),
+            InputLinkPortRef::new(to.0.node_run_id(), to.1),
         )
     }
 
@@ -127,13 +121,13 @@ impl App {
     /// Add `spec` under an optional requested display name.
     fn add_spec(
         &self,
-        mut spec: ProcessorSpec,
+        mut spec: NodeSpec,
         requested_display_name: Option<&str>,
-    ) -> Result<AddedProcessor> {
+    ) -> Result<AddedNode> {
         spec.display_name = requested_display_name.map(str::to_string);
-        let added = self.stream.add_processor_reporting_its_name(spec)?;
-        Ok(AddedProcessor {
-            processor_id: added.processor_id,
+        let added = self.stream.add_node_reporting_its_name(spec)?;
+        Ok(AddedNode {
+            node_run_id: added.node_run_id,
             display_name: added.name,
         })
     }
@@ -143,5 +137,5 @@ impl App {
 /// serialization failure to [`Error::Configuration`].
 fn to_config_value(config: impl Serialize) -> Result<serde_json::Value> {
     serde_json::to_value(config)
-        .map_err(|e| Error::Configuration(format!("processor config is not serializable: {e}")))
+        .map_err(|e| Error::Configuration(format!("node config is not serializable: {e}")))
 }

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use pyo3::prelude::*;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -102,7 +101,7 @@ pub(crate) enum GpuSurfaceGeometry {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
+pub(crate) struct NodeOutputPoolRequest<'pool_key> {
     pub(crate) pool_key: &'pool_key str,
     pub(crate) rotation_depth: u32,
 }

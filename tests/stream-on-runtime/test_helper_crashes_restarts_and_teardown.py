@@ -18,7 +18,7 @@ from conftest import TatolabdUnderTest
 from helper_placement_observation import (
     StartTatolabdRunningStream,
 )
-from helper_placement_processors import (
+from helper_placement_nodes import (
     CALLS_RETURNED_BEFORE_A_CALL_HANGS,
     COUNT_AT_WHICH_A_FRESH_COUNT_SINK_DIES,
 )
@@ -318,7 +318,7 @@ def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabd
     assert not survivors, f"helper processes {survivors} outlived the tatolabd that spawned them"
 
 
-def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
+def test_a_node_asleep_in_its_callback_still_runs_its_teardown(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """The shutdown ladder, end to end.
@@ -349,7 +349,7 @@ def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     )
 
 
-def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
+def test_a_node_interrupted_while_still_setting_up_still_tears_down(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """The route onto the ladder the engine's `stop()` hook never reaches.
@@ -381,7 +381,7 @@ def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
     )
 
 
-def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
+def test_a_worker_a_node_forked_goes_down_with_the_apps_helper(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     tatolabd = run_until_marker_then_interrupt(
@@ -390,7 +390,7 @@ def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     worker_pid = tatolabd.marker_payloads("WORKER_PID")[0]["worker_pid"]
 
     assert a_process_is_gone_within(worker_pid, 2.0), (
-        f"the worker a processor forked outlived the tatolabd that spawned it:\n"
+        f"the worker a node forked outlived the tatolabd that spawned it:\n"
         f"{tatolabd.recent_stderr()}"
     )
 
@@ -438,7 +438,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
     )
     stream_id = tatolabd.await_the_latest_stream_loaded()
     tatolabd.await_stderr_containing(HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT)
-    processor_states = {
+    node_states = {
         node["name"]: node.get("components", {}).get("state")
         for node in tatolabd.local_api_client().graph(stream_id)["nodes"]
     }
@@ -454,7 +454,7 @@ def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_buil
     )
     assert refusal in tatolabd.stderr_text, tatolabd.recent_stderr()
     assert f"its parent is engine build {ENGINE_BUILD_ID_OF_ANOTHER_BUILD}" in tatolabd.stderr_text
-    assert "reportsitsownprocesssource" in processor_states, processor_states
-    assert processor_states["reportsitsownprocesssource"] != RUNNING_NODE_STATE, (
-        f"the processor started anyway: {processor_states}"
+    assert "reportsitsownprocesssource" in node_states, node_states
+    assert node_states["reportsitsownprocesssource"] != RUNNING_NODE_STATE, (
+        f"the node started anyway: {node_states}"
     )

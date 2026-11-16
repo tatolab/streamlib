@@ -8,25 +8,21 @@
 
 use std::io::Write;
 
-use streamlib::sdk::json_schema::ProcessorDescriptorOutput;
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::json_schema::NodeDescriptorOutput;
+use streamlib::sdk::nodes::NODE_REGISTRY;
 
 fn main() -> std::io::Result<()> {
-    streamlib_media_builtins::register_media_builtin_processor_types();
-    let mut built_in_node_descriptors: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
+    streamlib_media_builtins::register_media_builtin_node_types();
+    let mut built_in_node_descriptors: Vec<NodeDescriptorOutput> = NODE_REGISTRY
         .list_registered()
         .iter()
-        .filter(|descriptor| {
-            descriptor
-                .processor_class_import_path
-                .names_a_built_in_node()
-        })
-        .map(ProcessorDescriptorOutput::from)
+        .filter(|descriptor| descriptor.node_class_import_path.names_a_built_in_node())
+        .map(NodeDescriptorOutput::from)
         .collect();
     built_in_node_descriptors.sort_by(|left, right| {
-        left.processor_class_import_path
+        left.node_class_import_path
             .as_str()
-            .cmp(right.processor_class_import_path.as_str())
+            .cmp(right.node_class_import_path.as_str())
     });
     let rendered = serde_json::to_string_pretty(&built_in_node_descriptors)?;
     let mut standard_output = std::io::stdout().lock();

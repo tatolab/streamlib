@@ -7,10 +7,10 @@ Ray tracing is an always-present capability of `GpuContext` on a device whose
 extension chain carries `VK_KHR_ray_tracing_pipeline`; a device without it
 refuses by name. Building a scene and tracing it — a bottom-level structure
 over triangle geometry, a top-level one placing it, a trace into an acquired
-storage image — needs nothing from the application but the processor itself.
+storage image — needs nothing from the application but the node itself.
 
 The acceleration structures are objects, not ids: nothing publishes one for
-another processor to resolve, so the handle a build returned is the whole way
+another node to resolve, so the handle a build returned is the whole way
 to name it, and a trace binds the top-level one because that is what holds the
 instances.
 
@@ -71,7 +71,7 @@ def run_probe(
     if "ray_tracing_unavailable" in observation:
         pytest.skip(observation["ray_tracing_unavailable"])
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
@@ -81,9 +81,9 @@ def spelled_the_same_way(message: str) -> str:
     return message.lower().replace("_", "")
 
 
-def test_a_python_processor_builds_a_scene_and_traces_it(start_tatolabd_running_stream):
+def test_a_python_node_builds_a_scene_and_traces_it(start_tatolabd_running_stream):
     """The demo: a BLAS, a TLAS placing it, and a trace into a storage image,
-    all from a processor interpreter with no application-supplied bridge."""
+    all from a node interpreter with no application-supplied bridge."""
     observed = run_probe(start_tatolabd_running_stream, "TracedTriangleProbe")
 
     assert observed["traced"] is True
@@ -96,7 +96,7 @@ def test_a_python_processor_builds_a_scene_and_traces_it(start_tatolabd_running_
         "the label is all a structure hands back — no id string reaches Python"
     )
     assert observed["traced_output_surface_id"], (
-        "the traced output is a surface this processor acquired for itself"
+        "the traced output is a surface this node acquired for itself"
     )
 
 
@@ -228,7 +228,7 @@ def test_an_acceleration_structure_binding_takes_a_handle_not_a_surface(
     start_tatolabd_running_stream,
 ):
     """It is the one binding kind that cannot be spelled as an id string:
-    nothing publishes an acceleration structure for another processor to
+    nothing publishes an acceleration structure for another node to
     resolve."""
     observed = run_probe(
         start_tatolabd_running_stream, "AccelerationStructureHandleRefusalProbe"

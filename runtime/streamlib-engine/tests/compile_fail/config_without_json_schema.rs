@@ -10,13 +10,13 @@ pub struct ProbeConfigWithoutTheDerive {
     pub width: u32,
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     config = crate::ProbeConfigWithoutTheDerive,
 )]
-pub struct ProbeProcessor;
+pub struct ProbeNode;
 
-impl streamlib::sdk::processors::ManualProcessor for ProbeProcessor::Processor {
+impl streamlib::sdk::nodes::ManualNode for ProbeNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }

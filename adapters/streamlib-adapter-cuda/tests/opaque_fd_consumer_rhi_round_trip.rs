@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 #![cfg(target_os = "linux")]
 
 use std::os::fd::FromRawFd as _;

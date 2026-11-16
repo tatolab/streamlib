@@ -15,7 +15,7 @@ use streamlib::sdk::context::{
     StreamClockReading, machine_time_ns_a_published_clock_reaches,
     stream_clock_reading_of_a_published_clock, stream_time_ns_on_a_published_clock,
 };
-use streamlib::sdk::execution::processor_scheduling_loop::ClockAProcessorSchedulingLoopPacesOn;
+use streamlib::sdk::execution::node_scheduling_loop::ClockANodeSchedulingLoopPacesOn;
 use streamlib::sdk::iceoryx2::StreamClockBoardReader;
 
 use crate::python_logging::monotonic_clock_now_ns;
@@ -69,7 +69,7 @@ fn machine_nanoseconds_until_this_helpers_stream_clock_reaches(stream_deadline_n
 /// This helper's stream clock, as its scheduling loop paces on it.
 pub(crate) struct HelperProcessStreamClock;
 
-impl ClockAProcessorSchedulingLoopPacesOn for HelperProcessStreamClock {
+impl ClockANodeSchedulingLoopPacesOn for HelperProcessStreamClock {
     fn now_ns(&self) -> i64 {
         helper_stream_clock_now_ns()
     }

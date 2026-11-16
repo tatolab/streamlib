@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -77,7 +76,7 @@ fn engine_log_record_as_python_mapping<'py>(
     mapping.set_item("target", record.target)?;
     mapping.set_item("message", record.message)?;
     mapping.set_item("pipeline_id", record.pipeline_id)?;
-    mapping.set_item("processor_id", record.processor_id)?;
+    mapping.set_item("node_run_id", record.node_run_id)?;
     mapping.set_item("rhi_op", record.rhi_op)?;
     mapping.set_item("attrs", attrs)?;
     mapping.set_item(

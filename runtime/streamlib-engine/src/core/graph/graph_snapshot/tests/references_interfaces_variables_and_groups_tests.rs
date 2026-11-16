@@ -24,12 +24,12 @@ fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStre
                 "type": "object",
                 "properties": {
                     "gateway": {
-                        streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
+                        streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD:
                             {"node_type": GATEWAY_CLASS_FOR_THE_REFERENCE_TESTS}
                     },
                     "track": {"type": "string"},
                     "gateway_or_its_name": {"anyOf": [
-                        {streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
+                        {streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {}},
                         {"type": "string"}
                     ]}
                 }
@@ -42,27 +42,29 @@ fn node_types_with_a_track_naming_its_gateway_by_reference() -> NodeTypesOneStre
                 "type": "object",
                 "properties": {
                     "track": {
-                        streamlib_processor_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {
+                        streamlib_node_schema::NODE_REFERENCE_SCHEMA_KEYWORD: {
                             "node_type": TRACK_CLASS_FOR_THE_REFERENCE_TESTS,
-                            streamlib_processor_schema::NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
+                            streamlib_node_schema::NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: true,
                         }
                     }
                 }
             })),
         ),
     ] {
-        let mut descriptor = crate::core::descriptors::ProcessorDescriptor::new(
-            crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
-            ProcessorClassImportPath::new(import_path).unwrap(),
+        let mut descriptor = crate::core::descriptors::NodeDescriptor::new(
+            crate::core::descriptors::NodeClassShortName::new(short_name).unwrap(),
+            NodeClassImportPath::new(import_path).unwrap(),
             "graph snapshot reference test",
         );
         if let Some(config_schema) = config_schema {
             descriptor = descriptor.with_config_schema(config_schema);
         }
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,
-                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
+                crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                ),
             )
             .expect("the type is described into the stream");
     }
@@ -402,9 +404,9 @@ fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamRes
             ),
         ),
     ] {
-        let descriptor = crate::core::descriptors::ProcessorDescriptor::new(
-            crate::core::descriptors::ProcessorClassShortName::new(short_name).unwrap(),
-            ProcessorClassImportPath::new(import_path).unwrap(),
+        let descriptor = crate::core::descriptors::NodeDescriptor::new(
+            crate::core::descriptors::NodeClassShortName::new(short_name).unwrap(),
+            NodeClassImportPath::new(import_path).unwrap(),
             "graph snapshot interface test",
         );
         let descriptor = if import_path == IMAGE_SOURCE_CLASS_FOR_THE_INTERFACE_TESTS {
@@ -413,9 +415,11 @@ fn node_types_with_an_image_source_and_a_packets_sink() -> NodeTypesOneStreamRes
             descriptor.with_input(port)
         };
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,
-                crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|_node| Err(Error::NotSupported("never constructed".into())))),
+                crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
+                    Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+                ),
             )
             .expect("the type is described into the stream");
     }
@@ -680,7 +684,7 @@ const GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS: &str =
 fn node_types_with_a_glow_configured_by_a_strength() -> NodeTypesOneStreamResolves {
     let node_types = NodeTypesOneStreamResolves::new();
     node_types
-        .register_a_type_described_in_this_streams_processor_interpreter(
+        .register_a_type_described_in_this_streams_node_interpreter(
             crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type(
                 GLOW_CLASS_FOR_THE_EXPOSED_CONFIG_FIELD_TESTS,
                 &["video_in"],
@@ -690,7 +694,7 @@ fn node_types_with_a_glow_configured_by_a_strength() -> NodeTypesOneStreamResolv
                 "type": "object",
                 "properties": {"strength": {"type": "number", "default": 0.5}},
             })),
-            crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                 Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
             ),
         )

@@ -15,7 +15,7 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyT
 use rmpv::Value;
 use streamlib::sdk::iceoryx2::RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES;
 
-use crate::python_processor_context::PythonGpuContextLimitedAccess;
+use crate::python_node_context::PythonGpuContextLimitedAccess;
 
 /// Hand one message's payload, a `PortPayloadBorrow`, to the `from_bytes` of
 /// the target an author named with `read(port, into=T)`, and return what it

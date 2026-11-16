@@ -400,7 +400,7 @@ impl SurfacesLentToNativeCode {
                 "height": request.height,
                 "format": texture_format,
                 "usage": usage,
-                "processor_output_pool": {
+                "node_output_pool": {
                     "pool_key": pool_key,
                     "rotation_depth": request.rotation_depth,
                 },

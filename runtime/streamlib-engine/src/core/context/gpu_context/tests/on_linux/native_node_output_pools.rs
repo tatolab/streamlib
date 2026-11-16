@@ -22,21 +22,21 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
     };
     let consumer = check_out_leases.mint_holder_id();
     let mut first_native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("first-native-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("first-native-node");
     let mut second_native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("second-native-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("second-native-node");
 
     lease_every_frame_a_native_node_may_hold(&mut first_native_node, &check_out_leases, consumer);
     assert!(
         matches!(
             acquire_one_native_node_frame_id(&mut first_native_node),
-            Err(Error::EverySlotInTheProcessorOutputPoolIsInUse { .. })
+            Err(Error::EverySlotInTheNodeOutputPoolIsInUse { .. })
         ),
         "the first node is refused at its own cap"
     );
 
     let second_nodes_frames: Vec<String> = (0
-        ..crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY)
+        ..crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY)
         .map(|_| {
             let frame = acquire_one_native_node_frame_id(&mut second_native_node)
                 .expect("another node's frames of the same shape are served");
@@ -48,7 +48,7 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
         .collect();
     assert_eq!(
         second_nodes_frames.len(),
-        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+        crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY,
         "the second node reaches its own cap, untouched by the first's"
     );
     acquire_one_pool_slot_id(&gpu)
@@ -62,7 +62,7 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
     };
     let consumer = check_out_leases.mint_holder_id();
     let mut native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-held-native-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("a-held-native-node");
     let held_frames =
         lease_every_frame_a_native_node_may_hold(&mut native_node, &check_out_leases, consumer);
     let shared_ring_before_the_refusal =
@@ -78,14 +78,14 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
         PixelFormat::Rgba32.wire_name()
     );
     match &refusal {
-        Error::EverySlotInTheProcessorOutputPoolIsInUse {
+        Error::EverySlotInTheNodeOutputPoolIsInUse {
             pool_key,
             pool_capacity,
         } => {
             assert_eq!(pool_key, &expected_pool_key);
             assert_eq!(
                 *pool_capacity,
-                crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+                crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY
             );
         }
         other => panic!("expected the node output pool's refusal, got {other:?}"),
@@ -100,7 +100,7 @@ fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
     );
     assert_eq!(
         native_node.slot_count(),
-        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+        crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY
     );
     assert_eq!(
         shared_ring_slots_and_generations(&gpu, LEASE_TEST_SURFACE_SHAPE),
@@ -128,7 +128,7 @@ fn a_native_nodes_frame_names_its_slots_claim_table_row_at_the_generation_it_pub
     };
     let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let mut native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-described-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("a-described-node");
     for _ in 0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD + 1 {
         let frame = native_node
             .acquire_the_next_output_pixel_buffer(
@@ -182,7 +182,7 @@ fn the_shared_pixel_buffer_pool_grows_when_native_nodes_have_borrowed_every_slot
         POOL_PRE_ALLOCATE_COUNT.div_ceil(SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD);
     let mut native_nodes: Vec<_> = (0..native_nodes_that_borrow_every_pre_allocated_slot)
         .map(|native_node_index| {
-            gpu.create_processor_output_pixel_buffer_pool_for_a_native_node(&format!(
+            gpu.create_node_output_pixel_buffer_pool_for_a_native_node(&format!(
                 "a-borrowing-node-{native_node_index}"
             ))
         })
@@ -223,7 +223,7 @@ fn a_native_nodes_shape_change_returns_the_old_shapes_slots() {
         return;
     };
     let mut native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-resized-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("a-resized-node");
     let old_shapes_frames: Vec<String> = (0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD)
         .map(|_| acquire_one_native_node_frame_id(&mut native_node).expect("the node's frame"))
         .collect();

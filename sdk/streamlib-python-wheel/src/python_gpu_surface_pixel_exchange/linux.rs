@@ -237,7 +237,7 @@ pub(crate) fn tensor_storage_buffer_dlpack_capsule<'py>(
         PixelExchangeTensorLayout::for_tensor_storage_buffer(&storage_buffer.tensor_layout)?;
     let cuda_import = python
         .detach(|| storage_buffer.cuda_import())
-        .map_err(crate::python_processor_context::gpu_operation_error)?;
+        .map_err(crate::python_node_context::gpu_operation_error)?;
     dlpack_capsule_over(
         python,
         cuda_import.device_pointer(),
@@ -269,7 +269,7 @@ pub(crate) fn publish_tensor_storage_buffer_device_writes(
                 &cuda_import,
             )
         })
-        .map_err(crate::python_processor_context::gpu_operation_error)
+        .map_err(crate::python_node_context::gpu_operation_error)
 }
 
 /// Publish a device-side write back into the surface, so every other
@@ -294,7 +294,7 @@ pub(crate) fn publish_device_write_back_to_surface(
                 &cuda_import,
             )
         })
-        .map_err(crate::python_processor_context::gpu_operation_error)?;
+        .map_err(crate::python_node_context::gpu_operation_error)?;
     export.exchange_client.run_device_export_copy(
         python,
         "copy_device_export_staging_back_to_surface",
@@ -321,7 +321,7 @@ fn surface_cpu_readback_export_for(
     let surface_id = owned_memory.minted_surface_id.as_deref().ok_or_else(|| {
         PyRuntimeError::new_err(
             "this surface carries no id, so there is nothing to key a readback staging on; the \
-             staged CPU door serves graph frames (resolve_surface) and surfaces this processor \
+             staged CPU door serves graph frames (resolve_surface) and surfaces this node \
              acquired",
         )
     })?;

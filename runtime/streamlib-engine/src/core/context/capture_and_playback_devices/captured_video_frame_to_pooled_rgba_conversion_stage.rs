@@ -12,7 +12,7 @@ use std::sync::Arc;
 use crate::core::color::{ResolvedColorInfo, TransferId};
 use crate::core::context::{
     GpuContextFullAccess, NativeNodeOutputPixelBufferFrame,
-    ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    NodeOutputPixelBufferPoolOfOneNativeNode,
 };
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, RhiColorConverter, SourceLayoutInfo,
@@ -63,7 +63,7 @@ pub(crate) struct CapturedVideoFrameToPooledRgbaConversionStage {
     conversion_timeline: Arc<HostVulkanTimelineSemaphore>,
     scratch_texture: Texture,
     next_timeline_signal_value: u64,
-    processor_output_pixel_buffer_pool: ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    node_output_pixel_buffer_pool: NodeOutputPixelBufferPoolOfOneNativeNode,
 }
 
 impl CapturedVideoFrameToPooledRgbaConversionStage {
@@ -72,7 +72,7 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
         source_pixel_format: PixelFormat,
         width: u32,
         height: u32,
-        processor_id_of_the_owning_node: &str,
+        node_run_id_of_the_owning_node: &str,
     ) -> Result<Self> {
         let color_converter =
             full.create_color_converter(source_pixel_format, PixelFormat::Rgba32)?;
@@ -92,9 +92,9 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
             conversion_timeline,
             scratch_texture,
             next_timeline_signal_value: 1,
-            processor_output_pixel_buffer_pool: full
-                .create_processor_output_pixel_buffer_pool_for_a_native_node(
-                    processor_id_of_the_owning_node,
+            node_output_pixel_buffer_pool: full
+                .create_node_output_pixel_buffer_pool_for_a_native_node(
+                    node_run_id_of_the_owning_node,
                 ),
         })
     }
@@ -153,7 +153,7 @@ impl CapturedVideoFrameToPooledRgbaConversionStage {
             pixel_buffer: pooled_pixel_buffer,
             ..
         } = self
-            .processor_output_pixel_buffer_pool
+            .node_output_pixel_buffer_pool
             .acquire_the_next_output_pixel_buffer(self.width, self.height, PixelFormat::Rgba32)?;
 
         // The pooled RGBA frame every source lands in is sRGB-encoded.

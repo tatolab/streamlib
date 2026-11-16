@@ -8,6 +8,6 @@ mod query_ops;
 mod traversal_source;
 
 pub use traversal_source::{
-    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut, TraversalSource,
+    LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,
     TraversalSourceMut,
 };

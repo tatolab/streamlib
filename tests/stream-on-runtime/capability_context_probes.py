@@ -200,7 +200,7 @@ class ContextStasher:
 
 @node.process(execution="manual")
 class WorkerThreadSource:
-    """`ctx.outputs` captured in setup, written from a thread the processor owns."""
+    """`ctx.outputs` captured in setup, written from a thread the node owns."""
 
     def __init__(self) -> None:
         self._stop = threading.Event()
@@ -290,11 +290,11 @@ class RepeatedPixelBufferAcquirer:
 @node.process(execution="manual")
 class WorkerThreadPrivilegedConstructor:
     """The native camera's shape: stash the capabilities in setup, construct
-    privileged resources from a thread the processor owns.
+    privileged resources from a thread the node owns.
 
     `camera_linux.rs` is the reference — its capture thread holds only
     `GpuContextLimitedAccess` and reaches for privileged construction once at
-    thread start. A Python processor follows the same pattern; what differs is
+    thread start. A Python node follows the same pattern; what differs is
     that each privileged call is its own round trip to the parent rather than
     one callback holding an escalate scope, which cannot cross a process.
     """

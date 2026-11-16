@@ -43,7 +43,7 @@ def main(stream_builder: StreamBuilder) -> None:
 # Written beside `stream.py` only after the stream is up, which is the shape an
 # agent produces: nothing imported it before, and the class is named to the
 # node by its import path alone.
-LIVE_ADDED_EFFECT_MODULE = "processors.live_added_effect"
+LIVE_ADDED_EFFECT_MODULE = "nodes.live_added_effect"
 LIVE_ADDED_EFFECT_CLASS = "LiveAddedEffect"
 LIVE_ADDED_EFFECT_SOURCE = '''\
 """An effect that announces its frames, written after the node started."""
@@ -272,12 +272,12 @@ def start_the_pattern_stream(
 
 
 @pytest.mark.requires_gpu
-def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
+def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
     pattern_stream = start_the_pattern_stream(
-        make_tatolab_project, start_tatolabd, {"processors/__init__.py": ""}
+        make_tatolab_project, start_tatolabd, {"nodes/__init__.py": ""}
     )
     app_directory, tatolabd, local_api, stream_id = (
         pattern_stream.app_directory,
@@ -293,7 +293,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     # The module lands beside the entry file only now, after the stream has
     # been running for a while.
-    (app_directory / "processors" / "live_added_effect.py").write_text(LIVE_ADDED_EFFECT_SOURCE)
+    (app_directory / "nodes" / "live_added_effect.py").write_text(LIVE_ADDED_EFFECT_SOURCE)
 
     added = add_node_live(
         local_api,
@@ -438,10 +438,10 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 HELPER_IMPORT_SECONDS = 8.0
 MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS = HELPER_IMPORT_SECONDS / 2
 
-SLOWLY_IMPORTING_SINK_MODULE = "processors.slowly_importing_sink"
+SLOWLY_IMPORTING_SINK_MODULE = "nodes.slowly_importing_sink"
 SLOWLY_IMPORTING_SINK_CLASS = "SlowlyImportingSink"
 SLOWLY_IMPORTING_SINK_SOURCE = f'''\
-"""A sink whose processor interpreter takes {HELPER_IMPORT_SECONDS} s to import it."""
+"""A sink whose node interpreter takes {HELPER_IMPORT_SECONDS} s to import it."""
 
 import os
 import time
@@ -486,8 +486,8 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         make_tatolab_project,
         start_tatolabd,
         {
-            "processors/__init__.py": "",
-            "processors/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
         },
     )
     local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
@@ -557,7 +557,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
         "add_node",
         {
             "stream": local_api.stream_asset_of(stream_id),
-            "type": "processors.no_such_module:Missing",
+            "type": "nodes.no_such_module:Missing",
             "mode": "live",
         },
     )

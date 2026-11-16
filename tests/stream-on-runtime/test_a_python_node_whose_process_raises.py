@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor whose `process()` raises for a while, read from `graph`.
+"""A Python node whose `process()` raises for a while, read from `graph`.
 
 The node keeps running while it raises, and its `components` carry what it
 raised under `process_raising_because` until a call runs cleanly again.
@@ -28,8 +28,8 @@ RAISES_FOR_SECONDS = 3.0
 #: A cold spawn and import, the raising window, and room for a loaded rig.
 RAISE_SEEN_AND_CLEARED_TIMEOUT_SECONDS = 30.0
 
-RAISING_PROCESSORS_SOURCE = f'''\
-"""A processor whose `process()` raises for its first seconds, then runs cleanly."""
+RAISING_NODES_SOURCE = f'''\
+"""A node whose `process()` raises for its first seconds, then runs cleanly."""
 
 import time
 
@@ -56,7 +56,7 @@ class RaisesForItsFirstSeconds:
 RAISING_STREAM_SOURCE = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from processors.raising import RaisesForItsFirstSeconds
+from nodes.raising import RaisesForItsFirstSeconds
 
 
 @graph_generator
@@ -85,8 +85,8 @@ def test_a_node_whose_process_raises_keeps_running_and_carries_what_it_raised_un
     """
     project_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/raising.py": RAISING_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/raising.py": RAISING_NODES_SOURCE,
             "stream.py": RAISING_STREAM_SOURCE,
         }
     )

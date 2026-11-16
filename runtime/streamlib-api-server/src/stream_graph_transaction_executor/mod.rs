@@ -188,7 +188,7 @@ fn the_document_a_placed_stream_holds(
     }
 }
 
-fn the_processor_node_an_edit_adds_or_configures(
+fn the_graph_node_an_edit_adds_or_configures(
     edit: &StreamGraphOperation,
     document: &StreamGraphDocument,
 ) -> Option<(String, String, Value)> {
@@ -210,10 +210,10 @@ fn the_processor_node_an_edit_adds_or_configures(
         }
         _ => return None,
     };
-    let names_a_processor = !holds_a_fragment
+    let names_a_node = !holds_a_fragment
         && node_type != STREAM_FRAGMENT_NODE_TYPE
         && !is_a_graph_interface_node_type(&node_type);
-    names_a_processor.then_some((node_type, node_name, config))
+    names_a_node.then_some((node_type, node_name, config))
 }
 
 /// Record `label` against the node `operation` adds, under the UUID `drawn_uuid_of` gives it.

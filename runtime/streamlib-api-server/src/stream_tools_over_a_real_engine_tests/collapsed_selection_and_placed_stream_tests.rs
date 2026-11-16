@@ -49,7 +49,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
                 json!({ "operations": [
                     { "operation": "add_node", "stream": stream_asset, "as": "sink",
                       "name": "pass-sink",
-                      "type": StreamToolsTestSink::processor_class_import_path().as_str() },
+                      "type": StreamToolsTestSink::node_class_import_path().as_str() },
                     { "operation": "connect", "stream": stream_asset,
                       "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                       "target": { "node": "sink", "port": "video" } },
@@ -299,7 +299,7 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path()
+    let sink_type = StreamToolsTestSink::node_class_import_path()
         .as_str()
         .to_owned();
     let sink = engine.a_sink_linked_from_the_source_of_main(&project).await;
@@ -498,7 +498,7 @@ async fn an_add_inside_a_placed_stream_of_a_type_nothing_resolves_is_refused() {
         .a_node_of_main_collapsed_into_sub(&project, &sink)
         .await;
     let sub_before_the_add = project.the_graph_document_of("sub");
-    let unresolved_type = StreamToolsTestSink::processor_class_import_path()
+    let unresolved_type = StreamToolsTestSink::node_class_import_path()
         .as_str()
         .replace("StreamToolsTestSink", "StreamToolsTestSinkNothingRegisters");
 

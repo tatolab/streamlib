@@ -18,13 +18,13 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor;
+use crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode;
 use crate::core::output_port_stream_facts::{
     StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
+pub(crate) struct WhatAHelperPlacedNodeReaches {
     pub(crate) stream_facts_of_its_output_ports: Arc<StreamFactsOfOutputPorts>,
     pub(crate) upstream_stream_facts_by_its_inbound_links: Arc<UpstreamStreamFactsByInboundLink>,
     pub(crate) shared_native_service_leases: Arc<SharedNativeServiceLeasesOfOneHelper>,
@@ -32,14 +32,14 @@ pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) process_raising_the_node_reports: Arc<ProcessRaisingTheNodeReports>,
     pub(crate) node_not_ready_reports: Arc<NodeNotReadyReports>,
     pub(crate) output_frames_kept_by_its_output_links:
-        Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor>,
+        Arc<OutputFramesKeptByTheOutputLinksOfOneNode>,
     /// The node's own keys of its project's store; `None` for a helper no node's context spawned.
     pub(crate) store_of_the_node: Option<crate::core::context::StoreOfOneNodeOpenedOnFirstUse>,
 }
 
 /// Replace the stream facts the helper's output port carries.
 pub(super) fn handle_set_output_port_stream_facts(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestSetOutputPortStreamFacts,
 ) -> EscalateResponse {
@@ -66,7 +66,7 @@ pub(super) fn handle_set_output_port_stream_facts(
 /// Answer with the current facts of the output port feeding the helper's input
 /// port, or with none.
 pub(super) fn handle_read_inbound_link_stream_facts(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestReadInboundLinkStreamFacts,
 ) -> EscalateResponse {
@@ -115,7 +115,7 @@ mod tests {
     }
 
     fn dispatched(
-        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
         request: serde_json::Value,
     ) -> EscalateResponse {
         match serde_json::from_value::<EscalateRequest>(request)
@@ -141,14 +141,14 @@ mod tests {
 
     #[test]
     fn a_helpers_set_replaces_its_ports_facts_and_a_downstream_read_sees_them() {
-        let what_the_writer_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches {
+        let what_the_writer_reaches = WhatAHelperPlacedNodeReaches {
             stream_facts_of_its_output_ports: Arc::new(StreamFactsOfOutputPorts::as_declared_by(
                 &[output_port_named("encoded_video")],
                 None,
             )),
             ..Default::default()
         };
-        let what_the_reader_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
+        let what_the_reader_reaches = WhatAHelperPlacedNodeReaches::default();
         what_the_reader_reaches
             .upstream_stream_facts_by_its_inbound_links
             .record_inbound_link(
@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn a_set_of_another_familys_facts_is_refused_naming_the_port_and_both_families() {
-        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches {
+        let what_the_node_reaches = WhatAHelperPlacedNodeReaches {
             stream_facts_of_its_output_ports: Arc::new(StreamFactsOfOutputPorts::as_declared_by(
                 &[output_port_named("encoded")],
                 None,

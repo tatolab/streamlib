@@ -31,7 +31,7 @@ default-filter = """
   | package(tatolab-module-sdk)
   | ((kind(lib) | kind(proc-macro)) & (
         package(streamlib-macros)
-      | package(streamlib-processor-schema)
+      | package(streamlib-node-schema)
       | package(streamlib-ipc-types)
       | package(streamlib-surface-client)
       | package(streamlib-gpu-frame-import-client)

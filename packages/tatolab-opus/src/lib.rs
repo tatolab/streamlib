@@ -21,7 +21,7 @@ use crate::audio_window_to_encoded_packet_encoder::{
     OpusEncoderPortStreamFacts,
 };
 use crate::encoded_packet_to_audio_block_decoder::{
-    ArrivingEncodedAudioMessage, EncodedPacketToAudioBlockDecoder, OPUS_DECODER_PROCESSOR_NAME,
+    ArrivingEncodedAudioMessage, EncodedPacketToAudioBlockDecoder, OPUS_DECODER_NODE_NAME,
     UpstreamPacketsStreamFacts,
 };
 use crate::opus_codec_refusal::OpusCodecNotice;
@@ -210,7 +210,7 @@ fn upstream_packets_stream_facts_from_python(
 ) -> PyResult<UpstreamPacketsStreamFacts> {
     let refused = |what: &str| {
         PyValueError::new_err(format!(
-            "{OPUS_DECODER_PROCESSOR_NAME}: the upstream port's stream facts {what}"
+            "{OPUS_DECODER_NODE_NAME}: the upstream port's stream facts {what}"
         ))
     };
     let optional_field = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {

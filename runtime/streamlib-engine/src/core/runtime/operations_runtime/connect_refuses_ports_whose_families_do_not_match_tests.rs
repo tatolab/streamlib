@@ -8,14 +8,14 @@ use serde_json::{Value, json};
 use super::{LiveGraphChangeOnOneStream, connect_impl};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
-    OutputPortDeclaredNames, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, OutputPortDeclaredNames,
+    PortDescriptor, PortFamily, PortFamilyDeclaration,
 };
 use crate::core::graph::{
-    InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
+    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
 
@@ -26,19 +26,19 @@ const CHANNELS_PRODUCER: &str = "FamilyCheckChannelsProducer";
 const CHANNELS_CONSUMER: &str = "FamilyCheckChannelsConsumer";
 const MESSAGE_PASSER: &str = "FamilyCheckMessagePasser";
 
-fn class_path(class_name: &str) -> ProcessorClassImportPath {
-    ProcessorClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
+fn class_path(class_name: &str) -> NodeClassImportPath {
+    NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
 }
 
 fn register_a_class(class_name: &str, inputs: Vec<PortDescriptor>, outputs: Vec<PortDescriptor>) {
-    let mut descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(class_name).unwrap(),
+    let mut descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(class_name).unwrap(),
         class_path(class_name),
         class_name,
     );
     descriptor.inputs = inputs;
     descriptor.outputs = outputs;
-    PROCESSOR_REGISTRY
+    NODE_REGISTRY
         .register_descriptor_only(descriptor)
         .expect("register the fixture descriptor");
 }
@@ -128,11 +128,11 @@ fn register_the_family_fixture_classes() {
     });
 }
 
-fn a_node_of(compiler: &Compiler, class_name: &str, config: Value) -> ProcessorUniqueId {
+fn a_node_of(compiler: &Compiler, class_name: &str, config: Value) -> NodeRunId {
     compiler.scope(|graph, _tx| {
         graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(class_path(class_name), config))
+            .add_v(NodeSpec::new(class_path(class_name), config))
             .expect("the node is named")
             .first()
             .expect("the node is created")

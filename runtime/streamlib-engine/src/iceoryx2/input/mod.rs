@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -385,7 +384,7 @@ impl InputMailboxesInner {
             .ok_or_else(|| {
                 Error::Link(format!(
                     "input port '{port}' has no node whose inbound links it could read — the \
-                     processor was not created for a node"
+                     node was not created for a node"
                 ))
             })?
             .stream_facts_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
@@ -800,7 +799,7 @@ impl InputMailboxes {
             Some(inner) => inner.upstream_stream_facts(port, inbound_link),
             None => Err(Error::Link(format!(
                 "InputMailboxes not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
+                 resources on this node instance"
             ))),
         }
     }
@@ -831,7 +830,7 @@ impl InputMailboxes {
         let Some(inner) = self.host_inner() else {
             return Err(Error::Configuration(format!(
                 "input port '{port}' declares `audio_window = match_device` but this \
-                 processor's inputs are not wired, so there is nothing to settle the \
+                 node's inputs are not wired, so there is nothing to settle the \
                  contract on. Connect the port, or drop the contract from it"
             )));
         };

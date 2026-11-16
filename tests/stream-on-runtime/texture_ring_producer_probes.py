@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor that *produces* texture-backed frames, and one that reads them.
+"""A Python node that *produces* texture-backed frames, and one that reads them.
 
 Every other GPU probe in this suite consumes frames a native block produced.
-These two close the other direction: a Python source in a processor interpreter
+These two close the other direction: a Python source in a node interpreter
 allocates its own output ring, writes pixels into a slot from that interpreter, and
 publishes the slot's surface id — which another process resolves and reads.
 

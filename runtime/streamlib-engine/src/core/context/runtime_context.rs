@@ -12,7 +12,7 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
     OneOffAcquisitionsCountedForOneNativeNode, SharedAudioClock, StreamClock,
 };
-use crate::core::graph::ProcessorUniqueId;
+use crate::core::graph::NodeRunId;
 use crate::core::logging::ProjectLogRouteEntry;
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::{
@@ -95,14 +95,14 @@ pub struct RuntimeContext {
     pub stream_clock: Arc<StreamClock>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
-    processor_id: Option<ProcessorUniqueId>,
+    node_run_id: Option<NodeRunId>,
     one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
-    processor_display_name: Option<String>,
+    node_display_name: Option<String>,
     /// The placed node's UUID, the key its store is scoped to (None for the shared/global
     /// context).
     node_uuid: Option<uuid::Uuid>,
     pause_gate: Option<Arc<AtomicBool>>,
-    processor_state: Option<Arc<crate::core::graph::ObservableProcessorState>>,
+    node_state: Option<Arc<crate::core::graph::ObservableNodeState>>,
     /// Runtime operations interface for graph mutations.
     runtime_ops: Arc<dyn RuntimeOperations>,
     /// Shared tokio runtime handle for async operations.
@@ -154,12 +154,12 @@ impl RuntimeContext {
             gpu,
             stream_clock,
             runtime_id,
-            processor_id: None,
+            node_run_id: None,
             one_off_acquisitions_of_the_node: None,
-            processor_display_name: None,
+            node_display_name: None,
             node_uuid: None,
             pause_gate: None,
-            processor_state: None,
+            node_state: None,
             runtime_ops,
             tokio_handle,
             iceoryx2_node,
@@ -311,14 +311,14 @@ impl RuntimeContext {
         &self.surface_share_mach_service_rendezvous
     }
 
-    pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
-        self.processor_id.as_ref()
+    pub fn node_run_id(&self) -> Option<&NodeRunId> {
+        self.node_run_id.as_ref()
     }
 
     /// The node's name (None for the
     /// shared/global context).
-    pub fn processor_display_name(&self) -> Option<&str> {
-        self.processor_display_name.as_deref()
+    pub fn node_display_name(&self) -> Option<&str> {
+        self.node_display_name.as_deref()
     }
 
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
@@ -343,17 +343,17 @@ impl RuntimeContext {
         &self.audio_clock
     }
 
-    pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
+    pub fn with_node_run_id(&self, node_run_id: NodeRunId) -> Self {
         Self {
             gpu: self.gpu.clone(),
             stream_clock: Arc::clone(&self.stream_clock),
             runtime_id: Arc::clone(&self.runtime_id),
-            processor_id: Some(processor_id),
+            node_run_id: Some(node_run_id),
             one_off_acquisitions_of_the_node: Some(OneOffAcquisitionsCountedForOneNativeNode::new()),
-            processor_display_name: self.processor_display_name.clone(),
+            node_display_name: self.node_display_name.clone(),
             node_uuid: self.node_uuid,
             pause_gate: self.pause_gate.clone(),
-            processor_state: self.processor_state.clone(),
+            node_state: self.node_state.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
@@ -375,12 +375,12 @@ impl RuntimeContext {
             gpu: self.gpu.clone(),
             stream_clock: Arc::clone(&self.stream_clock),
             runtime_id: Arc::clone(&self.runtime_id),
-            processor_id: self.processor_id.clone(),
+            node_run_id: self.node_run_id.clone(),
             one_off_acquisitions_of_the_node: self.one_off_acquisitions_of_the_node.clone(),
-            processor_display_name: self.processor_display_name.clone(),
+            node_display_name: self.node_display_name.clone(),
             node_uuid: self.node_uuid,
             pause_gate: Some(pause_gate),
-            processor_state: self.processor_state.clone(),
+            node_state: self.node_state.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
@@ -397,26 +397,26 @@ impl RuntimeContext {
         }
     }
 
-    pub fn with_processor_display_name(&self, processor_display_name: String) -> Self {
+    pub fn with_node_display_name(&self, node_display_name: String) -> Self {
         Self {
-            processor_display_name: Some(processor_display_name),
+            node_display_name: Some(node_display_name),
             ..self.clone()
         }
     }
 
-    pub(crate) fn with_processor_state(
+    pub(crate) fn with_node_state(
         &self,
-        processor_state: Arc<crate::core::graph::ObservableProcessorState>,
+        node_state: Arc<crate::core::graph::ObservableNodeState>,
     ) -> Self {
         Self {
-            processor_state: Some(processor_state),
+            node_state: Some(node_state),
             ..self.clone()
         }
     }
 
     pub(crate) fn report_why_the_node_is_not_ready(&self, not_ready_because: Option<String>) {
-        if let Some(processor_state) = &self.processor_state {
-            processor_state.note_why_the_node_is_not_ready(not_ready_because);
+        if let Some(node_state) = &self.node_state {
+            node_state.note_why_the_node_is_not_ready(not_ready_because);
         }
     }
 
@@ -454,7 +454,6 @@ impl RuntimeContext {
         !self.is_paused()
     }
 }
-
 
 // Host-internal compiler ops that still need direct access to the
 // underlying `RuntimeContext` (e.g. `surface_socket_path`,
@@ -548,14 +547,14 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_id().to_string()
     }
 
-    pub fn processor_id(&self) -> Option<String> {
-        self.host_base().processor_id().map(|id| id.to_string())
+    pub fn node_run_id(&self) -> Option<String> {
+        self.host_base().node_run_id().map(|id| id.to_string())
     }
 
     /// The node's name, or `None` for the
     /// shared/global context.
-    pub fn processor_display_name(&self) -> Option<String> {
-        self.host_base().processor_display_name().map(str::to_owned)
+    pub fn node_display_name(&self) -> Option<String> {
+        self.host_base().node_display_name().map(str::to_owned)
     }
 
     pub fn capture_device_access_prompting(&self) -> super::CaptureDeviceAccessPrompting {
@@ -679,14 +678,14 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         self.host_base().runtime_id().to_string()
     }
 
-    pub fn processor_id(&self) -> Option<String> {
-        self.host_base().processor_id().map(|id| id.to_string())
+    pub fn node_run_id(&self) -> Option<String> {
+        self.host_base().node_run_id().map(|id| id.to_string())
     }
 
     /// The node's name, or `None` for the
     /// shared/global context.
-    pub fn processor_display_name(&self) -> Option<String> {
-        self.host_base().processor_display_name().map(str::to_owned)
+    pub fn node_display_name(&self) -> Option<String> {
+        self.host_base().node_display_name().map(str::to_owned)
     }
 
     pub fn is_paused(&self) -> bool {
@@ -784,7 +783,7 @@ mod one_off_acquisition_counting_tests {
     use super::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
     use crate::core::Error;
     use crate::core::context::IsolationTier;
-    use crate::core::graph::ProcessorUniqueId;
+    use crate::core::graph::NodeRunId;
     use crate::core::rhi::TensorStorageBufferLayout;
     use crate::core::runtime::Runner;
 
@@ -827,10 +826,8 @@ mod one_off_acquisition_counting_tests {
     #[serial_test::serial]
     fn a_nodes_one_offs_count_across_its_lifecycle_calls_while_another_node_counts_its_own() {
         with_a_started_streams_shared_context(|shared_context| {
-            let node_context =
-                shared_context.with_processor_id(ProcessorUniqueId::from("Pcounted"));
-            let another_node_context =
-                shared_context.with_processor_id(ProcessorUniqueId::from("Panother"));
+            let node_context = shared_context.with_node_run_id(NodeRunId::from("Pcounted"));
+            let another_node_context = shared_context.with_node_run_id(NodeRunId::from("Panother"));
             let layout = a_256_byte_storage_buffer();
 
             let mut held_by_the_node = Vec::new();

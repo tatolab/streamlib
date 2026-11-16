@@ -1,0 +1,26 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::error::Result;
+
+pub trait ContinuousNode {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    /// Called repeatedly by the runtime in a loop. Restricted ctx.
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
+}

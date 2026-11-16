@@ -10,8 +10,8 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use super::processor_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
-use super::processor_interpreter_spawn_host::{
+use super::node_interpreter_shutdown_ladder::kill_the_process_group_and_reap_its_leader;
+use super::node_interpreter_spawn_host::{
     HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE, StreamInterpreterExitAwaited,
     remove_every_python_variable_named_in, spawn_standard_error_reader_keeping_its_tail,
     spawn_standard_output_reader_keeping_its_head, standard_error_tail_as_a_refusal_quotes_it,

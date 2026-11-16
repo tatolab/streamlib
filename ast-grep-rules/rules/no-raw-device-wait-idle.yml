@@ -5,7 +5,7 @@ message: A raw `device_wait_idle()` races concurrent queue submits; call `HostVu
 note: >-
   vkDeviceWaitIdle is externally synchronized over the VkDevice and every queue it
   owns. A raw call that skips the per-queue mutexes races vkQueueSubmit2 and
-  vkQueuePresentKHR during multi-processor setup and crashes the NVIDIA driver
+  vkQueuePresentKHR during multi-node setup and crashes the NVIDIA driver
   (UNASSIGNED-Threading-Info: vkDeviceWaitIdle(): Couldn't find VkQueue Object).
   The one raw call is `HostVulkanDevice::wait_idle` in
   vulkan/rhi/device/vulkan_device/queue_submission.rs. Test code is exempt.

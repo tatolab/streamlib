@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use serde_json::Value as JsonValue;
 use streamlib_project_repository::PREVIOUS_VALUE_NODE_TYPE;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -33,7 +33,7 @@ use crate::core::graph::{
     LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
     the_outputs_a_link_carries_on,
 };
-use crate::core::processors::OutOfProcessLinkWireReply;
+use crate::core::nodes::OutOfProcessLinkWireReply;
 use crate::iceoryx2::{Iceoryx2Node, InboundLinkName};
 
 use super::open_iceoryx2_service_op::{
@@ -84,7 +84,7 @@ pub(crate) fn the_reader_input_port_a_link_into_a_function_node_is_read_at(
 /// its own.
 pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
+    node_id: &NodeRunId,
 ) -> bool {
     graph.traversal().v(node_id).first().is_some_and(|node| {
         node.node_kind()
@@ -95,17 +95,17 @@ pub(crate) fn runs_inside_the_read_of_each_node_it_feeds(
 
 /// Whether `node_id` is a `PreviousValue` node, whose input the island reads
 /// from the last evaluation.
-pub(crate) fn is_a_previous_value_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+pub(crate) fn is_a_previous_value_node(graph: &Graph, node_id: &NodeRunId) -> bool {
     graph
         .traversal()
         .v(node_id)
         .first()
-        .is_some_and(|node| node.processor_type.to_string() == PREVIOUS_VALUE_NODE_TYPE)
+        .is_some_and(|node| node.node_type.to_string() == PREVIOUS_VALUE_NODE_TYPE)
 }
 
 /// Whether `node_id` is a function node, inside its readers' islands or
 /// promoted out of them.
-pub(crate) fn is_a_function_node(graph: &Graph, node_id: &ProcessorUniqueId) -> bool {
+pub(crate) fn is_a_function_node(graph: &Graph, node_id: &NodeRunId) -> bool {
     graph.traversal().v(node_id).first().is_some_and(|node| {
         node.node_kind()
             .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
@@ -129,8 +129,8 @@ pub(crate) fn how_a_link_is_wired(
     }
     Ok(
         match (
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()),
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id()),
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()),
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().node_run_id()),
         ) {
             (false, false) => HowALinkIsWired::ThroughAChannel,
             (true, true) => HowALinkIsWired::AsACallInsideAFunctionNodeIsland,
@@ -150,7 +150,7 @@ pub(crate) fn wire_a_link_into_a_function_node_island_through_its_reader(
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let function_node_id = link_in(graph, link_id)?.to_port().processor_id().clone();
+    let function_node_id = link_in(graph, link_id)?.to_port().node_run_id().clone();
     let island_links_calling_it: Vec<LinkUniqueId> = the_island_links(graph)
         .into_iter()
         .filter(|island_link_id| {
@@ -183,13 +183,13 @@ fn open_a_read_of_a_link_at_the_reader_of_an_island_link_unless_open(
     }
     let reader_id = link_in(graph, island_link_id)?
         .to_port()
-        .processor_id()
+        .node_run_id()
         .clone();
     let reader = graph
         .traversal()
         .v(&reader_id)
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(reader_id.to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(reader_id.to_string()))?;
     if !reader.has::<OutOfProcessLinkWiringComponent>() {
         return Err(Error::InvalidLink(format!(
             "link `{link_id}` feeds a function node island read by `{reader_id}`, which runs in \
@@ -218,12 +218,12 @@ fn open_a_read_of_a_link_at_the_reader_of_an_island_link_unless_open(
 fn the_function_nodes_an_island_link_evaluates(
     graph: &Graph,
     island_link_id: &LinkUniqueId,
-) -> HashSet<ProcessorUniqueId> {
+) -> HashSet<NodeRunId> {
     let Some(island_output_node_id) = graph
         .traversal()
         .e(island_link_id)
         .first()
-        .map(|island_link| island_link.source().processor_id().clone())
+        .map(|island_link| island_link.source().node_run_id().clone())
     else {
         return HashSet::new();
     };
@@ -243,8 +243,8 @@ fn the_island_links(graph: &Graph) -> Vec<LinkUniqueId> {
         .e(())
         .iter()
         .filter(|link| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().processor_id())
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.to_port().node_run_id())
         })
         .map(|link| link.id.clone())
         .collect()
@@ -273,7 +273,7 @@ fn open_the_reads_an_island_link_needs_at_its_reader(
     island_link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let function_node_ids: Vec<ProcessorUniqueId> =
+    let function_node_ids: Vec<NodeRunId> =
         the_function_nodes_an_island_link_evaluates(graph, island_link_id)
             .into_iter()
             .collect();
@@ -319,7 +319,7 @@ pub(crate) fn close_the_channels_no_island_reads_any_more(graph: &mut Graph) -> 
         for read in &read_through.reads_by_island_link {
             let still_needed = island_links.contains(&read.island_link_id)
                 && the_function_nodes_an_island_link_evaluates(graph, &read.island_link_id)
-                    .contains(link.to_port().processor_id());
+                    .contains(link.to_port().node_run_id());
             if !still_needed {
                 reads_no_island_needs.push((link.id.clone(), read.island_link_id.clone()));
             }
@@ -343,15 +343,15 @@ pub(crate) fn close_the_channels_no_island_reads_any_more(graph: &mut Graph) -> 
 /// any island.
 fn the_links_into_function_nodes_from_outside_any_island(
     graph: &Graph,
-    function_node_ids: &[ProcessorUniqueId],
+    function_node_ids: &[NodeRunId],
 ) -> Vec<LinkUniqueId> {
     graph
         .traversal()
         .e(())
         .iter()
         .filter(|link| {
-            function_node_ids.contains(link.to_port().processor_id())
-                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+            function_node_ids.contains(link.to_port().node_run_id())
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         })
         .map(|link| link.id.clone())
         .collect()
@@ -359,10 +359,7 @@ fn the_links_into_function_nodes_from_outside_any_island(
 
 /// The function nodes upstream of `node_id` through function nodes, the
 /// island its inputs evaluate.
-fn the_function_nodes_upstream_of(
-    graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> Vec<ProcessorUniqueId> {
+fn the_function_nodes_upstream_of(graph: &Graph, node_id: &NodeRunId) -> Vec<NodeRunId> {
     let mut function_nodes_upstream = Vec::new();
     let mut nodes_to_follow = vec![node_id.clone()];
     let mut followed = HashSet::new();
@@ -371,10 +368,10 @@ fn the_function_nodes_upstream_of(
             continue;
         }
         for link in graph.traversal().e(()).iter() {
-            if link.to_port().processor_id() != &following_id {
+            if link.to_port().node_run_id() != &following_id {
                 continue;
             }
-            let upstream_id = link.source().processor_id();
+            let upstream_id = link.source().node_run_id();
             if runs_inside_the_read_of_each_node_it_feeds(graph, upstream_id) {
                 function_nodes_upstream.push(upstream_id.clone());
                 nodes_to_follow.push(upstream_id.clone());
@@ -396,7 +393,7 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
     let island = the_island_feeding_a_link(graph, link_id)?;
-    let reader_id = link_in(graph, link_id)?.to_port().processor_id().clone();
+    let reader_id = link_in(graph, link_id)?.to_port().node_run_id().clone();
     let reader_link_wiring = graph
         .traversal()
         .v(&reader_id)
@@ -450,16 +447,16 @@ fn record_the_stream_facts_an_island_link_carries_on(
     let reader_input_port = link.to_port().port_name();
     let reader = graph
         .traversal()
-        .v(link.to_port().processor_id())
+        .v(link.to_port().node_run_id())
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(link.to_port().processor_id().to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(link.to_port().node_run_id().to_string()))?;
     let upstream_stream_facts_by_inbound_link = reader.upstream_stream_facts_by_inbound_link();
     upstream_stream_facts_by_inbound_link.forget_inbound_link(link_id);
     let island_output_node = graph
         .traversal()
-        .v(link.source().processor_id())
+        .v(link.source().node_run_id())
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(link.source().processor_id().to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(link.source().node_run_id().to_string()))?;
     let outputs_carried_on =
         the_outputs_a_link_carries_on(graph, island_output_node, link.source().port_name());
     let [(carried_on_node, carried_on_port, _)] = outputs_carried_on.as_slice() else {
@@ -502,7 +499,7 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
         .filter(|link_id| !links_wired_this_compile.contains(link_id))
         .collect();
     for link_id in island_links {
-        let reader_id = link_in(graph, &link_id)?.to_port().processor_id().clone();
+        let reader_id = link_in(graph, &link_id)?.to_port().node_run_id().clone();
         let Some(reader_link_wiring) = graph
             .traversal()
             .v(&reader_id)
@@ -549,7 +546,7 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
 /// `host`: inside the read of each node its island feeds, or in a helper
 /// process of its own.
 pub(crate) fn note_where_each_function_node_runs(graph: &mut Graph) {
-    let hosts: Vec<(ProcessorUniqueId, FunctionNodeHostComponent)> = graph
+    let hosts: Vec<(NodeRunId, FunctionNodeHostComponent)> = graph
         .traversal()
         .v(())
         .ids()
@@ -583,14 +580,14 @@ pub(crate) fn note_where_each_function_node_runs(graph: &mut Graph) {
     }
 }
 
-fn the_function_node_ids_an_island_calls(island: &JsonValue) -> Vec<ProcessorUniqueId> {
+fn the_function_node_ids_an_island_calls(island: &JsonValue) -> Vec<NodeRunId> {
     island
         .get("nodes")
         .and_then(JsonValue::as_array)
         .into_iter()
         .flatten()
         .filter_map(|node| node.get("node").and_then(JsonValue::as_str))
-        .map(ProcessorUniqueId::from)
+        .map(NodeRunId::from)
         .collect()
 }
 
@@ -623,7 +620,7 @@ fn mark_an_island_link_by_whether_its_reader_owes_an_answer(
 /// or its promotion, whichever comes first.
 pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     graph: &mut Graph,
-    function_node_id: &ProcessorUniqueId,
+    function_node_id: &NodeRunId,
 ) -> Option<std::sync::Arc<HowItsHelpersRanAFunctionNode>> {
     let node = graph.traversal_mut().v(function_node_id).first_mut()?;
     if let Some(component) = node.get::<FunctionNodeRanCompiledComponent>() {
@@ -638,22 +635,17 @@ pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
 
 /// Whether a node outside any island feeds `node_id`, directly or through an
 /// island it evaluates, whose messages wake it.
-fn is_fed_by_a_node_that_is_not_a_function_node(
-    graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> bool {
+fn is_fed_by_a_node_that_is_not_a_function_node(graph: &Graph, node_id: &NodeRunId) -> bool {
     let function_nodes_upstream = the_function_nodes_upstream_of(graph, node_id);
     graph
         .traversal()
         .e(())
         .iter()
         .filter(|link| {
-            link.to_port().processor_id() == node_id
-                || function_nodes_upstream.contains(link.to_port().processor_id())
+            link.to_port().node_run_id() == node_id
+                || function_nodes_upstream.contains(link.to_port().node_run_id())
         })
-        .any(|link| {
-            !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
-        })
+        .any(|link| !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()))
 }
 
 /// Unwire `link_id`, from a function node into its reader: close each read
@@ -663,7 +655,7 @@ pub(crate) fn unwire_a_link_from_a_function_node_island_into_its_reader(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
-    let reader_id = link_in(graph, link_id)?.to_port().processor_id().clone();
+    let reader_id = link_in(graph, link_id)?.to_port().node_run_id().clone();
     let links_the_unwired_island_link_reads: Vec<LinkUniqueId> = graph
         .traversal()
         .e(())
@@ -718,8 +710,8 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 /// through the function nodes downstream of it.
 fn the_readers_a_function_node_feeds(
     graph: &Graph,
-    function_node_id: &ProcessorUniqueId,
-) -> HashSet<ProcessorUniqueId> {
+    function_node_id: &NodeRunId,
+) -> HashSet<NodeRunId> {
     the_reader_input_ports_a_function_node_feeds(graph, function_node_id)
         .into_iter()
         .map(|(reader_id, _)| reader_id)
@@ -730,8 +722,8 @@ fn the_readers_a_function_node_feeds(
 /// reaches through the function nodes downstream of it.
 pub(crate) fn the_reader_input_ports_a_function_node_feeds(
     graph: &Graph,
-    function_node_id: &ProcessorUniqueId,
-) -> HashSet<(ProcessorUniqueId, String)> {
+    function_node_id: &NodeRunId,
+) -> HashSet<(NodeRunId, String)> {
     let mut reader_input_ports = HashSet::new();
     let mut function_nodes_to_follow = vec![function_node_id.clone()];
     let mut function_nodes_followed = HashSet::new();
@@ -740,10 +732,10 @@ pub(crate) fn the_reader_input_ports_a_function_node_feeds(
             continue;
         }
         for link in graph.traversal().e(()).iter() {
-            if link.source().processor_id() != &following_id {
+            if link.source().node_run_id() != &following_id {
                 continue;
             }
-            let destination_id = link.to_port().processor_id();
+            let destination_id = link.to_port().node_run_id();
             if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
                 function_nodes_to_follow.push(destination_id.clone());
             } else {
@@ -760,8 +752,8 @@ pub(crate) fn the_reader_input_ports_a_function_node_feeds(
 /// The function nodes among `node_ids`, which are never prepared or spawned.
 pub(crate) fn the_function_nodes_among<'a>(
     graph: &Graph,
-    node_ids: impl IntoIterator<Item = &'a ProcessorUniqueId>,
-) -> HashSet<ProcessorUniqueId> {
+    node_ids: impl IntoIterator<Item = &'a NodeRunId>,
+) -> HashSet<NodeRunId> {
     node_ids
         .into_iter()
         .filter(|node_id| runs_inside_the_read_of_each_node_it_feeds(graph, node_id))

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 #![cfg(target_os = "linux")]
 
 #[path = "common.rs"]
@@ -703,7 +702,7 @@ fn a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels
 
     assert!(
         pixels_match,
-        "the foreign import driven by the processor's export bundle must read the kernel's \
+        "the foreign import driven by the node's export bundle must read the kernel's \
          fill constant {FILL_CONSTANT_RGBA:?}; first pixel was {:?}",
         &readback[..4]
     );

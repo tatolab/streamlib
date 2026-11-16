@@ -52,15 +52,15 @@ pub(crate) use runtime_context::{
 };
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use store_scoped_to_this_node::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
+pub use texture_pools_and_rings::node_output_pixel_buffer_pool_of_one_native_node::{
+    NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
+};
 pub use texture_pools_and_rings::one_off_acquisitions_counted_for_one_native_node::OneOffAcquisitionCountedForItsNode;
 pub(crate) use texture_pools_and_rings::one_off_acquisitions_counted_for_one_native_node::{
     OneOffAcquisitionsCountedForOneNativeNode, acquire_a_one_off_counted_against_its_node,
 };
 pub(crate) use texture_pools_and_rings::one_off_acquisitions_held_for_one_node::{
     OneOffAcquisitionShape, OneOffAcquisitionsHeldForOneNode,
-};
-pub use texture_pools_and_rings::processor_output_pixel_buffer_pool_of_one_native_node::{
-    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
 };
 // Exported rather than crate-private so a test about deviceless pacing can open
 // the arm it means. The chain's probe takes the first arm that opens, so a test

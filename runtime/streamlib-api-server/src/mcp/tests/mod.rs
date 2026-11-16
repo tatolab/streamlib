@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use super::*;
 use serde_json::json;
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::descriptors::NodeClassImportPath;
 
 mod graph_edit_tool_tests;
 mod graph_logs_and_stream_tool_tests;
@@ -53,8 +53,8 @@ mod resource_and_prompt_tests;
 pub(crate) struct ControlPlaneMcpDispatchStubRuntime {
     exported_graph: Arc<Mutex<Value>>,
     recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
-    armed_add_processor_refusal: crate::control_plane_stub_support::ArmedAddProcessorRefusal,
-    add_processor_answers_after: Option<Duration>,
+    armed_add_node_refusal: crate::control_plane_stub_support::ArmedAddNodeRefusal,
+    add_node_answers_after: Option<Duration>,
 }
 
 impl ControlPlaneMcpDispatchStubRuntime {
@@ -62,8 +62,8 @@ impl ControlPlaneMcpDispatchStubRuntime {
         Self {
             exported_graph: Arc::new(Mutex::new(json!({ "nodes": [], "links": [] }))),
             recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
-            armed_add_processor_refusal: Arc::new(Mutex::new(None)),
-            add_processor_answers_after: None,
+            armed_add_node_refusal: Arc::new(Mutex::new(None)),
+            add_node_answers_after: None,
         }
     }
 
@@ -71,7 +71,7 @@ impl ControlPlaneMcpDispatchStubRuntime {
     /// engine-side refusal the front end has to carry back.
     fn refusing_every_add_node(refusal: &str) -> Self {
         Self {
-            armed_add_processor_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
+            armed_add_node_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
             ..Self::new()
         }
     }
@@ -80,7 +80,7 @@ impl ControlPlaneMcpDispatchStubRuntime {
     /// passed, so it is the request still in flight.
     pub(crate) fn with_add_node_answering_after(answers_after: Duration) -> Self {
         Self {
-            add_processor_answers_after: Some(answers_after),
+            add_node_answers_after: Some(answers_after),
             ..Self::new()
         }
     }

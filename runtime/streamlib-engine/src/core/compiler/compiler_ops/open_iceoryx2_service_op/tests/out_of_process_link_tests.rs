@@ -61,15 +61,15 @@ fn link_wiring_reaches_a_host_the_engine_cannot_downcast_to() {
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let dest_id = add_mock_input_only(&mut graph);
-    let source_instance = attach_processor_instance(
+    let source_instance = attach_node_instance(
         &mut graph,
         &source_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let link_id: LinkUniqueId = "L-seam-test".into();
 
@@ -107,7 +107,7 @@ fn rendered_metrics_in(graph: &mut Graph, proc_id: &str) -> Option<serde_json::V
         .traversal_mut()
         .v(proc_id)
         .first()
-        .expect("the processor's node must be in the graph")
+        .expect("the node's node must be in the graph")
         .serialize_components()
         .get("metrics")
         .cloned()
@@ -116,7 +116,7 @@ fn rendered_metrics_in(graph: &mut Graph, proc_id: &str) -> Option<serde_json::V
 /// Create a helper stub's board as its spawn would, and open its writer as
 /// its helper would, from a node of the helper's own.
 fn board_of_a_helper_stub_spawn(
-    instance: &Arc<Mutex<ProcessorInstance>>,
+    instance: &Arc<Mutex<NodeInstance>>,
     proc_id: &str,
     output_port_names: &[&str],
 ) -> (
@@ -168,15 +168,15 @@ fn a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let dest_id = add_mock_input_only(&mut graph);
-    let source_instance = attach_processor_instance(
+    let source_instance = attach_node_instance(
         &mut graph,
         &source_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let link_id: LinkUniqueId = "L-helper-placed".into();
     record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
@@ -256,15 +256,15 @@ fn a_reconnected_link_reuses_its_slot_from_zero_and_a_write_from_the_old_wiring_
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let dest_id = add_mock_input_only(&mut graph);
-    attach_processor_instance(
+    attach_node_instance(
         &mut graph,
         &source_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
     record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
@@ -337,7 +337,7 @@ fn rendered_metrics_keys(rendered: &serde_json::Value) -> Vec<String> {
 }
 
 #[test]
-fn a_helper_placed_processors_metrics_carry_exactly_the_keys_an_app_process_ones_do() {
+fn a_helper_placed_nodes_metrics_carry_exactly_the_keys_an_app_process_ones_do() {
     let mut native_plain = NativeLinkWiredForLossCounting::wire(
         "metrics-keys-plain",
         DeliveryProfile::Ordered.resolve(),
@@ -358,10 +358,10 @@ fn a_helper_placed_processors_metrics_carry_exactly_the_keys_an_app_process_ones
     let helper_plain_id = add_mock_input_only(&mut graph);
     let helper_windowed_id = add_mock_windowed_audio_consumer(&mut graph);
     for proc_id in [&source_id, &helper_plain_id, &helper_windowed_id] {
-        attach_processor_instance(
+        attach_node_instance(
             &mut graph,
             proc_id,
-            ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+            NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
         );
     }
     record_wiring_for_both_out_of_process_endpoints(
@@ -431,11 +431,11 @@ fn a_wired_output_link_keeps_room_in_its_helpers_pools_until_it_is_disconnected(
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let dest_id = add_mock_input_only(&mut graph);
-    for processor_id in [&source_id, &dest_id] {
-        attach_processor_instance(
+    for node_run_id in [&source_id, &dest_id] {
+        attach_node_instance(
             &mut graph,
-            processor_id,
-            ProcessorInstance::new(Box::new(
+            node_run_id,
+            NodeInstance::new(Box::new(
                 OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     RecordingOutOfProcessFarSideLinkDelivery::default(),
                     ProcessExecution::Reactive,
@@ -462,7 +462,7 @@ fn a_wired_output_link_keeps_room_in_its_helpers_pools_until_it_is_disconnected(
     let newest_delivery = DeliveryProfile::Newest.resolve();
     assert_eq!(
         kept_by_the_sources_output_links.kept_by_every_output_link(),
-        crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByOutputLinks {
+        crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByOutputLinks {
             queued_in_their_mailboxes: newest_delivery.depth,
             borrowed_past_their_mailboxes: newest_delivery.borrow_quota,
         }
@@ -483,10 +483,10 @@ fn disconnecting_an_out_of_process_link_reclaims_both_endpoints() {
 
     let source_reclaims: Arc<Mutex<Vec<ReclaimedLink>>> = Arc::default();
     let dest_reclaims: Arc<Mutex<Vec<ReclaimedLink>>> = Arc::default();
-    let source_instance = attach_processor_instance(
+    let source_instance = attach_node_instance(
         &mut graph,
         &source_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery {
                     reclaimed_links: source_reclaims.clone(),
@@ -496,10 +496,10 @@ fn disconnecting_an_out_of_process_link_reclaims_both_endpoints() {
             ),
         )),
     );
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery {
                     reclaimed_links: dest_reclaims.clone(),
@@ -573,10 +573,10 @@ fn wiring_an_out_of_process_link_hands_each_endpoint_its_entry() {
         Arc::default();
     let dest_late_wired: Arc<Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>> =
         Arc::default();
-    let source_instance = attach_processor_instance(
+    let source_instance = attach_node_instance(
         &mut graph,
         &source_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery {
                     late_wired_links: source_late_wired.clone(),
@@ -586,10 +586,10 @@ fn wiring_an_out_of_process_link_hands_each_endpoint_its_entry() {
             ),
         )),
     );
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery {
                     late_wired_links: dest_late_wired.clone(),
@@ -638,15 +638,15 @@ fn wiring_an_out_of_process_link_hands_each_endpoint_its_entry() {
 fn a_host_with_an_out_of_process_transport_is_recognised_as_a_subprocess() {
     let mut graph = Graph::new();
     let helper_hosted_id = add_mock_output_only(&mut graph);
-    attach_processor_instance(
+    attach_node_instance(
         &mut graph,
         &helper_hosted_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     assert!(out_of_process_link_wiring_of(&graph, &helper_hosted_id.as_str().into()).is_some());
 
     let engine_hosted_id = add_mock_input_only(&mut graph);
-    attach_mock_instance::<crate::core::test_support::MockInputOnlyProcessor::Processor>(
+    attach_mock_instance::<crate::core::test_support::MockInputOnlyNode::Node>(
         &mut graph,
         &engine_hosted_id,
     );
@@ -663,20 +663,20 @@ fn a_host_with_an_out_of_process_transport_is_recognised_as_a_subprocess() {
 /// or the helper is never told.
 #[test]
 fn a_link_between_an_engine_endpoint_and_a_helper_reclaims_each_its_own_way() {
-    use crate::core::test_support::MockOutputOnlyProcessor;
+    use crate::core::test_support::MockOutputOnlyNode;
 
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let (source, source_output, _) =
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
     let source_output = source_output.expect("an output-only mock holds an output writer");
 
     let dest_id = add_mock_input_only(&mut graph);
     let dest_reclaims: Arc<Mutex<Vec<ReclaimedLink>>> = Arc::default();
-    attach_processor_instance(
+    attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery {
                     reclaimed_links: dest_reclaims.clone(),

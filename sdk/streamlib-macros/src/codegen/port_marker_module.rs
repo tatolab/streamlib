@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -24,9 +23,9 @@ pub(super) fn generate_port_marker_module(
             let cast_name = &port.cast_name;
             quote! {
                 #marker_visibility struct #marker_name;
-                impl super::__streamlib_sdk::processors::#port_marker_trait for #marker_name {
+                impl super::__streamlib_sdk::nodes::#port_marker_trait for #marker_name {
                     const PORT_NAME: &'static str = #cast_name;
-                    type Processor = super::Processor;
+                    type Node = super::Node;
                 }
             }
         })

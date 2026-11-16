@@ -5,13 +5,13 @@
 
 An extension wheel: the Rust is inside this package and the `@node.process` classes
 below are the binding. Nothing here links the engine — the wheel depends on
-`tatolab-stream`, and the processor runs in its own processor interpreter like
-any other Python processor.
+`tatolab-stream`, and the node runs in its own node interpreter like
+any other Python node.
 """
 
-from .processors import H264Decoder as H264Decoder
-from .processors import H264DecoderConfig as H264DecoderConfig
-from .processors import H264Encoder as H264Encoder
-from .processors import H264EncoderConfig as H264EncoderConfig
+from .nodes import H264Decoder as H264Decoder
+from .nodes import H264DecoderConfig as H264DecoderConfig
+from .nodes import H264Encoder as H264Encoder
+from .nodes import H264EncoderConfig as H264EncoderConfig
 
 __all__ = ["H264Decoder", "H264DecoderConfig", "H264Encoder", "H264EncoderConfig"]

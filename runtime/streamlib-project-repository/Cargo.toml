@@ -21,7 +21,7 @@ default = ["history", "store"]
 history = ["dep:git2", "dep:libz-sys", "dep:notify", "dep:parking_lot", "dep:tokio", "dep:zip"]
 # The JSON Schema of each graph action, in the schemars rmcp reads, for the MCP tools. Without it
 # the engine and the SDK link only their own schemars, so a missing `JsonSchema` derive on a
-# processor config is reported against one crate.
+# node config is reported against one crate.
 mcp-tool-json-schema = ["dep:schemars"]
 # The project's store: one embedded database the runtime keeps what it holds for a project in,
 # outside its history, each concern a named table, committed by one debounced writer.
@@ -40,7 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
 sha2.workspace = true
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.68.82" }
+streamlib-node-schema = { path = "../../sdk/streamlib-node-schema", version = "0.68.82" }
 streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.82" }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true }

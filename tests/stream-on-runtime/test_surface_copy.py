@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor lands a frame in a kernel's input texture through the
+"""A Python node lands a frame in a kernel's input texture through the
 engine's surface-to-surface copy, with no array library.
 
-Every probe runs in a processor interpreter fed by the `TestPatternSource` module,
+Every probe runs in a node interpreter fed by the `TestPatternSource` module,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the
 scenario's stream on `tatolabd` and asserts on that line.
 """
@@ -28,7 +28,7 @@ def run_scenario(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 

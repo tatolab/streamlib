@@ -97,12 +97,12 @@ fn the_graph_of_a_stream_of_a_source_linked_into_a_sink(stream_name: &str) -> se
         "nodes": [
             {
                 "name": "source",
-                "type": MockOutputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+                "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
                 "config": {},
             },
             {
                 "name": "sink",
-                "type": MockInputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+                "type": MockInputOnlyNode::Node::node_class_import_path().as_str(),
                 "config": {},
             },
         ],
@@ -154,9 +154,9 @@ fn a_stopped_project_holds_its_graph_to_edit_and_plays_it_fresh_with_no_load() {
     let pause_refusal = refusal_of(runner.pause_playback(project.path()));
     assert!(pause_refusal.contains("none to pause"), "{pause_refusal}");
 
-    held.add_processor(
-        crate::core::processors::ProcessorSpec::new(
-            MockOutputOnlyProcessor::Processor::processor_class_import_path(),
+    held.add_node(
+        crate::core::nodes::NodeSpec::new(
+            MockOutputOnlyNode::Node::node_class_import_path(),
             serde_json::json!({}),
         )
         .with_display_name("second-source".to_string()),
@@ -288,15 +288,12 @@ fn a_stop_after_a_play_tears_every_instance_down_again_and_keeps_the_graph() {
             .iter()
             .filter(|node| {
                 crate::core::graph::GraphNodeWithComponents::has::<
-                    crate::core::graph::ProcessorInstanceComponent,
+                    crate::core::graph::NodeInstanceComponent,
                 >(*node)
             })
             .count()
     });
-    assert_eq!(
-        instances_left, 0,
-        "a stopped graph holds no processor instance"
-    );
+    assert_eq!(instances_left, 0, "a stopped graph holds no node instance");
 }
 
 #[test]

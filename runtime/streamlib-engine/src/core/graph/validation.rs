@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::error::{Error, Result};
-use crate::core::graph::{Link, ProcessorNode};
+use crate::core::graph::{GraphNode, Link};
 use petgraph::algo::is_cyclic_directed;
 use petgraph::graph::DiGraph;
 
 /// Refuse a graph whose links loop back through its own nodes.
-pub fn validate_graph(graph: &DiGraph<ProcessorNode, Link>) -> Result<()> {
+pub fn validate_graph(graph: &DiGraph<GraphNode, Link>) -> Result<()> {
     if is_cyclic_directed(graph) {
         return Err(Error::InvalidGraph("Graph contains cycles".into()));
     }
@@ -18,14 +18,14 @@ pub fn validate_graph(graph: &DiGraph<ProcessorNode, Link>) -> Result<()> {
 mod tests {
     use super::*;
     use crate::core::graph::{Graph, InputLinkPortRef};
-    use crate::core::processors::ProcessorSpec;
-    use crate::core::test_support::{MockProcessor, ensure_test_mocks_registered};
+    use crate::core::nodes::NodeSpec;
+    use crate::core::test_support::{MockNode, ensure_test_mocks_registered};
 
     fn a_node_reading_and_writing(graph: &mut Graph) -> String {
         graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                MockProcessor::processor_class_import_path(),
+            .add_v(NodeSpec::new(
+                MockNode::node_class_import_path(),
                 serde_json::Value::Null,
             ))
             .expect("the node is named")

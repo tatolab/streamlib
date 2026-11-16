@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 
-impl<'a> ProcessorTraversal<'a> {
-    pub fn nth(self, n: usize) -> Option<&'a ProcessorNode> {
+impl<'a> NodeTraversal<'a> {
+    pub fn nth(self, n: usize) -> Option<&'a GraphNode> {
         self.ids
             .into_iter()
             .nth(n)
@@ -23,15 +23,15 @@ impl<'a> LinkTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
-    pub fn nth(self, n: usize) -> Option<&'a ProcessorNode> {
+impl<'a> NodeTraversalMut<'a> {
+    pub fn nth(self, n: usize) -> Option<&'a GraphNode> {
         self.ids
             .into_iter()
             .nth(n)
             .and_then(|idx| self.graph.node_weight(idx))
     }
 
-    pub fn nth_mut(self, n: usize) -> Option<&'a mut ProcessorNode> {
+    pub fn nth_mut(self, n: usize) -> Option<&'a mut GraphNode> {
         self.ids
             .into_iter()
             .nth(n)

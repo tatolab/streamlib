@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor holds a tensor storage buffer and hands it to torch with
-no copy; another processor resolves it by surface id and reads the same values.
+"""A Python node holds a tensor storage buffer and hands it to torch with
+no copy; another node resolves it by surface id and reads the same values.
 
-Both run in processor interpreters of their own beneath `tatolabd`, and report
+Both run in node interpreters of their own beneath `tatolabd`, and report
 over the `MARKER:PROBE_RESULT` lines those interpreters forward to its stderr.
 The export is `kDLCUDA` on Linux and `kDLMetal` on macOS, where MLX reads the
 same tensor too; a rig whose torch sees no such device skips.
@@ -57,7 +57,7 @@ def run_scenario(
         assert isinstance(report, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
         if "failure" in report:
             pytest.fail(
-                f"{report['probe']} raised in its processor interpreter:\n{report['failure']}"
+                f"{report['probe']} raised in its node interpreter:\n{report['failure']}"
             )
         if "torch_device_unavailable" in report:
             pytest.skip(
@@ -92,7 +92,7 @@ def assert_written_through_torch_with_no_copy(producer_report: dict, shape) -> N
 def test_a_tensor_written_through_torch_is_read_by_another_process(
     start_tatolabd_running_stream,
 ):
-    """(1, 3, 640, 640) float32: written in one processor interpreter through
+    """(1, 3, 640, 640) float32: written in one node interpreter through
     `torch.from_dlpack`, resolved by id in another, values equal."""
     reports = run_scenario(
         start_tatolabd_running_stream,

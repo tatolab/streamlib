@@ -16,7 +16,7 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from engine_media_clock import engine_media_clock_now_ns
-from stream_clock_processors import (
+from stream_clock_nodes import (
     CONTINUOUS_TICK_COUNTER_INTERVAL_MS,
     CROSSING_TICK_COUNTER_INTERVAL_MS,
     REAL_TIME_PACED_MESSAGES_REPORTED,

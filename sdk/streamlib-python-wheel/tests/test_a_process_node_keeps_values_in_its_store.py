@@ -41,7 +41,7 @@ def contexts_escalating_to(parent: StandInParentKeepingNodeStoreValues):
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
         parent,
     )
     return (
@@ -97,7 +97,7 @@ def test_a_context_with_no_route_to_the_parent_refuses_by_name():
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
     )
 
     with pytest.raises(RuntimeError, match="no route to the parent"):

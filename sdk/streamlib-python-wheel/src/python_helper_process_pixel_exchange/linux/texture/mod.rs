@@ -14,10 +14,10 @@ use streamlib_consumer_rhi::{
 
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGpuExchangeClient, HelperSurfaceHeldAgainstProducerReuse,
-    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
+    HelperSurfaceReleaseDebt, NodeOutputPoolRequest, escalate_round_trip_to_parent,
     required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
-use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
+use crate::python_node_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
 
 use super::{
     OpaqueFdAllocationExportDescription, close_single_plane_dup_vulkan_refused,
@@ -390,7 +390,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
-        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+        node_output_pool: Option<NodeOutputPoolRequest<'_>>,
     ) -> PyResult<HelperAcquiredTexture> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;
@@ -398,7 +398,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("height", height)?;
         op.set_item("format", wire_format_name)?;
         op.set_item("usage", usage)?;
-        ProcessorOutputPoolRequest::write_onto_escalate_op(processor_output_pool, python, &op)?;
+        NodeOutputPoolRequest::write_onto_escalate_op(node_output_pool, python, &op)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
@@ -408,7 +408,7 @@ impl HelperProcessGpuExchangeClient {
         // metadata extraction below, so a malformed response still pays the
         // release — the same ordering `acquire_pixel_buffer` documents.
         let release_to_parent =
-            self.release_debt_unless_pooled(python, processor_output_pool, &surface_id);
+            self.release_debt_unless_pooled(python, node_output_pool, &surface_id);
         let format_wire_name: String = response_field(&response, "format")?.extract()?;
         let format = TextureFormat::from_wire_name(&format_wire_name).ok_or_else(|| {
             PyRuntimeError::new_err(format!(

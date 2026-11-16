@@ -13,7 +13,7 @@ use crate::control_plane_stub_support::http_get_over_the_local_api_socket;
 use serde_json::{Value, json};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OperationsOnTheStreamsLoadedInThisRuntime,
     OptionsForLoadingOneStream, Runner, StreamLocation,
@@ -26,10 +26,10 @@ use crate::mcp::tests::{first_text_block_json, prompt_text, resource_document, t
 
 /// A native node with nothing to do, added to each stream so each graph has a
 /// node of its own to tell it apart; its one output gives a prompt a port.
-#[streamlib::sdk::processor(execution = manual, output("video", family = Image))]
+#[streamlib::sdk::node(execution = manual, output("video", family = Image))]
 pub struct TwoStreamsTestIdleNode;
 
-impl ManualProcessor for TwoStreamsTestIdleNode::Processor {
+impl ManualNode for TwoStreamsTestIdleNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -51,7 +51,7 @@ struct AnEngineLoadingTwoStreams {
 
 impl AnEngineLoadingTwoStreams {
     fn load() -> Self {
-        PROCESSOR_REGISTRY.register::<TwoStreamsTestIdleNode::Processor>();
+        NODE_REGISTRY.register::<TwoStreamsTestIdleNode::Node>();
         let engine = Runner::new().expect("the engine builds");
         let project_directories = [
             tempfile::tempdir().expect("a project directory"),
@@ -72,13 +72,11 @@ impl AnEngineLoadingTwoStreams {
                     },
                 ))
                 .expect("the stream loads");
-            let mut idle_node = ProcessorSpec::new(
-                TwoStreamsTestIdleNode::processor_class_import_path(),
-                json!({}),
-            );
+            let mut idle_node =
+                NodeSpec::new(TwoStreamsTestIdleNode::node_class_import_path(), json!({}));
             idle_node.display_name = Some(format!("idle-in-{stream_id}"));
             stream
-                .add_processor_reporting_its_name(idle_node)
+                .add_node_reporting_its_name(idle_node)
                 .expect("the idle node is added");
             stream
         });
@@ -162,7 +160,7 @@ async fn a_mutation_lands_only_in_the_stream_it_names() {
             "add_node",
             json!({
                 "stream": SECOND_STREAM_ASSET,
-                "type": TwoStreamsTestIdleNode::processor_class_import_path().as_str(),
+                "type": TwoStreamsTestIdleNode::node_class_import_path().as_str(),
                 "name": "added-to-second",
                 "mode": "live",
             }),
@@ -291,7 +289,7 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
             .expect("the native types")
             .iter()
             .any(|entry| entry["type"]
-                == TwoStreamsTestIdleNode::processor_class_import_path().as_str()),
+                == TwoStreamsTestIdleNode::node_class_import_path().as_str()),
         "{catalog}"
     );
     assert_eq!(
@@ -310,7 +308,7 @@ async fn the_resources_render_every_stream_and_a_prompt_the_stream_it_names() {
             "stream": "second",
             "from_node": "idle-in-second",
             "from_port": "video",
-            "type": TwoStreamsTestIdleNode::processor_class_import_path().as_str(),
+            "type": TwoStreamsTestIdleNode::node_class_import_path().as_str(),
         }),
     )
     .await;

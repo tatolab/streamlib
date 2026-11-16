@@ -1,13 +1,12 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
-use streamlib_processor_schema::ProcessorSchema;
+use streamlib_node_schema::NodeSchema;
 
 use crate::grammar::{
-    DeclaredDescription, ParsedPort, ParsedProcessorAttr, PortDirection,
+    DeclaredDescription, ParsedNodeAttr, ParsedPort, PortDirection,
     declared_description_str_expression,
 };
 use syn::ItemStruct;
@@ -22,9 +21,9 @@ use author_visibility::{
 };
 use port_marker_module::generate_port_marker_module;
 
-pub(crate) fn generate_from_parsed_processor_attr(
+pub(crate) fn generate_from_parsed_node_attr(
     item: &ItemStruct,
-    parsed: &ParsedProcessorAttr,
+    parsed: &ParsedNodeAttr,
     sdk_root: TokenStream,
 ) -> TokenStream {
     let module_name = &item.ident;
@@ -33,11 +32,11 @@ pub(crate) fn generate_from_parsed_processor_attr(
         author_visibility_written_from_a_nested_module(&item.vis, GENERATED_MODULE_MEMBER_DEPTH);
     let port_marker_visibility =
         author_visibility_written_from_a_nested_module(&item.vis, GENERATED_PORT_MARKER_DEPTH);
-    let schema = &parsed.to_processor_schema();
+    let schema = &parsed.to_node_schema();
 
     let config_type = match &parsed.config_type {
         Some(path) => quote! { #path },
-        None => quote! { __streamlib_sdk::processors::EmptyConfig },
+        None => quote! { __streamlib_sdk::nodes::EmptyConfig },
     };
 
     let config_field_name = parsed
@@ -49,7 +48,7 @@ pub(crate) fn generate_from_parsed_processor_attr(
     let custom_fields = extract_custom_fields(item);
     let refused_field_attribute_diagnostics = refused_field_attribute_diagnostics(item);
 
-    let processor_struct = generate_processor_struct_from_schema(
+    let node_struct = generate_node_struct_from_schema(
         schema,
         &config_field_name,
         &custom_fields,
@@ -67,41 +66,41 @@ pub(crate) fn generate_from_parsed_processor_attr(
         &member_visibility,
         &port_marker_visibility,
     );
-    let processor_impl = generate_processor_impl_from_schema(
+    let node_impl = generate_node_impl_from_schema(
         schema,
         &member_visibility,
-        &ProcessorDeclaredMetaAndPortDescriptions::of(parsed),
+        &NodeDeclaredMetaAndPortDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
         &config_type,
         &config_field_name,
         &custom_fields,
     );
 
-    let processor_class_import_path_accessor = quote! {
+    let node_class_import_path_accessor = quote! {
         /// This node type's identity: its class in `tatolab.stream` for a
         /// built-in, else the module path captured where the macro expanded.
         #[allow(dead_code, reason = "the identity function is emitted for every node, and not every crate calls it")]
-        #member_visibility fn processor_class_import_path()
-            -> __streamlib_sdk::descriptors::ProcessorClassImportPath
+        #member_visibility fn node_class_import_path()
+            -> __streamlib_sdk::descriptors::NodeClassImportPath
         {
-            Processor::processor_class_import_path()
+            Node::node_class_import_path()
         }
     };
 
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
     let unsafe_send_impl = if schema.runtime.options.unsafe_send {
         quote! {
-            // SAFETY: This processor contains !Send types (e.g., AVFoundation objects)
+            // SAFETY: This node contains !Send types (e.g., AVFoundation objects)
             // but is safe to send because these types are only accessed from a single
-            // thread after initialization. The processor lifecycle ensures thread safety.
-            unsafe impl Send for Processor {}
+            // thread after initialization. The node lifecycle ensures thread safety.
+            unsafe impl Send for Node {}
         }
     } else {
         quote! {}
     };
 
     quote! {
-        #[allow(non_snake_case, reason = "the generated module is named after the author's processor type")]
+        #[allow(non_snake_case, reason = "the generated module is named after the author's node type")]
         #module_visibility mod #module_name {
             use super::*;
 
@@ -115,13 +114,13 @@ pub(crate) fn generate_from_parsed_processor_attr(
 
             #member_visibility type Config = #config_type;
 
-            #processor_class_import_path_accessor
+            #node_class_import_path_accessor
 
-            #member_visibility fn node(config: Config) -> __streamlib_sdk::processors::ProcessorSpec {
-                Processor::node(config)
+            #member_visibility fn node(config: Config) -> __streamlib_sdk::nodes::NodeSpec {
+                Node::node(config)
             }
 
-            #processor_struct
+            #node_struct
 
             #unsafe_send_impl
 
@@ -129,7 +128,7 @@ pub(crate) fn generate_from_parsed_processor_attr(
 
             #output_link_module
 
-            #processor_impl
+            #node_impl
         }
     }
 }
@@ -139,7 +138,7 @@ struct CustomField {
     name: Ident,
     ty: syn::Type,
     /// The field's authored attributes verbatim; each emission site filters.
-    attributes_authored_on_processor_struct_field: Vec<syn::Attribute>,
+    attributes_authored_on_node_struct_field: Vec<syn::Attribute>,
 }
 
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
@@ -179,9 +178,9 @@ fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
                 .iter()
                 .find(|attribute| attribute.path().is_ident("cfg_attr"))?;
             let message = format!(
-                "`#[cfg_attr(...)]` is not supported on `#[processor]` struct fields (field \
+                "`#[cfg_attr(...)]` is not supported on `#[node]` struct fields (field \
                  `{field_name}`): a `cfg_attr` that expands to a `cfg` would change the field's \
-                 presence on the generated `Processor` struct without changing it on the \
+                 presence on the generated `Node` struct without changing it on the \
                  `from_config` initializer, and the two would no longer agree. Author the \
                  `#[cfg(...)]` directly on the field instead."
             );
@@ -204,7 +203,7 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
                     .clone()
                     .expect("Named field must have ident"),
                 ty: authored_field.ty.clone(),
-                attributes_authored_on_processor_struct_field: authored_field.attrs.clone(),
+                attributes_authored_on_node_struct_field: authored_field.attrs.clone(),
             })
             .collect(),
         syn::Fields::Unit => Vec::new(),
@@ -212,8 +211,8 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
     }
 }
 
-fn generate_processor_struct_from_schema(
-    schema: &ProcessorSchema,
+fn generate_node_struct_from_schema(
+    schema: &NodeSchema,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
     member_visibility: &TokenStream,
@@ -239,7 +238,7 @@ fn generate_processor_struct_from_schema(
         .iter()
         .map(|custom_field| {
             let attributes = custom_field
-                .attributes_authored_on_processor_struct_field
+                .attributes_authored_on_node_struct_field
                 .iter()
                 .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute));
             let name = &custom_field.name;
@@ -249,7 +248,7 @@ fn generate_processor_struct_from_schema(
         .collect();
 
     quote! {
-        #member_visibility struct Processor {
+        #member_visibility struct Node {
             #ipc_input_field
             #ipc_output_field
             #config_field
@@ -260,86 +259,43 @@ fn generate_processor_struct_from_schema(
 
 /// The expression minting a node type's identity: a built-in's class in
 /// `tatolab.stream`, else the module path captured where the macro expands.
-fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> TokenStream {
+fn node_type_minted(built_in_node: bool, node_class_short_name: &str) -> TokenStream {
     if built_in_node {
         quote! {
-            __streamlib_sdk::descriptors::ProcessorClassImportPath::of_built_in_node(
-                #processor_class_short_name,
+            __streamlib_sdk::descriptors::NodeClassImportPath::of_built_in_node(
+                #node_class_short_name,
             )
         }
     } else {
         quote! {
-            __streamlib_sdk::descriptors::ProcessorClassImportPath::new(::core::module_path!())
+            __streamlib_sdk::descriptors::NodeClassImportPath::new(::core::module_path!())
                 .expect("module_path! always names the enclosing module")
         }
     }
 }
 
-fn generate_processor_impl_from_schema(
-    schema: &ProcessorSchema,
+fn generate_node_impl_from_schema(
+    schema: &NodeSchema,
     member_visibility: &TokenStream,
-    declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
+    declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    use streamlib_processor_schema::ProcessorSchemaExecution;
+    use streamlib_node_schema::NodeSchemaExecution;
 
-    let processor_class_short_name = &schema.name;
+    let node_class_short_name = &schema.name;
 
     // Derive execution mode from schema
-    let (
-        execution_variant,
-        execution_description,
-        processor_trait,
-        process_impl,
-        start_impl,
-        stop_impl,
-    ) = match &schema.execution {
-        ProcessorSchemaExecution::Reactive => (
-            quote! { __streamlib_sdk::execution::ProcessExecution::Reactive },
-            "Reactive",
-            quote! { __streamlib_sdk::processors::ReactiveProcessor },
-            quote! {
-                <Self as __streamlib_sdk::processors::ReactiveProcessor>::process(self, ctx)
-            },
-            quote! {
-                Err(__streamlib_sdk::error::Error::Runtime(
-                    "start() is only valid for Manual execution mode.".into()
-                ))
-            },
-            quote! {
-                Err(__streamlib_sdk::error::Error::Runtime(
-                    "stop() is only valid for Manual execution mode.".into()
-                ))
-            },
-        ),
-        ProcessorSchemaExecution::Manual => (
-            quote! { __streamlib_sdk::execution::ProcessExecution::Manual },
-            "Manual",
-            quote! { __streamlib_sdk::processors::ManualProcessor },
-            quote! {
-                let _ = ctx;
-                Err(__streamlib_sdk::error::Error::Runtime(
-                    "process() is only valid for Reactive/Continuous execution modes.".into()
-                ))
-            },
-            quote! {
-                <Self as __streamlib_sdk::processors::ManualProcessor>::start(self, ctx)
-            },
-            quote! {
-                <Self as __streamlib_sdk::processors::ManualProcessor>::stop(self, ctx)
-            },
-        ),
-        ProcessorSchemaExecution::Continuous { interval_ms } => {
-            let interval = *interval_ms;
-            (
-                quote! { __streamlib_sdk::execution::ProcessExecution::Continuous { interval_ms: #interval } },
-                "Continuous",
-                quote! { __streamlib_sdk::processors::ContinuousProcessor },
+    let (execution_variant, execution_description, node_trait, process_impl, start_impl, stop_impl) =
+        match &schema.execution {
+            NodeSchemaExecution::Reactive => (
+                quote! { __streamlib_sdk::execution::ProcessExecution::Reactive },
+                "Reactive",
+                quote! { __streamlib_sdk::nodes::ReactiveNode },
                 quote! {
-                    <Self as __streamlib_sdk::processors::ContinuousProcessor>::process(self, ctx)
+                    <Self as __streamlib_sdk::nodes::ReactiveNode>::process(self, ctx)
                 },
                 quote! {
                     Err(__streamlib_sdk::error::Error::Runtime(
@@ -351,9 +307,46 @@ fn generate_processor_impl_from_schema(
                         "stop() is only valid for Manual execution mode.".into()
                     ))
                 },
-            )
-        }
-    };
+            ),
+            NodeSchemaExecution::Manual => (
+                quote! { __streamlib_sdk::execution::ProcessExecution::Manual },
+                "Manual",
+                quote! { __streamlib_sdk::nodes::ManualNode },
+                quote! {
+                    let _ = ctx;
+                    Err(__streamlib_sdk::error::Error::Runtime(
+                        "process() is only valid for Reactive/Continuous execution modes.".into()
+                    ))
+                },
+                quote! {
+                    <Self as __streamlib_sdk::nodes::ManualNode>::start(self, ctx)
+                },
+                quote! {
+                    <Self as __streamlib_sdk::nodes::ManualNode>::stop(self, ctx)
+                },
+            ),
+            NodeSchemaExecution::Continuous { interval_ms } => {
+                let interval = *interval_ms;
+                (
+                    quote! { __streamlib_sdk::execution::ProcessExecution::Continuous { interval_ms: #interval } },
+                    "Continuous",
+                    quote! { __streamlib_sdk::nodes::ContinuousNode },
+                    quote! {
+                        <Self as __streamlib_sdk::nodes::ContinuousNode>::process(self, ctx)
+                    },
+                    quote! {
+                        Err(__streamlib_sdk::error::Error::Runtime(
+                            "start() is only valid for Manual execution mode.".into()
+                        ))
+                    },
+                    quote! {
+                        Err(__streamlib_sdk::error::Error::Runtime(
+                            "stop() is only valid for Manual execution mode.".into()
+                        ))
+                    },
+                )
+            }
+        };
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
@@ -371,20 +364,20 @@ fn generate_processor_impl_from_schema(
     });
 
     quote! {
-        impl Processor {
-            #member_visibility const NAME: &'static str = #processor_class_short_name;
+        impl Node {
+            #member_visibility const NAME: &'static str = #node_class_short_name;
 
             /// This node type's identity: its class in `tatolab.stream` for a
             /// built-in, else the module path captured where the macro expanded.
-            #member_visibility fn processor_class_import_path()
-                -> __streamlib_sdk::descriptors::ProcessorClassImportPath
+            #member_visibility fn node_class_import_path()
+                -> __streamlib_sdk::descriptors::NodeClassImportPath
             {
                 #node_type_minted
             }
 
-            #member_visibility fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
-                __streamlib_sdk::processors::ProcessorSpec::new(
-                    Self::processor_class_import_path(),
+            #member_visibility fn node(config: #config_type) -> __streamlib_sdk::nodes::NodeSpec {
+                __streamlib_sdk::nodes::NodeSpec::new(
+                    Self::node_class_import_path(),
                     __streamlib_sdk::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
                 )
@@ -400,7 +393,7 @@ fn generate_processor_impl_from_schema(
             }
         }
 
-        impl __streamlib_sdk::processors::__generated_private::GeneratedProcessor for Processor {
+        impl __streamlib_sdk::nodes::__generated_private::GeneratedNode for Node {
             type Config = #config_type;
 
             fn name(&self) -> &str {
@@ -438,28 +431,28 @@ fn generate_processor_impl_from_schema(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #processor_trait>::setup(self, ctx)
+                <Self as #node_trait>::setup(self, ctx)
             }
 
             fn __generated_teardown(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextFullAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #processor_trait>::teardown(self, ctx)
+                <Self as #node_trait>::teardown(self, ctx)
             }
 
             fn __generated_on_pause(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextLimitedAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #processor_trait>::on_pause(self, ctx)
+                <Self as #node_trait>::on_pause(self, ctx)
             }
 
             fn __generated_on_resume(
                 &mut self,
                 ctx: &__streamlib_sdk::context::RuntimeContextLimitedAccess<'_>,
             ) -> __streamlib_sdk::error::Result<()> {
-                <Self as #processor_trait>::on_resume(self, ctx)
+                <Self as #node_trait>::on_resume(self, ctx)
             }
         }
     }
@@ -467,7 +460,7 @@ fn generate_processor_impl_from_schema(
 
 /// Generate from_config method from schema.
 fn generate_from_config_from_schema(
-    schema: &ProcessorSchema,
+    schema: &NodeSchema,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
@@ -493,7 +486,7 @@ fn generate_from_config_from_schema(
         .iter()
         .map(|custom_field| {
             let attributes = custom_field
-                .attributes_authored_on_processor_struct_field
+                .attributes_authored_on_node_struct_field
                 .iter()
                 .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute));
             let name = &custom_field.name;
@@ -516,15 +509,15 @@ fn generate_from_config_from_schema(
 /// The node's declared category and description and each port's description,
 /// beside the schema the descriptor is emitted from: the schema carries no
 /// category, and a `const` description has no text it could carry.
-struct ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
+struct NodeDeclaredMetaAndPortDescriptions<'parsed> {
     node_description: Option<&'parsed DeclaredDescription>,
     category: Option<&'parsed str>,
     inputs: Vec<Option<&'parsed DeclaredDescription>>,
     outputs: Vec<Option<&'parsed DeclaredDescription>>,
 }
 
-impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
-    fn of(parsed: &'parsed ParsedProcessorAttr) -> Self {
+impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
+    fn of(parsed: &'parsed ParsedNodeAttr) -> Self {
         let of_ports = |ports: &'parsed [ParsedPort]| {
             ports.iter().map(|port| port.description.as_ref()).collect()
         };
@@ -538,8 +531,8 @@ impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
 }
 
 fn generate_descriptor_from_schema(
-    schema: &ProcessorSchema,
-    declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
+    schema: &NodeSchema,
+    declared_meta_and_port_descriptions: &NodeDeclaredMetaAndPortDescriptions<'_>,
     config_type: &TokenStream,
 ) -> TokenStream {
     let description =
@@ -609,15 +602,15 @@ fn generate_descriptor_from_schema(
     // derive fails on a diagnostic that names the fix.
     let config_schema = quote! {
         .with_config_schema(
-            <#config_type as __streamlib_sdk::descriptors::ProcessorConfigJsonSchema>
-                ::processor_config_schema_document()
+            <#config_type as __streamlib_sdk::descriptors::NodeConfigJsonSchema>
+                ::node_config_schema_document()
         )
     };
 
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
         quote! {
-            .with_scheduling(__streamlib_sdk::descriptors::ProcessorScheduling {
+            .with_scheduling(__streamlib_sdk::descriptors::NodeScheduling {
                 priority: #priority_tokens,
             })
         }
@@ -636,12 +629,12 @@ fn generate_descriptor_from_schema(
     // the author's struct — the generated module's own path *is* the type
     // path, with no `stringify!` needed to append the name.
     quote! {
-        fn descriptor() -> Option<__streamlib_sdk::descriptors::ProcessorDescriptor> {
+        fn descriptor() -> Option<__streamlib_sdk::descriptors::NodeDescriptor> {
             Some(
-                __streamlib_sdk::descriptors::ProcessorDescriptor::new(
-                    __streamlib_sdk::descriptors::ProcessorClassShortName::new(Processor::NAME)
+                __streamlib_sdk::descriptors::NodeDescriptor::new(
+                    __streamlib_sdk::descriptors::NodeClassShortName::new(Node::NAME)
                         .expect("a struct's identifier is never blank"),
-                    Processor::processor_class_import_path(),
+                    Node::node_class_import_path(),
                     #description,
                 )
                     .with_repository(#repository)
@@ -656,8 +649,8 @@ fn generate_descriptor_from_schema(
     }
 }
 
-fn thread_priority_tokens(priority: streamlib_processor_schema::ThreadPriority) -> TokenStream {
-    use streamlib_processor_schema::ThreadPriority;
+fn thread_priority_tokens(priority: streamlib_node_schema::ThreadPriority) -> TokenStream {
+    use streamlib_node_schema::ThreadPriority;
     match priority {
         ThreadPriority::RealTime => quote! { __streamlib_sdk::execution::ThreadPriority::RealTime },
         ThreadPriority::High => quote! { __streamlib_sdk::execution::ThreadPriority::High },
@@ -666,7 +659,7 @@ fn thread_priority_tokens(priority: streamlib_processor_schema::ThreadPriority) 
 }
 
 /// Generate iceoryx2 accessor methods from schema.
-fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStream {
+fn generate_iceoryx2_accessors_from_schema(schema: &NodeSchema) -> TokenStream {
     let has_iceoryx2_outputs = !schema.outputs.is_empty();
     let has_iceoryx2_inputs = !schema.inputs.is_empty();
 
@@ -770,9 +763,9 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 
 /// Emit an expression that rebuilds `family` as a `PortFamilyDeclaration`.
 fn port_family_declaration_tokens(
-    family: &streamlib_processor_schema::PortFamilyDeclaration,
+    family: &streamlib_node_schema::PortFamilyDeclaration,
 ) -> TokenStream {
-    use streamlib_processor_schema::{
+    use streamlib_node_schema::{
         ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
         ImageOutputPortFrameRate, OutputPortDeclaredNames,
     };
@@ -874,9 +867,9 @@ fn port_family_declaration_tokens(
 /// The values are already validated by the grammar, so this only has to render
 /// them — a contract that gets this far is one the read-side stage can honour.
 fn audio_window_contract_tokens(
-    audio_window: Option<&streamlib_processor_schema::AudioWindowContract>,
+    audio_window: Option<&streamlib_node_schema::AudioWindowContract>,
 ) -> TokenStream {
-    use streamlib_processor_schema::AudioWindowContract;
+    use streamlib_node_schema::AudioWindowContract;
 
     match audio_window {
         None => quote! { ::std::option::Option::None },
@@ -923,4 +916,4 @@ fn audio_window_contract_tokens(
 }
 
 #[cfg(test)]
-mod processor_struct_emit_tests;
+mod node_struct_emit_tests;

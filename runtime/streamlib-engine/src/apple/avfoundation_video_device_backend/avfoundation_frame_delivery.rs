@@ -107,7 +107,7 @@ pub(super) struct AvFoundationFrameDelivery {
     pub(super) stream_format: VideoCaptureStreamFormat,
     pub(super) pixel_format_delivered: PixelFormat,
     pub(super) gpu_context: GpuContextLimitedAccess,
-    pub(super) processor_id_of_the_capturing_node: String,
+    pub(super) node_run_id_of_the_capturing_node: String,
     pub(super) capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     pub(super) capture_progress: Mutex<AvFoundationCaptureProgress>,
     /// The route of the thread that started the delivery, which each frame's
@@ -276,7 +276,7 @@ impl AvFoundationCaptureProgress {
                     delivery.pixel_format_delivered,
                     width,
                     height,
-                    &delivery.processor_id_of_the_capturing_node,
+                    &delivery.node_run_id_of_the_capturing_node,
                 )?),
         };
         conversion.convert_into_pooled_pixel_buffer(

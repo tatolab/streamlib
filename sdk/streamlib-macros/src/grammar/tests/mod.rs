@@ -3,20 +3,19 @@
 
 use super::*;
 
+mod node_attribute_and_node_meta_tests;
 mod port_grammar_tests;
-mod processor_attribute_and_node_meta_tests;
 
 fn ident(name: &str) -> Ident {
     Ident::new(name, proc_macro2::Span::call_site())
 }
 
-fn parse_ok(tokens: proc_macro2::TokenStream) -> ParsedProcessorAttr {
-    parse2(tokens, DeclaredNodeMeta::default(), &ident("MyProcessor"))
-        .expect("attribute should parse")
+fn parse_ok(tokens: proc_macro2::TokenStream) -> ParsedNodeAttr {
+    parse2(tokens, DeclaredNodeMeta::default(), &ident("MyNode")).expect("attribute should parse")
 }
 
 fn parse_err(tokens: proc_macro2::TokenStream) -> String {
-    match parse2(tokens, DeclaredNodeMeta::default(), &ident("MyProcessor")) {
+    match parse2(tokens, DeclaredNodeMeta::default(), &ident("MyNode")) {
         Ok(_) => panic!("attribute should fail to parse"),
         Err(err) => err.to_string(),
     }
@@ -25,7 +24,7 @@ fn parse_err(tokens: proc_macro2::TokenStream) -> String {
 fn node_struct_with(attributes: proc_macro2::TokenStream) -> syn::ItemStruct {
     syn::parse_quote! {
         #attributes
-        struct MyProcessor;
+        struct MyNode;
     }
 }
 
@@ -46,6 +45,6 @@ fn node_meta_err(attributes: proc_macro2::TokenStream) -> String {
 fn parse_ok_with_meta(
     attributes: proc_macro2::TokenStream,
     tokens: proc_macro2::TokenStream,
-) -> ParsedProcessorAttr {
-    parse2(tokens, node_meta_ok(attributes), &ident("MyProcessor")).expect("attribute should parse")
+) -> ParsedNodeAttr {
+    parse2(tokens, node_meta_ok(attributes), &ident("MyNode")).expect("attribute should parse")
 }

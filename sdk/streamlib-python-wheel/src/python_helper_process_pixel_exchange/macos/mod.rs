@@ -88,7 +88,7 @@ pub(crate) struct IOSurfaceMachPortExportDescription {
     pub(crate) format_wire_name: &'static str,
     /// Present when the surface backs a texture.
     pub(crate) vk_image_creation_recipe:
-        Option<crate::python_processor_context::ExportedVkImageCreationRecipe>,
+        Option<crate::python_node_context::ExportedVkImageCreationRecipe>,
 }
 
 impl IOSurfaceMachPortExportDescription {
@@ -100,9 +100,7 @@ impl IOSurfaceMachPortExportDescription {
         width: u32,
         height: u32,
         format_wire_name: &'static str,
-        vk_image_creation_recipe: Option<
-            crate::python_processor_context::ExportedVkImageCreationRecipe,
-        >,
+        vk_image_creation_recipe: Option<crate::python_node_context::ExportedVkImageCreationRecipe>,
     ) -> PyResult<Self> {
         let iosurface_send_right =
             streamlib::sdk::engine::apple_surface_share::create_iosurface_mach_send_right(
@@ -599,7 +597,7 @@ impl HelperProcessGpuExchangeClient {
             .get("format")
             .and_then(|value| value.as_str())
             .unwrap_or("unknown");
-        let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
+        let format = crate::python_node_context::parse_pixel_format_name(format_name)?;
         let mut received_ports = received_ports.into_iter();
         let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
             return Err(PyRuntimeError::new_err(format!(

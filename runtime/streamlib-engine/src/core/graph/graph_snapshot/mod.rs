@@ -35,7 +35,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
 use crate::core::context::StreamClockSpec;
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_interface_resolution::{
     GraphInterfaceLevel, is_a_graph_interface_node_type,
     the_family_a_port_linked_to_an_interface_node_carries,
@@ -48,7 +48,7 @@ use crate::core::graph::{
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
 use crate::core::json_schema::{LabelledNodeGroup, LinkPortRefOutput};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 /// A graph a runtime runs: its nodes by class import path, config and name,
@@ -215,7 +215,7 @@ pub struct GraphSnapshotNode {
 
     /// The import path of the class the node is.
     #[serde(rename = "type")]
-    pub processor_type: ProcessorClassImportPath,
+    pub node_type: NodeClassImportPath,
 
     /// The node's config. Absent reads as `{}`, the config `add_node` takes
     /// when it is given none.
@@ -412,17 +412,15 @@ impl GraphSnapshot {
             .validate(node_types)
     }
 
-    pub fn node_types_its_running_nodes_name_at_every_level(
-        &self,
-    ) -> Vec<ProcessorClassImportPath> {
+    pub fn node_types_its_running_nodes_name_at_every_level(&self) -> Vec<NodeClassImportPath> {
         self.nodes_at_every_level()
             .into_iter()
             .filter(|(_, node)| {
                 node.fragment.is_none()
-                    && !is_a_graph_variable_node_type(&node.processor_type)
-                    && !is_a_graph_interface_node_type(node.processor_type.as_str())
+                    && !is_a_graph_variable_node_type(&node.node_type)
+                    && !is_a_graph_interface_node_type(node.node_type.as_str())
             })
-            .map(|(_, node)| node.processor_type.clone())
+            .map(|(_, node)| node.node_type.clone())
             .collect()
     }
 
@@ -478,12 +476,12 @@ impl GraphSnapshot {
         for node in &self.nodes {
             node_types.refuse_a_node_this_stream_cannot_add(
                 &node.name,
-                &node.processor_type,
+                &node.node_type,
                 &node.config,
             )?;
-            if node_types.port_info(&node.processor_type).is_none() {
-                return Err(Error::UnknownProcessorType {
-                    ident: node.processor_type.clone(),
+            if node_types.port_info(&node.node_type).is_none() {
+                return Err(Error::UnknownNodeType {
+                    ident: node.node_type.clone(),
                 });
             }
             match nodes_by_cast_name.entry(cast_exposed_name_to_url_safe(&node.name)?.into_owned())
@@ -528,10 +526,7 @@ impl GraphSnapshot {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
                 &node.config,
-                config_keys_of_a_node_type_holding_a_node_reference(
-                    node_types,
-                    &node.processor_type,
-                ),
+                config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type),
             )? {
                 let referenced_node_name = &reference.edge.referenced_node;
                 let Some(referenced_node) = nodes_by_cast_name
@@ -547,7 +542,7 @@ impl GraphSnapshot {
                 };
                 refuse_a_reference_to_a_node_of_the_wrong_type(
                     &reference,
-                    &referenced_node.processor_type,
+                    &referenced_node.node_type,
                 )?;
                 references_of_every_node.push(reference);
             }

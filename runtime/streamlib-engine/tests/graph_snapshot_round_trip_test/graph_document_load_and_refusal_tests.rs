@@ -17,19 +17,19 @@ fn a_graph_document_saved_from_a_running_stream_loads_back_as_the_same_graph() {
     let first =
         an_empty_stream_loaded_into(&first_runner, project_directory.path(), "built-in-code");
     let first_camera = first
-        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
+        .add_node(NodeSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
     let second_camera = first
-        .add_processor(ProcessorSpec::new(camera, serde_json::json!({"fps": 30})))
+        .add_node(NodeSpec::new(camera, serde_json::json!({"fps": 30})))
         .unwrap();
     let front_display = first
-        .add_processor(
-            ProcessorSpec::new(display.clone(), serde_json::json!({"width": 1920}))
+        .add_node(
+            NodeSpec::new(display.clone(), serde_json::json!({"width": 1920}))
                 .with_display_name("Front Display"),
         )
         .unwrap();
     let back_display = first
-        .add_processor(ProcessorSpec::new(display, serde_json::json!({})))
+        .add_node(NodeSpec::new(display, serde_json::json!({})))
         .unwrap();
     first
         .connect(
@@ -304,8 +304,8 @@ fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
-    let _ = stream.add_processor(ProcessorSpec::new(
-        ProcessorClassImportPath::new(UNRESOLVED).unwrap(),
+    let _ = stream.add_node(NodeSpec::new(
+        NodeClassImportPath::new(UNRESOLVED).unwrap(),
         serde_json::json!({}),
     ));
     let rendered = the_graph_document_of(&stream);
@@ -316,7 +316,7 @@ fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
         load(&reloading_runner, project_directory.path(), rendered),
         "a render naming an unresolved type cannot load",
     ) {
-        Error::UnknownProcessorType { ident } => {
+        Error::UnknownNodeType { ident } => {
             assert_eq!(ident.as_str(), UNRESOLVED);
         }
         other => panic!("expected the load to refuse the unresolved type, got {other:?}"),

@@ -7,7 +7,7 @@
 
 use parking_lot::Mutex;
 
-use super::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::port_stream_facts::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestSetProcessRaisingBecause;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseOk;
@@ -33,7 +33,7 @@ impl ProcessRaisingTheNodeReports {
 
 /// Record what the node's `process()` raised, or that it runs cleanly again.
 pub(super) fn handle_set_process_raising_because(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestSetProcessRaisingBecause,
 ) -> EscalateResponse {
@@ -51,7 +51,7 @@ mod tests {
     use super::*;
 
     fn set_process_raising_because(
-        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
         request_id: &str,
         raising_because: Option<&str>,
     ) {
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn a_raise_is_held_until_the_helper_reports_a_clean_run() {
-        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
+        let what_the_node_reaches = WhatAHelperPlacedNodeReaches::default();
         assert_eq!(
             what_the_node_reaches
                 .process_raising_the_node_reports

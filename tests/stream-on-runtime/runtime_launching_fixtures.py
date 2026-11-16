@@ -15,7 +15,7 @@ import pytest
 
 from conftest import (
     NO_VULKAN_DRIVER_REFUSAL,
-    STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN,
+    STREAM_UNLOAD_REMOVED_NODES_LOG_LINE_PATTERN,
     TATOLAB_RUN_TO_COMPLETION_TIMEOUT_SECONDS,
     PrivateMachineDirectories,
     StartedRuntimeProcesses,
@@ -81,7 +81,7 @@ def start_tatolabd(
     `start_tatolabd(*, extra_environment=None, working_directory=None,
     wait_until_serving=True) -> TatolabdUnderTest`:
     - `extra_environment` is laid over the test's environment, a `None` value
-      unsetting that variable; every stream's processor interpreters inherit it;
+      unsetting that variable; every stream's node interpreters inherit it;
     - `working_directory` defaults to a fresh directory of the test's own;
     - with `wait_until_serving`, returns once the local API answers, and a
       `tatolabd` that exits first fails the test. A second `tatolabd` while one
@@ -129,9 +129,9 @@ def start_tatolabd_running_stream(
     """Start this test's `tatolabd`, then run `stream_or_graph` on it with `tatolab open --play`.
 
     `start_tatolabd_running_stream(stream_or_graph, *,
-    project_directory=None, processor_interpreter=None, extra_environment=None,
+    project_directory=None, node_interpreter=None, extra_environment=None,
     working_directory=None) -> TatolabdUnderTest`. `extra_environment` and
-    `working_directory` are `tatolabd`'s, so the stream's processor interpreters
+    `working_directory` are `tatolabd`'s, so the stream's node interpreters
     inherit the environment. Returns as soon as `tatolab open --play` is started, its
     load not awaited: the run is `tatolabd.stream_runs[-1]`, and
     `await_loaded()` on it waits for the load, while a refused load ends that
@@ -142,7 +142,7 @@ def start_tatolabd_running_stream(
         stream_or_graph: StreamOrGraph,
         *,
         project_directory: "Path | None" = None,
-        processor_interpreter: "Path | None" = None,
+        node_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
         working_directory: "Path | None" = None,
     ) -> TatolabdUnderTest:
@@ -152,7 +152,7 @@ def start_tatolabd_running_stream(
         started_tatolabd.run_stream(
             stream_or_graph,
             project_directory=project_directory,
-            processor_interpreter=processor_interpreter,
+            node_interpreter=node_interpreter,
         )
         return started_tatolabd
 
@@ -168,7 +168,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
     """Run a stream on a `tatolabd` that reaches no Vulkan driver, to the end of the run.
 
     `run_stream_on_tatolabd_with_no_vulkan_driver(stream_or_graph, *,
-    project_directory=None, processor_interpreter=None, extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`, its load
+    project_directory=None, node_interpreter=None, extra_environment=None) -> StreamRunWithNoVulkanDriverOutcome`, its load
     followed to its end. Needs no device: a graph the compile or the load
     refuses ends the load with its stream failed and the reason; one it loads
     fails at its start, at the GPU, before any device opens. The runtime
@@ -200,7 +200,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         stream_or_graph: StreamOrGraph,
         *,
         project_directory: "Path | None" = None,
-        processor_interpreter: "Path | None" = None,
+        node_interpreter: "Path | None" = None,
         extra_environment: "dict[str, str | None] | None" = None,
     ) -> StreamRunWithNoVulkanDriverOutcome:
         tatolabd = the_tatolabd_with_no_vulkan_driver(
@@ -209,7 +209,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         tatolab_run = tatolab_commands_of_this_test.tatolab_run_of(
             stream_or_graph,
             project_directory=project_directory,
-            processor_interpreter=processor_interpreter,
+            node_interpreter=node_interpreter,
         )
         tatolabd_stderr_mark = tatolabd.stderr_line_count()
         stream_run = tatolabd.run_stream(tatolab_run)
@@ -254,7 +254,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
         listed_streams = local_api.list_streams()
         tatolabd_stderr_text = tatolabd.stderr_text_since(tatolabd_stderr_mark)
         start_began = STREAM_START_BEGAN_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
-        unload = STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
+        unload = STREAM_UNLOAD_REMOVED_NODES_LOG_LINE_PATTERN.search(tatolabd_stderr_text)
         assert listed_streams == [], (
             f"`{stream_run.command_description}` ended {exit_status} and left the runtime "
             f"holding {listed_streams}; standard error:\n{stream_run.recent_stderr()}"
@@ -276,7 +276,7 @@ def run_stream_on_tatolabd_with_no_vulkan_driver(
             loaded=start_began is not None,
             loaded_stream_id=start_began.group("stream_id") if start_began else None,
             loaded_node_count=(
-                int(unload.group("processor_count")) if start_began and unload else None
+                int(unload.group("node_count")) if start_began and unload else None
             ),
             failed_or_refused=failed_or_refused_because is not None,
             failed_or_refused_because=failed_or_refused_because,

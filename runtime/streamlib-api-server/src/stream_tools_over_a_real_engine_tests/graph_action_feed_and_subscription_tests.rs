@@ -15,7 +15,7 @@ async fn a_graph_action_sent_over_mcp_is_the_action_its_commit_records() {
     let project = a_project_whose_main_stream_holds_one_source();
     engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     let transacted_actions = json!([
         { "operation": "add_node", "stream": stream_asset, "type": sink_type.as_str(),
           "name": "monitor", "as": "monitor" },
@@ -294,7 +294,7 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
     assert_eq!(opened["streams"][0]["state"], "stopped", "{opened}");
     let stream_id = project.stream_id_of("main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
         Arc::clone(&operations_on_the_loaded_streams),
     )
@@ -396,15 +396,13 @@ async fn a_stream_graph_subscriber_is_sent_each_edit_and_follows_its_stream_to_i
 }
 
 /// A native source whose every `process()` raises the same words.
-#[streamlib::sdk::processor(execution = continuous(interval_ms = 5), output("video", family = Image))]
+#[streamlib::sdk::node(execution = continuous(interval_ms = 5), output("video", family = Image))]
 pub struct StreamToolsTestSourceWhoseProcessRaises;
 
 /// What [`StreamToolsTestSourceWhoseProcessRaises`] raises.
 const WHAT_THE_RAISING_SOURCE_RAISES: &str = "the test source raises on every process";
 
-impl streamlib::sdk::processors::ContinuousProcessor
-    for StreamToolsTestSourceWhoseProcessRaises::Processor
-{
+impl streamlib::sdk::nodes::ContinuousNode for StreamToolsTestSourceWhoseProcessRaises::Node {
     fn process(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
@@ -428,16 +426,15 @@ impl streamlib::sdk::processors::ContinuousProcessor
 )]
 async fn a_stream_graph_subscriber_is_sent_a_raise_no_graph_event_reports() {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| {
-        PROCESSOR_REGISTRY.register::<StreamToolsTestSourceWhoseProcessRaises::Processor>()
-    });
+    REGISTERED
+        .call_once(|| NODE_REGISTRY.register::<StreamToolsTestSourceWhoseProcessRaises::Node>());
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(json!({
         "stream": "raising",
         "nodes": [{
             "id": SOURCE_NODE_UUID,
             "name": "source",
-            "type": StreamToolsTestSourceWhoseProcessRaises::processor_class_import_path().as_str(),
+            "type": StreamToolsTestSourceWhoseProcessRaises::node_class_import_path().as_str(),
             "config": {},
         }],
         "links": [],

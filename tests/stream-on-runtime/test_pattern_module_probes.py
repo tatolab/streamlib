@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Probe that reads the test pattern module's frames from a processor interpreter.
+"""Probe that reads the test pattern module's frames from a node interpreter.
 
 Reports the first two Image frames it receives as one JSON marker line on
-`tatolabd`'s standard error — the boundary under test is one processor's
-device frames reaching a Python processor in an interpreter of its own.
+`tatolabd`'s standard error — the boundary under test is one node's
+device frames reaching a Python node in an interpreter of its own.
 """
 
 import dataclasses

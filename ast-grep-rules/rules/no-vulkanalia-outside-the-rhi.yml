@@ -16,7 +16,7 @@ ignores:
   - runtime/streamlib-consumer-rhi/**
   - adapters/streamlib-adapter-*/**
   - runtime/streamlib-vulkan-video/**
-  # The wrapper layer between processors and the RHI wires a few Vulkan handles into pools.
+  # The wrapper layer between nodes and the RHI wires a few Vulkan handles into pools.
   - runtime/streamlib-engine/src/core/context/gpu_context/**
   # Tests bring up real Vulkan devices for end-to-end validation.
   - "**/tests/**"

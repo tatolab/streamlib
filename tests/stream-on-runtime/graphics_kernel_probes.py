@@ -4,10 +4,10 @@
 """Probes for named-binding graphics draws, from where a kernel really runs.
 
 A kernel is an object: built in `setup()` where the capability is Full, drawn
-per frame in `process()`. Every probe runs in a processor interpreter of
+per frame in `process()`. Every probe runs in a node interpreter of
 its own and reports one `MARKER:PROBE_RESULT` JSON line.
 
-What is worth breaking a build over is that a Python processor can render a
+What is worth breaking a build over is that a Python node can render a
 pass — a fullscreen triangle sampling an acquired texture into an acquired
 colour target, with no application-supplied bridge and no vertex buffer
 anywhere — and that every way of getting the bindings wrong is refused by name:
@@ -148,7 +148,7 @@ class _GraphicsKernelProbeBase:
 
     Nothing upstream is needed: the probe acquires both surfaces itself, which
     is the point — a draw's colour target is an engine-owned texture the
-    processor names, not something handed to it.
+    node names, not something handed to it.
     """
 
     # Declared, not merely assigned: `setup` assigns it inside a nested
@@ -197,10 +197,10 @@ class _GraphicsKernelProbeBase:
 @node.meta(description="Draws a fullscreen triangle sampling one texture into another")
 @node.process(execution="manual")
 class FullscreenTriangleDrawProbe(_GraphicsKernelProbeBase):
-    """The demo: a Python processor renders a pass with named bindings.
+    """The demo: a Python node renders a pass with named bindings.
 
     No bridge is installed anywhere, no vertex buffer exists, and the colour
-    target is a texture this processor acquired rather than one an application
+    target is a texture this node acquired rather than one an application
     handed it.
     """
 
@@ -486,7 +486,7 @@ class RenderedTextureFrameProducer:
 @node.meta(description="Reads a rendered frame's pixels through cpu() in its own interpreter")
 @node.process
 class RenderedFrameCpuReader:
-    """Reads the first frame it is handed through `cpu()`, in a processor
+    """Reads the first frame it is handed through `cpu()`, in a node
     interpreter of its own, and reports what each half holds."""
 
     video_from_upstream = Input(Image, delivery="ordered")

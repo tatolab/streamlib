@@ -16,7 +16,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
     "Typing :: Typed",
 ]
-# The stream package and nothing of the engine: the node runs in a processor
+# The stream package and nothing of the engine: the node runs in a node
 # interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
 # A minimum, never an exact pin, as a third party's package depends on it.
 dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version

@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use streamlib::sdk::execution::processor_scheduling_loop::{
-    ProcessorSchedulingCallback, ProcessorSchedulingLoopControl, ProcessorSchedulingLoopHost,
+use streamlib::sdk::execution::node_scheduling_loop::{
+    NodeSchedulingCallback, NodeSchedulingLoopControl, NodeSchedulingLoopHost,
     run_continuous_scheduling_loop_on_its_stream_clock,
     run_continuous_scheduling_loop_on_real_time, run_reactive_scheduling_loop,
 };
@@ -21,7 +21,7 @@ use streamlib::sdk::iceoryx2::InputMailboxesInner;
 use crate::python_helper_stream_clock::{
     HelperProcessStreamClock, helper_stream_clock_open_step_index,
 };
-use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 
 const CALL_HOOK_FROM_THE_SCHEDULING_LOOP_METHOD: &str = "call_hook_from_the_scheduling_loop";
 
@@ -31,7 +31,7 @@ const TAKE_THE_LIFECYCLE_COMMANDS_THAT_WOKE_THE_SCHEDULING_LOOP_METHOD: &str =
 #[pyfunction]
 #[pyo3(signature = (
     *,
-    processor_interpreter,
+    node_interpreter,
     link_data_access,
     lifecycle_command_arrival_fd,
     execution_mode,
@@ -46,8 +46,8 @@ const TAKE_THE_LIFECYCLE_COMMANDS_THAT_WOKE_THE_SCHEDULING_LOOP_METHOD: &str =
 )]
 pub(crate) fn run_the_scheduling_loop_of_this_helper(
     python: Python<'_>,
-    processor_interpreter: Py<PyAny>,
-    link_data_access: Py<PythonProcessorLinkDataAccess>,
+    node_interpreter: Py<PyAny>,
+    link_data_access: Py<PythonNodeLinkDataAccess>,
     lifecycle_command_arrival_fd: RawFd,
     execution_mode: &str,
     interval_ms: u32,
@@ -55,8 +55,8 @@ pub(crate) fn run_the_scheduling_loop_of_this_helper(
     stream_clock_may_step: bool,
     paused: bool,
 ) -> PyResult<()> {
-    let mut host = ProcessorSchedulingLoopHostInThisHelper {
-        processor_interpreter,
+    let mut host = NodeSchedulingLoopHostInThisHelper {
+        node_interpreter,
         link_data_access,
         lifecycle_command_arrival_fd,
         stream_clock_may_step,
@@ -66,7 +66,7 @@ pub(crate) fn run_the_scheduling_loop_of_this_helper(
     };
     match execution_mode {
         "reactive" => {
-            python.detach(|| run_reactive_scheduling_loop("this helper's processor", &mut host))
+            python.detach(|| run_reactive_scheduling_loop("this helper's node", &mut host))
         }
         "continuous" if paced_by_real_time => {
             python.detach(|| run_continuous_scheduling_loop_on_real_time(&mut host, interval_ms))
@@ -91,9 +91,9 @@ pub(crate) fn run_the_scheduling_loop_of_this_helper(
     }
 }
 
-struct ProcessorSchedulingLoopHostInThisHelper {
-    processor_interpreter: Py<PyAny>,
-    link_data_access: Py<PythonProcessorLinkDataAccess>,
+struct NodeSchedulingLoopHostInThisHelper {
+    node_interpreter: Py<PyAny>,
+    link_data_access: Py<PythonNodeLinkDataAccess>,
     lifecycle_command_arrival_fd: RawFd,
     /// Whether the stream's clock may run behind the step barrier, so the
     /// node's callbacks count on the step ledger.
@@ -107,22 +107,22 @@ struct ProcessorSchedulingLoopHostInThisHelper {
     raised_from_python: Option<PyErr>,
 }
 
-impl ProcessorSchedulingLoopHostInThisHelper {
-    fn link_data_access(&self) -> &PythonProcessorLinkDataAccess {
+impl NodeSchedulingLoopHostInThisHelper {
+    fn link_data_access(&self) -> &PythonNodeLinkDataAccess {
         self.link_data_access.get()
     }
 
-    fn stop_on(&mut self, raised: PyErr) -> ProcessorSchedulingLoopControl {
+    fn stop_on(&mut self, raised: PyErr) -> NodeSchedulingLoopControl {
         self.raised_from_python.get_or_insert(raised);
         self.stopped = true;
-        ProcessorSchedulingLoopControl::Stop
+        NodeSchedulingLoopControl::Stop
     }
 
-    fn control_after_what_arrived(&self) -> ProcessorSchedulingLoopControl {
+    fn control_after_what_arrived(&self) -> NodeSchedulingLoopControl {
         if self.stopped {
-            ProcessorSchedulingLoopControl::Stop
+            NodeSchedulingLoopControl::Stop
         } else {
-            ProcessorSchedulingLoopControl::KeepRunning
+            NodeSchedulingLoopControl::KeepRunning
         }
     }
 
@@ -155,7 +155,7 @@ impl ProcessorSchedulingLoopHostInThisHelper {
     fn wait_for_a_lifecycle_command(
         &mut self,
         longest_wait: Duration,
-    ) -> ProcessorSchedulingLoopControl {
+    ) -> NodeSchedulingLoopControl {
         let mut fds = [self.lifecycle_command_arrival_pollfd()];
         match Self::poll_readable(&mut fds, longest_wait) {
             Ok(0) => self.control_after_what_arrived(),
@@ -172,16 +172,12 @@ impl ProcessorSchedulingLoopHostInThisHelper {
     }
 }
 
-impl ProcessorSchedulingLoopHost for ProcessorSchedulingLoopHostInThisHelper {
-    fn call_processor(
-        &mut self,
-        callback: ProcessorSchedulingCallback,
-        counted_on_the_step_ledger: bool,
-    ) {
+impl NodeSchedulingLoopHost for NodeSchedulingLoopHostInThisHelper {
+    fn call_node(&mut self, callback: NodeSchedulingCallback, counted_on_the_step_ledger: bool) {
         let hook_name = match callback {
-            ProcessorSchedulingCallback::OnPause => "on_pause",
-            ProcessorSchedulingCallback::OnResume => "on_resume",
-            ProcessorSchedulingCallback::Process => "process",
+            NodeSchedulingCallback::OnPause => "on_pause",
+            NodeSchedulingCallback::OnResume => "on_resume",
+            NodeSchedulingCallback::Process => "process",
         };
         let step_ledger = (counted_on_the_step_ledger && self.stream_clock_may_step)
             .then(|| {
@@ -193,7 +189,7 @@ impl ProcessorSchedulingLoopHost for ProcessorSchedulingLoopHostInThisHelper {
             step_ledger.note_a_callback_started();
         }
         let called = Python::attach(|python| {
-            self.processor_interpreter
+            self.node_interpreter
                 .call_method1(
                     python,
                     CALL_HOOK_FROM_THE_SCHEDULING_LOOP_METHOD,
@@ -231,16 +227,16 @@ impl ProcessorSchedulingLoopHost for ProcessorSchedulingLoopHostInThisHelper {
         Some(self.lifecycle_command_arrival_fd)
     }
 
-    fn take_arrived_control(&mut self) -> ProcessorSchedulingLoopControl {
+    fn take_arrived_control(&mut self) -> NodeSchedulingLoopControl {
         if self.stopped {
-            return ProcessorSchedulingLoopControl::Stop;
+            return NodeSchedulingLoopControl::Stop;
         }
         self.wait_for_a_lifecycle_command(Duration::ZERO)
     }
 
-    fn take_the_control_its_fd_announced(&mut self) -> ProcessorSchedulingLoopControl {
+    fn take_the_control_its_fd_announced(&mut self) -> NodeSchedulingLoopControl {
         let taken = Python::attach(|python| {
-            self.processor_interpreter
+            self.node_interpreter
                 .call_method0(
                     python,
                     TAKE_THE_LIFECYCLE_COMMANDS_THAT_WOKE_THE_SCHEDULING_LOOP_METHOD,
@@ -259,7 +255,7 @@ impl ProcessorSchedulingLoopHost for ProcessorSchedulingLoopHostInThisHelper {
         }
     }
 
-    fn after_a_signal_interrupted_a_wait(&mut self) -> ProcessorSchedulingLoopControl {
+    fn after_a_signal_interrupted_a_wait(&mut self) -> NodeSchedulingLoopControl {
         match Python::attach(|python| python.check_signals()) {
             Ok(()) => self.control_after_what_arrived(),
             Err(raised) => self.stop_on(raised),
@@ -269,7 +265,7 @@ impl ProcessorSchedulingLoopHost for ProcessorSchedulingLoopHostInThisHelper {
     fn wait_on_the_machine_clock_or_a_control(
         &mut self,
         machine_wait: Duration,
-    ) -> ProcessorSchedulingLoopControl {
+    ) -> NodeSchedulingLoopControl {
         // `poll` counts whole milliseconds, so a shorter wait sleeps on the
         // machine clock and then looks for a command.
         if machine_wait < Duration::from_millis(1) {

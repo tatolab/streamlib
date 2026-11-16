@@ -8,26 +8,26 @@ pub mod _generated_ {
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/clap_effect.rs"]
+#[path = "../nodes/clap_effect.rs"]
 pub mod clap_effect;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/host.rs"]
+#[path = "../nodes/host.rs"]
 pub mod host;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/parameter_automation.rs"]
+#[path = "../nodes/parameter_automation.rs"]
 pub mod parameter_automation;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/parameter_modulation.rs"]
+#[path = "../nodes/parameter_modulation.rs"]
 pub mod parameter_modulation;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/plugin_info.rs"]
+#[path = "../nodes/plugin_info.rs"]
 pub mod plugin_info;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
-#[path = "../processors/scanner.rs"]
+#[path = "../nodes/scanner.rs"]
 pub mod scanner;
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 streamlib_plugin_abi::export_plugin!(
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    crate::clap_effect::ClapEffectProcessor::Processor,
+    crate::clap_effect::ClapEffectNode::Node,
 );

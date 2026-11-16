@@ -3,11 +3,11 @@
 
 //! Naming a link's channel and notify services, and sizing them: subscribers, notifiers, ring depth and the windowed-port refusals.
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::compiler::compiler_ops::function_node_island::{
     runs_inside_the_read_of_each_node_it_feeds, the_reader_input_ports_a_function_node_feeds,
 };
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, Link,
@@ -24,13 +24,13 @@ use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DE
 use super::link_still_counts_toward_its_ports;
 
 pub(super) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
-    let processor_id = source.processor_id();
+    let node_run_id = source.node_run_id();
     let port_name = source.port_name();
-    crate::iceoryx2::source_channel_name(processor_id.as_str(), port_name)
+    crate::iceoryx2::source_channel_name(node_run_id.as_str(), port_name)
         .map(|name| name.into_string())
         .map_err(|why| {
             Error::Configuration(format!(
-                "cannot derive channel name for source '{processor_id}:{port_name}': {why}"
+                "cannot derive channel name for source '{node_run_id}:{port_name}': {why}"
             ))
         })
 }
@@ -41,7 +41,7 @@ pub(super) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String>
 /// `Notifier` here; the destination waits on ONE `Listener` fd, so fan-in never
 /// multiplies the fds a runner multiplexes. Subprocess SDKs derive this name the
 /// same way.
-pub(super) fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
+pub(super) fn notify_service_name_for(dest_proc_id: &NodeRunId) -> String {
     format!("streamlib/{}/notify", dest_proc_id)
 }
 
@@ -64,7 +64,7 @@ fn every_link_carrying_from<'a>(
 fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize {
     every_link_carrying_from(graph, source)
         .map(|link| {
-            let destination_id = link.to_port().processor_id();
+            let destination_id = link.to_port().node_run_id();
             if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
                 the_reader_input_ports_a_function_node_feeds(graph, destination_id)
                     .len()
@@ -153,10 +153,10 @@ pub(super) fn channel_service_creation_depth(
         .filter(|link| link_still_counts_toward_its_ports(link))
     {
         let destination = link.to_port();
-        let destination_processor_id = destination.processor_id();
+        let destination_node_run_id = destination.node_run_id();
         if audio_windowing_declared_by_input_port_of(
             graph,
-            destination_processor_id,
+            destination_node_run_id,
             destination.port_name(),
         )?
         .is_some()
@@ -219,7 +219,7 @@ pub(super) fn subscriber_ring_depth_of_input_port(
 /// an island it evaluates holds none.
 pub(super) fn destination_max_notifiers(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
 ) -> Result<usize> {
     let links_into_it_through_a_channel = graph
         .traversal()
@@ -227,7 +227,7 @@ pub(super) fn destination_max_notifiers(
         .in_e()
         .iter()
         .filter(|link| {
-            !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+            !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         })
         .count();
     let links_read_through_it_into_its_islands: usize = graph
@@ -240,7 +240,7 @@ pub(super) fn destination_max_notifiers(
                     read_through
                         .reads_by_island_link
                         .iter()
-                        .filter(|read| read.reader_input_port.processor_id() == dest_proc_id)
+                        .filter(|read| read.reader_input_port.node_run_id() == dest_proc_id)
                         .count()
                 })
         })
@@ -248,7 +248,7 @@ pub(super) fn destination_max_notifiers(
     let inbound_links = links_into_it_through_a_channel + links_read_through_it_into_its_islands;
     if inbound_links > MAX_INBOUND_LINKS_PER_DESTINATION {
         return Err(Error::Configuration(format!(
-            "processor '{dest_proc_id}' would hold {inbound_links} inbound links, and a \
+            "node '{dest_proc_id}' would hold {inbound_links} inbound links, and a \
              destination carries at most {MAX_INBOUND_LINKS_PER_DESTINATION}"
         )));
     }
@@ -262,10 +262,10 @@ pub(super) fn destination_max_notifiers(
 /// port read it under whatever profiles and quotas they each declare.
 pub(super) fn delivery_resolution_of_input_port(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
 ) -> Result<DeliveryResolution> {
-    let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
+    let dest_type = node_class_import_path_of(graph, dest_proc_id)?;
     let node_types = graph.node_types_this_stream_resolves();
     let declared_borrow_quota = node_types
         .port_info(&dest_type)
@@ -281,16 +281,16 @@ pub(super) fn delivery_resolution_of_input_port(
     })
 }
 
-pub(super) fn processor_class_import_path_of(
+pub(super) fn node_class_import_path_of(
     graph: &Graph,
-    proc_id: &ProcessorUniqueId,
-) -> Result<ProcessorClassImportPath> {
+    proc_id: &NodeRunId,
+) -> Result<NodeClassImportPath> {
     graph
         .traversal()
         .v(proc_id)
         .first()
-        .map(|node| node.processor_type().clone())
-        .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{proc_id}' not found")))
+        .map(|node| node.node_type().clone())
+        .ok_or_else(|| Error::NodeNotFound(format!("Node '{proc_id}' not found")))
 }
 
 /// The window declaration this destination's input port carries, if it carries
@@ -300,10 +300,10 @@ pub(super) fn processor_class_import_path_of(
 /// is read: the declaration is the whole answer and nothing is inferred.
 pub(super) fn audio_windowing_declared_by_input_port_of(
     graph: &Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Ok(dest_type) = processor_class_import_path_of(graph, dest_proc_id) else {
+    let Ok(dest_type) = node_class_import_path_of(graph, dest_proc_id) else {
         return Ok(None);
     };
     audio_windowing_declared_by_input_port(
@@ -322,7 +322,7 @@ pub(super) fn audio_windowing_declared_by_input_port_of(
 /// that a window is exact.
 pub(super) fn refuse_a_second_inbound_link_into_a_windowed_port(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
@@ -357,7 +357,7 @@ pub(super) fn refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_r
     graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {

@@ -216,7 +216,7 @@ fn check_sustained_escalation_rate() {
             thread = thread.name().unwrap_or("<unnamed>"),
             escalations_last_second = count,
             "sustained GpuContextLimitedAccess::escalate rate on this thread — \
-             processor likely needs more pre-reservation in setup()"
+             node likely needs more pre-reservation in setup()"
         );
     }
 }

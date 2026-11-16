@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serial_test::serial;
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeOperations};
 use streamlib::sdk::schemars::JsonSchema;
@@ -17,18 +17,18 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 use streamlib_project_repository::{StreamGraphDocumentNode, StreamGraphOperation};
 use uuid::Uuid;
 
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
-pub struct RefusedLiveAddTestProcessorConfig {}
+pub struct RefusedLiveAddTestNodeConfig {}
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
-    config = crate::RefusedLiveAddTestProcessorConfig,
+    config = crate::RefusedLiveAddTestNodeConfig,
 )]
-pub struct RefusedLiveAddTestProcessor;
+pub struct RefusedLiveAddTestNode;
 
-impl streamlib_engine::ManualProcessor for RefusedLiveAddTestProcessor::Processor {
+impl streamlib_engine::ManualNode for RefusedLiveAddTestNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -41,7 +41,7 @@ fn a_stream_holding_one_node(
     Arc<Runner>,
     Arc<LoadedStreamInThisRuntime>,
 ) {
-    PROCESSOR_REGISTRY.register::<RefusedLiveAddTestProcessor::Processor>();
+    NODE_REGISTRY.register::<RefusedLiveAddTestNode::Node>();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner
@@ -51,9 +51,9 @@ fn a_stream_holding_one_node(
         ))
         .expect("an empty stream loads");
     stream
-        .add_processor(
-            ProcessorSpec::new(
-                RefusedLiveAddTestProcessor::processor_class_import_path(),
+        .add_node(
+            NodeSpec::new(
+                RefusedLiveAddTestNode::node_class_import_path(),
                 serde_json::json!({}),
             )
             .with_display_name("held"),
@@ -62,7 +62,7 @@ fn a_stream_holding_one_node(
     if started {
         stream.start().expect("the stream starts");
         stream
-            .wait_until_every_processor_is_running(Duration::from_secs(30))
+            .wait_until_every_node_is_running(Duration::from_secs(30))
             .expect("the node runs");
     }
     (project_directory, runner, stream)
@@ -98,7 +98,7 @@ fn the_node_names_the_graph_answers(stream: &LoadedStreamInThisRuntime) -> Vec<S
 
 #[test]
 #[serial]
-fn an_add_whose_processor_the_running_stream_cannot_build_leaves_no_node() {
+fn an_add_whose_node_the_running_stream_cannot_build_leaves_no_node() {
     let (_project_directory, _runner, stream) = a_stream_holding_one_node(true);
     let before = the_node_names_the_graph_answers(&stream);
 
@@ -130,7 +130,7 @@ fn an_add_of_a_type_nothing_resolves_leaves_no_node() {
         serde_json::json!({
             "id": Uuid::new_v4(),
             "name": "ghost",
-            "type": "ghost_package::DefinitelyNotARegisteredProcessor",
+            "type": "ghost_package::DefinitelyNotARegisteredNode",
         }),
     )
     .expect_err("a type nothing resolves is refused");
@@ -151,7 +151,7 @@ fn an_add_refused_for_a_uuid_another_node_holds_leaves_that_node() {
         serde_json::json!({
             "id": held_node_uuid,
             "name": "another",
-            "type": RefusedLiveAddTestProcessor::processor_class_import_path().as_str(),
+            "type": RefusedLiveAddTestNode::node_class_import_path().as_str(),
         }),
     )
     .expect_err("a UUID the graph's node holds is refused");

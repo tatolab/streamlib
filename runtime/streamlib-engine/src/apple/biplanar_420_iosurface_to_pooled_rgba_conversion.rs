@@ -56,7 +56,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
         source_pixel_format: PixelFormat,
         width: u32,
         height: u32,
-        processor_id_of_the_owning_node: &str,
+        node_run_id_of_the_owning_node: &str,
     ) -> Result<Self> {
         let conversion_stage = gpu_context.escalate(|full| {
             CapturedVideoFrameToPooledRgbaConversionStage::create(
@@ -64,7 +64,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
                 source_pixel_format,
                 width,
                 height,
-                processor_id_of_the_owning_node,
+                node_run_id_of_the_owning_node,
             )
         })?;
         Ok(Self {

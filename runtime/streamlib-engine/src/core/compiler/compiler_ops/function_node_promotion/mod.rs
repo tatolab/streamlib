@@ -13,14 +13,14 @@ use super::function_node_island::{
     the_state_fields_of_a_function_node,
 };
 use super::open_iceoryx2_service_op::close_iceoryx2_service;
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, FunctionNodePromotionOutOfItsReadersIslands,
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
-    LinkUniqueId, OutOfProcessLinkWiringComponent, ProcessorMetrics,
+    LinkUniqueId, NodeMetrics, OutOfProcessLinkWiringComponent,
 };
 
 /// How often a promoted function node's helper runs it when the reader it
@@ -41,17 +41,17 @@ pub(crate) const STATEFUL_FUNCTION_NODE_SEVERAL_READERS_READ_INTERVAL_MS: u32 = 
 /// this release.
 pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
     graph: &mut Graph,
-    processors_to_add: &[ProcessorUniqueId],
-    processors_to_remove: &[ProcessorUniqueId],
+    nodes_to_add: &[NodeRunId],
+    nodes_to_remove: &[NodeRunId],
 ) -> Result<()> {
-    let mut moved_out_of_the_islands: HashSet<ProcessorUniqueId> = HashSet::new();
+    let mut moved_out_of_the_islands: HashSet<NodeRunId> = HashSet::new();
     loop {
-        let runs_inline = |node_id: &ProcessorUniqueId| {
+        let runs_inline = |node_id: &NodeRunId| {
             runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
                 && !moved_out_of_the_islands.contains(node_id)
-                && !processors_to_remove.contains(node_id)
+                && !nodes_to_remove.contains(node_id)
         };
-        let mut stateful_function_nodes_inline: Vec<ProcessorUniqueId> = graph
+        let mut stateful_function_nodes_inline: Vec<NodeRunId> = graph
             .traversal()
             .v(())
             .ids()
@@ -59,7 +59,7 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
             .filter(|node_id| runs_inline(node_id))
             .filter(|node_id| {
                 graph.traversal().v(node_id).first().is_some_and(|node| {
-                    !the_state_fields_of_a_function_node(graph, &node.processor_type).is_empty()
+                    !the_state_fields_of_a_function_node(graph, &node.node_type).is_empty()
                 })
             })
             .collect();
@@ -69,7 +69,7 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
                 .into_iter()
                 .find_map(|node_id| {
                     let readers =
-                        the_readers_evaluating(graph, &node_id, &runs_inline, processors_to_remove);
+                        the_readers_evaluating(graph, &node_id, &runs_inline, nodes_to_remove);
                     (readers.len() > 1).then_some((node_id, readers))
                 });
         let Some((stateful_function_node, readers)) = read_by_several_readers else {
@@ -79,7 +79,7 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
         let running: BTreeSet<String> = readers
             .iter()
             .chain(std::iter::once(&stateful_function_node))
-            .filter(|node_id| !processors_to_add.contains(*node_id))
+            .filter(|node_id| !nodes_to_add.contains(*node_id))
             .map(|node_id| the_name_in_the_graph_of(graph, node_id))
             .collect();
         if !running.is_empty() {
@@ -100,7 +100,7 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
         let moved = the_function_nodes_downstream_of(graph, &stateful_function_node, &runs_inline);
         if let Some(not_added) = moved
             .iter()
-            .find(|node_id| !processors_to_add.contains(*node_id))
+            .find(|node_id| !nodes_to_add.contains(*node_id))
         {
             return Err(Error::InvalidGraph(format!(
                 "stateful function node `{stateful_function_node_name}` would be read by {} \
@@ -131,7 +131,7 @@ pub(crate) fn place_each_stateful_function_node_several_readers_read_in_a_proces
 /// `ran_compiled` with that helper.
 fn mark_a_function_node_promoted_to_its_own_process(
     graph: &mut Graph,
-    function_node_id: &ProcessorUniqueId,
+    function_node_id: &NodeRunId,
     process_execution: ProcessExecution,
 ) {
     let Some(how_its_own_helper_ran_it) =
@@ -151,17 +151,17 @@ fn mark_a_function_node_promoted_to_its_own_process(
 /// the function nodes `runs_inline` keeps downstream of it.
 fn the_readers_evaluating(
     graph: &Graph,
-    function_node: &ProcessorUniqueId,
-    runs_inline: &dyn Fn(&ProcessorUniqueId) -> bool,
-    processors_to_remove: &[ProcessorUniqueId],
-) -> BTreeSet<ProcessorUniqueId> {
+    function_node: &NodeRunId,
+    runs_inline: &dyn Fn(&NodeRunId) -> bool,
+    nodes_to_remove: &[NodeRunId],
+) -> BTreeSet<NodeRunId> {
     let mut readers = BTreeSet::new();
     for downstream in the_function_nodes_downstream_of(graph, function_node, runs_inline) {
         for link in graph.traversal().e(()).iter() {
-            let destination = link.to_port().processor_id();
-            if link.source().processor_id() == &downstream
+            let destination = link.to_port().node_run_id();
+            if link.source().node_run_id() == &downstream
                 && !runs_inline(destination)
-                && !processors_to_remove.contains(destination)
+                && !nodes_to_remove.contains(destination)
             {
                 readers.insert(destination.clone());
             }
@@ -174,9 +174,9 @@ fn the_readers_evaluating(
 /// outputs reach.
 fn the_function_nodes_downstream_of(
     graph: &Graph,
-    function_node: &ProcessorUniqueId,
-    runs_inline: &dyn Fn(&ProcessorUniqueId) -> bool,
-) -> HashSet<ProcessorUniqueId> {
+    function_node: &NodeRunId,
+    runs_inline: &dyn Fn(&NodeRunId) -> bool,
+) -> HashSet<NodeRunId> {
     let mut reached = HashSet::new();
     let mut to_follow = vec![function_node.clone()];
     while let Some(following) = to_follow.pop() {
@@ -184,8 +184,8 @@ fn the_function_nodes_downstream_of(
             continue;
         }
         for link in graph.traversal().e(()).iter() {
-            let destination = link.to_port().processor_id();
-            if link.source().processor_id() == &following && runs_inline(destination) {
+            let destination = link.to_port().node_run_id();
+            if link.source().node_run_id() == &following && runs_inline(destination) {
                 to_follow.push(destination.clone());
             }
         }
@@ -196,27 +196,25 @@ fn the_function_nodes_downstream_of(
 /// What a promotion adds to the compile that carries it.
 #[derive(Debug, Default)]
 pub(crate) struct FunctionNodePromotionPlanned {
-    pub(crate) processors_to_add: Vec<ProcessorUniqueId>,
+    pub(crate) nodes_to_add: Vec<NodeRunId>,
     /// Each link into or out of a promoted node, wired again by what its two
     /// ends now are.
     pub(crate) links_to_add: Vec<LinkUniqueId>,
     /// What `graph` renders under each promoted node's `metrics` once wired.
-    pub(crate) promotion_of_each_node: Vec<(
-        ProcessorUniqueId,
-        FunctionNodePromotionOutOfItsReadersIslands,
-    )>,
+    pub(crate) promotion_of_each_node:
+        Vec<(NodeRunId, FunctionNodePromotionOutOfItsReadersIslands)>,
 }
 
 /// What the compile that carries a promotion removes from the graph.
 pub(crate) struct WhatTheCompileCarryingAPromotionRemoves<'a> {
-    pub(crate) processors: &'a [ProcessorUniqueId],
+    pub(crate) nodes: &'a [NodeRunId],
     pub(crate) links: &'a [LinkUniqueId],
 }
 
 pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
     graph: &mut Graph,
-    crashed_function_node: &ProcessorUniqueId,
-    reader: &ProcessorUniqueId,
+    crashed_function_node: &NodeRunId,
+    reader: &NodeRunId,
     reason: &str,
     what_the_same_compile_removes: &WhatTheCompileCarryingAPromotionRemoves<'_>,
 ) -> Result<FunctionNodePromotionPlanned> {
@@ -233,8 +231,8 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
         .traversal()
         .e(())
         .iter()
-        .filter(|link| promoted.contains(link.source().processor_id()))
-        .map(|link| link.to_port().processor_id())
+        .filter(|link| promoted.contains(link.source().node_run_id()))
+        .map(|link| link.to_port().node_run_id())
         .filter(|destination| !promoted.contains(*destination) && *destination != reader)
         .map(|other_reader| the_name_in_the_graph_of(graph, other_reader))
         .collect();
@@ -274,15 +272,15 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
         .e(())
         .iter()
         .filter(|link| {
-            promoted.contains(link.source().processor_id())
-                || promoted.contains(link.to_port().processor_id())
+            promoted.contains(link.source().node_run_id())
+                || promoted.contains(link.to_port().node_run_id())
         })
-        .map(|link| (link.id.clone(), link.to_port().processor_id() == reader))
+        .map(|link| (link.id.clone(), link.to_port().node_run_id() == reader))
         .collect();
     let removed_by_the_same_compile = promoted
         .iter()
         .chain(std::iter::once(reader))
-        .any(|node_id| what_the_same_compile_removes.processors.contains(node_id))
+        .any(|node_id| what_the_same_compile_removes.nodes.contains(node_id))
         || links_touching_a_promoted_node
             .iter()
             .any(|(link_id, _)| what_the_same_compile_removes.links.contains(link_id));
@@ -319,7 +317,7 @@ pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
                 reason: reason.to_string(),
             },
         ));
-        planned.processors_to_add.push(promoted_id);
+        planned.nodes_to_add.push(promoted_id);
     }
     planned.links_to_add = links_touching_a_promoted_node
         .into_iter()
@@ -337,10 +335,10 @@ pub(crate) fn record_each_promotion_on_its_nodes_metrics(
         let Some(node) = graph.traversal_mut().v(promoted_id).first_mut() else {
             continue;
         };
-        if let Some(metrics) = node.get_mut::<ProcessorMetrics>() {
+        if let Some(metrics) = node.get_mut::<NodeMetrics>() {
             metrics.promotion_out_of_its_readers_islands = Some(promotion.clone());
         } else {
-            node.insert(ProcessorMetrics {
+            node.insert(NodeMetrics {
                 promotion_out_of_its_readers_islands: Some(promotion.clone()),
                 ..Default::default()
             });
@@ -349,7 +347,7 @@ pub(crate) fn record_each_promotion_on_its_nodes_metrics(
 }
 
 /// The name `node_id` carries in the graph, or its id when no node has it.
-fn the_name_in_the_graph_of(graph: &Graph, node_id: &ProcessorUniqueId) -> String {
+fn the_name_in_the_graph_of(graph: &Graph, node_id: &NodeRunId) -> String {
     graph
         .traversal()
         .v(node_id)
@@ -359,19 +357,14 @@ fn the_name_in_the_graph_of(graph: &Graph, node_id: &ProcessorUniqueId) -> Strin
 }
 
 /// `function_node` and every function node its outputs reach inside islands.
-fn the_function_nodes_from(
-    graph: &Graph,
-    function_node: &ProcessorUniqueId,
-) -> HashSet<ProcessorUniqueId> {
+fn the_function_nodes_from(graph: &Graph, function_node: &NodeRunId) -> HashSet<NodeRunId> {
     the_function_nodes_downstream_of(graph, function_node, &|node_id| {
         runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
     })
 }
 
-fn the_promoted_nodes_in_a_stable_order(
-    promoted: &HashSet<ProcessorUniqueId>,
-) -> Vec<ProcessorUniqueId> {
-    let mut in_order: Vec<ProcessorUniqueId> = promoted.iter().cloned().collect();
+fn the_promoted_nodes_in_a_stable_order(promoted: &HashSet<NodeRunId>) -> Vec<NodeRunId> {
+    let mut in_order: Vec<NodeRunId> = promoted.iter().cloned().collect();
     in_order.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     in_order
 }

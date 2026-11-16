@@ -185,7 +185,7 @@ def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
 ):
     """A machine with no audio is a supported environment; a wrong device id is
     a wiring error. Playing into a different speaker than the one named would be
-    worse than failing, so the sink refuses and the processor never reaches
+    worse than failing, so the sink refuses and the node never reaches
     Running."""
     tatolabd = start_tatolabd_running_stream(speaker_sink_naming_an_unopenable_device)
     stream_id = tatolabd.await_the_latest_stream_loaded()

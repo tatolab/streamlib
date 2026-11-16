@@ -60,7 +60,7 @@ class RefusesSetupProbe:
     frames_to_downstream = Output(Packets)
 
     def setup(self, ctx) -> None:
-        raise RuntimeError("this processor cannot set itself up")
+        raise RuntimeError("this node cannot set itself up")
 
 
 @node.process

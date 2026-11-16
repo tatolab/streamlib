@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
-    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
     RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
 use streamlib::sdk::error::{Error, Result};
@@ -15,7 +15,7 @@ use streamlib::sdk::iceoryx2::{
     DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody, ImageFrameH273Colour,
     array_frame_attribute_table_of,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 use streamlib::sdk::schemars::JsonSchema;
 
@@ -28,7 +28,7 @@ const ARRAY_INPUT_PORT: &str = "array";
 const IMAGE_OUTPUT_PORT: &str = "image";
 
 /// Configuration for [`ArrayToImage`].
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
@@ -58,7 +58,7 @@ impl Default for ArrayToImageConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     config = crate::port_family_conversion::array_to_image::ArrayToImageConfig,
@@ -90,20 +90,18 @@ impl Default for ArrayToImageConfig {
 )]
 pub struct ArrayToImage {
     image_format: Option<TextureFormat>,
-    output_pixel_buffer_pool: Option<ProcessorOutputPixelBufferPoolOfOneNativeNode>,
+    output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
 }
 
-impl ReactiveProcessor for ArrayToImage::Processor {
+impl ReactiveNode for ArrayToImage::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.image_format = Some(image_format_of_the_config(&self.config)?);
-        let processor_id_of_this_node = ctx
-            .processor_id()
+        let node_run_id_of_this_node = ctx
+            .node_run_id()
             .unwrap_or_else(|| "ArrayToImage".to_string());
         self.output_pixel_buffer_pool = Some(
             ctx.gpu_full_access()
-                .create_processor_output_pixel_buffer_pool_for_a_native_node(
-                    &processor_id_of_this_node,
-                ),
+                .create_node_output_pixel_buffer_pool_for_a_native_node(&node_run_id_of_this_node),
         );
         Ok(())
     }

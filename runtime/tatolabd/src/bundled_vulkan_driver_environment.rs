@@ -1,10 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use streamlib::sdk::processor_interpreter::{
+use streamlib::sdk::node_interpreter::{
     BUNDLED_ICD_MANIFEST_FILE_NAME, bundled_vulkan_driver_directory_in_the_lend,
 };
 
@@ -22,11 +21,10 @@ pub(crate) const DRIVER_SEARCH_ADDING_ENVIRONMENT_VARIABLE: &str = "VK_ADD_DRIVE
 /// manifest, a driver-replacing variable is set, or the manifest is already
 /// named.
 pub(crate) fn vk_add_driver_files_naming_the_bundled_icd_manifest(
-    processor_interpreter_lend_directory: &Path,
+    node_interpreter_lend_directory: &Path,
     environment_variable: impl Fn(&str) -> Option<OsString>,
 ) -> Option<OsString> {
-    let bundled_icd_manifest =
-        bundled_icd_manifest_in_the_lend(processor_interpreter_lend_directory);
+    let bundled_icd_manifest = bundled_icd_manifest_in_the_lend(node_interpreter_lend_directory);
     if !bundled_icd_manifest.is_file() {
         return None;
     }

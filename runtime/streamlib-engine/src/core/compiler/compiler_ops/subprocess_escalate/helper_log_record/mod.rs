@@ -57,7 +57,7 @@ pub(super) fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
         target,
         message: log.message,
         pipeline_id: log.pipeline_id,
-        processor_id: log.processor_id,
+        node_run_id: log.node_run_id,
         rhi_op: log.rhi_op,
         intercepted: log.intercepted,
         channel: log.channel,

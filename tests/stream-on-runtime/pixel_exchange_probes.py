@@ -5,7 +5,7 @@
 
 Each probe runs in its own helper process, acquires or resolves a surface
 there, and reports what it observed as one `MARKER:PROBE_RESULT` JSON line —
-the same child→parent log forwarding every processor's records ride, so the
+the same child→parent log forwarding every node's records ride, so the
 observation crosses the process boundary without any channel a test invented.
 """
 

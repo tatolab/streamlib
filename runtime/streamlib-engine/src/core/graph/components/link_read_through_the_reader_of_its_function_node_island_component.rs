@@ -7,7 +7,7 @@ use serde_json::Value as JsonValue;
 
 use super::{Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent};
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId};
-use crate::core::processors::OutOfProcessLinkWireReply;
+use crate::core::nodes::OutOfProcessLinkWireReply;
 
 /// Marks a link from a node outside any island into a function node whose
 /// channel is read by the readers of the islands calling that node, once for

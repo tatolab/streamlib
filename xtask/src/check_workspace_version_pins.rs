@@ -627,14 +627,14 @@ mod tests {
     #[test]
     fn a_drifted_pin_is_reported_and_synced() {
         let scanned = scan(
-            "streamlib-processor-schema = { path = \"../streamlib-processor-schema\", version = \"0.17.0\" }\n",
+            "streamlib-node-schema = { path = \"../streamlib-node-schema\", version = \"0.17.0\" }\n",
         );
 
         assert_eq!(scanned.drifts.len(), 1);
         assert_eq!(scanned.drifts[0].line_number_one_based, 1);
         assert_eq!(
             scanned.drifts[0].dependency_entry_name,
-            "streamlib-processor-schema"
+            "streamlib-node-schema"
         );
         assert_eq!(scanned.drifts[0].pinned_version_requirement, "0.17.0");
         assert!(

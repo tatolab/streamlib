@@ -107,7 +107,7 @@ pub(crate) fn escalate_the_machines_shutdown_for_a_delivered_signal(
         RuntimeShutdownEscalation::Forced => tracing::warn!(
             signal_name,
             "a second interrupt forces the shutdown: every helper's process group is \
-             terminated without its teardown, and a native processor thread still inside its \
+             terminated without its teardown, and a native node thread still inside its \
              callback is abandoned. A third interrupt exits at once."
         ),
         RuntimeShutdownEscalation::ExitAtOnce => tracing::error!(

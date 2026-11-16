@@ -11,7 +11,7 @@ use crate::core::compiler::compilation_plan::{
 };
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
-use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
+use crate::core::compiler::compiler_ops::NodeConfigUpdateOutcome;
 use crate::core::compiler::compiler_ops::function_node_island::{
     HowALinkIsWired, close_the_channels_no_island_reads_any_more,
     hand_each_reader_the_island_a_compile_changed, how_a_link_is_wired,
@@ -42,20 +42,19 @@ use crate::core::compiler::compiler_ops::shader_node_island::{
     unwire_each_link_of_the_shader_nodes_restarted,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
-use crate::core::compiler::processor_thread_shutdown::{
-    AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
-    ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
-    remove_processors_signalling_every_thread_before_joining_any,
-    stop_processor_threads_signalling_every_thread_before_joining_any,
+use crate::core::compiler::node_thread_shutdown::{
+    AbandonedNodeThreadStillRunning, DescriptionOfTheAbandonedNodeThreads, NodeDisplayNameAndId,
+    NodeThreadJoinBudgets, remove_nodes_signalling_every_thread_before_joining_any,
+    stop_node_threads_signalling_every_thread_before_joining_any,
 };
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
-    LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
-    ProcessorReadyBarrierHandle, ProcessorUniqueId, StateComponent,
+    LinkUniqueId, NodeReadyBarrierHandle, NodeRunId, OutOfProcessLinkWireRepliesComponent,
+    OutOfProcessLinkWiringComponent, StateComponent,
 };
-use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorState};
+use crate::core::nodes::{NodeState, NodeTypesOneStreamResolves};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -67,7 +66,7 @@ pub(crate) struct Compiler {
     /// Held for the whole of a commit: two batches compiling at once would
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
-    abandoned_processor_threads: Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    abandoned_node_threads: Mutex<Vec<AbandonedNodeThreadStillRunning>>,
 }
 
 impl Default for Compiler {
@@ -92,19 +91,14 @@ impl Compiler {
             ))),
             transaction: Arc::new(Mutex::new(Vec::new())),
             one_commit_at_a_time: Mutex::new(()),
-            abandoned_processor_threads: Mutex::new(Vec::new()),
+            abandoned_node_threads: Mutex::new(Vec::new()),
         }
     }
 
-    pub(crate) fn processor_threads_abandoned_and_still_running(
-        &self,
-    ) -> Vec<ProcessorDisplayNameAndId> {
-        let mut abandoned = self.abandoned_processor_threads.lock();
+    pub(crate) fn node_threads_abandoned_and_still_running(&self) -> Vec<NodeDisplayNameAndId> {
+        let mut abandoned = self.abandoned_node_threads.lock();
         abandoned.retain(|thread| !thread.join_handle.is_finished());
-        abandoned
-            .iter()
-            .map(|thread| thread.processor.clone())
-            .collect()
+        abandoned.iter().map(|thread| thread.node.clone()).collect()
     }
 
     // =========================================================================
@@ -155,7 +149,7 @@ impl Compiler {
             Arc::clone(&self.graph),
             operations,
             runtime_ctx,
-            &self.abandoned_processor_threads,
+            &self.abandoned_node_threads,
         )
     }
 
@@ -163,9 +157,9 @@ impl Compiler {
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
-        abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
     ) -> Result<()> {
-        let readers_awaiting_a_promotion: Vec<ProcessorUniqueId> = operations
+        let readers_awaiting_a_promotion: Vec<NodeRunId> = operations
             .iter()
             .filter_map(|operation| match operation {
                 PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
@@ -180,7 +174,7 @@ impl Compiler {
             Arc::clone(&graph_arc),
             operations,
             runtime_ctx,
-            abandoned_processor_threads,
+            abandoned_node_threads,
             &mut result,
         );
         if !readers_awaiting_a_promotion.is_empty() {
@@ -209,7 +203,7 @@ impl Compiler {
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
-        abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+        abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
         result: &mut CompileResult,
     ) -> Result<()> {
         let the_stream_the_compile_belongs_to = runtime_ctx.loaded_stream_identity();
@@ -221,21 +215,21 @@ impl Compiler {
 
         {
             let graph = graph_arc.read();
-            plan.drop_link_adds_into_removed_processors(&graph);
+            plan.drop_link_adds_into_removed_nodes(&graph);
         }
-        plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph_arc.write());
+        plan.hand_config_updates_to_nodes_this_batch_constructs(&mut graph_arc.write());
         refuse_an_edit_an_island_cannot_take(
             &graph_arc.read(),
-            &plan.processors_to_add,
-            &plan.processors_to_remove,
+            &plan.nodes_to_add,
+            &plan.nodes_to_remove,
             &plan.links_to_add,
             &plan.links_to_remove,
             &plan.config_updates,
         )?;
         let shader_nodes_restarted = the_running_shader_nodes_a_live_edit_restarts(
             &graph_arc.read(),
-            &plan.processors_to_add,
-            &plan.processors_to_remove,
+            &plan.nodes_to_add,
+            &plan.nodes_to_remove,
             &[
                 plan.links_to_add.as_slice(),
                 plan.links_to_remove.as_slice(),
@@ -245,14 +239,14 @@ impl Compiler {
         plan.add_each_node_and_link_restarted(&shader_nodes_restarted);
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
-            &plan.processors_to_add,
-            &plan.processors_to_remove,
+            &plan.nodes_to_add,
+            &plan.nodes_to_remove,
         )?;
         {
             let mut graph = graph_arc.write();
             carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
                 &mut graph,
-                &mut plan.processors_to_add,
+                &mut plan.nodes_to_add,
                 &mut plan.links_to_add,
             )?;
             plan.links_to_remove = std::mem::take(&mut plan.links_to_remove)
@@ -268,9 +262,9 @@ impl Compiler {
         }
 
         tracing::info!(
-            "Compiling: +{} -{} processors, +{} -{} links, {} config updates",
-            plan.processors_to_add.len(),
-            plan.processors_to_remove.len(),
+            "Compiling: +{} -{} nodes, +{} -{} links, {} config updates",
+            plan.nodes_to_add.len(),
+            plan.nodes_to_remove.len(),
             plan.links_to_add.len(),
             plan.links_to_remove.len(),
             plan.config_updates.len(),
@@ -280,14 +274,14 @@ impl Compiler {
         the_stream_the_compile_belongs_to
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
 
-        let abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> = if !plan
+        let abandoned_in_this_compile: Vec<NodeDisplayNameAndId> = if !plan
             .links_to_remove
             .is_empty()
-            || !plan.processors_to_remove.is_empty()
+            || !plan.nodes_to_remove.is_empty()
         {
             tracing::debug!(
-                "[commit] Removing {} processors, {} links",
-                plan.processors_to_remove.len(),
+                "[commit] Removing {} nodes, {} links",
+                plan.nodes_to_remove.len(),
                 plan.links_to_remove.len()
             );
 
@@ -299,16 +293,16 @@ impl Compiler {
             }
 
             let abandoned_by_this_removal =
-                remove_processors_signalling_every_thread_before_joining_any(
+                remove_nodes_signalling_every_thread_before_joining_any(
                     &graph_arc,
                     the_stream_the_compile_belongs_to,
-                    &plan.processors_to_remove,
-                    ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+                    &plan.nodes_to_remove,
+                    NodeThreadJoinBudgets::ENGINE_CHOSEN,
                     || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
                     runtime_ctx.this_streams_teardown_progress_note(),
-                    abandoned_processor_threads,
+                    abandoned_node_threads,
                 )?;
-            result.processors_removed += plan.processors_to_remove.len();
+            result.nodes_removed += plan.nodes_to_remove.len();
             abandoned_by_this_removal
         } else {
             Vec::new()
@@ -319,7 +313,7 @@ impl Compiler {
             stop_each_shader_node_restarted(
                 &graph_arc,
                 runtime_ctx,
-                abandoned_processor_threads,
+                abandoned_node_threads,
                 &shader_nodes_restarted,
                 &mut plan,
             )?,
@@ -329,15 +323,13 @@ impl Compiler {
         // =====================================================================
         // 3. Phase 1: PREPARE - Attach infrastructure components
         // =====================================================================
-        let mut barrier_handles: Vec<(ProcessorUniqueId, ProcessorReadyBarrierHandle)> = vec![];
+        let mut barrier_handles: Vec<(NodeRunId, NodeReadyBarrierHandle)> = vec![];
         let function_nodes_run_inside_their_readers =
-            the_function_nodes_among(&graph_arc.read(), &plan.processors_to_add);
-        let shader_nodes_fused_into_another = place_each_shader_node_island_on_its_host(
-            &mut graph_arc.write(),
-            &plan.processors_to_add,
-        )?;
-        let processors_to_build: Vec<ProcessorUniqueId> = plan
-            .processors_to_add
+            the_function_nodes_among(&graph_arc.read(), &plan.nodes_to_add);
+        let shader_nodes_fused_into_another =
+            place_each_shader_node_island_on_its_host(&mut graph_arc.write(), &plan.nodes_to_add)?;
+        let nodes_to_build: Vec<NodeRunId> = plan
+            .nodes_to_add
             .iter()
             .filter(|proc_id| {
                 !function_nodes_run_inside_their_readers.contains(*proc_id)
@@ -346,26 +338,27 @@ impl Compiler {
             .cloned()
             .collect();
 
-        if !processors_to_build.is_empty() {
+        if !nodes_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Prepare);
-            for proc_id in &processors_to_build {
+            for proc_id in &nodes_to_build {
                 let mut graph = graph_arc.write();
-                let node = graph.traversal().v(proc_id).first().ok_or_else(|| {
-                    Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id))
-                })?;
+                let node =
+                    graph.traversal().v(proc_id).first().ok_or_else(|| {
+                        Error::NodeNotFound(format!("Node '{}' not found", proc_id))
+                    })?;
 
-                let processor_type = node.processor_type.clone();
+                let node_type = node.node_type.clone();
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerWillCreateProcessor {
-                        processor_id: proc_id.clone(),
-                        processor_type: processor_type.clone(),
+                    RuntimeEvent::CompilerWillCreateNode {
+                        node_run_id: proc_id.clone(),
+                        node_type: node_type.clone(),
                     },
                 );
 
                 tracing::info!("[{}] Preparing {}", CompilePhase::Prepare, proc_id);
 
-                let barrier_handle = super::compiler_ops::prepare_processor(
+                let barrier_handle = super::compiler_ops::prepare_node(
                     &mut graph,
                     proc_id,
                     the_stream_the_compile_belongs_to,
@@ -373,22 +366,22 @@ impl Compiler {
                 barrier_handles.push((proc_id.clone(), barrier_handle));
 
                 the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                    RuntimeEvent::CompilerDidCreateProcessor {
-                        processor_id: proc_id.clone(),
-                        processor_type,
+                    RuntimeEvent::CompilerDidCreateNode {
+                        node_run_id: proc_id.clone(),
+                        node_type,
                     },
                 );
 
-                result.processors_created += 1;
+                result.nodes_created += 1;
             }
             tracing::debug!("[{}] Completed", CompilePhase::Prepare);
         }
 
-        if !processors_to_build.is_empty() {
+        if !nodes_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Spawn);
-            for proc_id in &processors_to_build {
+            for proc_id in &nodes_to_build {
                 tracing::info!("[{}] Spawning {}", CompilePhase::Spawn, proc_id);
-                super::compiler_ops::spawn_processor(Arc::clone(&graph_arc), runtime_ctx, proc_id)?;
+                super::compiler_ops::spawn_node(Arc::clone(&graph_arc), runtime_ctx, proc_id)?;
             }
             tracing::debug!("[{}] Completed", CompilePhase::Spawn);
         }
@@ -396,7 +389,7 @@ impl Compiler {
         for (proc_id, handle) in &barrier_handles {
             tracing::trace!("[{}] Waiting for READY signal", proc_id);
             if handle.ready_receiver.recv().is_err() {
-                tracing::warn!("[{}] Processor failed during instance creation", proc_id);
+                tracing::warn!("[{}] Node failed during instance creation", proc_id);
             }
         }
 
@@ -438,7 +431,7 @@ impl Compiler {
                     .first()
                     .and_then(|node| node.get::<StateComponent>())
                 {
-                    state.transition_to_only_from(ProcessorState::Pending, ProcessorState::Running);
+                    state.transition_to_only_from(NodeState::Pending, NodeState::Running);
                 }
             }
         }
@@ -458,21 +451,21 @@ impl Compiler {
         // 8. Config updates - for each config_update
         // =====================================================================
         for (proc_id, config_to_apply) in plan.config_updates {
-            match super::compiler_ops::apply_processor_config_update(
+            match super::compiler_ops::apply_node_config_update(
                 &graph_arc,
                 &proc_id,
                 config_to_apply,
             )? {
-                ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
+                NodeConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
                     tracing::info!("[CONFIG] Updated config for {}", proc_id);
                     result.configs_updated += 1;
                     the_stream_the_compile_belongs_to.publish_on_this_streams_topic(
-                        RuntimeEvent::ProcessorConfigDidChange {
-                            processor_id: proc_id,
+                        RuntimeEvent::NodeConfigDidChange {
+                            node_run_id: proc_id,
                         },
                     );
                 }
-                ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
+                NodeConfigUpdateOutcome::NodeNoLongerInTheGraph => {}
             }
         }
 
@@ -485,7 +478,7 @@ impl Compiler {
 
         if !abandoned_in_this_compile.is_empty() {
             return Err(Error::Runtime(
-                DescriptionOfTheAbandonedProcessorThreads(&abandoned_in_this_compile).to_string(),
+                DescriptionOfTheAbandonedNodeThreads(&abandoned_in_this_compile).to_string(),
             ));
         }
         Ok(())
@@ -500,10 +493,10 @@ impl Compiler {
 fn stop_each_shader_node_restarted(
     graph_arc: &Arc<RwLock<Graph>>,
     runtime_ctx: &Arc<RuntimeContext>,
-    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
+    abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
     shader_nodes_restarted: &RunningShaderNodesALiveEditRestarts,
     plan: &mut CompilationPlan,
-) -> Result<Vec<ProcessorDisplayNameAndId>> {
+) -> Result<Vec<NodeDisplayNameAndId>> {
     if shader_nodes_restarted.is_empty() {
         return Ok(Vec::new());
     }
@@ -512,26 +505,26 @@ fn stop_each_shader_node_restarted(
         shader_nodes_restarted.nodes.len()
     );
     unwire_each_link_of_the_shader_nodes_restarted(&mut graph_arc.write(), shader_nodes_restarted)?;
-    stop_processor_threads_signalling_every_thread_before_joining_any(
+    stop_node_threads_signalling_every_thread_before_joining_any(
         graph_arc,
         runtime_ctx.loaded_stream_identity(),
         &shader_nodes_restarted.nodes,
-        ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+        NodeThreadJoinBudgets::ENGINE_CHOSEN,
         || runtime_ctx.this_streams_shutdown_escalation().is_forced(),
         runtime_ctx.this_streams_teardown_progress_note(),
-        abandoned_processor_threads,
+        abandoned_node_threads,
     );
     let still_held_by_an_abandoned_thread = the_restarted_nodes_an_abandoned_thread_still_runs(
-        abandoned_processor_threads,
+        abandoned_node_threads,
         &shader_nodes_restarted.nodes,
     );
-    let abandoned_node_ids: Vec<ProcessorUniqueId> = still_held_by_an_abandoned_thread
+    let abandoned_node_ids: Vec<NodeRunId> = still_held_by_an_abandoned_thread
         .iter()
-        .map(|processor| processor.processor_id.clone())
+        .map(|node| node.node_run_id.clone())
         .collect();
     let mut graph = graph_arc.write();
     plan.leave_unbuilt_each_node_whose_thread_was_abandoned(&graph, &abandoned_node_ids);
-    let rebuilt_node_ids: Vec<ProcessorUniqueId> = shader_nodes_restarted
+    let rebuilt_node_ids: Vec<NodeRunId> = shader_nodes_restarted
         .nodes
         .iter()
         .filter(|node_id| !abandoned_node_ids.contains(node_id))
@@ -545,17 +538,15 @@ fn stop_each_shader_node_restarted(
 /// one, has not returned. Such a node keeps no thread handle, so a stop finds
 /// nothing to abandon, yet its old thread still writes its state.
 fn the_restarted_nodes_an_abandoned_thread_still_runs(
-    abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
-    node_ids: &[ProcessorUniqueId],
-) -> Vec<ProcessorDisplayNameAndId> {
-    let mut abandoned = abandoned_processor_threads.lock();
+    abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
+    node_ids: &[NodeRunId],
+) -> Vec<NodeDisplayNameAndId> {
+    let mut abandoned = abandoned_node_threads.lock();
     abandoned.retain(|thread| !thread.join_handle.is_finished());
-    let mut still_running: Vec<ProcessorDisplayNameAndId> = Vec::new();
+    let mut still_running: Vec<NodeDisplayNameAndId> = Vec::new();
     for thread in abandoned.iter() {
-        if node_ids.contains(&thread.processor.processor_id)
-            && !still_running.contains(&thread.processor)
-        {
-            still_running.push(thread.processor.clone());
+        if node_ids.contains(&thread.node.node_run_id) && !still_running.contains(&thread.node) {
+            still_running.push(thread.node.clone());
         }
     }
     still_running
@@ -748,21 +739,21 @@ fn the_plan_these_operations_make(
     graph_arc: &RwLock<Graph>,
     operations: Vec<PendingOperation>,
 ) -> CompilationPlan {
-    use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
+    use crate::core::graph::{NodeInstanceComponent, PendingDeletionComponent};
 
     let mut plan = CompilationPlan::default();
     let mut links_queued_in_this_batch = std::collections::HashSet::new();
 
     for op in operations {
         match op {
-            PendingOperation::AddProcessor(id) => {
+            PendingOperation::AddNode(id) => {
                 let graph = graph_arc.read();
                 let exists = graph.traversal().v(&id).exists();
                 let running = graph
                     .traversal()
                     .v(&id)
                     .first()
-                    .map(|n| n.has::<ProcessorInstanceComponent>())
+                    .map(|n| n.has::<NodeInstanceComponent>())
                     .unwrap_or(false);
                 let pending_deletion = graph
                     .traversal()
@@ -773,17 +764,17 @@ fn the_plan_these_operations_make(
                 drop(graph);
 
                 if pending_deletion {
-                    tracing::debug!("AddProcessor({}): pending deletion, skipping add", id);
+                    tracing::debug!("AddNode({}): pending deletion, skipping add", id);
                 } else if exists && !running {
-                    plan.processors_to_add.push(id);
+                    plan.nodes_to_add.push(id);
                 } else if !exists {
-                    tracing::warn!("AddProcessor({}): not in graph, skipping", id);
+                    tracing::warn!("AddNode({}): not in graph, skipping", id);
                 } else {
-                    tracing::debug!("AddProcessor({}): already running, skipping", id);
+                    tracing::debug!("AddNode({}): already running, skipping", id);
                 }
             }
-            PendingOperation::RemoveProcessor(id) => {
-                plan.processors_to_remove.push(id);
+            PendingOperation::RemoveNode(id) => {
+                plan.nodes_to_remove.push(id);
             }
             PendingOperation::AddLink(id) => {
                 let graph = graph_arc.read();
@@ -815,11 +806,11 @@ fn the_plan_these_operations_make(
             PendingOperation::RemoveLink(id) => {
                 plan.links_to_remove.push(id);
             }
-            PendingOperation::UpdateProcessorConfig {
-                processor_id,
+            PendingOperation::UpdateNodeConfig {
+                node_run_id,
                 config_to_apply,
             } => {
-                plan.config_updates.push((processor_id, config_to_apply));
+                plan.config_updates.push((node_run_id, config_to_apply));
             }
             PendingOperation::PromoteAFunctionNodeOutOfTheIslandsOfTheReaderItCrashed {
                 function_node_id,
@@ -879,7 +870,7 @@ fn plan_every_function_node_promotion(
                 &promotion.reader_id,
                 &promotion.reason,
                 &WhatTheCompileCarryingAPromotionRemoves {
-                    processors: &plan.processors_to_remove,
+                    nodes: &plan.nodes_to_remove,
                     links: &plan.links_to_remove,
                 },
             ) {
@@ -894,12 +885,12 @@ fn plan_every_function_node_promotion(
         tracing::info!(
             "Promoting function node {} and {} downstream of it out of {}'s islands",
             promotion.function_node_id,
-            promotion_planned.processors_to_add.len() - 1,
+            promotion_planned.nodes_to_add.len() - 1,
             promotion.reader_id,
         );
-        for processor_id in &promotion_planned.processors_to_add {
-            if !plan.processors_to_add.contains(processor_id) {
-                plan.processors_to_add.push(processor_id.clone());
+        for node_run_id in &promotion_planned.nodes_to_add {
+            if !plan.nodes_to_add.contains(node_run_id) {
+                plan.nodes_to_add.push(node_run_id.clone());
             }
         }
         for link_id in &promotion_planned.links_to_add {

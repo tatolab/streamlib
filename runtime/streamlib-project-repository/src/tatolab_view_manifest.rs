@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use streamlib_processor_schema::PortFamily;
+use streamlib_node_schema::PortFamily;
 
 /// The view contract this runtime reads: a manifest for a later minor, or another major, does not open.
 pub const VIEW_CONTRACT_READ_MAJOR: u64 = 1;

@@ -35,23 +35,23 @@ from tatolab.runtime._function_node_compilation import (
 )
 from tatolab.runtime._function_node_pool import (
     FunctionNodePool,
-    the_processor_class_the_function_node_pool_runs_as,
+    the_node_class_the_function_node_pool_runs_as,
 )
-from tatolab.runtime._function_node_run_as_its_helpers_processor import (
-    ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs,
+from tatolab.runtime._function_node_run_as_its_helpers_node import (
+    ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs,
 )
 from tatolab.runtime._not_ready_placeholder_frames import (
     PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
     TransparentFramesOnTheImageOutputsOfANodeNotReady,
 )
-from tatolab.runtime._processor_hosting import (
+from tatolab.runtime._node_hosting import (
     apply_configuration,
 )
 from tatolab.runtime._parent_process_bridge import EscalateRequestError, ParentProcessBridge
-from tatolab.runtime._processor_class_description import load_processor_class
-from tatolab.runtime._hosted_processor import (
-    HostedProcessor,
-    construct_hosted_processor,
+from tatolab.runtime._node_class_description import load_node_class
+from tatolab.runtime._hosted_node import (
+    HostedNode,
+    construct_hosted_node,
     the_words_a_process_raise_is_shown_in,
     unwire_link_data_access,
     wire_link_data_access,
@@ -78,17 +78,17 @@ class HelperProcessLifecycle:
     def __init__(
         self,
         bridge: ParentProcessBridge,
-        processor_class: type,
+        node_class: type,
         runtime_id: str,
-        processor_id: str,
+        node_run_id: str,
         link_data_access: NodeLinkDataAccess,
     ) -> None:
         self._bridge = bridge
-        self._processor_class = processor_class
+        self._node_class = node_class
         self._runtime_id = runtime_id
-        self._processor_id = processor_id
+        self._node_run_id = node_run_id
         self._link_data_access = link_data_access
-        self._hosted: Optional[HostedProcessor] = None
+        self._hosted: Optional[HostedNode] = None
         self._set_up_succeeded = False
         self._setup_raised_on_its_own = False
         self._running = False
@@ -125,7 +125,7 @@ class HelperProcessLifecycle:
                 # queued behind it.
                 self._running = False
                 log.warn(
-                    "the engine's shutdown ladder interrupted this processor; "
+                    "the engine's shutdown ladder interrupted this node; "
                     "the bag in flight is lost"
                 )
 
@@ -193,7 +193,7 @@ class HelperProcessLifecycle:
         if self._transparent_frames_while_not_ready is None:
             self._transparent_frames_while_not_ready = (
                 TransparentFramesOnTheImageOutputsOfANodeNotReady(
-                    list(getattr(self._processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [])),
+                    list(getattr(self._node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, [])),
                     self._warn_once_while_not_ready,
                 )
             )
@@ -266,8 +266,8 @@ class HelperProcessLifecycle:
     def _setup(self, command: "dict[str, Any]") -> None:
         try:
             configuration = command.get("config")
-            if self._processor_class is FunctionNodePool:
-                self._processor_class = the_processor_class_the_function_node_pool_runs_as(
+            if self._node_class is FunctionNodePool:
+                self._node_class = the_node_class_the_function_node_pool_runs_as(
                     configuration or {}, self._link_data_access
                 )
                 configuration = None
@@ -281,13 +281,13 @@ class HelperProcessLifecycle:
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
+                        self._node_class, NODE_DECLARATION_INPUT_PORTS_STAMP, []
                     )
                 ],
                 [
                     port["name"]
                     for port in getattr(
-                        self._processor_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
+                        self._node_class, NODE_DECLARATION_OUTPUT_PORTS_STAMP, []
                     )
                 ],
             )
@@ -319,19 +319,19 @@ class HelperProcessLifecycle:
                 feed_each_input_port_from_its_function_node_island(
                     self._link_data_access,
                     port_wiring.get("islands") or [],
-                    load_processor_class,
+                    load_node_class,
                 )
             )
             read_each_unlinked_input_port_as_its_pin_value(
                 link_data_access=self._link_data_access,
                 pin_values=dict(port_wiring.get("pins") or {}),
             )
-            self._hosted = construct_hosted_processor(
-                self._processor_class,
+            self._hosted = construct_hosted_node(
+                self._node_class,
                 configuration,
                 self._link_data_access,
                 self._runtime_id,
-                self._processor_id,
+                self._node_run_id,
                 self._bridge,
             )
             self._hosted.call_hook_letting_failure_propagate(
@@ -361,8 +361,8 @@ class HelperProcessLifecycle:
         self._tell_the_parent_whether_the_node_is_ready()
         ready: "dict[str, Any]" = {"rpc": "ready"}
         function_nodes_ran_compiled = (
-            ran_compiled_by_node_id_of_the_promoted_function_node_a_processor_class_runs(
-                self._processor_class
+            ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(
+                self._node_class
             )
         )
         if self._function_node_islands_it_reads is not None:
@@ -383,7 +383,7 @@ class HelperProcessLifecycle:
                 self._hosted.full_access_context, execution_mode
             )
         except ValueError as refusal:
-            log.error(f"the processor cannot run: {refusal}")
+            log.error(f"the node cannot run: {refusal}")
             return
         self._running = True
         note_stop_request_from_parent_on_runtime_context(
@@ -440,7 +440,7 @@ class HelperProcessLifecycle:
         self._scheduling_loop_runs = True
         try:
             run_the_scheduling_loop_of_this_helper(
-                processor_interpreter=self,
+                node_interpreter=self,
                 link_data_access=self._link_data_access,
                 lifecycle_command_arrival_fd=self._bridge.lifecycle_command_arrival_fd(),
                 execution_mode=execution_mode,
@@ -453,7 +453,7 @@ class HelperProcessLifecycle:
             self._scheduling_loop_runs = False
 
     def _paced_by_real_time(self) -> bool:
-        return getattr(self._processor_class, NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP, False) is True
+        return getattr(self._node_class, NODE_DECLARATION_PACED_BY_REAL_TIME_STAMP, False) is True
 
     def call_hook_from_the_scheduling_loop(self, hook_name: str) -> None:
         """Make the callback the engine's scheduling loop asks for."""
@@ -525,7 +525,7 @@ class HelperProcessLifecycle:
             if changed_values_by_field != self._exposed_config_values_last_refused:
                 self._exposed_config_values_last_refused = changed_values_by_field
                 log.error(
-                    "this processor refused a value a link gave a config field it exposes as an input",
+                    "this node refused a value a link gave a config field it exposes as an input",
                     fields=sorted(changed_values_by_field),
                     error=str(configuration_refused),
                 )
@@ -549,7 +549,7 @@ class HelperProcessLifecycle:
             apply_configuration(self._hosted.instance, configuration)
         except Exception as configuration_refused:
             log.error(
-                "this processor refused the config value of a field its link stopped driving",
+                "this node refused the config value of a field its link stopped driving",
                 field=field,
                 error=str(configuration_refused),
             )
@@ -582,7 +582,7 @@ class HelperProcessLifecycle:
 
     def _dispatch_mid_run(self, command: "dict[str, Any]") -> None:
         if command.get("cmd") == "run":
-            log.warn("the parent sent `run` while this processor was already running")
+            log.warn("the parent sent `run` while this node was already running")
             return
         self._dispatch(command)
 
@@ -647,7 +647,7 @@ class HelperProcessLifecycle:
             unwire_link_data_access(self._link_data_access, command)
         except Exception as unwire_failure:
             log.error(
-                "this processor could not release a disconnected link's port",
+                "this node could not release a disconnected link's port",
                 link_id=command.get("link_id"),
                 error=str(unwire_failure),
             )
@@ -662,7 +662,7 @@ class HelperProcessLifecycle:
         link_id = link.get("link_id")
         if not self._set_up_succeeded:
             self._answer_the_parents_wire_link(
-                link_id, "this processor's setup did not succeed, so it opens no port"
+                link_id, "this node's setup did not succeed, so it opens no port"
             )
             return
         if direction == "input":
@@ -681,7 +681,7 @@ class HelperProcessLifecycle:
             wire_link_data_access(self._link_data_access, port_wiring)
         except Exception as wire_failure:
             log.error(
-                "this processor could not open its port for a link wired after setup",
+                "this node could not open its port for a link wired after setup",
                 link_id=link_id,
                 direction=direction,
                 error=str(wire_failure),
@@ -696,14 +696,14 @@ class HelperProcessLifecycle:
         input_port = island.get("input_port")
         if not self._set_up_succeeded or self._function_node_islands_it_reads is None:
             self._answer_the_parents_wire_link(
-                link_id, "this processor's setup did not succeed, so no island feeds its inputs"
+                link_id, "this node's setup did not succeed, so no island feeds its inputs"
             )
             return
         try:
             self._function_node_islands_it_reads.feed_an_input_port_from_its_island(island)
         except Exception as feed_failure:
             log.error(
-                "this processor could not evaluate an island the engine handed it after setup",
+                "this node could not evaluate an island the engine handed it after setup",
                 link_id=link_id,
                 input_port=input_port,
                 error=str(feed_failure),
@@ -720,7 +720,7 @@ class HelperProcessLifecycle:
             self._function_node_islands_it_reads.stop_feeding_an_input_port(input_port)
         except Exception as unfeed_failure:
             log.error(
-                "this processor could not stop evaluating an island unlinked from it",
+                "this node could not stop evaluating an island unlinked from it",
                 link_id=command.get("link_id"),
                 input_port=input_port,
                 error=str(unfeed_failure),
@@ -735,7 +735,7 @@ class HelperProcessLifecycle:
             )
         except Exception as pin_values_refused:
             log.error(
-                "this processor could not read the pin values the engine handed it",
+                "this node could not read the pin values the engine handed it",
                 error=str(pin_values_refused),
             )
 
@@ -757,7 +757,7 @@ class HelperProcessLifecycle:
             self._bridge.send(
                 {
                     "rpc": "error",
-                    "error": "this processor's setup did not succeed, so it takes no "
+                    "error": "this node's setup did not succeed, so it takes no "
                     "configuration",
                 }
             )

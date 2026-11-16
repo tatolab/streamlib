@@ -10,10 +10,10 @@ use uuid::Uuid;
 
 use crate::core::Error;
 use crate::core::context::StreamClockSpec;
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::json_schema::LinkPortRefOutput;
-use crate::core::processors::NodeTypesOneStreamResolves;
-use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::nodes::NODE_REGISTRY;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 mod graph_document_reading_and_writing_tests;
 mod references_interfaces_variables_and_groups_tests;
@@ -24,10 +24,10 @@ const A_CAMERA_CLASS: &str = "my_app.nodes:CameraNode";
 /// a `video` output. Idempotent across tests.
 fn a_registered_camera_class() -> &'static str {
     const REGISTERED_CAMERA_CLASS: &str = "graph_snapshot_tests:RegisteredCamera";
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
-        crate::core::descriptors::ProcessorDescriptor::new(
-            crate::core::descriptors::ProcessorClassShortName::new("RegisteredCamera").unwrap(),
-            ProcessorClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
+    let _ = NODE_REGISTRY.register_descriptor_only(
+        crate::core::descriptors::NodeDescriptor::new(
+            crate::core::descriptors::NodeClassShortName::new("RegisteredCamera").unwrap(),
+            NodeClassImportPath::new(REGISTERED_CAMERA_CLASS).unwrap(),
             "graph snapshot test",
         )
         .with_input(crate::core::descriptors::PortDescriptor::new(

@@ -11,7 +11,7 @@ relay. `STREAMLIB_FIXTURE_RELAY_URL`, in the environment the stream compiles in,
 
 import os
 
-from moq_gateway_processors import CountingRecordsSource, ReportsEachRecordReceivedSink
+from moq_gateway_nodes import CountingRecordsSource, ReportsEachRecordReceivedSink
 from tatolab.moq import MoqGateway, MoqTrack, MoqTrackReceive, MoqTrackSend
 from tatolab.stream import StreamBuilder, graph_generator
 

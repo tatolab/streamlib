@@ -10,12 +10,12 @@ use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::PortDirection;
-use crate::core::processors::{
+use crate::core::nodes::{
     OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
 };
 
 use crate::core::compiler::compiler_ops::subprocess_escalate::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatTheNodeOfAHelperPlacedProcessorReaches,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatAHelperPlacedNodeReaches,
 };
 
 use crate::core::context::GpuContext;
@@ -425,7 +425,7 @@ mod reader_and_escalate_worker {
 mod link_delivery_to_a_subprocess_past_its_setup_command {
     use super::*;
     use crate::core::execution::ProcessExecution;
-    use crate::core::processors::OutOfProcessLinkWiringEnvelope;
+    use crate::core::nodes::OutOfProcessLinkWiringEnvelope;
     use crate::core::test_support::CapturedTracingWarnings;
 
     struct LinkDeliveryWithTheSubprocessEndInHand {
@@ -440,7 +440,7 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
             .expect("a read timeout on the subprocess end");
         LinkDeliveryWithTheSubprocessEndInHand {
             delivery: SubprocessBridgeLinkDelivery {
-                processor_display_name: "BlurProcessor".to_string(),
+                node_display_name: "BlurNode".to_string(),
                 parent_side: Arc::new(
                     ParentSideOfOneSubprocessBridgeSharedByItsThreads::over(
                         parent_end,
@@ -559,8 +559,8 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
         assert!(
             refused
                 .to_string()
-                .contains("'BlurProcessor' (Pblur) has failed"),
-            "the refusal names the processor; got {refused}"
+                .contains("'BlurNode' (Pblur) has failed"),
+            "the refusal names the node; got {refused}"
         );
         delivery
             .tell_the_far_side_a_link_was_unwired(
@@ -604,7 +604,7 @@ mod link_delivery_to_a_subprocess_past_its_setup_command {
         read_frame(&mut subprocess_end_reader).expect("the wire_link frame");
 
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
-            refusal_of_a_link_into_a_helper_process_that_failed("BlurProcessor", "Pblur"),
+            refusal_of_a_link_into_a_helper_process_that_failed("BlurNode", "Pblur"),
         );
         assert!(
             matches!(
@@ -669,7 +669,7 @@ fn log_frame() -> serde_json::Value {
         "intercepted": false,
         "channel": serde_json::Value::Null,
         "pipeline_id": serde_json::Value::Null,
-        "processor_id": "p-bridge-test",
+        "node_run_id": "p-bridge-test",
         "attrs": {},
     })
 }
@@ -700,7 +700,7 @@ fn log_frame_does_not_leak_to_lifecycle_channel() {
         None,
         sandbox,
         "p-bridge-test".into(),
-        WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        WhatAHelperPlacedNodeReaches::default(),
     )
     .expect("bridge construction");
 
@@ -748,7 +748,7 @@ fn lifecycle_frame_still_routes_to_lifecycle_channel() {
         None,
         sandbox,
         "p-bridge-test".into(),
-        WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        WhatAHelperPlacedNodeReaches::default(),
     )
     .expect("bridge construction");
 
@@ -780,7 +780,7 @@ fn the_native_escalate_socket_answers_escalates_and_refuses_everything_else() {
         Some(native_parent_end),
         sandbox,
         "p-native-escalate-test".into(),
-        WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        WhatAHelperPlacedNodeReaches::default(),
     )
     .expect("bridge construction");
 
@@ -899,7 +899,7 @@ fn bridge_drop_releases_a_crashed_helpers_surface_share_registrations() {
             None,
             sandbox.clone(),
             format!("p-crash-{cycle}"),
-            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            WhatAHelperPlacedNodeReaches::default(),
         )
         .expect("bridge construction");
 

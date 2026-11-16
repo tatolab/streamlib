@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 // Allow `::streamlib::*` paths emitted by the procedural macro to
 // resolve back to this crate when invoked from external consumer
 // crates (e.g. domain packages, customer apps).
@@ -37,8 +36,8 @@ pub mod sdk {
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
+    pub use streamlib_engine::core::node_interpreter;
     pub use streamlib_engine::core::prelude;
-    pub use streamlib_engine::core::processor_interpreter;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
@@ -52,9 +51,9 @@ pub mod sdk {
 
     pub mod app;
 
-    pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
+    pub use app::{AddedNode, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
 
-    pub use streamlib_engine::sdk::processors;
+    pub use streamlib_engine::sdk::nodes;
 
     // ---- Runtime-control requests ----
     /// `request_the_shutdown_of_every_loaded_stream` — ask whoever owns the
@@ -81,9 +80,9 @@ pub mod sdk {
 
     // ---- Procedural macros ----
 
-    pub use streamlib_engine::processor;
+    pub use streamlib_engine::node;
 
-    pub use streamlib_engine::processor_config;
+    pub use streamlib_engine::node_config;
 
     // ---- Permission helpers ----
 
@@ -195,13 +194,12 @@ pub mod engine_internal {
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub use streamlib_engine::permissions;
     pub use streamlib_engine::{
-        ContinuousProcessor, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualProcessor,
-        MediaClock, NativeTextureHandle, OutputPortMarker, PROCESSOR_REGISTRY, PooledTextureHandle,
-        ProcessorSpec, ReactiveProcessor, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
+        ContinuousNode, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualNode, MediaClock,
+        NODE_REGISTRY, NativeTextureHandle, NodeSpec, OutputPortMarker, PooledTextureHandle,
+        ReactiveNode, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
         RuntimeContextLimitedAccess, StreamClock, StreamClockSpec, Texture, TextureDescriptor,
         TextureFormat, TexturePool, TexturePoolDescriptor, TextureUsages, core, crossbeam_channel,
-        iceoryx2, input, logging, output, platform, processor, processor_config, schemars, sdk,
-        serde_json,
+        iceoryx2, input, logging, node, node_config, output, platform, schemars, sdk, serde_json,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::{

@@ -87,9 +87,9 @@ fn a_node_whose_output_is(
     family: crate::core::descriptors::PortFamily,
     config: Option<serde_json::Value>,
     frame_rate: Option<crate::core::descriptors::ImageOutputPortFrameRate>,
-) -> crate::core::graph::ProcessorNode {
-    crate::core::graph::ProcessorNode::new(
-        streamlib_processor_schema::ProcessorClassImportPath::new("tests.CameraSource")
+) -> crate::core::graph::GraphNode {
+    crate::core::graph::GraphNode::new(
+        streamlib_node_schema::NodeClassImportPath::new("tests.CameraSource")
             .expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         "CameraSource",
@@ -113,10 +113,9 @@ fn a_node_whose_output_is(
 
 fn a_node_of_kind(
     node_kind: Option<crate::core::descriptors::NodeKind>,
-) -> crate::core::graph::ProcessorNode {
-    crate::core::graph::ProcessorNode::new(
-        streamlib_processor_schema::ProcessorClassImportPath::new("tests:Lfo")
-            .expect("a legal import path"),
+) -> crate::core::graph::GraphNode {
+    crate::core::graph::GraphNode::new(
+        streamlib_node_schema::NodeClassImportPath::new("tests:Lfo").expect("a legal import path"),
         node_kind,
         "Lfo",
         None,
@@ -129,7 +128,7 @@ fn a_node_of_kind(
 fn a_node_renders_its_kind_and_a_function_node_its_language_beside_it() {
     use crate::core::descriptors::{FunctionNodeLanguage, NodeKind};
     let render = |node_kind| {
-        serde_json::to_value(ProcessorNodeOutput::from(&a_node_of_kind(node_kind))).unwrap()
+        serde_json::to_value(GraphNodeOutput::from(&a_node_of_kind(node_kind))).unwrap()
     };
 
     let process = render(Some(NodeKind::Process));
@@ -149,8 +148,7 @@ fn a_node_renders_its_kind_and_a_function_node_its_language_beside_it() {
 
 #[test]
 fn a_node_whose_type_nothing_registers_renders_no_kind() {
-    let unregistered =
-        serde_json::to_value(ProcessorNodeOutput::from(&a_node_of_kind(None))).unwrap();
+    let unregistered = serde_json::to_value(GraphNodeOutput::from(&a_node_of_kind(None))).unwrap();
     assert!(unregistered.get("kind").is_none(), "{unregistered}");
     assert!(unregistered.get("language").is_none(), "{unregistered}");
 }
@@ -158,27 +156,26 @@ fn a_node_whose_type_nothing_registers_renders_no_kind() {
 #[test]
 fn a_catalog_entry_renders_its_kind_and_a_function_node_its_language_beside_it() {
     use crate::core::descriptors::{FunctionNodeLanguage, NodeKind};
-    let mut descriptor = crate::core::ProcessorDescriptor::new(
-        crate::core::descriptors::ProcessorClassShortName::new("Lfo").expect("a short name"),
-        streamlib_processor_schema::ProcessorClassImportPath::new("tests:Lfo")
-            .expect("a legal import path"),
+    let mut descriptor = crate::core::NodeDescriptor::new(
+        crate::core::descriptors::NodeClassShortName::new("Lfo").expect("a short name"),
+        streamlib_node_schema::NodeClassImportPath::new("tests:Lfo").expect("a legal import path"),
         "oscillates",
     );
-    let process = serde_json::to_value(ProcessorDescriptorOutput::from(&descriptor)).unwrap();
+    let process = serde_json::to_value(NodeDescriptorOutput::from(&descriptor)).unwrap();
     assert_eq!(process["kind"], "process");
     assert!(process.get("language").is_none(), "{process}");
 
     descriptor.node_kind = NodeKind::Function {
         language: FunctionNodeLanguage::Rust,
     };
-    let function = serde_json::to_value(ProcessorDescriptorOutput::from(&descriptor)).unwrap();
+    let function = serde_json::to_value(NodeDescriptorOutput::from(&descriptor)).unwrap();
     assert_eq!(function["kind"], "function");
     assert_eq!(function["language"], "rust");
 }
 
 #[test]
 fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_facts() {
-    let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_whose_output_is(
+    let rendered = serde_json::to_value(GraphNodeOutput::from(&a_node_whose_output_is(
         crate::core::descriptors::PortFamily::Image,
         Some(serde_json::json!({"frames_per_second": 30})),
         Some(
@@ -210,7 +207,7 @@ fn an_image_output_renders_the_frame_rate_its_config_declares_as_its_stream_fact
 #[test]
 fn an_output_port_renders_the_facts_it_carries_now() {
     let node = a_node_whose_output_is(crate::core::descriptors::PortFamily::Packets, None, None);
-    let unstated = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+    let unstated = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_renders_exactly(&unstated["ports"]["outputs"][0], &PORT_INFO_KEYS);
 
     node.stream_facts_of_output_ports()
@@ -225,7 +222,7 @@ fn an_output_port_renders_the_facts_it_carries_now() {
             .into(),
         )
         .expect("a Packets port carries Packets facts");
-    let replaced = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+    let replaced = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
         replaced["ports"]["outputs"][0]["stream_facts"],
         serde_json::json!({
@@ -240,7 +237,7 @@ fn an_output_port_renders_the_facts_it_carries_now() {
 #[test]
 fn a_records_port_renders_its_values_unchecked_in_the_graph_and_the_registry() {
     let node = a_node_whose_output_is(crate::core::descriptors::PortFamily::Records, None, None);
-    let rendered = serde_json::to_value(ProcessorNodeOutput::from(&node)).unwrap();
+    let rendered = serde_json::to_value(GraphNodeOutput::from(&node)).unwrap();
     assert_eq!(
         rendered["ports"]["outputs"][0]["values_checked"],
         serde_json::json!(false)
@@ -419,11 +416,11 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
 /// standing in for what its own device gave it.
 fn a_node_declaring_the_sentinel(
     settled: Option<crate::iceoryx2::ResolvedAudioWindowContract>,
-) -> crate::core::graph::ProcessorNode {
+) -> crate::core::graph::GraphNode {
     use crate::core::graph::GraphNodeWithComponents;
 
-    let mut node = crate::core::graph::ProcessorNode::new(
-        streamlib_processor_schema::ProcessorClassImportPath::new("tests.SpeakerSink")
+    let mut node = crate::core::graph::GraphNode::new(
+        streamlib_node_schema::NodeClassImportPath::new("tests.SpeakerSink")
             .expect("a legal import path"),
         Some(crate::core::descriptors::NodeKind::Process),
         "SpeakerSink",
@@ -480,7 +477,7 @@ fn a_settled_match_device_port_renders_the_five_values_its_device_gave() {
     )
     .expect("a device format settles a contract");
 
-    let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(
+    let rendered = serde_json::to_value(GraphNodeOutput::from(&a_node_declaring_the_sentinel(
         Some(settled),
     )))
     .unwrap();
@@ -500,10 +497,8 @@ fn a_settled_match_device_port_renders_the_five_values_its_device_gave() {
 
 #[test]
 fn an_unsettled_match_device_port_still_renders_the_sentinel() {
-    let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(
-        None,
-    )))
-    .unwrap();
+    let rendered =
+        serde_json::to_value(GraphNodeOutput::from(&a_node_declaring_the_sentinel(None))).unwrap();
 
     assert_eq!(
         rendered["ports"]["inputs"][0]["audio_window"],
@@ -516,10 +511,8 @@ fn an_unsettled_match_device_port_still_renders_the_sentinel() {
 /// copy of the same fact to keep in agreement.
 #[test]
 fn the_settled_contracts_render_on_the_port_and_not_as_a_component_of_their_own() {
-    let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(
-        None,
-    )))
-    .unwrap();
+    let rendered =
+        serde_json::to_value(GraphNodeOutput::from(&a_node_declaring_the_sentinel(None))).unwrap();
 
     assert!(
         rendered["components"]

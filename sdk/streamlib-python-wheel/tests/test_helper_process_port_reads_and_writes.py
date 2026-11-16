@@ -17,10 +17,10 @@ from helper_process_test_support import (
     frame_index_payload,
 )
 from tatolab.runtime import _engine
-from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
+from tatolab.runtime._node_interpreter_bootstrap import (
     ParentProcessBridge,
-    load_processor_class,
+    load_node_class,
 )
 from tatolab.stream import NodeLinkDataAccess
 
@@ -38,7 +38,7 @@ def payload_bytes_read_from(destination: NodeLinkDataAccess, input_port: str) ->
 
 
 def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():
-    """A processor added to a running graph is set up before any link reaches
+    """A node added to a running graph is set up before any link reaches
     it, and a link may be taken away again later. Its declared ports stay
     usable throughout: a read finds nothing, a write goes nowhere, and neither
     raises. Only a port the class never declared is refused, by name.
@@ -83,11 +83,11 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     """
     link_id = "L-envelope-test"
     destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
 
@@ -108,11 +108,11 @@ def test_a_message_read_unread_is_handed_on_exactly_as_it_arrived():
     into_the_relay = "L-unread-into-the-relay"
     out_of_the_relay = "L-unread-out-of-the-relay"
     destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", out_of_the_relay)]}
     )
     relay = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         relay,
         {
             "inputs": [engine_shaped_link_wiring("input", into_the_relay)],
@@ -120,7 +120,7 @@ def test_a_message_read_unread_is_handed_on_exactly_as_it_arrived():
         },
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", into_the_relay)]}
     )
     assert (
@@ -174,15 +174,15 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
         wiring["max_subscribers"] = 3
 
     shallow_destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         shallow_destination, {"inputs": [shallow_wiring]}
     )
     deep_destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         deep_destination, {"inputs": [deep_wiring]}
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(source, {"outputs": [source_wiring]})
+    node_interpreter_bootstrap.wire_link_data_access(source, {"outputs": [source_wiring]})
 
     for frame_index in range(messages_published_while_neither_reads):
         source.write_to_output_port("frames_to_downstream", frame_index_payload(frame_index))
@@ -219,15 +219,15 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     # The destination is wired first both times: a send with no subscriber
     # attached is dropped.
     def connect() -> None:
-        processor_interpreter_bootstrap.wire_link_data_access(
+        node_interpreter_bootstrap.wire_link_data_access(
             destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
         )
-        processor_interpreter_bootstrap.wire_link_data_access(
+        node_interpreter_bootstrap.wire_link_data_access(
             source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
         )
 
     def disconnect() -> None:
-        processor_interpreter_bootstrap.unwire_link_data_access(
+        node_interpreter_bootstrap.unwire_link_data_access(
             source,
             {
                 "direction": "output",
@@ -235,7 +235,7 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
                 "link_id": link_id,
             },
         )
-        processor_interpreter_bootstrap.unwire_link_data_access(
+        node_interpreter_bootstrap.unwire_link_data_access(
             destination, {"direction": "input", "link_id": link_id}
         )
 
@@ -256,15 +256,15 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
     """
     link_id = "L-unknown-direction"
     destination = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
     )
     source = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         source, {"outputs": [engine_shaped_link_wiring("output", link_id)]}
     )
 
-    processor_interpreter_bootstrap.unwire_link_data_access(
+    node_interpreter_bootstrap.unwire_link_data_access(
         source,
         {
             "direction": "sideways",
@@ -272,7 +272,7 @@ def test_unwiring_a_link_in_an_unknown_direction_touches_neither_plane():
             "link_id": link_id,
         },
     )
-    processor_interpreter_bootstrap.unwire_link_data_access(
+    node_interpreter_bootstrap.unwire_link_data_access(
         destination, {"direction": "sideways", "link_id": link_id}
     )
 
@@ -293,7 +293,7 @@ def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -320,7 +320,7 @@ def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
 
 
 def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
-    """A processor added to a running graph is set up with no links and gets
+    """A node added to a running graph is set up with no links and gets
     its first ones from later connects. The engine hands each one over as a
     `wire_link` the child acts on from inside its execution loop — parked on
     the parent, because with no input it has nothing else to wait on — and
@@ -333,7 +333,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -345,7 +345,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     # The far end of the child's output is opened first, so nothing the child
     # publishes is dropped for want of a subscriber.
     downstream = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
     )
@@ -364,7 +364,7 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         }
     )
     upstream = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
     )
@@ -462,7 +462,7 @@ def test_an_island_fed_after_setup_is_evaluated_swapped_and_stopped_mid_run(stan
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:IslandReadingProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:IslandReadingProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -519,7 +519,7 @@ def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_se
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:IslandReadingProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:IslandReadingProbe")
     )
     stand_in_parent.send(
         {"cmd": "setup", "capability": "full", "config": {}, "ports": {"pins": {"level": 0.25}}}
@@ -568,7 +568,7 @@ def test_each_new_value_a_link_gives_an_exposed_config_field_is_a_live_config_up
     stand_in_parent,
 ):
     """A config field the node exposes is read from the input port of its
-    name before each `process()`, and each new value reaches the processor as
+    name before each `process()`, and each new value reaches the node as
     a live config update; a field it stops exposing is no longer read.
 
     Fail-without-fix: drop the read from `call_hook_from_the_scheduling_loop`
@@ -580,7 +580,7 @@ def test_each_new_value_a_link_gives_an_exposed_config_field_is_a_live_config_up
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ExposedGainProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ExposedGainProbe")
     )
     stand_in_parent.send(
         {
@@ -623,7 +623,7 @@ def test_each_new_value_a_link_gives_an_exposed_config_field_is_a_live_config_up
 def test_an_exposed_config_field_its_link_stops_driving_goes_back_to_its_config_value(
     stand_in_parent,
 ):
-    """Unlinking an exposed field hands the processor its config's own value
+    """Unlinking an exposed field hands the node its config's own value
     again, the one the last config update set, as a live config update.
 
     Fail-without-fix: the probe keeps the 1.5 the island last gave its gain.
@@ -634,7 +634,7 @@ def test_an_exposed_config_field_its_link_stops_driving_goes_back_to_its_config_
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ExposedGainProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ExposedGainProbe")
     )
     stand_in_parent.send(
         {
@@ -684,7 +684,7 @@ def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_pare
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -717,16 +717,16 @@ def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_pare
 
 def test_a_wire_after_a_failed_setup_is_refused_rather_than_opened(stand_in_parent):
     """The engine can hand a link over while `setup` is still running, and the
-    child reads it only once `setup` has answered. A processor whose setup
+    child reads it only once `setup` has answered. A node whose setup
     failed opens no port for it, so the link must read error rather than wired.
 
     Fail-without-fix: open the port anyway and the child answers `link_wired`
-    for a processor that never came up.
+    for a node that never came up.
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RefusesSetupProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RefusesSetupProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -760,7 +760,7 @@ def test_a_wire_in_an_unknown_direction_is_refused_rather_than_left_unanswered(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -786,19 +786,19 @@ def test_a_wire_in_an_unknown_direction_is_refused_rather_than_left_unanswered(
 
 
 def test_a_helper_slower_than_its_upstream_forwards_the_burst(stand_in_parent):
-    """A processor slower than its upstream never goes idle, so the loop runs
+    """A node slower than its upstream never goes idle, so the loop runs
     `process()` back to back and still forwards what the burst sent."""
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:SlowPassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:SlowPassThroughProbe")
     )
 
     inbound_link_id = "L-slow-in"
     outbound_link_id = "L-slow-out"
     downstream = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         downstream,
         {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
     )
@@ -819,7 +819,7 @@ def test_a_helper_slower_than_its_upstream_forwards_the_burst(stand_in_parent):
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     upstream = _engine.open_node_link_data_access_for_helper_process()
-    processor_interpreter_bootstrap.wire_link_data_access(
+    node_interpreter_bootstrap.wire_link_data_access(
         upstream,
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
     )

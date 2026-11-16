@@ -8,7 +8,5 @@
 //!
 //! These tests only cover internal parsing and analysis logic.
 
-
 #[test]
-fn test_macros_can_be_imported() {
-}
+fn test_macros_can_be_imported() {}

@@ -11,7 +11,7 @@ use streamlib::sdk::iceoryx2::{
     ChannelsBlockDescriptorBody, ChannelsBlockSampleType, DataChannelPayloadDescriptor,
     DataChannelPayloadDescriptorKind,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::schemars::JsonSchema;
 
 use super::conversion_node_config_defaults::{
@@ -24,7 +24,7 @@ const RECORDS_INPUT_PORT: &str = "records";
 const CHANNELS_OUTPUT_PORT: &str = "channels";
 
 /// Configuration for [`RecordsToChannels`].
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
@@ -46,7 +46,7 @@ impl Default for RecordsToChannelsConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     config = crate::port_family_conversion::records_to_channels::RecordsToChannelsConfig,
@@ -83,7 +83,7 @@ pub struct RecordsToChannels {
     next_start_sample: u64,
 }
 
-impl ReactiveProcessor for RecordsToChannels::Processor {
+impl ReactiveNode for RecordsToChannels::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         refuse_a_channels_output_config(
             "RecordsToChannels",

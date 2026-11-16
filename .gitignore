@@ -126,7 +126,7 @@ TASK-*.md
 _generated_/
 
 # Generated Rust crate root — the mechanical projection of a folder-backed
-# package's processors/ directory, rewritten before every cargo invocation.
+# package's nodes/ directory, rewritten before every cargo invocation.
 # Kept out of _generated_/ so it is not mistaken for the Deno wire vocabulary,
 # whose directory presence is a provisioning oracle.
 

@@ -21,7 +21,7 @@ use crate::python_gpu_surface_pixel_exchange::{
     HOST_VISIBLE_DLPACK_DEVICE, PixelExchangeTensorLayout, dlpack_capsule_over,
     dlpack_device_as_python_pair, exchange_shape_for_max_version,
 };
-use crate::python_processor_context::PooledGpuFrameClaimHeldByARead;
+use crate::python_node_context::PooledGpuFrameClaimHeldByARead;
 
 /// A read message's payload, held where the sample put it until the borrow and
 /// every export of it are gone.

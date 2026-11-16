@@ -4,12 +4,12 @@
 use std::sync::{Arc, Weak};
 
 use crate::core::graph::LinkUniqueId;
-use crate::core::processors::OutOfProcessLinkWiringEnvelope;
+use crate::core::nodes::OutOfProcessLinkWiringEnvelope;
 use crate::iceoryx2::OutputWriterInner;
 
 #[derive(Clone)]
 pub(crate) enum SourceSideOfALinkWiredOn {
-    ANativeProcessorsOutputWriter(Arc<OutputWriterInner>),
+    ANativeNodesOutputWriter(Arc<OutputWriterInner>),
     AHelperProcessesLinkWiring(Arc<OutOfProcessLinkWiringEnvelope>),
 }
 
@@ -23,7 +23,7 @@ pub(crate) struct SourceSideHeldOpenForAReaderOutsideItsStream {
 
 #[derive(Debug)]
 enum WeakSourceSideOfALinkWiredOn {
-    ANativeProcessorsOutputWriter(Weak<OutputWriterInner>),
+    ANativeNodesOutputWriter(Weak<OutputWriterInner>),
     AHelperProcessesLinkWiring(Weak<OutOfProcessLinkWiringEnvelope>),
 }
 
@@ -37,8 +37,8 @@ impl SourceSideHeldOpenForAReaderOutsideItsStream {
     ) -> Self {
         Self {
             wired_on: match wired_on {
-                SourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter(output_writer) => {
-                    WeakSourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter(Arc::downgrade(
+                SourceSideOfALinkWiredOn::ANativeNodesOutputWriter(output_writer) => {
+                    WeakSourceSideOfALinkWiredOn::ANativeNodesOutputWriter(Arc::downgrade(
                         output_writer,
                     ))
                 }
@@ -57,7 +57,7 @@ impl SourceSideHeldOpenForAReaderOutsideItsStream {
 impl Drop for SourceSideHeldOpenForAReaderOutsideItsStream {
     fn drop(&mut self) {
         match &self.wired_on {
-            WeakSourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter(output_writer) => {
+            WeakSourceSideOfALinkWiredOn::ANativeNodesOutputWriter(output_writer) => {
                 let Some(output_writer) = output_writer.upgrade() else {
                     return;
                 };

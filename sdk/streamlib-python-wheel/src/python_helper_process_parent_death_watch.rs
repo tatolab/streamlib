@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd, RawFd};
 use std::sync::OnceLock;
@@ -11,7 +10,7 @@ use std::time::{Duration, Instant};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use streamlib::sdk::processor_interpreter::{
+use streamlib::sdk::node_interpreter::{
     CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,
 };
 
@@ -192,7 +191,7 @@ fn tear_this_helper_down_because_its_parent_went_away(reason: &'static str) {
     tracing::warn!("{reason}; this helper tears itself down");
     let the_parent_went_away_at = Instant::now();
     if let Some(parent_channel_fd) = PARENT_CHANNEL_FD_THE_WATCH_ENDS.get() {
-        // SAFETY: a scalar syscall on the channel the processor interpreter
+        // SAFETY: a scalar syscall on the channel the node interpreter
         // bootstrap handed over. Shut down rather than closed: the bridge's
         // reader still owns the fd, and shutting it down is what wakes that
         // reader with the end of the channel even while something else still
@@ -243,7 +242,7 @@ fn walk_the_self_teardown_ladder_from(the_parent_went_away_at: Instant) -> ! {
 fn kill_this_helpers_whole_process_group() -> ! {
     // SAFETY: scalar syscalls. The spawn host made this helper the leader of a
     // group whose id is its pid; the pid itself is signalled too, for a
-    // processor that moved the helper out of that group.
+    // node that moved the helper out of that group.
     unsafe {
         let this_helper = libc::getpid();
         libc::killpg(this_helper, libc::SIGKILL);

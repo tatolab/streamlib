@@ -37,12 +37,12 @@ impl GpuContext {
         )
     }
 
-    pub(crate) fn create_processor_output_pixel_buffer_pool_for_a_native_node(
+    pub(crate) fn create_node_output_pixel_buffer_pool_for_a_native_node(
         &self,
-        processor_id_of_the_owning_node: &str,
-    ) -> crate::core::context::ProcessorOutputPixelBufferPoolOfOneNativeNode {
-        crate::core::context::ProcessorOutputPixelBufferPoolOfOneNativeNode::new(
-            processor_id_of_the_owning_node,
+        node_run_id_of_the_owning_node: &str,
+    ) -> crate::core::context::NodeOutputPixelBufferPoolOfOneNativeNode {
+        crate::core::context::NodeOutputPixelBufferPoolOfOneNativeNode::new(
+            node_run_id_of_the_owning_node,
             self.loaded_stream_this_view_serves,
             Arc::clone(&self.pixel_buffer_pool_manager),
             Arc::clone(&self.engines_own_surface_store),

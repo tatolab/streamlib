@@ -1,20 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::{
-    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
+    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
     FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter,
 };
 
 use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
-use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 
 use super::*;
 
@@ -303,14 +302,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
     }
 }
 
-#[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersProcessor", frozen)]
-pub(crate) struct FunctionNodeEvaluatedAsItsHelpersProcessor {
+#[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersNode", frozen)]
+pub(crate) struct FunctionNodeEvaluatedAsItsHelpersNode {
     function_node: Mutex<FunctionNodeInAnIsland>,
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
 }
 
 #[pymethods]
-impl FunctionNodeEvaluatedAsItsHelpersProcessor {
+impl FunctionNodeEvaluatedAsItsHelpersNode {
     #[new]
     #[pyo3(signature = (
         *,
@@ -331,7 +330,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         reason = "pyo3 maps each Python keyword argument to its own parameter"
     )]
     fn new(
-        link_data_access: &PythonProcessorLinkDataAccess,
+        link_data_access: &PythonNodeLinkDataAccess,
         node_id: String,
         called_through: Py<PyAny>,
         input_count: usize,
@@ -343,8 +342,7 @@ impl FunctionNodeEvaluatedAsItsHelpersProcessor {
         inputs_carrying_an_unread_message: Vec<usize>,
         outputs_carrying_an_unread_message: Vec<usize>,
     ) -> PyResult<Self> {
-        let breadcrumb_number =
-            BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
+        let breadcrumb_number = BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE;
         let call_breadcrumb_board_writer =
             link_data_access.shared_loss_count_board_writer_of_this_helper();
         let writes_its_state_on_the_board = !initial_state_values.is_empty()

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::collections::HashMap;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::{
     options_loading_a_stream_of_the_test_project_at,
@@ -9,18 +8,17 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::{
 };
 
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::descriptors::NodeClassImportPath;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
+use streamlib::sdk::nodes::{Config, GeneratedNode, ManualNode, NodeSpec};
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner};
 use streamlib::sdk::{App, THE_STREAM_ID_AN_APP_LOADS};
 
-
 macro_rules! manual_fixture {
     ($struct_name:ident) => {
-        #[streamlib::sdk::processor(execution = manual)]
+        #[streamlib::sdk::node(execution = manual)]
         struct $struct_name;
-        impl ManualProcessor for $struct_name::Processor {
+        impl ManualNode for $struct_name::Node {
             fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
                 Ok(())
             }
@@ -59,9 +57,9 @@ fn an_engine_loading_one_empty_stream(
     (runner, stream)
 }
 
-fn register_session_reference<P>(registrar: &LoadedStreamInThisRuntime) -> ProcessorClassImportPath
+fn register_session_reference<P>(registrar: &LoadedStreamInThisRuntime) -> NodeClassImportPath
 where
-    P: GeneratedProcessor + 'static,
+    P: GeneratedNode + 'static,
     P::Config: Config,
 {
     registrar
@@ -86,12 +84,12 @@ fn normalize_node_uuids(graph_json: &serde_json::Value) -> String {
 }
 
 #[test]
-fn app_add_matches_the_streams_add_processor_snapshot() {
+fn app_add_matches_the_streams_add_node_snapshot() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let (_registrar_runner, registrar) =
         an_engine_loading_one_empty_stream(project_directory.path());
-    let alpha_ref = register_session_reference::<EquivAlpha::Processor>(&registrar);
-    let beta_ref = register_session_reference::<EquivBeta::Processor>(&registrar);
+    let alpha_ref = register_session_reference::<EquivAlpha::Node>(&registrar);
+    let beta_ref = register_session_reference::<EquivBeta::Node>(&registrar);
 
     let config = serde_json::json!({});
 
@@ -111,10 +109,10 @@ fn app_add_matches_the_streams_add_processor_snapshot() {
     // stream.
     let (_runner, stream) = an_engine_loading_one_empty_stream(project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(alpha_ref, config.clone()))
+        .add_node(NodeSpec::new(alpha_ref, config.clone()))
         .expect("stream add alpha");
     stream
-        .add_processor(ProcessorSpec::new(beta_ref, config))
+        .add_node(NodeSpec::new(beta_ref, config))
         .expect("stream add beta");
     let stream_snapshot = normalize_node_uuids(&stream.to_json().expect("stream graph json"));
 
@@ -140,13 +138,13 @@ fn app_connect_is_a_faithful_passthrough_of_the_streams_connect() {
     ))
     .expect("App::new");
     let node = app
-        .add_local::<PassthroughNode::Processor>(serde_json::json!({}), None)
-        .expect("add_local returns a connectable processor");
+        .add_local::<PassthroughNode::Node>(serde_json::json!({}), None)
+        .expect("add_local returns a connectable node");
 
     let via_app = app.connect((&node, "no_such_out"), (&node, "no_such_in"));
     let via_stream = app.stream().connect(
-        OutputLinkPortRef::new(node.processor_id(), "no_such_out"),
-        InputLinkPortRef::new(node.processor_id(), "no_such_in"),
+        OutputLinkPortRef::new(node.node_run_id(), "no_such_out"),
+        InputLinkPortRef::new(node.node_run_id(), "no_such_in"),
     );
 
     assert_eq!(
@@ -156,16 +154,13 @@ fn app_connect_is_a_faithful_passthrough_of_the_streams_connect() {
     );
 }
 
-fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
-    use streamlib::sdk::descriptors::{
-        PortDescriptor, ProcessorClassShortName, ProcessorDescriptor,
-    };
-    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+fn register_ported_type(short: &str, input: &str, output: &str) -> NodeClassImportPath {
+    use streamlib::sdk::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
+    use streamlib::sdk::nodes::NODE_REGISTRY;
 
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short).unwrap(),
+    let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short).unwrap(),
         import_path.clone(),
         "app-sugar connect test",
     )
@@ -185,12 +180,12 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClas
             streamlib::sdk::descriptors::PortFamily::Image,
         ),
     ));
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
 #[test]
-fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
+fn app_connect_between_real_nodes_on_valid_ports_returns_ok() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let source_ref = register_ported_type("AppConnectOkSource", "_unused_in", "video");
     let sink_ref = register_ported_type("AppConnectOkSink", "video_in", "_unused_out");
@@ -209,8 +204,8 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
 
     // The ids `App` handed back are the default uppercase-leading form — the
     // shape that pre-fix produced `InvalidLink` for every real connect.
-    assert!(source.processor_id().to_string().starts_with('P'));
-    assert!(sink.processor_id().to_string().starts_with('P'));
+    assert!(source.node_run_id().to_string().starts_with('P'));
+    assert!(sink.node_run_id().to_string().starts_with('P'));
 
     let link = app
         .connect((&source, "video"), (&sink, "video_in"))
@@ -231,7 +226,7 @@ fn add_local_hello_world_materializes_a_real_node() {
     .expect("App::new");
 
     let node = app
-        .add_local::<MaterializeNode::Processor>(serde_json::json!({}), None)
+        .add_local::<MaterializeNode::Node>(serde_json::json!({}), None)
         .expect("add_local materializes a node");
 
     let graph_json = app.stream().to_json().expect("graph json");
@@ -247,9 +242,9 @@ fn add_local_hello_world_materializes_a_real_node() {
         "the graph's node is the add_local type: {node_types:?}"
     );
 
-    let node_id = node.processor_id();
+    let node_id = node.node_run_id();
     app.stream()
-        .remove_processor(node_id)
+        .remove_node(node_id)
         .unwrap_or_else(|why| panic!("the add_local id {node_id} must name a real node: {why}"));
 }
 
@@ -261,7 +256,7 @@ fn add_rejects_a_non_serializable_config() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     // The config is encoded before the registry is ever consulted, so any
     // path works — the serialization error must fire first.
-    let reference = ProcessorClassImportPath::new("app_sugar_test::Whatever").unwrap();
+    let reference = NodeClassImportPath::new("app_sugar_test::Whatever").unwrap();
 
     let app = App::new_at_stream_location(the_location_of_a_stream_of_the_test_project_at(
         project_directory.path(),
@@ -280,7 +275,7 @@ fn add_rejects_a_non_serializable_config() {
 }
 
 #[test]
-fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
+fn connect_to_nonexistent_port_surfaces_node_port_not_found() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     use streamlib::sdk::error::PortDirection;
 
@@ -290,15 +285,15 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
     ))
     .expect("App::new");
     let node = app
-        .add_local::<IgnoredConnectNode::Processor>(serde_json::json!({}), None)
-        .expect("add_local returns a connectable processor");
+        .add_local::<IgnoredConnectNode::Node>(serde_json::json!({}), None)
+        .expect("add_local returns a connectable node");
 
     let error = app
         .connect((&node, "no_such_out"), (&node, "no_such_in"))
         .expect_err("connecting a nonexistent port must fail");
 
     match error {
-        Error::ProcessorPortNotFound {
+        Error::NodePortNotFound {
             port_name,
             direction,
             ..
@@ -306,7 +301,7 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
             assert_eq!(port_name, "no_such_out");
             assert_eq!(direction, PortDirection::Output);
         }
-        other => panic!("expected ProcessorPortNotFound, got {other:?}"),
+        other => panic!("expected NodePortNotFound, got {other:?}"),
     }
 }
 
@@ -375,7 +370,7 @@ fn add_local_reaches_the_display_name_surface_too() {
     .expect("App::new");
 
     let node = app
-        .add_local::<DisplayNamedNode::Processor>(serde_json::json!({}), Some("Blur"))
+        .add_local::<DisplayNamedNode::Node>(serde_json::json!({}), Some("Blur"))
         .expect("add_local materializes a node");
 
     assert_eq!(node.display_name(), "blur");

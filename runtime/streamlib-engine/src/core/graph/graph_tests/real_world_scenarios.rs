@@ -9,22 +9,22 @@ fn test_compiler_create_phase_pattern() {
     let mut graph = test_graph();
     let id = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
     {
         let node = graph.traversal_mut().v(id.as_str()).first_mut().unwrap();
-        node.insert(MockProcessorInstance);
+        node.insert(MockNodeInstance);
         node.insert(MockState::default());
         node.insert(MockPauseGate::new());
     }
 
     let node = graph.traversal().v(id.as_str()).first().unwrap();
-    assert!(node.has::<MockProcessorInstance>());
+    assert!(node.has::<MockNodeInstance>());
     assert!(node.has::<MockState>());
     assert!(node.has::<MockPauseGate>());
 }
@@ -35,18 +35,18 @@ fn test_compiler_wire_phase_pattern() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let link_id = graph
@@ -79,26 +79,26 @@ fn test_runtime_pause_all_pattern() {
 
     let id1 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let id2 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let id3 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -137,23 +137,23 @@ fn test_runtime_status_pattern() {
 
     let id1 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let id2 = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named");
 
     graph
@@ -161,16 +161,16 @@ fn test_runtime_status_pattern() {
         .v(id1.as_str())
         .first_mut()
         .unwrap()
-        .insert(MockState(ProcessorState::Running));
+        .insert(MockState(NodeState::Running));
 
     graph
         .traversal_mut()
         .v(id2.as_str())
         .first_mut()
         .unwrap()
-        .insert(MockState(ProcessorState::Paused));
+        .insert(MockState(NodeState::Paused));
 
-    let processor_states: Vec<(String, ProcessorState)> = graph
+    let node_states: Vec<(String, NodeState)> = graph
         .traversal()
         .v(())
         .has_component::<MockState>()
@@ -181,11 +181,11 @@ fn test_runtime_status_pattern() {
         })
         .collect();
 
-    assert_eq!(processor_states.len(), 2);
+    assert_eq!(node_states.len(), 2);
 
-    let states_map: std::collections::HashMap<_, _> = processor_states.into_iter().collect();
-    assert_eq!(states_map.get(&id1), Some(&ProcessorState::Running));
-    assert_eq!(states_map.get(&id2), Some(&ProcessorState::Paused));
+    let states_map: std::collections::HashMap<_, _> = node_states.into_iter().collect();
+    assert_eq!(states_map.get(&id1), Some(&NodeState::Running));
+    assert_eq!(states_map.get(&id2), Some(&NodeState::Paused));
 }
 
 #[test]
@@ -194,26 +194,26 @@ fn test_pipeline_topology() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let middle_id = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 

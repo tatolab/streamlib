@@ -42,9 +42,9 @@ def write_a_describe_time_log_record_to_stderr(
 
 class ParentProcessLogSink:
 
-    def __init__(self, bridge: ParentProcessBridge, processor_id: str) -> None:
+    def __init__(self, bridge: ParentProcessBridge, node_run_id: str) -> None:
         self._bridge = bridge
-        self._processor_id = processor_id
+        self._node_run_id = node_run_id
         self._next_sequence_number = 0
         self._sequence_lock = threading.Lock()
 
@@ -60,7 +60,7 @@ class ParentProcessLogSink:
             # merged stream. Wall clock is what a human reads.
             source_ts=datetime.now(timezone.utc).isoformat(),
             pipeline_id=None,
-            processor_id=self._processor_id,
+            node_run_id=self._node_run_id,
         )
 
     def send_a_captured_engine_record(self, record: "dict[str, Any]") -> None:
@@ -80,7 +80,7 @@ class ParentProcessLogSink:
                 record["emitted_at_wall_clock_nanoseconds"]
             ),
             pipeline_id=record["pipeline_id"],
-            processor_id=record["processor_id"] or self._processor_id,
+            node_run_id=record["node_run_id"] or self._node_run_id,
             target=record["target"],
             rhi_op=record["rhi_op"],
         )
@@ -94,7 +94,7 @@ class ParentProcessLogSink:
         attrs: "dict[str, Any]",
         source_ts: str,
         pipeline_id: "Optional[str]",
-        processor_id: "Optional[str]",
+        node_run_id: "Optional[str]",
         target: "Optional[str]" = None,
         rhi_op: "Optional[str]" = None,
     ) -> None:
@@ -111,7 +111,7 @@ class ParentProcessLogSink:
                 "intercepted": False,
                 "channel": None,
                 "pipeline_id": pipeline_id,
-                "processor_id": processor_id,
+                "node_run_id": node_run_id,
                 "attrs": attrs,
             }
             # Named only where there is one to name: the two columns an engine

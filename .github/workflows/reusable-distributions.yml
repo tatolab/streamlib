@@ -7,7 +7,7 @@ name: Distributions
 # publishes after it, from reusable-module-distributions.yml, and a module that
 # fails to build never withholds the core. A project names that index for the
 # modules the runtime does not carry, takes its core modules from the wheels the
-# runtime unit carries, and everything else from PyPI. The engine wheel is not published: a processor
+# runtime unit carries, and everything else from PyPI. The engine wheel is not published: a node
 # interpreter borrows the runtime from the runtime unit's lend, so no stream's
 # venv installs it.
 #

@@ -333,7 +333,7 @@ jobs:
 
           module = importlib.import_module(os.environ['MODULE_IMPORT_PACKAGE_NAME'])
           exported = list(getattr(module, '__all__', []))
-          assert exported, distribution_name + ' exports no processor classes'
+          assert exported, distribution_name + ' exports no node classes'
           for name in exported:
               getattr(module, name)
           print(distribution_name, 'exports', ', '.join(exported))

@@ -443,7 +443,7 @@ mod tests {
         let node_types: Vec<&str> = graph
             .nodes
             .iter()
-            .map(|node| node.processor_type.as_str())
+            .map(|node| node.node_type.as_str())
             .collect();
         assert_eq!(node_types, ["tatolab.testpattern:TestPatternSource"]);
         assert!(graph.nodes.iter().all(|node| node.id.is_some()));

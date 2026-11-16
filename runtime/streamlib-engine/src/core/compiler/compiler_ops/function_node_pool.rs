@@ -11,10 +11,10 @@
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::descriptors::{
-    NodeKind, PortDescriptor, PortFamily, PortFamilyDeclaration, ProcessorClassImportPath,
-    ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeKind, PortDescriptor, PortFamily,
+    PortFamilyDeclaration,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
@@ -23,7 +23,7 @@ use crate::core::graph::{
     LinkCarriedThroughTheFunctionNodePoolComponent, LinkUniqueId, OutOfProcessLinkWiringComponent,
     OutputLinkPortRef, PortInfo, the_family_a_link_out_of_an_output_carries,
 };
-use crate::core::processors::ProcessorSpec;
+use crate::core::nodes::NodeSpec;
 
 pub(crate) const FUNCTION_NODE_POOL_NODE_TYPE: &str =
     "tatolab.runtime._function_node_pool:FunctionNodePool";
@@ -34,13 +34,13 @@ pub(crate) const FUNCTION_NODE_POOL_INTERVAL_MS: u32 = 10;
 const FUNCTION_NODE_POOL_SHORT_NAME: &str = "FunctionNodePool";
 
 /// The import path the stream's function node pool is registered under.
-pub(crate) fn the_function_node_pool_type() -> Result<ProcessorClassImportPath> {
-    ProcessorClassImportPath::new(FUNCTION_NODE_POOL_NODE_TYPE)
+pub(crate) fn the_function_node_pool_type() -> Result<NodeClassImportPath> {
+    NodeClassImportPath::new(FUNCTION_NODE_POOL_NODE_TYPE)
         .map_err(|refusal| Error::Configuration(refusal.to_string()))
 }
 
 /// Whether `node_type` is the stream's function node pool.
-pub(crate) fn is_the_function_node_pool_type(node_type: &ProcessorClassImportPath) -> bool {
+pub(crate) fn is_the_function_node_pool_type(node_type: &NodeClassImportPath) -> bool {
     node_type.as_str() == FUNCTION_NODE_POOL_NODE_TYPE
 }
 
@@ -48,9 +48,9 @@ pub(crate) fn is_the_function_node_pool_type(node_type: &ProcessorClassImportPat
 /// each carried island adds to the pool's node.
 pub(crate) fn the_function_node_pool_descriptor(
     node_ports: Option<(&[PortInfo], &[PortInfo])>,
-) -> Result<ProcessorDescriptor> {
-    let mut descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(FUNCTION_NODE_POOL_SHORT_NAME)
+) -> Result<NodeDescriptor> {
+    let mut descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(FUNCTION_NODE_POOL_SHORT_NAME)
             .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
         the_function_node_pool_type()?,
         "Evaluates every function node island no reader of it can evaluate, and publishes each \
@@ -84,8 +84,8 @@ fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     let Some(link) = graph.traversal().e(link_id).first() else {
         return false;
     };
-    let reader_id = link.to_port().processor_id();
-    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+    let reader_id = link.to_port().node_run_id();
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         || runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
     {
         return false;
@@ -101,19 +101,18 @@ fn needs_the_function_node_pool(graph: &Graph, link_id: &LinkUniqueId) -> bool {
     }
     let node_types = graph.node_types_this_stream_resolves();
     let runs_in_the_app_process = !reader.has::<OutOfProcessLinkWiringComponent>()
-        && node_types.is_a_natively_compiled_node_type(&reader.processor_type);
-    let is_driven_manually = node_types
-        .the_execution_a_described_class_declares(&reader.processor_type)
+        && node_types.is_a_natively_compiled_node_type(&reader.node_type);
+    let is_driven_manually = node_types.the_execution_a_described_class_declares(&reader.node_type)
         == Some(ProcessExecution::Manual);
     runs_in_the_app_process
         || (is_driven_manually
-            && the_island_upstream_of_runs_a_node_as_python(graph, link.source().processor_id()))
+            && the_island_upstream_of_runs_a_node_as_python(graph, link.source().node_run_id()))
 }
 
 /// Whether `island_output_node` or any function node it reads runs as Python.
 fn the_island_upstream_of_runs_a_node_as_python(
     graph: &Graph,
-    island_output_node: &ProcessorUniqueId,
+    island_output_node: &NodeRunId,
 ) -> bool {
     let mut reached = std::collections::HashSet::new();
     let mut to_follow = vec![island_output_node.clone()];
@@ -124,7 +123,7 @@ fn the_island_upstream_of_runs_a_node_as_python(
         let runs_as_python = graph.traversal().v(&following).first().is_some_and(|node| {
             graph
                 .node_types_this_stream_resolves()
-                .descriptor(&node.processor_type)
+                .descriptor(&node.node_type)
                 .is_some_and(|descriptor| descriptor.function_node_runs_as_python)
         });
         if runs_as_python {
@@ -135,8 +134,8 @@ fn the_island_upstream_of_runs_a_node_as_python(
                 .traversal()
                 .e(())
                 .iter()
-                .filter(|link| link.to_port().processor_id() == &following)
-                .map(|link| link.source().processor_id().clone())
+                .filter(|link| link.to_port().node_run_id() == &following)
+                .map(|link| link.source().node_run_id().clone())
                 .filter(|upstream| runs_inside_the_read_of_each_node_it_feeds(graph, upstream)),
         );
     }
@@ -144,18 +143,18 @@ fn the_island_upstream_of_runs_a_node_as_python(
 }
 
 /// The stream's pool node, if it has one.
-pub(crate) fn the_function_node_pool_of(graph: &Graph) -> Option<ProcessorUniqueId> {
+pub(crate) fn the_function_node_pool_of(graph: &Graph) -> Option<NodeRunId> {
     graph
         .traversal()
         .v(())
         .iter()
-        .find(|node| is_the_function_node_pool_type(&node.processor_type))
+        .find(|node| is_the_function_node_pool_type(&node.node_type))
         .map(|node| node.id.clone())
 }
 
 pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
     graph: &mut Graph,
-    processors_to_add: &mut Vec<ProcessorUniqueId>,
+    nodes_to_add: &mut Vec<NodeRunId>,
     links_to_add: &mut Vec<LinkUniqueId>,
 ) -> Result<()> {
     let carried: Vec<LinkUniqueId> = links_to_add
@@ -167,7 +166,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
         return Ok(());
     }
     let pool_id = match the_function_node_pool_of(graph) {
-        Some(running_pool) if !processors_to_add.contains(&running_pool) => {
+        Some(running_pool) if !nodes_to_add.contains(&running_pool) => {
             return Err(Error::InvalidGraph(format!(
                 "link `{}` feeds a function node island into a reader that cannot evaluate it, which \
                  the stream's function node pool evaluates, and the pool is already running; a \
@@ -180,7 +179,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
         None => {
             let pool_id = graph
                 .traversal_mut()
-                .add_v(ProcessorSpec::new(
+                .add_v(NodeSpec::new(
                     the_function_node_pool_type()?,
                     serde_json::json!({ "carries": [] }),
                 ))?
@@ -190,7 +189,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
                 })?
                 .id
                 .clone();
-            processors_to_add.push(pool_id.clone());
+            nodes_to_add.push(pool_id.clone());
             pool_id
         }
     };
@@ -208,7 +207,7 @@ pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_
 /// and a link from the matching new output of the pool into its reader.
 fn carry_one_link_through_the_pool(
     graph: &mut Graph,
-    pool_id: &ProcessorUniqueId,
+    pool_id: &NodeRunId,
     link_id: &LinkUniqueId,
 ) -> Result<(LinkUniqueId, LinkUniqueId)> {
     let (source, destination) = {
@@ -221,7 +220,7 @@ fn carry_one_link_through_the_pool(
     };
     let hands_a_message_on_unread = graph
         .traversal()
-        .v(source.processor_id())
+        .v(source.node_run_id())
         .first()
         .and_then(|node| {
             node.ports
@@ -230,12 +229,9 @@ fn carry_one_link_through_the_pool(
                 .find(|port| port.name == source.port_name())
         })
         .is_some_and(|port| port.family.family_follows_input_port.is_some());
-    let family = the_family_a_link_out_of_an_output_carries(
-        graph,
-        source.processor_id(),
-        source.port_name(),
-    )
-    .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
+    let family =
+        the_family_a_link_out_of_an_output_carries(graph, source.node_run_id(), source.port_name())
+            .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Channels));
     let carry_family = if hands_a_message_on_unread {
         serde_json::json!({
             "family": "message",
@@ -248,15 +244,15 @@ fn carry_one_link_through_the_pool(
         .traversal_mut()
         .v(pool_id)
         .first_mut()
-        .ok_or_else(|| Error::ProcessorNotFound(pool_id.to_string()))?;
+        .ok_or_else(|| Error::NodeNotFound(pool_id.to_string()))?;
     let carry_number = pool.ports.inputs.len();
     let pool_input_port = format!("island_{carry_number}");
     let pool_output_port = format!("island_{carry_number}_output");
     let description = format!(
         "carries `{}`.`{}` to `{}`.`{}`",
-        source.processor_id(),
+        source.node_run_id(),
         source.port_name(),
-        destination.processor_id(),
+        destination.node_run_id(),
         destination.port_name()
     );
     let input_descriptor = PortDescriptor::new(
@@ -383,7 +379,7 @@ pub(crate) fn the_links_carried_through_the_function_node_pool_of(
             }
         };
         let (_, into_the_pool, out_of_the_pool) = &mut halves_of_each_carried_link[index];
-        if link.source().processor_id() == &function_node_pool {
+        if link.source().node_run_id() == &function_node_pool {
             *out_of_the_pool = Some(link);
         } else {
             *into_the_pool = Some(link);
@@ -422,18 +418,18 @@ pub(crate) mod tests {
     };
     use crate::core::compiler::compiler_ops::shader_node_island::the_host_input_port_a_fused_shader_node_input_is_read_at;
     use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
-    use crate::core::processors::HowANodeOfADescribedTypeRuns;
-    use crate::core::test_support::MockInputOnlyProcessor;
+    use crate::core::nodes::HowANodeOfADescribedTypeRuns;
+    use crate::core::test_support::MockInputOnlyNode;
 
     fn a_graph_resolving_the_pool_and_three_function_node_types() -> Graph {
         let graph = a_graph_resolving_three_function_node_types();
         graph
             .node_types_this_stream_resolves()
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 the_function_node_pool_descriptor(None).unwrap(),
-                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+                HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|node| {
                     Err(Error::Configuration(format!(
-                        "`{}` builds no processor in this test",
+                        "`{}` builds no node in this test",
                         node.id
                     )))
                 })),
@@ -442,10 +438,10 @@ pub(crate) mod tests {
         graph
     }
 
-    fn a_reader_in_the_app_process(graph: &mut Graph) -> ProcessorUniqueId {
+    fn a_reader_in_the_app_process(graph: &mut Graph) -> NodeRunId {
         add_a_node(
             graph,
-            MockInputOnlyProcessor::processor_class_import_path().as_str(),
+            MockInputOnlyNode::node_class_import_path().as_str(),
             JsonValue::Null,
         )
     }
@@ -471,16 +467,16 @@ pub(crate) mod tests {
     /// A graph whose `lfo` feeds a reader in the app process, the link carried
     /// through the pool: the graph, `lfo`, the reader and the carried link.
     pub(crate) fn a_graph_carrying_an_lfo_into_its_reader_through_the_pool()
-    -> (Graph, ProcessorUniqueId, ProcessorUniqueId, LinkUniqueId) {
+    -> (Graph, NodeRunId, NodeRunId, LinkUniqueId) {
         let mut graph = a_graph_resolving_the_pool_and_three_function_node_types();
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_reader_in_the_app_process(&mut graph);
         let lfo_into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        let mut processors_to_add = vec![lfo.clone(), reader.clone()];
+        let mut nodes_to_add = vec![lfo.clone(), reader.clone()];
         let mut links_to_add = vec![lfo_into_the_reader.clone()];
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
@@ -496,10 +492,10 @@ pub(crate) mod tests {
     fn graph_renders_the_pool_beside_the_nodes_and_each_carried_link_as_it_was_given() {
         let (graph, lfo, reader, lfo_into_the_reader) =
             a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
-        let name_of = |processor_id: &ProcessorUniqueId| {
+        let name_of = |node_run_id: &NodeRunId| {
             graph
                 .traversal()
-                .v(processor_id)
+                .v(node_run_id)
                 .first()
                 .unwrap()
                 .display_name
@@ -512,7 +508,7 @@ pub(crate) mod tests {
             rendered
                 .nodes
                 .iter()
-                .all(|node| !is_the_function_node_pool_type(&node.processor_type)),
+                .all(|node| !is_the_function_node_pool_type(&node.node_type)),
             "the pool is no node of the graph: {:?}",
             rendered
                 .nodes
@@ -570,7 +566,7 @@ pub(crate) mod tests {
         let lfo_into_remap = link(&mut graph, (&lfo, "result"), (&remap, "x"));
         let remap_into_the_first = link(&mut graph, (&remap, "result"), (&first_reader, "in1"));
         let lfo_into_the_second = link(&mut graph, (&lfo, "result"), (&second_reader, "in1"));
-        let mut processors_to_add = vec![lfo.clone(), remap.clone(), first_reader, second_reader];
+        let mut nodes_to_add = vec![lfo.clone(), remap.clone(), first_reader, second_reader];
         let mut links_to_add = vec![
             lfo_into_remap.clone(),
             remap_into_the_first.clone(),
@@ -579,14 +575,14 @@ pub(crate) mod tests {
 
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
 
         let pool = the_function_node_pool_of(&graph).expect("the stream has a pool");
         assert_eq!(
-            processors_to_add.iter().filter(|id| **id == pool).count(),
+            nodes_to_add.iter().filter(|id| **id == pool).count(),
             1,
             "one pool, however many islands it carries"
         );
@@ -600,7 +596,7 @@ pub(crate) mod tests {
         for carried in the_links_a_link_is_wired_as(&graph, &lfo_into_the_second) {
             let wired_as = how_a_link_is_wired(&graph, &carried).unwrap();
             let link = graph.traversal().e(&carried).first().unwrap();
-            if link.to_port().processor_id() == &pool {
+            if link.to_port().node_run_id() == &pool {
                 assert_eq!(
                     wired_as,
                     HowALinkIsWired::AsTheIslandItsReaderEvaluatesAtEachRead
@@ -629,9 +625,9 @@ pub(crate) mod tests {
 
     /// Register `tint`, a shader type taking an Image and a float `amount`.
     fn register_a_tint_shader_node_type(graph: &Graph) {
-        let import_path = ProcessorClassImportPath::new("test_shaders:tint").unwrap();
-        let mut descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new("tint").unwrap(),
+        let import_path = NodeClassImportPath::new("test_shaders:tint").unwrap();
+        let mut descriptor = NodeDescriptor::new(
+            NodeClassShortName::new("tint").unwrap(),
             import_path,
             "a shader node type for a test",
         );
@@ -653,7 +649,7 @@ pub(crate) mod tests {
         ));
         graph
             .node_types_this_stream_resolves()
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,
                 HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
                     shader_node_program: shader_program(
@@ -664,7 +660,7 @@ pub(crate) mod tests {
                     ),
                     evaluator_of_the_island_it_hosts: Box::new(|node| {
                         Err(Error::Configuration(format!(
-                            "`{}` builds no processor in this test",
+                            "`{}` builds no node in this test",
                             node.id
                         )))
                     }),
@@ -687,7 +683,7 @@ pub(crate) mod tests {
         let fused_tint_into_the_host =
             link(&mut graph, (&fused_tint, "result"), (&host_tint, "image"));
         let lfo_into_the_host = link(&mut graph, (&lfo, "result"), (&host_tint, "amount"));
-        let mut processors_to_add = vec![lfo, remap, fused_tint.clone(), host_tint.clone()];
+        let mut nodes_to_add = vec![lfo, remap, fused_tint.clone(), host_tint.clone()];
         let mut links_to_add = vec![
             lfo_into_remap,
             remap_into_the_fused_tint.clone(),
@@ -697,7 +693,7 @@ pub(crate) mod tests {
 
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
@@ -713,7 +709,7 @@ pub(crate) mod tests {
                         .traversal()
                         .e(*link_id)
                         .first()
-                        .is_some_and(|link| link.source().processor_id() == &pool)
+                        .is_some_and(|link| link.source().node_run_id() == &pool)
                 })
                 .expect("one of the two links leaves the pool");
             how_a_link_is_wired(&graph, out_of_the_pool).unwrap()
@@ -740,12 +736,12 @@ pub(crate) mod tests {
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_helper_reader_before_its_setup(&mut graph);
         let lfo_into_the_reader = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        let mut processors_to_add = vec![lfo, reader];
+        let mut nodes_to_add = vec![lfo, reader];
         let mut links_to_add = vec![lfo_into_the_reader.clone()];
 
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
@@ -767,22 +763,22 @@ pub(crate) mod tests {
         ]);
         let node_types = graph.node_types_this_stream_resolves();
         let builds_nothing = || -> HowANodeOfADescribedTypeRuns {
-            HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|node| {
                 Err(Error::Configuration(format!(
-                    "`{}` builds no processor in this test",
+                    "`{}` builds no node in this test",
                     node.id
                 )))
             }))
         };
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 the_function_node_pool_descriptor(None).unwrap(),
                 builds_nothing(),
             )
             .unwrap();
-        let mut manual_class = ProcessorDescriptor::new(
-            ProcessorClassShortName::new("ReadsThroughItsNativeHalf").unwrap(),
-            ProcessorClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
+        let mut manual_class = NodeDescriptor::new(
+            NodeClassShortName::new("ReadsThroughItsNativeHalf").unwrap(),
+            NodeClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
             "a class driven manually for a test",
         );
         for input_port in ["from_python", "from_compiled"] {
@@ -794,13 +790,13 @@ pub(crate) mod tests {
             ));
         }
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 manual_class,
                 builds_nothing(),
             )
             .unwrap();
         node_types.record_the_execution_a_described_class_declares(
-            ProcessorClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
+            NodeClassImportPath::new(A_CLASS_WITH_A_NATIVE_HALF).unwrap(),
             ProcessExecution::Manual,
         );
         graph
@@ -815,7 +811,7 @@ pub(crate) mod tests {
         let python_into_the_reader = link(&mut graph, (&tally, "result"), (&reader, "from_python"));
         let compiled_into_the_reader =
             link(&mut graph, (&lfo, "result"), (&reader, "from_compiled"));
-        let mut processors_to_add = vec![tally, lfo, reader];
+        let mut nodes_to_add = vec![tally, lfo, reader];
         let mut links_to_add = vec![
             python_into_the_reader.clone(),
             compiled_into_the_reader.clone(),
@@ -823,7 +819,7 @@ pub(crate) mod tests {
 
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
@@ -843,7 +839,7 @@ pub(crate) mod tests {
     }
 
     /// `test_ops:gate`, whose `result` hands on the message at `value` unread.
-    fn a_gate_type() -> ProcessorDescriptor {
+    fn a_gate_type() -> NodeDescriptor {
         let mut gate = a_function_node_type("test_ops:gate", &["value", "open"], &[]);
         let mut follows_its_value = PortFamilyDeclaration::of_family(PortFamily::Image);
         follows_its_value.family_follows_input_port = Some("value".to_string());
@@ -856,11 +852,11 @@ pub(crate) mod tests {
         let graph = a_graph_resolving_these_function_node_types([a_gate_type()]);
         graph
             .node_types_this_stream_resolves()
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 the_function_node_pool_descriptor(None).unwrap(),
-                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+                HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|node| {
                     Err(Error::Configuration(format!(
-                        "`{}` builds no processor in this test",
+                        "`{}` builds no node in this test",
                         node.id
                     )))
                 })),
@@ -872,12 +868,12 @@ pub(crate) mod tests {
         let reader = a_reader_in_the_app_process(&mut graph);
         let into_the_gate = link(&mut graph, (&class_node, "out1"), (&gate, "value"));
         let gate_into_the_reader = link(&mut graph, (&gate, "result"), (&reader, "in1"));
-        let mut processors_to_add = vec![class_node.clone(), gate, reader];
+        let mut nodes_to_add = vec![class_node.clone(), gate, reader];
         let mut links_to_add = vec![into_the_gate.clone(), gate_into_the_reader.clone()];
 
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();
@@ -918,7 +914,7 @@ pub(crate) mod tests {
                     .first()
                     .unwrap()
                     .to_port()
-                    .processor_id()
+                    .node_run_id()
                     == &pool
             })
             .unwrap();
@@ -927,13 +923,13 @@ pub(crate) mod tests {
             .v(&pool)
             .first_mut()
             .unwrap()
-            .insert_component_without_rendering_it(
-            OutOfProcessLinkWiringComponent(std::sync::Arc::new(
-                crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-                    ProcessExecution::Continuous { interval_ms: 10 },
+            .insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
+                std::sync::Arc::new(
+                    crate::core::nodes::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                        ProcessExecution::Continuous { interval_ms: 10 },
+                    ),
                 ),
-            )),
-        );
+            ));
 
         wire_a_link_from_a_function_node_island_into_its_reader(
             &mut graph,
@@ -951,7 +947,7 @@ pub(crate) mod tests {
             .and_then(|read_through| read_through.the_read_for_the_island_link(&into_the_pool))
             .map(|read| read.reader_input_port.clone())
             .expect("the pool reads the class node's channel for the island it carries");
-        assert_eq!(read_at.processor_id(), &pool);
+        assert_eq!(read_at.node_run_id(), &pool);
     }
 
     #[test]
@@ -960,11 +956,11 @@ pub(crate) mod tests {
         let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
         let reader = a_reader_in_the_app_process(&mut graph);
         let first = link(&mut graph, (&lfo, "result"), (&reader, "in1"));
-        let mut processors_to_add = vec![lfo.clone(), reader];
+        let mut nodes_to_add = vec![lfo.clone(), reader];
         let mut links_to_add = vec![first];
         carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
             &mut graph,
-            &mut processors_to_add,
+            &mut nodes_to_add,
             &mut links_to_add,
         )
         .unwrap();

@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod channel_service_naming_and_sizing;
 mod link_destination_side;
 mod link_source_side;
@@ -15,24 +14,22 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
     Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, Link,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
-    LinkUniqueId, LossCountsOfPortsInThisProcess, OutOfProcessLinkWireRepliesComponent,
-    OutOfProcessLinkWiringComponent, OutputLinkPortRef, ProcessorInstanceComponent,
-    ProcessorLossCounts, ProcessorMetrics, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
+    LinkUniqueId, LossCountsOfPortsInThisProcess, NodeInstanceComponent, NodeLossCounts,
+    NodeMetrics, OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    OutputLinkPortRef, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
 };
-use crate::core::processors::{
-    OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
-};
+use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::iceoryx2::Iceoryx2Node;
 use channel_service_naming_and_sizing::{
     RoomForAWindowedReaderTheSourcesGraphCannotSee, audio_windowing_declared_by_input_port_of,
     channel_service_name, delivery_resolution_of_input_port, destination_max_notifiers,
-    notify_service_name_for, processor_class_import_path_of,
+    node_class_import_path_of, notify_service_name_for,
     refuse_a_second_inbound_link_into_a_windowed_port,
     refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring, resolve_channel_sizing,
     subscriber_ring_depth_of_input_port,
@@ -107,10 +104,10 @@ pub(crate) fn close_iceoryx2_service_into_the_host_of_a_shader_node_island(
     else {
         return Ok(());
     };
-    release_the_source_side_of_a_link(graph, source.processor_id(), source.port_name(), link_id);
+    release_the_source_side_of_a_link(graph, source.node_run_id(), source.port_name(), link_id);
     release_the_destination_side_of_a_link(
         graph,
-        host_input_port.processor_id(),
+        host_input_port.node_run_id(),
         host_input_port.port_name(),
         link_id,
     );
@@ -298,13 +295,13 @@ fn release_both_sides_of_a_read_by_the_reader_of_an_island(
 ) {
     release_the_source_side_of_a_link(
         graph,
-        source.processor_id(),
+        source.node_run_id(),
         source.port_name(),
         wiring_link_id,
     );
     release_the_destination_side_of_a_link(
         graph,
-        reader_input_port.processor_id(),
+        reader_input_port.node_run_id(),
         reader_input_port.port_name(),
         wiring_link_id,
     );
@@ -375,9 +372,9 @@ pub(crate) fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) 
     let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
             (
-                link.source().processor_id().clone(),
+                link.source().node_run_id().clone(),
                 link.source().port_name().to_string(),
-                link.to_port().processor_id().clone(),
+                link.to_port().node_run_id().clone(),
                 link.to_port().port_name().to_string(),
             )
         })
@@ -422,7 +419,7 @@ fn link_still_counts_toward_its_ports(link: &Link) -> bool {
 
 fn out_of_process_link_wiring_of(
     graph: &Graph,
-    proc_id: &ProcessorUniqueId,
+    proc_id: &NodeRunId,
 ) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
     graph
         .traversal()
@@ -432,46 +429,36 @@ fn out_of_process_link_wiring_of(
         .map(|component| Arc::clone(&component.0))
 }
 
-fn processor_to_reclaim_from(
+fn node_to_reclaim_from(
     graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-) -> Option<Arc<Mutex<ProcessorInstance>>> {
-    get_single_processor(graph, proc_id)
+    proc_id: &NodeRunId,
+) -> Option<Arc<Mutex<NodeInstance>>> {
+    get_single_node(graph, proc_id)
         .inspect_err(|error| {
             tracing::warn!(
                 proc_id = %proc_id,
                 error = %error,
-                "close_iceoryx2_service: processor missing; port not reclaimed"
+                "close_iceoryx2_service: node missing; port not reclaimed"
             )
         })
         .ok()
 }
 
-fn get_single_processor(
-    graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-) -> Result<Arc<Mutex<ProcessorInstance>>> {
+fn get_single_node(graph: &mut Graph, proc_id: &NodeRunId) -> Result<Arc<Mutex<NodeInstance>>> {
     graph
         .traversal_mut()
         .v(proc_id)
         .first_mut()
-        .and_then(|node| {
-            node.get::<ProcessorInstanceComponent>()
-                .map(|i| i.0.clone())
-        })
-        .ok_or_else(|| Error::Configuration(format!("Processor '{}' not found", proc_id)))
+        .and_then(|node| node.get::<NodeInstanceComponent>().map(|i| i.0.clone()))
+        .ok_or_else(|| Error::Configuration(format!("Node '{}' not found", proc_id)))
 }
 
-fn publish_loss_counts_on_processor_node(
-    graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-    processor: &ProcessorInstance,
-) {
-    let input_inner = processor.iceoryx2_input_mailboxes_inner();
-    insert_loss_counts_on_processor_node_once(
+fn publish_loss_counts_on_graph_node(graph: &mut Graph, proc_id: &NodeRunId, node: &NodeInstance) {
+    let input_inner = node.iceoryx2_input_mailboxes_inner();
+    insert_loss_counts_on_graph_node_once(
         graph,
         proc_id,
-        ProcessorLossCounts::CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess {
+        NodeLossCounts::CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess {
             dropped_bag_counts_by_inbound_link: input_inner
                 .as_ref()
                 .map(|input_inner| input_inner.dropped_bag_counts_by_inbound_link())
@@ -479,7 +466,7 @@ fn publish_loss_counts_on_processor_node(
             discarded_sample_counts_by_inbound_link: input_inner
                 .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
                 .unwrap_or_default(),
-            bag_counts_by_output_port: processor
+            bag_counts_by_output_port: node
                 .iceoryx2_output_writer_inner()
                 .map(|output_inner| output_inner.bag_counts_by_output_port())
                 .unwrap_or_default(),
@@ -489,18 +476,18 @@ fn publish_loss_counts_on_processor_node(
 
 /// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link
 /// already did.
-pub(crate) fn insert_loss_counts_on_processor_node_once(
+pub(crate) fn insert_loss_counts_on_graph_node_once(
     graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-    loss_counts: ProcessorLossCounts,
+    proc_id: &NodeRunId,
+    loss_counts: NodeLossCounts,
 ) {
     let Some(node) = graph.traversal_mut().v(proc_id).first_mut() else {
         return;
     };
-    if node.has::<ProcessorMetrics>() {
+    if node.has::<NodeMetrics>() {
         return;
     }
-    node.insert(ProcessorMetrics {
+    node.insert(NodeMetrics {
         loss_counts,
         ..Default::default()
     });

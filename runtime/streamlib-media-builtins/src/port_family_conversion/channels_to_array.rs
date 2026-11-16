@@ -10,7 +10,7 @@ use streamlib::sdk::iceoryx2::{
     ArrayFrameCpuAttributeToPack, DataChannelPayloadDescriptor,
     array_frame_payload_of_cpu_attributes,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 
 use super::port_family_messages_read_by_a_conversion::channels_block_read_by_a_conversion;
 
@@ -20,7 +20,7 @@ const ARRAY_OUTPUT_PORT: &str = "array";
 /// The one attribute each Array frame `ChannelsToArray` writes holds.
 pub const CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     input(
@@ -47,7 +47,7 @@ pub const CHANNELS_TO_ARRAY_SAMPLES_ATTRIBUTE_NAME: &str = "samples";
 )]
 pub struct ChannelsToArray;
 
-impl ReactiveProcessor for ChannelsToArray::Processor {
+impl ReactiveNode for ChannelsToArray::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(CHANNELS_INPUT_PORT)? {
             match array_frame_of_the_channels_block(

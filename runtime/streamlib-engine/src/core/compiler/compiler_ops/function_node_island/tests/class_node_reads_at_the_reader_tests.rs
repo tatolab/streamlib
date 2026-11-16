@@ -15,7 +15,7 @@ fn a_reader_reaches_the_stream_facts_of_the_class_node_an_island_hands_on_unread
     ]);
     let source = add_a_node(
         &mut graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     graph
@@ -72,7 +72,7 @@ fn an_island_handing_out_values_of_its_own_records_no_upstream_output_at_its_rea
     let source = link_in(&graph, &into_the_island)
         .unwrap()
         .source()
-        .processor_id()
+        .node_run_id()
         .clone();
 
     wire_a_link_from_a_function_node_island_into_its_reader(
@@ -112,7 +112,7 @@ fn a_class_node_linked_into_an_island_is_read_at_a_hidden_input_of_its_reader() 
         "the link into the island is read at its reader once"
     );
     let read_at = reads[0].clone();
-    assert_eq!(read_at.processor_id(), &reader);
+    assert_eq!(read_at.node_run_id(), &reader);
     assert_eq!(
         read_at.port_name(),
         the_reader_input_port_a_link_into_a_function_node_is_read_at(
@@ -137,7 +137,7 @@ fn a_class_node_linked_into_an_island_is_read_at_a_hidden_input_of_its_reader() 
     let source = link_in(&graph, &into_the_island)
         .unwrap()
         .source()
-        .processor_id()
+        .node_run_id()
         .clone();
     let ports_of_both_ends_wired_once = [
         reader_setup_command_ports(&graph, &source),
@@ -188,7 +188,7 @@ fn the_reads_of(graph: &Graph, link_id: &LinkUniqueId) -> Vec<InputLinkPortRef> 
 fn the_reader_input_port_an_island_names(
     graph: &Graph,
     island_link_id: &LinkUniqueId,
-    function_node_id: &ProcessorUniqueId,
+    function_node_id: &NodeRunId,
 ) -> JsonValue {
     let island = the_island_feeding_a_link(graph, island_link_id).unwrap();
     island["nodes"]
@@ -262,7 +262,7 @@ fn an_island_reading_a_class_node_that_feeds_two_readers_is_read_at_each_of_them
     let source = link_in(&graph, &into_the_island)
         .unwrap()
         .source()
-        .processor_id()
+        .node_run_id()
         .clone();
     let wiring_link_ids_at_the_source: HashSet<String> =
         reader_setup_command_ports(&graph, &source)["outputs"]
@@ -310,11 +310,7 @@ fn an_island_reading_a_class_node_that_feeds_two_input_ports_of_one_reader_is_re
 
     let reads = the_reads_of(&graph, &into_the_island);
     assert_eq!(reads.len(), 2);
-    assert!(
-        reads
-            .iter()
-            .all(|read_at| read_at.processor_id() == &reader)
-    );
+    assert!(reads.iter().all(|read_at| read_at.node_run_id() == &reader));
     assert_ne!(
         reads[0].port_name(),
         reads[1].port_name(),
@@ -351,9 +347,9 @@ fn a_class_node_link_wired_after_two_readers_opens_a_read_at_each() {
         .unwrap();
     }
 
-    let readers: HashSet<ProcessorUniqueId> = the_reads_of(&graph, &into_the_island)
+    let readers: HashSet<NodeRunId> = the_reads_of(&graph, &into_the_island)
         .iter()
-        .map(|read_at| read_at.processor_id().clone())
+        .map(|read_at| read_at.node_run_id().clone())
         .collect();
     assert_eq!(readers, HashSet::from([reader, second_reader]));
 }

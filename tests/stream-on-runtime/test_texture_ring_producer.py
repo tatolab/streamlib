@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor in its own processor interpreter producing texture-backed frames.
+"""A Python node in its own node interpreter producing texture-backed frames.
 
 `NodeOutputTextureRing` is the surface a Python source publishes frames
 from, and its unit tests stand the capability in — they own the slot
@@ -10,7 +10,7 @@ the half a stand-in cannot: the engine hands back slots that stay registered
 for the producer's whole life, rotate as the ring says they do, and carry
 pixels a *different* process can resolve by surface id and read.
 
-Each scenario runs the producer in a processor interpreter beneath `tatolabd`
+Each scenario runs the producer in a node interpreter beneath `tatolabd`
 and asserts on the `MARKER:PROBE_RESULT` lines it forwards to `tatolabd`'s
 stderr.
 """
@@ -52,7 +52,7 @@ def run_scenario(
         assert isinstance(report, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
         if "failure" in report:
             pytest.fail(
-                f"{report['probe']} raised in its processor interpreter:\n{report['failure']}"
+                f"{report['probe']} raised in its node interpreter:\n{report['failure']}"
             )
         reports_by_probe.setdefault(report["probe"], []).append(report)
     return reports_by_probe
@@ -156,7 +156,7 @@ def test_the_same_schedule_with_no_claim_recycles_the_first_frame(
 def test_the_pixels_a_python_source_writes_are_read_by_another_process(
     start_tatolabd_running_stream,
 ):
-    """The producer writes in a processor interpreter of its own; the consumer resolves
+    """The producer writes in a node interpreter of its own; the consumer resolves
     the published id in a second one and sees those bytes.
 
     That the resolve succeeds at all is half the assertion: the slot is
@@ -189,8 +189,8 @@ def test_the_pixels_a_python_source_writes_are_read_by_another_process(
 def test_the_producer_and_its_consumer_run_in_different_processes(
     start_tatolabd_running_stream,
 ):
-    """The premise the two assertions above rest on — one Python processor per
-    processor interpreter, so the surface id really did cross a boundary."""
+    """The premise the two assertions above rest on — one Python node per
+    node interpreter, so the surface id really did cross a boundary."""
     reports = run_scenario(
         start_tatolabd_running_stream,
         "published_frames_reach_a_downstream_consumer",

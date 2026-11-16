@@ -55,8 +55,8 @@ pub(crate) struct RuntimeLogsVerbArguments {
     /// Follow as new records land (like `tail -F`), by the cursor each page answers.
     #[arg(short = 'f', long = "follow")]
     pub(crate) follow_appended_records: bool,
-    #[arg(long = "processor", value_name = "ID")]
-    pub(crate) processor_id: Option<String>,
+    #[arg(long = "node", value_name = "ID")]
+    pub(crate) node_run_id: Option<String>,
     /// Only records from this pipeline id.
     #[arg(long = "pipeline", value_name = "ID")]
     pub(crate) pipeline_id: Option<String>,
@@ -85,7 +85,7 @@ pub(crate) struct RuntimeLogsVerbArguments {
 impl RuntimeLogsVerbArguments {
     fn record_filters(&self) -> RuntimeLogRecordFilters {
         RuntimeLogRecordFilters {
-            processor_id: self.processor_id.clone(),
+            node_run_id: self.node_run_id.clone(),
             pipeline_id: self.pipeline_id.clone(),
             rhi_operations_only: self.rhi_operations_only,
             minimum_level: self.minimum_level,

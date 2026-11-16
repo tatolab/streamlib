@@ -86,8 +86,8 @@ CODEC_ROUND_TRIPS = {
         "probed_stream": an_h264_round_trip_with_probes,
         "marker_classes": (H264Encoder, H264Decoder),
         "rendered_types": {
-            "H264Encoder": "tatolab.h264.processors:H264Encoder",
-            "H264Decoder": "tatolab.h264.processors:H264Decoder",
+            "H264Encoder": "tatolab.h264.nodes:H264Encoder",
+            "H264Decoder": "tatolab.h264.nodes:H264Decoder",
         },
     },
     "h265": {
@@ -95,8 +95,8 @@ CODEC_ROUND_TRIPS = {
         "probed_stream": an_h265_round_trip_with_probes,
         "marker_classes": (H265Encoder, H265Decoder),
         "rendered_types": {
-            "H265Encoder": "tatolab.h265.processors:H265Encoder",
-            "H265Decoder": "tatolab.h265.processors:H265Decoder",
+            "H265Encoder": "tatolab.h265.nodes:H265Encoder",
+            "H265Decoder": "tatolab.h265.nodes:H265Decoder",
         },
     },
 }
@@ -172,7 +172,7 @@ def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
 ):
     """The whole surface, end to end: module node class → helper process →
     hardware encode and decode in its helper → decoded Image frames read by a Python
-    processor in its own processor interpreter.
+    node in its own node interpreter.
 
     The pattern publishes 320×180, both codecs code it at 320×192, and the
     probe must see 320×180 back — the conformance crop — as an Image frame

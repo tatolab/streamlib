@@ -9,7 +9,7 @@ allocates; on macOS it reaches Metal as a no-copy buffer over the frame's own
 IOSurface. The consumer writes ordinary user code: resolve the frame,
 `torch.from_dlpack`, work on a device tensor.
 
-Every processor runs in its own processor interpreter. On Linux the staging
+Every node runs in its own node interpreter. On Linux the staging
 lives one process away: the child imports it over the surface-share check-out
 and waits on the staging's refill timeline for each copy `tatolabd` runs. What
 is worth breaking a build over is that the tensor really is device-resident,
@@ -86,7 +86,7 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
@@ -107,7 +107,7 @@ def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_tatolabd_running_s
 
     `torch.from_dlpack(resolved_frame)` yields a GPU-resident tensor whose
     pixels are the frame's pixels — one engine-side blit, no CPU copy, no
-    user-facing buffer flavour to pick — from a processor that does not share
+    user-facing buffer flavour to pick — from a node that does not share
     the engine's address space.
     """
     observation = run_probe(start_tatolabd_running_stream, "GraphFrameToTorchProbe")

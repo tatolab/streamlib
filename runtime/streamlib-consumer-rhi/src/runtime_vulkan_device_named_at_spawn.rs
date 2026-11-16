@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::ffi::OsString;
 
 use crate::{ConsumerRhiError, Result};
@@ -69,7 +68,7 @@ fn runtime_vulkan_device_uuid_from_the_environment_value(
     let Some(environment_value) = environment_value else {
         return Err(ConsumerRhiError::Configuration(format!(
             "{RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE} is not set, so this process does \
-             not know which Vulkan device the runtime built on; a processor interpreter is \
+             not know which Vulkan device the runtime built on; a node interpreter is \
              handed it at spawn, and importing on any other device reads the wrong memory"
         )));
     };

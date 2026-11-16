@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use sha2::{Digest, Sha256};
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::descriptors::NodeClassImportPath;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::Runner;
-use streamlib_media_builtins::register_media_builtin_processor_types;
+use streamlib_media_builtins::register_media_builtin_node_types;
 
 /// Each golden graph's SHA-256, pinned as it was added: a golden is never
 /// edited, so a change to what a graph holds adds a golden and a line here,
@@ -51,13 +51,13 @@ fn golden_graph_document(path: &Path) -> serde_json::Value {
         .expect("a golden graph is JSON")
 }
 
-fn node_types_in(graph_document: &serde_json::Value) -> Vec<ProcessorClassImportPath> {
+fn node_types_in(graph_document: &serde_json::Value) -> Vec<NodeClassImportPath> {
     graph_document["nodes"]
         .as_array()
         .expect("a graph holds nodes")
         .iter()
         .map(|node| {
-            ProcessorClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+            NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
                 .expect("a type names a class")
         })
         .collect()
@@ -109,7 +109,7 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
         .expect("a graph holds nodes")
         .iter()
         .filter(|node| {
-            !ProcessorClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+            !NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
                 .expect("a type names a class")
                 .names_a_built_in_node()
         })
@@ -126,7 +126,7 @@ fn module_node_names_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
 /// left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_loads_on_this_floor() {
-    register_media_builtin_processor_types();
+    register_media_builtin_node_types();
 
     for path in golden_graph_paths() {
         let recorded_graph_document = golden_graph_document(&path);
@@ -151,7 +151,7 @@ fn every_golden_graph_loads_on_this_floor() {
 /// distribution declares, never by the built-in type it replaced.
 #[test]
 fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
-    register_media_builtin_processor_types();
+    register_media_builtin_node_types();
     for path in golden_graph_paths() {
         let node_types = node_types_in(&golden_graph_document(&path));
         for module_node_type in [
@@ -178,7 +178,7 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
         for node_type in &node_types {
             assert!(
                 !matches!(
-                    PROCESSOR_REGISTRY.refuse_a_built_in_node_type_this_runtime_lacks(node_type),
+                    NODE_REGISTRY.refuse_a_built_in_node_type_this_runtime_lacks(node_type),
                     Err(Error::BuiltInNodeTypeMovedToAModule { .. })
                 ),
                 "{path:?} names {node_type}, which moved to a module"
@@ -191,14 +191,14 @@ fn the_golden_graphs_name_the_moved_built_ins_by_their_module_types() {
 /// on later builds; adding one adds a golden that names it.
 #[test]
 fn the_golden_graphs_name_every_built_in_this_floor_registers() {
-    register_media_builtin_processor_types();
-    let named_by_a_golden: BTreeSet<ProcessorClassImportPath> = golden_graph_paths()
+    register_media_builtin_node_types();
+    let named_by_a_golden: BTreeSet<NodeClassImportPath> = golden_graph_paths()
         .iter()
         .flat_map(|path| node_types_in(&golden_graph_document(path)))
         .collect();
 
-    let named_by_no_golden: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
-        .registered_processor_class_import_paths()
+    let named_by_no_golden: Vec<NodeClassImportPath> = NODE_REGISTRY
+        .registered_node_class_import_paths()
         .into_iter()
         .filter(|registered| registered.names_a_built_in_node())
         .filter(|built_in| !named_by_a_golden.contains(built_in))

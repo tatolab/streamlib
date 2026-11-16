@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""How a Python processor's helper process starts: loading its class, the
+"""How a Python node's helper process starts: loading its class, the
 channel and engine build it is handed, and, from a real helper process, the
 records it sends its parent once running.
 """
@@ -23,12 +23,12 @@ from helper_process_test_support import (
     engine_shaped_link_wiring,
 )
 from tatolab.runtime import _engine
-from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
+from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
 from tatolab.runtime._engine import engine_build_id_compiled_into_this_extension
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime._node_interpreter_bootstrap import (
     HelperProcessProtocolError,
     ParentProcessBridge,
-    load_processor_class,
+    load_node_class,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -38,7 +38,7 @@ pytestmark = pytest.mark.usefixtures(
 
 
 def test_a_module_scope_class_loads_from_its_import_path():
-    loaded = load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    loaded = load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     assert loaded.__name__ == "PassThroughProbe"
 
 
@@ -46,19 +46,19 @@ def test_a_nested_class_resolves_through_the_whole_dotted_qualname():
     """`stream_builder.add` deliberately admits `Outer.Inner` because a fresh
     interpreter can reach it — which it only can if the loader walks every
     segment. A single `getattr` on the joined qualname raises instead."""
-    loaded = load_processor_class(f"{PROBE_MODULE}:OuterProbe.InnerProbe")
+    loaded = load_node_class(f"{PROBE_MODULE}:OuterProbe.InnerProbe")
     assert loaded.__qualname__ == "OuterProbe.InnerProbe"
 
 
 def test_an_unresolvable_import_path_names_the_segment_that_failed():
     with pytest.raises(HelperProcessProtocolError) as refusal:
-        load_processor_class(f"{PROBE_MODULE}:OuterProbe.NoSuchProbe")
+        load_node_class(f"{PROBE_MODULE}:OuterProbe.NoSuchProbe")
     assert "NoSuchProbe" in str(refusal.value)
 
 
 def test_an_import_path_without_a_qualname_is_refused():
     with pytest.raises(HelperProcessProtocolError) as refusal:
-        load_processor_class(PROBE_MODULE)
+        load_node_class(PROBE_MODULE)
     assert "module:qualname" in str(refusal.value)
 
 
@@ -77,14 +77,14 @@ def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
 
 
 def test_a_helper_started_without_its_channel_says_so(monkeypatch):
-    monkeypatch.delenv(processor_interpreter_bootstrap.ESCALATE_FD_ENV, raising=False)
+    monkeypatch.delenv(node_interpreter_bootstrap.ESCALATE_FD_ENV, raising=False)
     with pytest.raises(HelperProcessProtocolError) as refusal:
         ParentProcessBridge.open_from_inherited_fd()
-    assert processor_interpreter_bootstrap.ESCALATE_FD_ENV in str(refusal.value)
+    assert node_interpreter_bootstrap.ESCALATE_FD_ENV in str(refusal.value)
 
 
 def test_a_non_numeric_channel_fd_is_refused_by_value(monkeypatch):
-    monkeypatch.setenv(processor_interpreter_bootstrap.ESCALATE_FD_ENV, "not-an-fd")
+    monkeypatch.setenv(node_interpreter_bootstrap.ESCALATE_FD_ENV, "not-an-fd")
     with pytest.raises(HelperProcessProtocolError) as refusal:
         ParentProcessBridge.open_from_inherited_fd()
     assert "not-an-fd" in str(refusal.value)
@@ -124,7 +124,7 @@ def start_a_real_helper_process(
     *,
     rust_log: "str | None" = None,
 ) -> subprocess.Popen:
-    """`python <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py` as the
+    """`python <lend>/tatolab/runtime/_node_interpreter_bootstrap.py` as the
     spawn host starts it — its channel, its class, its domain — handed
     `parent_engine_build_id`, or no id at all.
 
@@ -137,17 +137,17 @@ def start_a_real_helper_process(
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name not in (processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV, "RUST_LOG")
+        if name not in (node_interpreter_bootstrap.ENGINE_BUILD_ID_ENV, "RUST_LOG")
     }
     if rust_log is not None:
         environment["RUST_LOG"] = rust_log
     if parent_engine_build_id is not None:
-        environment[processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
+        environment[node_interpreter_bootstrap.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
     environment.update(
         {
-            processor_interpreter_bootstrap.ENTRYPOINT_ENV: f"{PROBE_MODULE}:PassThroughProbe",
-            processor_interpreter_bootstrap.PROCESSOR_ID_ENV: "Pbuildid",
-            processor_interpreter_bootstrap.ESCALATE_FD_ENV: str(parent.child_end.fileno()),
+            node_interpreter_bootstrap.ENTRYPOINT_ENV: f"{PROBE_MODULE}:PassThroughProbe",
+            node_interpreter_bootstrap.NODE_RUN_ID_ENV: "Pbuildid",
+            node_interpreter_bootstrap.ESCALATE_FD_ENV: str(parent.child_end.fileno()),
             "STREAMLIB_ICEORYX2_DOMAIN_ROOT": str(domain_root),
             "PYTHONPATH": os.pathsep.join(
                 entry
@@ -157,7 +157,7 @@ def start_a_real_helper_process(
         }
     )
     return subprocess.Popen(
-        [sys.executable, processor_interpreter_bootstrap.__file__],
+        [sys.executable, node_interpreter_bootstrap.__file__],
         env=environment,
         pass_fds=[parent.child_end.fileno()],
         stdin=subprocess.DEVNULL,
@@ -222,7 +222,7 @@ def test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing(
     standard_error = standard_error_of_a_helper_that_refused_its_start(helper)
 
     assert (
-        f"{processor_interpreter_bootstrap.ENGINE_BUILD_ID_ENV} is not set" in standard_error
+        f"{node_interpreter_bootstrap.ENGINE_BUILD_ID_ENV} is not set" in standard_error
     ), standard_error
     assert engine_build_id_compiled_into_this_extension() in standard_error
     assert list(empty_iceoryx2_domain_root.iterdir()) == []
@@ -256,9 +256,9 @@ def test_a_helper_handed_its_own_engine_build_id_starts_and_opens_its_node(
 
 
 def test_the_bootstrap_is_runnable_by_path():
-    """The parent execs `python <lend>/tatolab/runtime/_processor_interpreter_bootstrap.py`;
+    """The parent execs `python <lend>/tatolab/runtime/_node_interpreter_bootstrap.py`;
     a file without a `__main__` guard would exec cleanly and do nothing."""
-    with open(processor_interpreter_bootstrap.__file__, encoding="utf-8") as source:
+    with open(node_interpreter_bootstrap.__file__, encoding="utf-8") as source:
         assert '__name__ == "__main__"' in source.read()
 
 
@@ -326,7 +326,7 @@ def test_a_helpers_own_engine_records_reach_its_parent_as_rust_records(
 ):
     """A helper hosts no engine and writes no log, so an engine record made in
     one reaches a reader only by riding the channel home. It travels as the
-    Rust record it is — its own target, its own level, its processor — so the
+    Rust record it is — its own target, its own level, its node — so the
     same call site reads in the runtime's log wherever it ran.
 
     Fail-without-fix: the child has no tracing subscriber, the record reaches
@@ -372,8 +372,8 @@ def test_a_helpers_own_engine_records_reach_its_parent_as_rust_records(
             "a captured record keeps the level its call site gave it, so a debug "
             f"record never arrives as a warning; got {record}"
         )
-        assert record["processor_id"] == "Pbuildid", (
-            "one helper hosts one processor, so its engine records name it"
+        assert record["node_run_id"] == "Pbuildid", (
+            "one helper hosts one node, so its engine records name it"
         )
         assert int(record["source_seq"]) >= 1, (
             "a captured record shares the helper's sequence, so a gap in it still "

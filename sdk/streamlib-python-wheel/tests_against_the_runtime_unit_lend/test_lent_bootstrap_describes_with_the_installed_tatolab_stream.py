@@ -49,7 +49,7 @@ def test_the_lent_bootstrap_describes_a_process_node_and_a_function_node(tmp_pat
     described = subprocess.run(
         [
             sys.executable,
-            str(lend_directory / "tatolab" / "runtime" / "_processor_interpreter_bootstrap.py"),
+            str(lend_directory / "tatolab" / "runtime" / "_node_interpreter_bootstrap.py"),
             "--describe",
             "nodes_of_the_project:PacketRelay",
             "nodes_of_the_project:remap",

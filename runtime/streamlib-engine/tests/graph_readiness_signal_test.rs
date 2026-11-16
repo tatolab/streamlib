@@ -1,15 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::time::{Duration, Instant};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
 };
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
 
 /// An empty stream loaded into `runner`, its project in `project_directory`.
@@ -29,11 +28,10 @@ fn an_empty_stream_loaded_into(
 /// reaching it means nothing transitioned rather than that the machine stalled.
 const SHORT_TIMEOUT: Duration = Duration::from_millis(250);
 
-fn register_test_type(short: &str) -> ProcessorClassImportPath {
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let class_short_name = ProcessorClassShortName::new(short).unwrap();
-    let descriptor = ProcessorDescriptor::new(
+fn register_test_type(short: &str) -> NodeClassImportPath {
+    let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let class_short_name = NodeClassShortName::new(short).unwrap();
+    let descriptor = NodeDescriptor::new(
         class_short_name,
         import_path.clone(),
         "graph readiness signal test",
@@ -54,19 +52,19 @@ fn register_test_type(short: &str) -> ProcessorClassImportPath {
             streamlib::sdk::descriptors::PortFamily::Image,
         ),
     ));
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
 #[test]
 #[serial]
-fn a_graph_with_no_processors_has_nothing_to_wait_for() {
+fn a_graph_with_no_nodes_has_nothing_to_wait_for() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
 
     stream
-        .wait_until_every_processor_is_running(SHORT_TIMEOUT)
+        .wait_until_every_node_is_running(SHORT_TIMEOUT)
         .expect("an empty graph is up by definition");
 }
 
@@ -76,21 +74,21 @@ fn a_graph_that_was_never_started_is_not_reported_as_running() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
-    let processor_id = stream
-        .add_processor(ProcessorSpec::new(
+    let node_run_id = stream
+        .add_node(NodeSpec::new(
             register_test_type("NeverStarted"),
             serde_json::json!({}),
         ))
         .expect("a registered type adds cleanly");
 
     let failure = stream
-        .wait_until_every_processor_is_running(SHORT_TIMEOUT)
+        .wait_until_every_node_is_running(SHORT_TIMEOUT)
         .expect_err("a graph that never started must not report itself running");
 
     let reported = failure.to_string();
     assert!(
-        reported.contains(processor_id.as_str()),
-        "the timeout must name the processor it gave up on, got: {reported}"
+        reported.contains(node_run_id.as_str()),
+        "the timeout must name the node it gave up on, got: {reported}"
     );
     assert!(
         reported.contains("Pending"),
@@ -100,58 +98,58 @@ fn a_graph_that_was_never_started_is_not_reported_as_running() {
 
 #[test]
 #[serial]
-fn a_failure_behind_a_processor_that_never_starts_is_still_reported() {
+fn a_failure_behind_a_node_that_never_starts_is_still_reported() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(
+        .add_node(NodeSpec::new(
             register_test_type("StaysPending"),
             serde_json::json!({}),
         ))
         .expect("a registered type adds cleanly");
     // A registry miss lands the node in `Error` without spawning anything.
-    let _ = stream.add_processor(ProcessorSpec::new(
-        ProcessorClassImportPath::new("ghost_package::BehindTheSlowOne").unwrap(),
+    let _ = stream.add_node(NodeSpec::new(
+        NodeClassImportPath::new("ghost_package::BehindTheSlowOne").unwrap(),
         serde_json::json!({}),
     ));
 
     let reported = stream
-        .wait_until_every_processor_is_running(SHORT_TIMEOUT)
-        .expect_err("a graph holding a failed processor is not running")
+        .wait_until_every_node_is_running(SHORT_TIMEOUT)
+        .expect_err("a graph holding a failed node is not running")
         .to_string();
 
     assert!(
         reported.contains("=Error"),
-        "the failed processor must be in the report even when the wait gave up on another, \
+        "the failed node must be in the report even when the wait gave up on another, \
          got: {reported}"
     );
 }
 
 #[test]
 #[serial]
-fn a_processor_that_failed_ends_the_wait_without_burning_the_timeout() {
+fn a_node_that_failed_ends_the_wait_without_burning_the_timeout() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
-    let _ = stream.add_processor(ProcessorSpec::new(
-        ProcessorClassImportPath::new("ghost_package::NotRegistered").unwrap(),
+    let _ = stream.add_node(NodeSpec::new(
+        NodeClassImportPath::new("ghost_package::NotRegistered").unwrap(),
         serde_json::json!({}),
     ));
 
     let began_waiting = Instant::now();
     let failure = stream
-        .wait_until_every_processor_is_running(Duration::from_secs(30))
-        .expect_err("a graph holding a failed processor is not running");
+        .wait_until_every_node_is_running(Duration::from_secs(30))
+        .expect_err("a graph holding a failed node is not running");
     let waited = began_waiting.elapsed();
 
     assert!(
         failure.to_string().contains("Error rather than Running"),
-        "the failure must distinguish a broken processor from a slow one, got: {failure}"
+        "the failure must distinguish a broken node from a slow one, got: {failure}"
     );
     assert!(
         waited < Duration::from_secs(5),
-        "waited {waited:?} on a processor that was already Error — the wait is not \
+        "waited {waited:?} on a node that was already Error — the wait is not \
          short-circuiting on failure"
     );
 }

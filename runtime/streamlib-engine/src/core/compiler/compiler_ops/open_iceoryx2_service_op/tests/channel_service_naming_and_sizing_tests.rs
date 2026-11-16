@@ -23,7 +23,7 @@ fn channel_service_name_is_source_port_shaped() {
 fn channel_max_subscribers_is_the_fixed_cap_plus_the_taps_reservation_and_refuses_past_it() {
     let mut graph = Graph::new();
     let src_id = add_mock_output_only(&mut graph);
-    let src_uid: ProcessorUniqueId = src_id.as_str().into();
+    let src_uid: NodeRunId = src_id.as_str().into();
     let connect_one_more_destination = |graph: &mut Graph| {
         let dest_id = add_mock_input_only(graph);
         graph.traversal_mut().add_e(
@@ -68,7 +68,7 @@ fn resolve_channel_sizing_recovers_service_open_max_subscribers() {
             InputLinkPortRef::new(&dest_id, "in1"),
         );
     }
-    let src_uid: ProcessorUniqueId = src_id.as_str().into();
+    let src_uid: NodeRunId = src_id.as_str().into();
 
     let sizing = resolve_channel_sizing(
         &graph,
@@ -94,7 +94,7 @@ fn resolve_channel_sizing_recovers_service_open_max_subscribers() {
 fn destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it() {
     let mut graph = Graph::new();
     let dest_id = add_mock_input_only(&mut graph);
-    let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
+    let dest_uid: NodeRunId = dest_id.as_str().into();
     let connect_one_more_source = |graph: &mut Graph| {
         let src_id = add_mock_output_only(graph);
         graph.traversal_mut().add_e(
@@ -124,7 +124,7 @@ fn destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it() {
 
 /// A graph resolving function node types, with a destination fed
 /// `channel_links` links through channels.
-fn a_destination_fed_through_channels(channel_links: usize) -> (Graph, ProcessorUniqueId) {
+fn a_destination_fed_through_channels(channel_links: usize) -> (Graph, NodeRunId) {
     let mut graph =
         crate::core::compiler::compiler_ops::function_node_island::tests::a_graph_resolving_three_function_node_types(
         );
@@ -216,10 +216,10 @@ fn each_read_of_a_link_into_an_island_at_the_destination_holds_a_notifier_of_its
 fn one_helper_destinations_recorded_input_entry(channel_service_name: &str) -> serde_json::Value {
     let mut graph = Graph::new();
     let dest_id = add_mock_input_only(&mut graph);
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
         .expect("a helper stub's node carries its link wiring");
@@ -261,10 +261,10 @@ fn the_envelope_hands_a_helper_its_channel_as_the_name_it_knows_the_link_by() {
 /// A native destination knows a link by the channel it subscribes to.
 #[test]
 fn a_native_destination_knows_each_link_by_its_channel() {
-    use crate::core::test_support::MockInputOnlyProcessor;
+    use crate::core::test_support::MockInputOnlyNode;
 
     let (_source_output, dest_input) =
-        wire_one_test_link::<MockInputOnlyProcessor::Processor>("inbound-link-name", false);
+        wire_one_test_link::<MockInputOnlyNode::Node>("inbound-link-name", false);
 
     assert_eq!(
         dest_input.inbound_link_names("in1"),
@@ -273,16 +273,16 @@ fn a_native_destination_knows_each_link_by_its_channel() {
 }
 
 #[test]
-fn a_dead_source_processor_makes_releasing_the_publishers_source_side_a_no_op() {
-    for source_processor_still_there in [true, false] {
+fn a_dead_source_node_makes_releasing_the_publishers_source_side_a_no_op() {
+    for source_node_still_there in [true, false] {
         let mut source_graph = Graph::new();
         let source_id = add_mock_output_only(&mut source_graph);
         let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
         let reclaimed_links = far_side.reclaimed_links.clone();
-        let source_instance = attach_processor_instance(
+        let source_instance = attach_node_instance(
             &mut source_graph,
             &source_id,
-            ProcessorInstance::new(Box::new(
+            NodeInstance::new(Box::new(
                 OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                     far_side,
                     ProcessExecution::Reactive,
@@ -295,13 +295,13 @@ fn a_dead_source_processor_makes_releasing_the_publishers_source_side_a_no_op() 
             &Iceoryx2Node::for_this_test_process(),
         )
         .expect("a helper source's port opens for the publisher");
-        if !source_processor_still_there {
+        if !source_node_still_there {
             drop(source_instance);
             drop(source_graph);
             drop(held);
             assert!(
                 reclaimed_links.lock().is_empty(),
-                "a source processor that is gone is told nothing"
+                "a source node that is gone is told nothing"
             );
             continue;
         }
@@ -310,7 +310,7 @@ fn a_dead_source_processor_makes_releasing_the_publishers_source_side_a_no_op() 
         assert_eq!(
             reclaimed_links.lock().len(),
             1,
-            "a source processor still there is told to drop its side"
+            "a source node still there is told to drop its side"
         );
         drop(source_instance);
     }

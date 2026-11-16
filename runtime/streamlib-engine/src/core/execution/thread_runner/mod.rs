@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -17,22 +16,22 @@ use crate::core::child_process_restart_backoff::{
 };
 use crate::core::context::StreamClock;
 use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::execution::processor_scheduling_loop::{
-    ProcessorSchedulingCallback, ProcessorSchedulingLoopControl, ProcessorSchedulingLoopHost,
+use crate::core::execution::node_scheduling_loop::{
+    NodeSchedulingCallback, NodeSchedulingLoopControl, NodeSchedulingLoopHost,
     run_continuous_scheduling_loop_on_its_stream_clock,
     run_continuous_scheduling_loop_on_real_time, run_reactive_scheduling_loop,
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId, StepProgressOfOneNode};
-use crate::core::processors::{ProcessorInstance, ProcessorState};
+use crate::core::graph::{NodeRunId, ObservableNodeState, StepProgressOfOneNode};
+use crate::core::nodes::{NodeInstance, NodeState};
 
-#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
-pub fn run_processor_loop(
-    id: ProcessorUniqueId,
-    processor: Arc<Mutex<ProcessorInstance>>,
+#[tracing::instrument(name = "node.lifecycle", skip(node, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(node_run_id = %id, isolation_tier = isolation_tier.as_str()))]
+pub fn run_node_loop(
+    id: NodeRunId,
+    node: Arc<Mutex<NodeInstance>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
-    state: Arc<ObservableProcessorState>,
+    state: Arc<ObservableNodeState>,
     pause_gate: Arc<AtomicBool>,
     step_progress: Arc<StepProgressOfOneNode>,
     exec_config: ExecutionConfig,
@@ -49,7 +48,7 @@ pub fn run_processor_loop(
         ProcessExecution::Continuous { interval_ms } => {
             let mut host = scheduling_loop_host_on_this_thread(
                 &id,
-                &processor,
+                &node,
                 &shutdown_rx,
                 #[cfg(unix)]
                 None,
@@ -72,7 +71,7 @@ pub fn run_processor_loop(
         ProcessExecution::Reactive => {
             let mut host = scheduling_loop_host_on_this_thread(
                 &id,
-                &processor,
+                &node,
                 &shutdown_rx,
                 #[cfg(unix)]
                 shutdown_wake_fd,
@@ -86,7 +85,7 @@ pub fn run_processor_loop(
         ProcessExecution::Manual => {
             run_manual_mode(
                 &id,
-                &processor,
+                &node,
                 &shutdown_rx,
                 &state,
                 &pause_gate,
@@ -100,7 +99,7 @@ pub fn run_processor_loop(
         Some(full_access_grant) => {
             tracing::info!("[{}] Invoking teardown()...", id);
             let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx, full_access_grant);
-            let mut guard = processor.lock();
+            let mut guard = node.lock();
             match guard.teardown(&full_ctx) {
                 Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
                 Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
@@ -115,12 +114,12 @@ pub fn run_processor_loop(
         }
     }
 
-    state.transition_to_unless_already_failed(ProcessorState::Stopped);
+    state.transition_to_unless_already_failed(NodeState::Stopped);
     tracing::info!("[{}] Thread stopped", id);
 }
 
-struct ProcessorSchedulingLoopHostOnAnEngineThread<'a, CallProcessor> {
-    processor: &'a Arc<Mutex<ProcessorInstance>>,
+struct NodeSchedulingLoopHostOnAnEngineThread<'a, CallNode> {
+    node: &'a Arc<Mutex<NodeInstance>>,
     shutdown_rx: &'a crossbeam_channel::Receiver<()>,
     /// Owned for as long as the loop runs, which registers it by its raw fd.
     #[cfg(unix)]
@@ -128,20 +127,15 @@ struct ProcessorSchedulingLoopHostOnAnEngineThread<'a, CallProcessor> {
     pause_gate: &'a AtomicBool,
     stream_clock: &'a StreamClock,
     step_progress: &'a StepProgressOfOneNode,
-    call_processor: CallProcessor,
+    call_node: CallNode,
 }
 
-impl<CallProcessor> ProcessorSchedulingLoopHost
-    for ProcessorSchedulingLoopHostOnAnEngineThread<'_, CallProcessor>
+impl<CallNode> NodeSchedulingLoopHost for NodeSchedulingLoopHostOnAnEngineThread<'_, CallNode>
 where
-    CallProcessor: FnMut(ProcessorSchedulingCallback, bool),
+    CallNode: FnMut(NodeSchedulingCallback, bool),
 {
-    fn call_processor(
-        &mut self,
-        callback: ProcessorSchedulingCallback,
-        counted_on_the_step_ledger: bool,
-    ) {
-        (self.call_processor)(callback, counted_on_the_step_ledger);
+    fn call_node(&mut self, callback: NodeSchedulingCallback, counted_on_the_step_ledger: bool) {
+        (self.call_node)(callback, counted_on_the_step_ledger);
     }
 
     fn note_step_finished(&mut self, step_index: u64) {
@@ -154,7 +148,7 @@ where
     }
 
     fn input_mailboxes(&self) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
-        self.processor.lock().iceoryx2_input_mailboxes_inner()
+        self.node.lock().iceoryx2_input_mailboxes_inner()
     }
 
     #[cfg(unix)]
@@ -163,35 +157,35 @@ where
         self.shutdown_wake_fd.as_ref().map(AsRawFd::as_raw_fd)
     }
 
-    fn take_arrived_control(&mut self) -> ProcessorSchedulingLoopControl {
+    fn take_arrived_control(&mut self) -> NodeSchedulingLoopControl {
         if self.shutdown_rx.try_recv().is_ok() {
-            ProcessorSchedulingLoopControl::Stop
+            NodeSchedulingLoopControl::Stop
         } else {
-            ProcessorSchedulingLoopControl::KeepRunning
+            NodeSchedulingLoopControl::KeepRunning
         }
     }
 
     /// Only a shutdown makes the wake fd readable, and it stays readable.
-    fn take_the_control_its_fd_announced(&mut self) -> ProcessorSchedulingLoopControl {
-        ProcessorSchedulingLoopControl::Stop
+    fn take_the_control_its_fd_announced(&mut self) -> NodeSchedulingLoopControl {
+        NodeSchedulingLoopControl::Stop
     }
 
-    fn after_a_signal_interrupted_a_wait(&mut self) -> ProcessorSchedulingLoopControl {
-        ProcessorSchedulingLoopControl::KeepRunning
+    fn after_a_signal_interrupted_a_wait(&mut self) -> NodeSchedulingLoopControl {
+        NodeSchedulingLoopControl::KeepRunning
     }
 
     fn wait_on_the_machine_clock_or_a_control(
         &mut self,
         machine_wait: Duration,
-    ) -> ProcessorSchedulingLoopControl {
+    ) -> NodeSchedulingLoopControl {
         match self.shutdown_rx.recv_timeout(machine_wait) {
-            Ok(()) => ProcessorSchedulingLoopControl::Stop,
+            Ok(()) => NodeSchedulingLoopControl::Stop,
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                ProcessorSchedulingLoopControl::KeepRunning
+                NodeSchedulingLoopControl::KeepRunning
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
                 let _ = crossbeam_channel::after(machine_wait).recv();
-                ProcessorSchedulingLoopControl::KeepRunning
+                NodeSchedulingLoopControl::KeepRunning
             }
         }
     }
@@ -206,24 +200,22 @@ where
     }
 }
 
-fn dispatch_processor_scheduling_callback(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+fn dispatch_node_scheduling_callback(
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     runtime_ctx: &RuntimeContext,
-    state: &ObservableProcessorState,
+    state: &ObservableNodeState,
     step_progress: &StepProgressOfOneNode,
-    callback: ProcessorSchedulingCallback,
+    callback: NodeSchedulingCallback,
     counted_on_the_step_ledger: bool,
 ) {
     let counted = counted_on_the_step_ledger && !runtime_ctx.stream_clock.spec().is_real();
     {
         let _callback_in_flight = counted.then(|| step_progress.callback_in_flight());
         match callback {
-            ProcessorSchedulingCallback::OnPause => dispatch_on_pause(id, processor, runtime_ctx),
-            ProcessorSchedulingCallback::OnResume => dispatch_on_resume(id, processor, runtime_ctx),
-            ProcessorSchedulingCallback::Process => {
-                dispatch_process(id, processor, runtime_ctx, state)
-            }
+            NodeSchedulingCallback::OnPause => dispatch_on_pause(id, node, runtime_ctx),
+            NodeSchedulingCallback::OnResume => dispatch_on_resume(id, node, runtime_ctx),
+            NodeSchedulingCallback::Process => dispatch_process(id, node, runtime_ctx, state),
         }
     }
     if counted {
@@ -232,28 +224,27 @@ fn dispatch_processor_scheduling_callback(
 }
 
 fn scheduling_loop_host_on_this_thread<'a>(
-    id: &'a ProcessorUniqueId,
-    processor: &'a Arc<Mutex<ProcessorInstance>>,
+    id: &'a NodeRunId,
+    node: &'a Arc<Mutex<NodeInstance>>,
     shutdown_rx: &'a crossbeam_channel::Receiver<()>,
     #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &'a AtomicBool,
     runtime_ctx: &'a RuntimeContext,
-    state: &'a ObservableProcessorState,
+    state: &'a ObservableNodeState,
     step_progress: &'a StepProgressOfOneNode,
-) -> ProcessorSchedulingLoopHostOnAnEngineThread<'a, impl FnMut(ProcessorSchedulingCallback, bool)>
-{
-    ProcessorSchedulingLoopHostOnAnEngineThread {
-        processor,
+) -> NodeSchedulingLoopHostOnAnEngineThread<'a, impl FnMut(NodeSchedulingCallback, bool)> {
+    NodeSchedulingLoopHostOnAnEngineThread {
+        node,
         shutdown_rx,
         #[cfg(unix)]
         shutdown_wake_fd,
         pause_gate,
         stream_clock: &runtime_ctx.stream_clock,
         step_progress,
-        call_processor: move |callback, counted_on_the_step_ledger| {
-            dispatch_processor_scheduling_callback(
+        call_node: move |callback, counted_on_the_step_ledger| {
+            dispatch_node_scheduling_callback(
                 id,
-                processor,
+                node,
                 runtime_ctx,
                 state,
                 step_progress,
@@ -265,10 +256,10 @@ fn scheduling_loop_host_on_this_thread<'a>(
 }
 
 fn run_manual_mode(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    state: &Arc<ObservableProcessorState>,
+    state: &Arc<ObservableNodeState>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
     isolation_tier: IsolationTier,
@@ -281,13 +272,13 @@ fn run_manual_mode(
             id,
             isolation_tier.as_str(),
         );
-        state.transition_to(ProcessorState::Error);
+        state.transition_to(NodeState::Error);
         return;
     };
     tracing::info!("[{}] Invoking start()...", id);
     {
         let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, start_grant);
-        let mut guard = processor.lock();
+        let mut guard = node.lock();
         match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
             Err(e) => {
@@ -318,13 +309,13 @@ fn run_manual_mode(
         let is_paused = pause_gate.load(Ordering::Acquire);
 
         if is_paused && !was_paused {
-            dispatch_on_pause(id, processor, runtime_ctx);
+            dispatch_on_pause(id, node, runtime_ctx);
             // A pause that landed while the node read `Restarting` set the
             // gate but could not move the state.
-            state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
+            state.transition_to_only_from(NodeState::Running, NodeState::Paused);
             was_paused = true;
         } else if !is_paused && was_paused {
-            dispatch_on_resume(id, processor, runtime_ctx);
+            dispatch_on_resume(id, node, runtime_ctx);
             was_paused = false;
         }
 
@@ -333,7 +324,7 @@ fn run_manual_mode(
                 next_helper_process_restart_at = None;
                 match restart_the_out_of_process_helper_that_died(
                     id,
-                    processor,
+                    node,
                     runtime_ctx,
                     isolation_tier,
                 ) {
@@ -342,18 +333,13 @@ fn run_manual_mode(
                         current_helper_process_started_at = Instant::now();
                         helper_process_stopped_answering_at = None;
                         if pause_gate.load(Ordering::Acquire) {
-                            dispatch_on_pause(id, processor, runtime_ctx);
+                            dispatch_on_pause(id, node, runtime_ctx);
                             was_paused = true;
-                            state.transition_to_only_from(
-                                ProcessorState::Restarting,
-                                ProcessorState::Paused,
-                            );
+                            state.transition_to_only_from(NodeState::Restarting, NodeState::Paused);
                         } else {
                             was_paused = false;
-                            state.transition_to_only_from(
-                                ProcessorState::Restarting,
-                                ProcessorState::Running,
-                            );
+                            state
+                                .transition_to_only_from(NodeState::Restarting, NodeState::Running);
                         }
                     }
                     Err(_) if shutdown_rx.try_recv().is_ok() => {
@@ -365,7 +351,7 @@ fn run_manual_mode(
                     }
                     Err(restart_refusal) => {
                         if let Some(reason_the_node_gave) =
-                            processor.lock().failure_the_node_reported_of_itself()
+                            node.lock().failure_the_node_reported_of_itself()
                         {
                             tracing::error!(
                                 "[{}] the node failed itself: {}",
@@ -396,15 +382,15 @@ fn run_manual_mode(
                 why_the_node_is_not_ready_as_its_helper_reports,
                 its_helper_reports_whether_the_node_is_ready,
             ) = {
-                let mut processor = processor.lock();
-                processor.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+                let mut node = node.lock();
+                node.detect_and_clean_up_after_an_out_of_process_helper_that_died();
                 (
-                    processor.failure_the_node_reported_of_itself(),
-                    processor.has_failed_unrecoverably(),
-                    processor.why_the_out_of_process_helper_died_on_its_own(),
-                    processor.why_process_is_raising_as_its_helper_reports(),
-                    processor.why_the_node_is_not_ready_as_its_helper_reports(),
-                    processor.out_of_process_link_wiring().is_some(),
+                    node.failure_the_node_reported_of_itself(),
+                    node.has_failed_unrecoverably(),
+                    node.why_the_out_of_process_helper_died_on_its_own(),
+                    node.why_process_is_raising_as_its_helper_reports(),
+                    node.why_the_node_is_not_ready_as_its_helper_reports(),
+                    node.out_of_process_link_wiring().is_some(),
                 )
             };
             state.note_why_process_is_raising(why_process_is_raising_as_its_helper_reports);
@@ -445,7 +431,7 @@ fn run_manual_mode(
                     if stopped_answering_at.elapsed()
                         >= GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED
                     {
-                        tracing::error!("[{}] Processor failed unrecoverably", id);
+                        tracing::error!("[{}] Node failed unrecoverably", id);
                         state.fail_with("its helper process stopped answering the engine");
                         already_reported_failure = true;
                     }
@@ -465,7 +451,7 @@ fn run_manual_mode(
         Some(stop_grant) => {
             tracing::info!("[{}] Invoking stop()...", id);
             let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, stop_grant);
-            let mut guard = processor.lock();
+            let mut guard = node.lock();
             match guard.stop(&full_ctx) {
                 Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
                 Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
@@ -487,8 +473,8 @@ const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Durat
     Duration::from_secs(5);
 
 fn restart_the_out_of_process_helper_that_died(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     runtime_ctx: &RuntimeContext,
     isolation_tier: IsolationTier,
 ) -> crate::core::Result<()> {
@@ -499,20 +485,19 @@ fn restart_the_out_of_process_helper_that_died(
         ))
     })?;
     let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, restart_grant);
-    let promotion_awaited = processor
+    let promotion_awaited = node
         .lock()
         .ask_to_promote_the_function_node_that_lost_the_helper_that_died(&full_ctx);
     if let Some(promotion_awaited) = promotion_awaited {
         promotion_awaited.wait_until_it_settles();
     }
-    processor
-        .lock()
+    node.lock()
         .restart_the_out_of_process_helper_that_died(&full_ctx)
 }
 
 fn after_a_helper_process_death(
-    id: &ProcessorUniqueId,
-    state: &ObservableProcessorState,
+    id: &NodeRunId,
+    state: &ObservableNodeState,
     restart_backoff: &mut ChildProcessRestartBackoff,
     exit_reason: String,
     run_before_the_death: Duration,
@@ -537,18 +522,18 @@ fn after_a_helper_process_death(
     tracing::warn!(
         "[{id}] its helper process died ({exit_reason}); a new one starts in {restart_wait:?}"
     );
-    state.transition_to(ProcessorState::Restarting);
+    state.transition_to(NodeState::Restarting);
     Some(Instant::now() + restart_wait)
 }
 
 fn dispatch_on_pause(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     runtime_ctx: &RuntimeContext,
 ) {
     tracing::info!("[{}] Invoking on_pause()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-    let mut guard = processor.lock();
+    let mut guard = node.lock();
     match guard.on_pause(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
@@ -556,13 +541,13 @@ fn dispatch_on_pause(
 }
 
 fn dispatch_process(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     runtime_ctx: &RuntimeContext,
-    state: &ObservableProcessorState,
+    state: &ObservableNodeState,
 ) {
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-    let mut guard = processor.lock();
+    let mut guard = node.lock();
     match guard.process(&limited_ctx) {
         Ok(()) => state.note_that_process_ran_cleanly(),
         Err(e) => {
@@ -573,13 +558,13 @@ fn dispatch_process(
 }
 
 fn dispatch_on_resume(
-    id: &ProcessorUniqueId,
-    processor: &Arc<Mutex<ProcessorInstance>>,
+    id: &NodeRunId,
+    node: &Arc<Mutex<NodeInstance>>,
     runtime_ctx: &RuntimeContext,
 ) {
     tracing::info!("[{}] Invoking on_resume()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-    let mut guard = processor.lock();
+    let mut guard = node.lock();
     match guard.on_resume(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),

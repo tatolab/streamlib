@@ -1,10 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod codegen;
 mod grammar;
-mod processor_config;
+mod node_config;
 
 use grammar as attribute_grammar;
 
@@ -13,7 +12,7 @@ use quote::quote;
 use syn::{ItemStruct, parse_macro_input};
 
 #[proc_macro_attribute]
-pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item_struct = parse_macro_input!(item as ItemStruct);
 
     let node_meta =
@@ -26,7 +25,7 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    TokenStream::from(codegen::generate_from_parsed_processor_attr(
+    TokenStream::from(codegen::generate_from_parsed_node_attr(
         &item_struct,
         &parsed,
         sdk_root(),
@@ -34,9 +33,9 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
-pub fn processor_config(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn node_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
-    match processor_config::expand_processor_config(attr.into(), item_struct, sdk_root()) {
+    match node_config::expand_node_config(attr.into(), item_struct, sdk_root()) {
         Ok(expanded) => expanded.into(),
         Err(refusal) => refusal.to_compile_error().into(),
     }

@@ -159,7 +159,7 @@ pub(super) fn index_of_the_device_the_runtime_named(
     };
     Err(ConsumerRhiError::Gpu(format!(
         "the runtime built on Vulkan device {}, and no device this process enumerates carries \
-         that UUID — it saw: {devices_seen}. A processor interpreter inherits the runtime's \
+         that UUID — it saw: {devices_seen}. A node interpreter inherits the runtime's \
          loader environment; a driver variable set for this process alone can hide the \
          runtime's device",
         crate::lowercase_hex_of_vulkan_device_uuid(vulkan_device_uuid_the_runtime_named)

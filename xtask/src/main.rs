@@ -275,7 +275,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "-p",
                 "streamlib-macros",
                 "-p",
-                "streamlib-processor-schema",
+                "streamlib-node-schema",
                 "-p",
                 "streamlib-ipc-types",
                 "-p",

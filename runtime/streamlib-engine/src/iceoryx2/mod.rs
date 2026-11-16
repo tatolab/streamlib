@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-
 mod audio_window;
 mod channel_ceiling;
 mod channel_idle_poll_backoff;
@@ -62,10 +61,9 @@ pub use function_node_island_input_port::{
 #[cfg(test)]
 pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;
 pub use helper_process_loss_count_board::{
-    FunctionNodeCallUnderWayInThisHelper, HelperPlacedProcessorLossCounts,
-    HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter,
-    InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkLossCountBoardSlotMirror,
-    OutputPortBagCountBoardMirror, ProcessorLossCountSnapshot,
+    FunctionNodeCallUnderWayInThisHelper, HelperPlacedNodeLossCounts, HelperProcessLossCountBoard,
+    HelperProcessLossCountBoardWriter, InboundLinkLossCountBoardSlotAndWiringGeneration,
+    InboundLinkLossCountBoardSlotMirror, NodeLossCountSnapshot, OutputPortBagCountBoardMirror,
 };
 #[cfg(test)]
 pub(crate) use iceoryx2_domain_for_this_test_process::a_notifier_nothing_listens_on;
@@ -91,7 +89,7 @@ pub use message_group_loss_recovery_gate::{
     MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
 };
 pub use payload::MessageGroupBoundary;
-pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR;
+pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{

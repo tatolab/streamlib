@@ -14,14 +14,14 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use streamlib::sdk::descriptors::ProcessorDescriptor;
+use streamlib::sdk::descriptors::NodeDescriptor;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{
-    GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse,
+    GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse, NodeDescriptorOutput,
     NodeTypeAnInstalledModuleDeclaresOutput, NodeTypesDescribedInOneStreamOutput,
-    PortFamilyDescriptorOutput, ProcessorDescriptorOutput, RegistryResponse,
+    PortFamilyDescriptorOutput, RegistryResponse,
 };
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use tokio_util::sync::CancellationToken;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
@@ -238,7 +238,7 @@ pub(crate) fn machine_wide_registry_response(
     operations_on_the_loaded_streams: &Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
 ) -> MachineWideRegistryResponse {
     MachineWideRegistryResponse {
-        nodes: node_catalog_response(&PROCESSOR_REGISTRY.list_registered()).nodes,
+        nodes: node_catalog_response(&NODE_REGISTRY.list_registered()).nodes,
         families: PortFamilyDescriptorOutput::every_port_family(),
         streams: operations_on_the_loaded_streams
             .ids_of_the_loaded_streams()
@@ -260,7 +260,7 @@ pub(crate) fn machine_wide_registry_response(
                                 distribution: installed_module.distribution.clone(),
                                 distribution_version: installed_module.distribution_version.clone(),
                                 entry_point: installed_module.entry_point.clone(),
-                                node: ProcessorDescriptorOutput::from(descriptor),
+                                node: NodeDescriptorOutput::from(descriptor),
                             }
                         })
                         .collect(),
@@ -352,11 +352,11 @@ pub(crate) async fn get_registry(
 
 /// One stream's node catalog, rendered as `/api/registry` and the MCP node
 /// catalog resource both serve it.
-pub(crate) fn node_catalog_response(node_catalog: &[ProcessorDescriptor]) -> RegistryResponse {
+pub(crate) fn node_catalog_response(node_catalog: &[NodeDescriptor]) -> RegistryResponse {
     RegistryResponse {
         nodes: node_catalog
             .iter()
-            .map(ProcessorDescriptorOutput::from)
+            .map(NodeDescriptorOutput::from)
             .collect(),
         families: PortFamilyDescriptorOutput::every_port_family(),
     }
@@ -383,10 +383,8 @@ pub(crate) mod router_surface_tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
-    use streamlib::sdk::descriptors::{
-        ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
-    };
-    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+    use streamlib::sdk::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDescriptor};
+    use streamlib::sdk::nodes::NODE_REGISTRY;
     use streamlib::sdk::runtime::BoxFuture;
     use tower::ServiceExt;
 
@@ -418,10 +416,10 @@ pub(crate) mod router_surface_tests {
     /// mutation the pre-pivot api-server served. Method + path exactly as they
     /// were, so this reads as the inventory it is.
     const DELETED_GRAPH_MUTATION_ROUTES: &[(&str, &str)] = &[
-        ("POST", "/api/processor"),
-        ("POST", "/api/processor/source"),
-        ("POST", "/api/processor/source/replace"),
-        ("DELETE", "/api/processors/some-id"),
+        ("POST", "/api/node"),
+        ("POST", "/api/node/source"),
+        ("POST", "/api/node/source/replace"),
+        ("DELETE", "/api/nodes/some-id"),
         ("POST", "/api/connections"),
         ("DELETE", "/api/connections/some-id"),
     ];
@@ -611,11 +609,11 @@ pub(crate) mod router_surface_tests {
             "required": [],
         });
         let class_import_path = "streamlib_api_server::registry_rendering_probe::TestPatternProbe";
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(
-                ProcessorDescriptor::new(
-                    ProcessorClassShortName::new("TestPatternProbe").unwrap(),
-                    ProcessorClassImportPath::new(class_import_path).unwrap(),
+                NodeDescriptor::new(
+                    NodeClassShortName::new("TestPatternProbe").unwrap(),
+                    NodeClassImportPath::new(class_import_path).unwrap(),
                     "a registry-rendering probe",
                 )
                 .with_config_schema(config_schema.clone()),

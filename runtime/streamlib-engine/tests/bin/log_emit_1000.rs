@@ -88,7 +88,7 @@ fn main() {
     for i in 0u32..1000 {
         tracing::info!(
             pipeline_id = "strace-test",
-            processor_id = "emitter",
+            node_run_id = "emitter",
             rhi_op = "tick",
             i,
             "strace-no-syscalls"

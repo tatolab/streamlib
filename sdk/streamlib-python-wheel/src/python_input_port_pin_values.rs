@@ -10,7 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use crate::python_helper_stream_clock::helper_stream_clock_now_ns;
-use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 
 /// Read each input port of `pin_values` as its pin value while no link feeds
 /// it, in place of the pin values read before; a port left out reads only its
@@ -18,7 +18,7 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 #[pyfunction]
 #[pyo3(signature = (*, link_data_access, pin_values))]
 pub(crate) fn read_each_unlinked_input_port_as_its_pin_value(
-    link_data_access: &PythonProcessorLinkDataAccess,
+    link_data_access: &PythonNodeLinkDataAccess,
     pin_values: HashMap<String, f64>,
 ) -> PyResult<()> {
     let input_mailboxes = link_data_access

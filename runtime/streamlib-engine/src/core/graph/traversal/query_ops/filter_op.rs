@@ -2,18 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 
-impl<'a> ProcessorTraversal<'a> {
-    pub fn filter(self, predicate: impl Fn(&ProcessorNode) -> bool) -> ProcessorTraversal<'a> {
+impl<'a> NodeTraversal<'a> {
+    pub fn filter(self, predicate: impl Fn(&GraphNode) -> bool) -> NodeTraversal<'a> {
         let new_ids = self
             .ids
             .iter()
             .filter_map(|&idx| self.graph.node_weight(idx).map(|node| (idx, node)))
             .filter_map(|(idx, node)| predicate(node).then_some(idx))
             .collect();
-        ProcessorTraversal {
+        NodeTraversal {
             graph: self.graph,
             ids: new_ids,
         }
@@ -35,15 +35,15 @@ impl<'a> LinkTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
-    pub fn filter(self, predicate: impl Fn(&ProcessorNode) -> bool) -> ProcessorTraversalMut<'a> {
+impl<'a> NodeTraversalMut<'a> {
+    pub fn filter(self, predicate: impl Fn(&GraphNode) -> bool) -> NodeTraversalMut<'a> {
         let new_ids = self
             .ids
             .iter()
             .filter_map(|&idx| self.graph.node_weight(idx).map(|node| (idx, node)))
             .filter_map(|(idx, node)| predicate(node).then_some(idx))
             .collect();
-        ProcessorTraversalMut {
+        NodeTraversalMut {
             graph: self.graph,
             ids: new_ids,
         }

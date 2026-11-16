@@ -167,7 +167,7 @@ expression = "GPL-3.0-only"
 license-files = []
 
 [[licenses.clarify]]
-name = "streamlib-processor-schema"
+name = "streamlib-node-schema"
 expression = "GPL-3.0-only"
 license-files = []
 

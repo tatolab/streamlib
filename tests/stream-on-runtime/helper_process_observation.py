@@ -15,7 +15,7 @@ HELPER_PROCESS_STARTED_LOG_LINE_TEXT = "helper process started: pid="
 #: `tatolabd`'s line for each helper process it starts.
 HELPER_PROCESS_STARTED_LOG_LINE_PATTERN = re.compile(re.escape(HELPER_PROCESS_STARTED_LOG_LINE_TEXT) + r"(\d+)")
 
-PROCESSOR_INTERPRETER_BOOTSTRAP_FILE_NAME = b"_processor_interpreter_bootstrap.py"
+NODE_INTERPRETER_BOOTSTRAP_FILE_NAME = b"_node_interpreter_bootstrap.py"
 
 PROCESS_POLL_INTERVAL_SECONDS = 0.05
 
@@ -56,13 +56,13 @@ def helper_process_is_still_alive(process_id: int) -> bool:
     if PROC_FILESYSTEM_IS_MOUNTED:
         try:
             with open(f"/proc/{process_id}/cmdline", "rb") as command_line:
-                return PROCESSOR_INTERPRETER_BOOTSTRAP_FILE_NAME in command_line.read()
+                return NODE_INTERPRETER_BOOTSTRAP_FILE_NAME in command_line.read()
         except FileNotFoundError:
             return False
     listed = subprocess.run(
         ["ps", "-o", "command=", "-p", str(process_id)], capture_output=True, check=False
     )
-    return PROCESSOR_INTERPRETER_BOOTSTRAP_FILE_NAME in listed.stdout
+    return NODE_INTERPRETER_BOOTSTRAP_FILE_NAME in listed.stdout
 
 
 def parent_process_id_of(process_id: int) -> int:
@@ -82,14 +82,14 @@ def process_descends_from(process_id: int, ancestor_process_id: int) -> bool:
 
 
 def assert_runs_in_a_process_of_its_own_beneath(
-    processor_interpreter_process_id: int, tatolabd_process_id: int
+    node_interpreter_process_id: int, tatolabd_process_id: int
 ) -> None:
     """The live interpreter is not `tatolabd`, and `tatolabd` is its ancestor."""
-    assert processor_interpreter_process_id != tatolabd_process_id, (
-        "the processor interpreter runs inside tatolabd's own process"
+    assert node_interpreter_process_id != tatolabd_process_id, (
+        "the node interpreter runs inside tatolabd's own process"
     )
-    assert process_descends_from(processor_interpreter_process_id, tatolabd_process_id), (
-        f"processor interpreter {processor_interpreter_process_id} does not descend from "
+    assert process_descends_from(node_interpreter_process_id, tatolabd_process_id), (
+        f"node interpreter {node_interpreter_process_id} does not descend from "
         f"tatolabd {tatolabd_process_id}"
     )
 
