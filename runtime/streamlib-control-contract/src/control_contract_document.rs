@@ -6,11 +6,17 @@
 
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
+use streamlib_node_schema::pin_type::{
+    NodeInputMode, PinDeclaration, PinType, PinTypeDescription, PinTypeStability,
+    built_in_pin_types,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
-use crate::control_operation::{ControlOperation, ControlOperationDeclaration};
+use crate::control_operation::{
+    ControlOperation, ControlOperationDeclaration, ControlOperationStability,
+};
 use crate::control_operation_results::ControlContractVersionMismatch;
 use crate::control_operations::{CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, Discover};
 
@@ -71,6 +77,11 @@ pub fn control_contract_document() -> Value {
         .iter()
         .map(|declaration| the_agent_discovery_tool_entry_of(declaration, &mut schema_generator))
         .collect();
+    let pin_types: Vec<Value> = built_in_pin_types()
+        .iter()
+        .map(|row| the_pin_type_entry_of(row, &mut schema_generator))
+        .collect();
+    the_pin_type_components_added_to(&mut schema_generator);
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -83,6 +94,7 @@ pub fn control_contract_document() -> Value {
         "methods": methods,
         "x-notifications": notifications,
         "x-agent-discovery-tools": agent_discovery_tools,
+        "x-pin-types": pin_types,
         "components": { "schemas": component_schemas },
     })
 }
@@ -136,6 +148,41 @@ fn the_agent_discovery_tool_entry_of(
     entry
 }
 
+fn the_pin_type_entry_of(
+    row: &PinTypeDescription,
+    schema_generator: &mut schemars::SchemaGenerator,
+) -> Value {
+    let mut entry = json!({
+        "name": row.name,
+        "label": row.label,
+        "documentation": row.documentation,
+        "flows": row.flows,
+        "annotations": row.annotations,
+        "python_form": row.python_form,
+        "typescript_form": row.typescript_form,
+        "x-since": row.since_contract_version,
+        "x-stability": the_contract_stability_of(row.stability),
+    });
+    if let Some(value_json_schema) = row.name.value_json_schema(schema_generator) {
+        entry["value_json_schema"] = value_json_schema.to_value();
+    }
+    entry
+}
+
+fn the_contract_stability_of(stability: PinTypeStability) -> ControlOperationStability {
+    match stability {
+        PinTypeStability::Stable => ControlOperationStability::Stable,
+        PinTypeStability::Experimental => ControlOperationStability::Experimental,
+    }
+}
+
+/// Adds the pin type shapes no operation names yet, so a client generates them from the file.
+fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGenerator) {
+    schema_generator.subschema_for::<PinType>();
+    schema_generator.subschema_for::<PinDeclaration>();
+    schema_generator.subschema_for::<NodeInputMode>();
+}
+
 fn the_errors_of(
     declaration: &ControlOperationDeclaration,
     refusal_schema: &schemars::Schema,
@@ -184,6 +231,8 @@ fn the_notification_entry_of(
 
 #[cfg(test)]
 mod tests {
+    use streamlib_node_schema::pin_type::BuiltInPinTypeName;
+
     use super::*;
 
     #[test]
@@ -234,6 +283,149 @@ mod tests {
             committed == control_contract_file_contents(),
             "contract.json differs from the registry; run `cargo xtask generate-control-contract`"
         );
+    }
+
+    #[test]
+    fn the_pin_type_list_has_one_experimental_row_per_built_in_pin_type_in_order() {
+        let document = control_contract_document();
+        let rows = document["x-pin-types"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`x-pin-types` is an array"));
+        let row_names: Vec<Value> = rows.iter().map(|row| row["name"].clone()).collect();
+        let built_in_names: Vec<Value> = BuiltInPinTypeName::EVERY_NAME
+            .iter()
+            .map(|name| json!(name))
+            .collect();
+        assert_eq!(row_names, built_in_names);
+        for row in rows {
+            assert_eq!(row["x-stability"], json!("experimental"), "{}", row["name"]);
+            assert_eq!(
+                row["x-since"],
+                json!(CONTROL_CONTRACT_VERSION),
+                "{}",
+                row["name"]
+            );
+            for field in ["label", "documentation", "python_form", "typescript_form"] {
+                assert!(row[field].is_string(), "{} has no `{field}`", row["name"]);
+            }
+            assert!(
+                row["flows"]
+                    .as_array()
+                    .is_some_and(|flows| !flows.is_empty())
+            );
+            assert!(row["annotations"].is_array());
+        }
+    }
+
+    #[test]
+    fn a_pin_type_row_states_a_value_schema_exactly_when_its_type_stores_a_value() {
+        let stores_no_value = [
+            "texture",
+            "audio",
+            "encoded_video",
+            "encoded_audio",
+            "tensor",
+            "trigger",
+            "named",
+        ];
+        let document = control_contract_document();
+        for row in document["x-pin-types"].as_array().into_iter().flatten() {
+            let name = row["name"].as_str().unwrap_or_default();
+            assert_eq!(
+                row.get("value_json_schema").is_some(),
+                !stores_no_value.contains(&name),
+                "`{name}`"
+            );
+        }
+        assert_eq!(
+            document["x-pin-types"][BuiltInPinTypeName::Asset.position()]["value_json_schema"],
+            json!({ "$ref": "#/components/schemas/AssetPinValue" })
+        );
+    }
+
+    #[test]
+    fn the_pin_type_shapes_are_component_schemas() {
+        let document = control_contract_document();
+        for name in [
+            "PinType",
+            "DeclaredPinType",
+            "PinFlow",
+            "PinAnnotations",
+            "PinDeclaration",
+            "NodeInputMode",
+            "BundleMember",
+        ] {
+            assert!(
+                document["components"]["schemas"].get(name).is_some(),
+                "`{name}` is not a component schema"
+            );
+        }
+        assert!(
+            document["components"]["schemas"]["BundleMember"]["properties"]
+                .get("default_value")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn every_component_schema_uses_only_the_keywords_the_contract_uses() {
+        const KEYWORDS: [&str; 15] = [
+            "type",
+            "properties",
+            "required",
+            "additionalProperties",
+            "items",
+            "minItems",
+            "maxItems",
+            "const",
+            "oneOf",
+            "anyOf",
+            "$ref",
+            "format",
+            "minimum",
+            "description",
+            "default",
+        ];
+        let document = control_contract_document();
+        let mut keywords = std::collections::BTreeSet::new();
+        for schema in document["components"]["schemas"]
+            .as_object()
+            .into_iter()
+            .flat_map(|schemas| schemas.values())
+        {
+            every_keyword_in(schema, &mut keywords);
+        }
+        let unknown: Vec<&String> = keywords
+            .iter()
+            .filter(|keyword| !KEYWORDS.contains(&keyword.as_str()))
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "keywords outside the contract's: {unknown:?}"
+        );
+    }
+
+    fn every_keyword_in(schema: &Value, keywords: &mut std::collections::BTreeSet<String>) {
+        match schema {
+            Value::Object(object) => {
+                for (keyword, inner) in object {
+                    keywords.insert(keyword.clone());
+                    match keyword.as_str() {
+                        "properties" => inner
+                            .as_object()
+                            .into_iter()
+                            .flat_map(|properties| properties.values())
+                            .for_each(|property| every_keyword_in(property, keywords)),
+                        "default" | "const" => {}
+                        _ => every_keyword_in(inner, keywords),
+                    }
+                }
+            }
+            Value::Array(items) => items
+                .iter()
+                .for_each(|item| every_keyword_in(item, keywords)),
+            _ => {}
+        }
     }
 
     fn every_reference_in(value: &Value, references: &mut Vec<String>) {

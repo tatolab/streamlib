@@ -3516,6 +3516,400 @@
       "x-effect": "destroys"
     }
   ],
+  "x-pin-types": [
+    {
+      "name": "boolean",
+      "label": "Boolean",
+      "documentation": "True or false.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "bool",
+      "typescript_form": "\"boolean\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/BooleanPinValue"
+      }
+    },
+    {
+      "name": "integer",
+      "label": "Integer",
+      "documentation": "A whole number, exact to 2^53, or within the exact size the type states.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "range",
+        "step",
+        "unit",
+        "meaning",
+        "control"
+      ],
+      "python_form": "int",
+      "typescript_form": "\"integer\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/IntegerPinValue"
+      }
+    },
+    {
+      "name": "float",
+      "label": "Float",
+      "documentation": "A number, held as a 64-bit float unless the type states a size.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "range",
+        "step",
+        "unit",
+        "meaning",
+        "control"
+      ],
+      "python_form": "float",
+      "typescript_form": "\"float\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/FloatPinValue"
+      }
+    },
+    {
+      "name": "string",
+      "label": "String",
+      "documentation": "Text.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "str",
+      "typescript_form": "\"string\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/StringPinValue"
+      }
+    },
+    {
+      "name": "menu",
+      "label": "Menu",
+      "documentation": "One of a fixed list of option names.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Literal",
+      "typescript_form": "\"menu\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/MenuPinValue"
+      }
+    },
+    {
+      "name": "color",
+      "label": "Color",
+      "documentation": "An sRGB colour with alpha, four numbers from 0 to 1.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Color",
+      "typescript_form": "\"color\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/ColorPinValue"
+      }
+    },
+    {
+      "name": "vector",
+      "label": "Vector",
+      "documentation": "Two, three or four numbers, named x, y, z and w.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Vector2, Vector3, Vector4",
+      "typescript_form": "\"vector\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/VectorPinValue"
+      }
+    },
+    {
+      "name": "rectangle",
+      "label": "Rectangle",
+      "documentation": "A rectangle by its left and top edges, width and height.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Rectangle",
+      "typescript_form": "\"rectangle\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/RectanglePinValue"
+      }
+    },
+    {
+      "name": "transform",
+      "label": "Transform",
+      "documentation": "A 4 by 4 matrix, row by row.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Transform",
+      "typescript_form": "\"transform\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/TransformPinValue"
+      }
+    },
+    {
+      "name": "texture",
+      "label": "Texture",
+      "documentation": "A GPU picture, in one of the pixel formats the type states.",
+      "flows": [
+        "stream",
+        "value"
+      ],
+      "annotations": [
+        "frame_rate",
+        "meaning",
+        "control"
+      ],
+      "python_form": "Texture",
+      "typescript_form": "\"texture\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "audio",
+      "label": "Audio",
+      "documentation": "A stream of audio samples.",
+      "flows": [
+        "stream"
+      ],
+      "annotations": [
+        "sample_rate",
+        "sample_type",
+        "meaning",
+        "control"
+      ],
+      "python_form": "Audio",
+      "typescript_form": "\"audio\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "encoded_video",
+      "label": "Encoded video",
+      "documentation": "Encoded video, one access unit per message, in one of the codecs the type states.",
+      "flows": [
+        "stream"
+      ],
+      "annotations": [
+        "meaning"
+      ],
+      "python_form": "EncodedVideo",
+      "typescript_form": "\"encoded_video\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "encoded_audio",
+      "label": "Encoded audio",
+      "documentation": "Encoded audio, one packet per message, in one of the codecs the type states.",
+      "flows": [
+        "stream"
+      ],
+      "annotations": [
+        "meaning"
+      ],
+      "python_form": "EncodedAudio",
+      "typescript_form": "\"encoded_audio\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "tensor",
+      "label": "Tensor",
+      "documentation": "An array of numbers with a shape.",
+      "flows": [
+        "stream",
+        "value"
+      ],
+      "annotations": [
+        "residency",
+        "meaning"
+      ],
+      "python_form": "Tensor",
+      "typescript_form": "\"tensor\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "asset",
+      "label": "Asset",
+      "documentation": "One of the project's assets, of the media the type states.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Asset",
+      "typescript_form": "\"asset\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/AssetPinValue"
+      }
+    },
+    {
+      "name": "trigger",
+      "label": "Trigger",
+      "documentation": "An event with no payload; its message's timestamp is the event.",
+      "flows": [
+        "trigger"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "Trigger",
+      "typescript_form": "\"trigger\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "list_of",
+      "label": "List",
+      "documentation": "A list of values of the one type it names.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning",
+        "control"
+      ],
+      "python_form": "list",
+      "typescript_form": "\"list_of\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/ListPinValue"
+      }
+    },
+    {
+      "name": "bundle",
+      "label": "Bundle",
+      "documentation": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type.",
+      "flows": [
+        "value",
+        "stream"
+      ],
+      "annotations": [
+        "meaning"
+      ],
+      "python_form": "dataclass",
+      "typescript_form": "\"bundle\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/BundlePinValue"
+      }
+    },
+    {
+      "name": "named",
+      "label": "Named type",
+      "documentation": "A type a module declares by its class, carried as the bytes that class packs.",
+      "flows": [
+        "stream",
+        "value"
+      ],
+      "annotations": [
+        "meaning"
+      ],
+      "python_form": "named_pin_type",
+      "typescript_form": "\"named\"",
+      "x-since": 3,
+      "x-stability": "experimental"
+    },
+    {
+      "name": "node_reference",
+      "label": "Node reference",
+      "documentation": "A setting naming another node of the graph. It never takes a wire.",
+      "flows": [
+        "value"
+      ],
+      "annotations": [],
+      "python_form": "NodeReference",
+      "typescript_form": "\"node_reference\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/NodeReferencePinValue"
+      }
+    },
+    {
+      "name": "pin_type_choice",
+      "label": "Pin type choice",
+      "documentation": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire.",
+      "flows": [
+        "value"
+      ],
+      "annotations": [],
+      "python_form": "PinTypeChoice",
+      "typescript_form": "\"pin_type_choice\"",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "value_json_schema": {
+        "$ref": "#/components/schemas/PinType"
+      }
+    }
+  ],
   "components": {
     "schemas": {
       "ProjectActionRefusalOnTheWire": {
@@ -10732,6 +11126,1218 @@
           "operation"
         ],
         "description": "`call_operation`'s params."
+      },
+      "BooleanPinValue": {
+        "type": "boolean",
+        "description": "A Boolean's stored value: a JSON boolean."
+      },
+      "IntegerPinValue": {
+        "type": "integer",
+        "format": "int64",
+        "description": "An Integer's stored value: a whole number, within its exact size when the type states one\nand exact to 2^53 when it states none."
+      },
+      "FloatPinValue": {
+        "type": "number",
+        "format": "double",
+        "description": "A Float's stored value: any JSON number; `1` is taken as 1.0."
+      },
+      "StringPinValue": {
+        "type": "string",
+        "description": "A String's stored value: any text; the empty string is a value."
+      },
+      "MenuPinValue": {
+        "type": "string",
+        "description": "A Menu's stored value: one of the type's option names, spelled as declared."
+      },
+      "ColorPinValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "red": {
+            "type": "number",
+            "format": "double"
+          },
+          "green": {
+            "type": "number",
+            "format": "double"
+          },
+          "blue": {
+            "type": "number",
+            "format": "double"
+          },
+          "alpha": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "red",
+          "green",
+          "blue",
+          "alpha"
+        ],
+        "description": "A Color's stored value: sRGB red, green and blue and alpha, each 0 for none and 1 for full,\nnot linear light and not multiplied by alpha. Alpha 1 is opaque. A number outside 0 to 1 is\ntaken as sent."
+      },
+      "VectorPinValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "double"
+          },
+          "y": {
+            "type": "number",
+            "format": "double"
+          },
+          "z": {
+            "type": "number",
+            "format": "double",
+            "description": "Present for three and four components."
+          },
+          "w": {
+            "type": "number",
+            "format": "double",
+            "description": "Present for four components."
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "description": "A Vector's stored value: `x` and `y`, with `z` for three components and `w` for four, and no\nother key. The type's declared size says which keys it holds."
+      },
+      "RectanglePinValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "double"
+          },
+          "y": {
+            "type": "number",
+            "format": "double"
+          },
+          "width": {
+            "type": "number",
+            "format": "double"
+          },
+          "height": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "required": [
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "description": "A Rectangle's stored value: its left edge `x`, its top edge `y`, and a `width` and `height`\nof 0 or more. The node says whether they are pixels or a share of the frame."
+      },
+      "TransformPinValue": {
+        "type": "array",
+        "items": {
+          "type": "number",
+          "format": "double"
+        },
+        "minItems": 16,
+        "maxItems": 16,
+        "description": "A Transform's stored value: a 4 by 4 matrix as 16 numbers, row by row. It multiplies a\ncolumn, so the fourth number of each of the first three rows is the translation."
+      },
+      "AssetPinValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "asset": {
+            "type": "string",
+            "description": "The asset's UUID.",
+            "format": "uuid"
+          },
+          "from": {
+            "type": "string",
+            "description": "The UUID of the imported project that holds the asset; absent, the project's own.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "asset"
+        ],
+        "description": "An Asset's stored value: the asset's UUID as `list_assets` answers it, with `from`, the\nimport's project UUID, for an asset of an import. Never a bare string."
+      },
+      "ListPinValue": {
+        "type": "array",
+        "items": true,
+        "description": "A List's stored value: a list of its element's form, in order. `[]` is a value."
+      },
+      "BundlePinValue": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "A bundle's stored value: an object keyed by member name, each member in its own type's form.\nOnly a member that declares a default may be left out."
+      },
+      "NodeReferencePinValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The node's name."
+          }
+        },
+        "required": [
+          "node"
+        ],
+        "description": "A node reference's stored value: the referenced node's name."
+      },
+      "PinType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "True or false."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exact_size": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IntegerSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The size the number must fit; absent, any whole number exact to 2^53."
+              },
+              "type": {
+                "type": "string",
+                "const": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A whole number."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exact_size": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FloatSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The size the number is held in; absent, a 64-bit float."
+              },
+              "type": {
+                "type": "string",
+                "const": "float"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A number."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "Text."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "option_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The options, spelled as declared."
+              },
+              "type": {
+                "type": "string",
+                "const": "menu"
+              }
+            },
+            "required": [
+              "type",
+              "option_names"
+            ],
+            "description": "One of a fixed list of option names."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "color"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "An sRGB colour with alpha."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "component_count": {
+                "$ref": "#/components/schemas/VectorComponentCount",
+                "description": "How many numbers it holds."
+              },
+              "type": {
+                "type": "string",
+                "const": "vector"
+              }
+            },
+            "required": [
+              "type",
+              "component_count"
+            ],
+            "description": "Two, three or four numbers."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "rectangle"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "A rectangle by its left and top edges, width and height."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "transform"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "A 4 by 4 matrix."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pixel_formats": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TexturePixelFormat"
+                },
+                "description": "The formats it may hold; on an input, empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "texture"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A GPU picture."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "audio"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "A stream of audio samples."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "codecs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The codecs it may hold; empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "encoded_video"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Encoded video, one access unit per message."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "codecs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The codecs it may hold; empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "encoded_audio"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Encoded audio, one packet per message."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "tensor"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "An array of numbers with a shape."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "media": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProjectAssetMedia"
+                },
+                "description": "The media the asset must hold one of; empty takes any asset."
+              },
+              "type": {
+                "type": "string",
+                "const": "asset"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "One of the project's assets."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "trigger"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "An event with no payload."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "element_type": {
+                "$ref": "#/components/schemas/PinType",
+                "description": "The type of each element."
+              },
+              "type": {
+                "type": "string",
+                "const": "list_of"
+              }
+            },
+            "required": [
+              "type",
+              "element_type"
+            ],
+            "description": "A list of values of one type."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BundleMember"
+                },
+                "description": "The members, in declared order."
+              },
+              "type": {
+                "type": "string",
+                "const": "bundle"
+              }
+            },
+            "required": [
+              "type",
+              "members"
+            ],
+            "description": "Named members, each of its own type, carried as one."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "named_pin_type": {
+                "$ref": "#/components/schemas/NamedPinTypeImportPath",
+                "description": "The class that declares it."
+              },
+              "type": {
+                "type": "string",
+                "const": "named"
+              }
+            },
+            "required": [
+              "type",
+              "named_pin_type"
+            ],
+            "description": "A type a module declares by its class."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "referenced_node_type": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The node type the referenced node must be; absent, any node."
+              },
+              "one_referrer_per_referenced_node": {
+                "type": "boolean",
+                "description": "Whether one node at most may name a given node through this setting.",
+                "default": false
+              },
+              "type": {
+                "type": "string",
+                "const": "node_reference"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A setting naming another node of the graph. It never takes a wire."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "among": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PinType"
+                },
+                "description": "The types it may choose; empty chooses any."
+              },
+              "type": {
+                "type": "string",
+                "const": "pin_type_choice"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes\na wire."
+          }
+        ],
+        "description": "What a port carries, as an author, a person and a client name it.\n\nThe set is closed: a named type and a bundle are how a project adds its own."
+      },
+      "IntegerSize": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "int8",
+            "description": "A signed 8-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int16",
+            "description": "A signed 16-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int32",
+            "description": "A signed 32-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int64",
+            "description": "A signed 64-bit integer, as a Tensor or List element only."
+          },
+          {
+            "type": "string",
+            "const": "uint8",
+            "description": "An unsigned 8-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint16",
+            "description": "An unsigned 16-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint32",
+            "description": "An unsigned 32-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint64",
+            "description": "An unsigned 64-bit integer, as a Tensor or List element only."
+          }
+        ],
+        "description": "The size an Integer must fit."
+      },
+      "FloatSize": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "float32",
+            "description": "A 32-bit float."
+          },
+          {
+            "type": "string",
+            "const": "float64",
+            "description": "A 64-bit float."
+          }
+        ],
+        "description": "The size a Float is held in."
+      },
+      "VectorComponentCount": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "two",
+            "description": "`x` and `y`."
+          },
+          {
+            "type": "string",
+            "const": "three",
+            "description": "`x`, `y` and `z`."
+          },
+          {
+            "type": "string",
+            "const": "four",
+            "description": "`x`, `y`, `z` and `w`."
+          }
+        ],
+        "description": "How many numbers a Vector holds."
+      },
+      "TexturePixelFormat": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "rgba8_unorm",
+            "description": "Four 8-bit channels, red first, read as 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "rgba8_unorm_srgb",
+            "description": "Four 8-bit channels, red first, sRGB-encoded."
+          },
+          {
+            "type": "string",
+            "const": "bgra8_unorm",
+            "description": "Four 8-bit channels, blue first, read as 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "bgra8_unorm_srgb",
+            "description": "Four 8-bit channels, blue first, sRGB-encoded."
+          },
+          {
+            "type": "string",
+            "const": "rgba16_float",
+            "description": "Four 16-bit float channels."
+          },
+          {
+            "type": "string",
+            "const": "rgba32_float",
+            "description": "Four 32-bit float channels."
+          },
+          {
+            "type": "string",
+            "const": "nv12",
+            "description": "8-bit luma, then interleaved half-size chroma."
+          }
+        ],
+        "description": "A texture format, spelled as the escalate wire spells it."
+      },
+      "ProjectAssetMedia": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "image",
+            "description": "A still picture."
+          },
+          {
+            "type": "string",
+            "const": "video",
+            "description": "Moving pictures."
+          },
+          {
+            "type": "string",
+            "const": "audio",
+            "description": "Sound."
+          },
+          {
+            "type": "string",
+            "const": "lut",
+            "description": "A colour lookup table."
+          },
+          {
+            "type": "string",
+            "const": "scene",
+            "description": "A 3D scene."
+          },
+          {
+            "type": "string",
+            "const": "stream",
+            "description": "A stream's graph document, matched against the asset's kind."
+          }
+        ],
+        "description": "What an asset holds, as its media facts or its kind name it."
+      },
+      "BundleMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The member's name, a key of the bundle's stored value."
+          },
+          "member_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The member's type."
+          },
+          "meaning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the member's value stands for, such as `frequency`."
+          },
+          "default_value": {
+            "description": "The value a stored bundle that leaves the member out reads; absent, the member must be\npresent."
+          }
+        },
+        "required": [
+          "name",
+          "member_type"
+        ],
+        "description": "One member of a bundle."
+      },
+      "NamedPinTypeImportPath": {
+        "type": "string",
+        "description": "The class that declares a named pin type, `module:QualifiedClassName`."
+      },
+      "PinDeclaration": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "pin_type": {
+            "$ref": "#/components/schemas/DeclaredPinType",
+            "description": "The type it carries, or how that type is found."
+          },
+          "flow": {
+            "$ref": "#/components/schemas/PinFlow",
+            "description": "How its messages are read."
+          },
+          "annotations": {
+            "$ref": "#/components/schemas/PinAnnotations",
+            "description": "What it states besides its type, none of which decides a link."
+          },
+          "former_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names the port had before, each of which still finds it."
+          },
+          "may_be_unset": {
+            "type": "boolean",
+            "description": "Whether an input may hold no value and read as nothing."
+          }
+        },
+        "required": [
+          "pin_type",
+          "flow"
+        ],
+        "description": "What a port declares about what it carries."
+      },
+      "DeclaredPinType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pin_type": {
+                "$ref": "#/components/schemas/PinType",
+                "description": "The type."
+              },
+              "kind": {
+                "type": "string",
+                "const": "is"
+              }
+            },
+            "required": [
+              "kind",
+              "pin_type"
+            ],
+            "description": "Exactly this type."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pin_types": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PinType"
+                },
+                "description": "The types it takes."
+              },
+              "kind": {
+                "type": "string",
+                "const": "one_of"
+              }
+            },
+            "required": [
+              "kind",
+              "pin_types"
+            ],
+            "description": "Any one of these types."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "any"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false,
+            "description": "Every type. An input only."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input_port_name": {
+                "type": "string",
+                "description": "The input whose type it takes."
+              },
+              "kind": {
+                "type": "string",
+                "const": "same_as_input"
+              }
+            },
+            "required": [
+              "kind",
+              "input_port_name"
+            ],
+            "description": "The type of the named input's link."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "input_name": {
+                "type": "string",
+                "description": "The input that chooses its type."
+              },
+              "kind": {
+                "type": "string",
+                "const": "set_by_input"
+              }
+            },
+            "required": [
+              "kind",
+              "input_name"
+            ],
+            "description": "The type the named pin type choice input holds."
+          }
+        ],
+        "description": "The pin type a port declares, or how it is found."
+      },
+      "PinFlow": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "value",
+            "description": "The newest message is read until a newer one arrives."
+          },
+          {
+            "type": "string",
+            "const": "stream",
+            "description": "Each message is read as it arrives."
+          },
+          {
+            "type": "string",
+            "const": "trigger",
+            "description": "Each message is an event, read in order."
+          }
+        ],
+        "description": "How a pin's messages are read."
+      },
+      "PinAnnotations": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinNumberRange"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The lowest and highest number it holds."
+          },
+          "step": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The step a control moves a number by."
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The unit a number is in, such as `Hz`."
+          },
+          "meaning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What its value stands for, such as `frequency`."
+          },
+          "control": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The control that edits or shows it: one of the Studio's, or a module's qualified name."
+          },
+          "frame_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinFrameRateAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The frame rate a Texture output's stream has."
+          },
+          "sample_rate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinSampleRateAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample rate an Audio output's stream has."
+          },
+          "sample_type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinAudioSampleType"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The sample type an Audio output's stream has."
+          },
+          "residency": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinTensorResidency"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where a Tensor output's values live."
+          }
+        },
+        "description": "What a pin states besides its type. None of it decides a link."
+      },
+      "PinNumberRange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "minimum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The lowest; absent, no lower bound."
+          },
+          "maximum": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The highest; absent, no upper bound."
+          }
+        },
+        "description": "The lowest and highest number a pin holds; either may be left open."
+      },
+      "PinFrameRateAnnotation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "stated": {
+                "type": "object",
+                "properties": {
+                  "numerator": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "denominator": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "numerator",
+                  "denominator"
+                ]
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false,
+            "description": "Frames per second, as a rational number."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "from_setting": {
+                "type": "object",
+                "properties": {
+                  "setting": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "setting"
+                ]
+              }
+            },
+            "required": [
+              "from_setting"
+            ],
+            "additionalProperties": false,
+            "description": "The value of the node's input of this name."
+          }
+        ],
+        "description": "The frame rate a Texture output states, or the setting it follows."
+      },
+      "PinSampleRateAnnotation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "stated": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "stated"
+            ],
+            "additionalProperties": false,
+            "description": "Samples per second."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "from_setting": {
+                "type": "object",
+                "properties": {
+                  "setting": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "setting"
+                ]
+              }
+            },
+            "required": [
+              "from_setting"
+            ],
+            "additionalProperties": false,
+            "description": "The value of the node's input of this name."
+          }
+        ],
+        "description": "The sample rate an Audio output states, or the setting it follows."
+      },
+      "PinAudioSampleType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "f32",
+            "description": "32-bit float samples."
+          },
+          {
+            "type": "string",
+            "const": "f64",
+            "description": "64-bit float samples."
+          }
+        ],
+        "description": "The type of each sample of an Audio stream."
+      },
+      "PinTensorResidency": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "gpu",
+            "description": "In GPU memory."
+          },
+          {
+            "type": "string",
+            "const": "cpu",
+            "description": "In CPU memory."
+          }
+        ],
+        "description": "Where a Tensor's values live."
+      },
+      "NodeInputMode": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "wire_or_value"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false,
+            "description": "A link or a stored value, read each run."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "const": "wire_only"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "additionalProperties": false,
+            "description": "A link only, read each run."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "read": {
+                "$ref": "#/components/schemas/SettingReadTime",
+                "description": "When the node reads it.",
+                "default": "at_setup"
+              },
+              "mode": {
+                "type": "string",
+                "const": "setting_only"
+              }
+            },
+            "required": [
+              "mode"
+            ],
+            "description": "A stored value only, never a link."
+          }
+        ],
+        "description": "Whether an input takes a wire, a stored value, or both."
+      },
+      "SettingReadTime": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "at_setup",
+            "description": "Once, when the node is set up; a change rebuilds the node."
+          },
+          {
+            "type": "string",
+            "const": "each_run",
+            "description": "Each run, with no rebuild. Runtime-owned nodes only."
+          }
+        ],
+        "description": "When a node reads a setting-only input."
       }
     }
   }

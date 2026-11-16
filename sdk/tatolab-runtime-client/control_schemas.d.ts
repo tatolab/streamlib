@@ -189,6 +189,38 @@ export interface ControlSchemasOfTheContract {
     readonly ControlOperationStability: z.ZodType<ControlContract.ControlOperationStability>;
     readonly ControlOperationEffect: z.ZodType<ControlContract.ControlOperationEffect>;
     readonly CallOperationRequest: z.ZodType<ControlContract.CallOperationRequest>;
+    readonly BooleanPinValue: z.ZodType<ControlContract.BooleanPinValue>;
+    readonly IntegerPinValue: z.ZodType<ControlContract.IntegerPinValue>;
+    readonly FloatPinValue: z.ZodType<ControlContract.FloatPinValue>;
+    readonly StringPinValue: z.ZodType<ControlContract.StringPinValue>;
+    readonly MenuPinValue: z.ZodType<ControlContract.MenuPinValue>;
+    readonly ColorPinValue: z.ZodType<ControlContract.ColorPinValue>;
+    readonly VectorPinValue: z.ZodType<ControlContract.VectorPinValue>;
+    readonly RectanglePinValue: z.ZodType<ControlContract.RectanglePinValue>;
+    readonly TransformPinValue: z.ZodType<ControlContract.TransformPinValue>;
+    readonly AssetPinValue: z.ZodType<ControlContract.AssetPinValue>;
+    readonly ListPinValue: z.ZodType<ControlContract.ListPinValue>;
+    readonly BundlePinValue: z.ZodType<ControlContract.BundlePinValue>;
+    readonly NodeReferencePinValue: z.ZodType<ControlContract.NodeReferencePinValue>;
+    readonly PinType: z.ZodType<ControlContract.PinType>;
+    readonly IntegerSize: z.ZodType<ControlContract.IntegerSize>;
+    readonly FloatSize: z.ZodType<ControlContract.FloatSize>;
+    readonly VectorComponentCount: z.ZodType<ControlContract.VectorComponentCount>;
+    readonly TexturePixelFormat: z.ZodType<ControlContract.TexturePixelFormat>;
+    readonly ProjectAssetMedia: z.ZodType<ControlContract.ProjectAssetMedia>;
+    readonly BundleMember: z.ZodType<ControlContract.BundleMember>;
+    readonly NamedPinTypeImportPath: z.ZodType<ControlContract.NamedPinTypeImportPath>;
+    readonly PinDeclaration: z.ZodType<ControlContract.PinDeclaration>;
+    readonly DeclaredPinType: z.ZodType<ControlContract.DeclaredPinType>;
+    readonly PinFlow: z.ZodType<ControlContract.PinFlow>;
+    readonly PinAnnotations: z.ZodType<ControlContract.PinAnnotations>;
+    readonly PinNumberRange: z.ZodType<ControlContract.PinNumberRange>;
+    readonly PinFrameRateAnnotation: z.ZodType<ControlContract.PinFrameRateAnnotation>;
+    readonly PinSampleRateAnnotation: z.ZodType<ControlContract.PinSampleRateAnnotation>;
+    readonly PinAudioSampleType: z.ZodType<ControlContract.PinAudioSampleType>;
+    readonly PinTensorResidency: z.ZodType<ControlContract.PinTensorResidency>;
+    readonly NodeInputMode: z.ZodType<ControlContract.NodeInputMode>;
+    readonly SettingReadTime: z.ZodType<ControlContract.SettingReadTime>;
   };
   readonly operations: {
     readonly [Method in ControlContract.ControlOperationMethodName]: {
