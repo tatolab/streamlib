@@ -18,6 +18,7 @@ EXEMPT_PREFIXES = (
     "ast-grep-rules/",
     "vendor/",
     "scripts/check_ast_grep_suppressions.py",
+    "scripts/test_check_ast_grep_suppressions.py",
 )
 SUPPRESSION_COMMENT = re.compile(
     r"(?://|#|/\*)[^\w\n]*ast-grep-ignore(?P<rules>:[^\n]*)?"
