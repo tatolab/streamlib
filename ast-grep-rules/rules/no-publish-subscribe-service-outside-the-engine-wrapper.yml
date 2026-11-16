@@ -1,0 +1,32 @@
+id: no-publish-subscribe-service-outside-the-engine-wrapper
+language: rust
+severity: error
+message: A publish-subscribe service built here lacks the sequence-number user header every channel data service carries; open the channel through `Iceoryx2Node::open_or_create_service` and take its ports from the returned service.
+note: >-
+  A channel data service built outside
+  runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs and
+  runtime/streamlib-engine/src/iceoryx2/node/ either fails to open against the
+  engine's channels or carries samples no destination can count the loss of.
+  The rule matches the `publish_subscribe` identifier, the one token no spelling
+  of the call can split. Naming iceoryx2's sample header type through
+  `header::publish_subscribe` accounts for bytes rather than building a service,
+  and is allowed. Test modules, test files and benches are checked too, and the
+  rule takes no ast-grep-ignore.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+ignores:
+  - runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs
+  - runtime/streamlib-engine/src/iceoryx2/node/**
+rule:
+  any:
+    - kind: identifier
+    - kind: field_identifier
+  regex: '^publish_subscribe$'
+  not:
+    inside:
+      kind: scoped_identifier
+      has:
+        field: path
+        regex: '(^|::)header$'

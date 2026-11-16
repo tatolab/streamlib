@@ -1,0 +1,146 @@
+id: no-inheritable-descriptor
+language: rust
+severity: error
+message: This descriptor is inherited by every process this one spawns, so a grandchild can hold it open past this process's exit; create it close-on-exec.
+note: >-
+  Set close-on-exec where the descriptor is born, never afterwards with fcntl: a
+  spawn on another thread can land between the two calls. `libc::dup` becomes
+  `libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0)`; `libc::pipe` becomes
+  `libc::pipe2(fds, libc::O_CLOEXEC)`, or `std::io::pipe()` where the code also
+  builds on Darwin; `libc::epoll_create` becomes
+  `libc::epoll_create1(libc::EPOLL_CLOEXEC)`; `pipe2`, `epoll_create1`,
+  `timerfd_create`, `eventfd` and `recvmsg` carry `O_CLOEXEC`, `EPOLL_CLOEXEC`,
+  `TFD_CLOEXEC`, `EFD_CLOEXEC` and `MSG_CMSG_CLOEXEC`. Test code is checked too,
+  and the rule takes no ast-grep-ignore: a test that means a child to inherit a
+  descriptor clears the flag on it by name.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: '(^|::)libc::(dup|pipe|epoll_create)$'
+    - kind: identifier
+      regex: '^(dup|pipe|epoll_create)$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)libc::pipe2$'
+        - not:
+            has:
+              field: arguments
+              regex: '\bO_CLOEXEC\b'
+    - kind: identifier
+      regex: '^pipe2$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+        not:
+          regex: '\bO_CLOEXEC\b'
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)libc::epoll_create1$'
+        - not:
+            has:
+              field: arguments
+              regex: '\bEPOLL_CLOEXEC\b'
+    - kind: identifier
+      regex: '^epoll_create1$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+        not:
+          regex: '\bEPOLL_CLOEXEC\b'
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)libc::timerfd_create$'
+        - not:
+            has:
+              field: arguments
+              regex: '\bTFD_CLOEXEC\b'
+    - kind: identifier
+      regex: '^timerfd_create$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+        not:
+          regex: '\bTFD_CLOEXEC\b'
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)libc::eventfd$'
+        - not:
+            has:
+              field: arguments
+              regex: '\bEFD_CLOEXEC\b'
+    - kind: identifier
+      regex: '^eventfd$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+        not:
+          regex: '\bEFD_CLOEXEC\b'
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)libc::recvmsg$'
+        - not:
+            has:
+              field: arguments
+              regex: '\bMSG_CMSG_CLOEXEC\b'
+    - kind: identifier
+      regex: '^recvmsg$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^libc$'
+      precedes:
+        kind: token_tree
+        not:
+          regex: '\bMSG_CMSG_CLOEXEC\b'

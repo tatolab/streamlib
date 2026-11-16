@@ -1,0 +1,39 @@
+id: no-iceoryx2-node-outside-the-engine-owned-domain
+language: rust
+severity: error
+message: An iceoryx2 node built outside `create_iceoryx2_node_in_domain` lands outside the engine-owned domain; use `create_iceoryx2_node_in_engine_owned_domain` or `Iceoryx2Node::new` (in a test, `Iceoryx2Node::for_this_test_process`).
+note: >-
+  A node built any other way reads iceoryx2's ambient configuration and lands in
+  a different domain from every engine-owned node, where no data flows and
+  nothing errors, so a partial migration hangs tests silently. The one node
+  constructor is `create_iceoryx2_node_in_domain` in
+  runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs. Test modules,
+  test files and benches are checked too, and the rule takes no ast-grep-ignore.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: '(^|::)NodeBuilder::new$'
+    - kind: identifier
+      regex: '^new$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^NodeBuilder$'
+      precedes:
+        kind: token_tree
+  not:
+    inside:
+      stopBy: end
+      kind: function_item
+      has:
+        field: name
+        regex: '^create_iceoryx2_node_in_domain$'
