@@ -55,7 +55,8 @@ pub(crate) struct RuntimeLogsVerbArguments {
     /// Follow as new records land (like `tail -F`), by the cursor each page answers.
     #[arg(short = 'f', long = "follow")]
     pub(crate) follow_appended_records: bool,
-    #[arg(long = "node", value_name = "ID")]
+    /// Only records from the node with this run id, the `node_run_id` a log record carries.
+    #[arg(long = "node-run-id", value_name = "ID")]
     pub(crate) node_run_id: Option<String>,
     /// Only records from this pipeline id.
     #[arg(long = "pipeline", value_name = "ID")]

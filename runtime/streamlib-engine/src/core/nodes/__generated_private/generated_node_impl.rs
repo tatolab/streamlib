@@ -114,7 +114,7 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     /// Each stateful function node its far side calls, whose state its board
     /// carries.
     stateful_function_nodes_its_far_side_calls: Vec<StatefulFunctionNodeItsFarSideCalls>,
-    runs_a_function_node_as_its_node: bool,
+    runs_a_function_node_as_a_standalone_node: bool,
     /// Where each function node its islands call is told how its far side ran
     /// it, by the node's id.
     how_its_far_side_ran_each_function_node:
@@ -421,7 +421,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     config_fields_its_node_exposes_as_inputs: Vec::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
-                    runs_a_function_node_as_its_node: false,
+                    runs_a_function_node_as_a_standalone_node: false,
                     how_its_far_side_ran_each_function_node: std::collections::HashMap::new(),
                     answer_cells_of_links_handed_over_past_the_setup_command: Vec::new(),
                     how_a_link_reaches_the_far_side:
@@ -766,7 +766,7 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    pub(crate) fn number_the_function_node_its_far_side_runs_as_its_node(
+    pub(crate) fn number_the_function_node_its_far_side_runs_as_a_standalone_node(
         &self,
         function_node_id: &str,
         function_node_name: &str,
@@ -779,10 +779,10 @@ impl OutOfProcessLinkWiringEnvelope {
         let breadcrumb_number =
             recorded.the_breadcrumb_number_of_a_function_node(function_node_id, function_node_name);
         recorded.note_a_stateful_function_node(breadcrumb_number, function_node_uuid, state_fields);
-        recorded.runs_a_function_node_as_its_node = true;
+        recorded.runs_a_function_node_as_a_standalone_node = true;
         debug_assert_eq!(
             breadcrumb_number,
-            crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE
+            crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE
         );
     }
 
@@ -1001,7 +1001,8 @@ impl OutOfProcessLinkWiringEnvelope {
                  island; it keeps evaluating it until it restarts"
             );
         }
-        let runs_a_function_node_as_its_node = recorded.runs_a_function_node_as_its_node;
+        let runs_a_function_node_as_a_standalone_node =
+            recorded.runs_a_function_node_as_a_standalone_node;
         let breadcrumb_numbers_still_carried: std::collections::HashSet<u64> = recorded
             .function_node_islands_feeding_its_input_ports
             .iter()
@@ -1012,9 +1013,9 @@ impl OutOfProcessLinkWiringEnvelope {
         recorded
             .stateful_function_nodes_its_far_side_calls
             .retain(|stateful| {
-                (runs_a_function_node_as_its_node
+                (runs_a_function_node_as_a_standalone_node
                     && stateful.breadcrumb_number
-                        == crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE)
+                        == crate::iceoryx2::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE)
                     || breadcrumb_numbers_still_carried
                         .contains(&u64::from(stateful.breadcrumb_number))
             });
@@ -1635,7 +1636,7 @@ mod tests {
 
         let promoted =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        promoted.number_the_function_node_its_far_side_runs_as_its_node(
+        promoted.number_the_function_node_its_far_side_runs_as_a_standalone_node(
             "P-lfo",
             "lfo",
             the_lfo_uuid(),
@@ -1684,7 +1685,7 @@ mod tests {
         reader.forget_a_function_node_island("L-island");
         let promoted =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        promoted.number_the_function_node_its_far_side_runs_as_its_node(
+        promoted.number_the_function_node_its_far_side_runs_as_a_standalone_node(
             "P-lfo",
             "lfo",
             the_lfo_uuid(),

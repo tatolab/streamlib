@@ -120,7 +120,7 @@ from tatolab.runtime._engine import (
     engine_build_id_compiled_into_this_extension,
     open_node_link_data_access_for_helper_process,
 )
-from tatolab.runtime._function_node_run_as_its_helpers_node import (
+from tatolab.runtime._function_node_run_as_a_standalone_node import (
     the_node_class_a_promoted_function_node_runs_as,
 )
 

@@ -9,6 +9,7 @@ use std::borrow::Cow;
 
 use crate::ThreadPriority;
 
+/// Runtime language for a node.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeLanguage {
@@ -49,6 +50,7 @@ impl JsonSchema for NodeLanguage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOptions {
+    /// [Rust] Generate unsafe Send impl for !Send nodes (AVFoundation, etc.)
     #[serde(default)]
     pub unsafe_send: bool,
     /// [Python] Required Python version spec (e.g., ">=3.12"). Python runtime only.
@@ -83,6 +85,7 @@ pub struct RuntimeConfigFull {
     pub env: std::collections::HashMap<String, String>,
 }
 
+/// Runtime configuration for a node.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeConfig {
     /// Language runtime (rust, python, typescript). Defaults to rust.
@@ -168,6 +171,12 @@ impl JsonSchema for RuntimeConfig {
     }
 }
 
+/// Execution mode for a node (YAML parsing version).
+///
+/// Supports flexible YAML formats:
+/// - Simple string: `execution: reactive` or `execution: manual`
+/// - Object for continuous with interval: `execution: { type: continuous, interval_ms: 10 }`
+/// - Object for continuous default interval: `execution: continuous` (interval_ms defaults to 0)
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum NodeSchemaExecution {
     /// Reactive: process() is called when input arrives.
@@ -361,6 +370,7 @@ pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
 
 pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] = ["newest", "ordered"];
 
+/// A port definition within a node schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodePortSchema {
@@ -391,6 +401,7 @@ pub struct NodePortSchema {
     pub family: crate::PortFamilyDeclaration,
 }
 
+/// Config definition within a node schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfigSchema {
@@ -401,6 +412,7 @@ pub struct NodeConfigSchema {
     pub schema: String,
 }
 
+/// A state field definition within a node schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeStateField {
@@ -414,6 +426,13 @@ pub struct NodeStateField {
     pub default: Option<String>,
 }
 
+/// Declarative scheduling intent for a node — replaces the substring-
+/// matching heuristic that picked priority by node short name.
+///
+/// Optional; omission means [`ThreadPriority::Normal`]. Authors do not name
+/// node threads: the compiler leaves the OS thread name unset, because
+/// Linux truncates it at 15 characters and the node id in the log lines
+/// identifies the instance without it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeScheduling {
@@ -422,6 +441,9 @@ pub struct NodeScheduling {
     pub priority: ThreadPriority,
 }
 
+/// A complete node schema definition — the manifest-shaped view of one
+/// node, derived from its `#[node(...)]` attribute (the source of
+/// truth) by the source-scan extractor.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NodeSchema {
@@ -435,6 +457,7 @@ pub struct NodeSchema {
     #[serde(default)]
     pub runtime: RuntimeConfig,
 
+    /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurNode").
     #[serde(default)]
     pub entrypoint: Option<String>,
 
@@ -446,6 +469,7 @@ pub struct NodeSchema {
     #[serde(default)]
     pub scheduling: Option<NodeScheduling>,
 
+    /// Whether the node paces itself on real time, as a live device does.
     #[serde(default)]
     pub paced_by_real_time: bool,
 
@@ -453,6 +477,7 @@ pub struct NodeSchema {
     #[serde(default)]
     pub config: Option<NodeConfigSchema>,
 
+    /// State fields (internal node state, Default-initialized).
     #[serde(default)]
     pub state: Vec<NodeStateField>,
 

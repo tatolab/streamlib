@@ -357,7 +357,7 @@ impl LoadedStreamInThisRuntime {
         let (teardown_outcome, nodes_of_the_graph, links_of_the_graph) =
             self.stop_holding_the_start_or_stop_lock();
 
-        let mut node_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
+        let mut node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
             HashMap::with_capacity(nodes_of_the_graph.len());
         for node in nodes_of_the_graph {
             let spec = NodeSpec::new(node.node_type, node.config)
@@ -366,10 +366,10 @@ impl LoadedStreamInThisRuntime {
                 .with_exposed_config_fields(node.exposed_config_fields)
                 .with_node_uuid(node.node_uuid);
             let put_back = self.add_node_of_a_validated_graph_load(spec)?;
-            node_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);
+            node_run_id_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);
         }
         let node_of = |node_uuid: &Uuid| -> Result<NodeRunId> {
-            node_of_each_node_uuid
+            node_run_id_of_each_node_uuid
                 .get(node_uuid)
                 .cloned()
                 .ok_or_else(|| {

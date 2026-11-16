@@ -35,7 +35,7 @@ from tatolab.stream import (
 from tatolab.stream._node_declaration import NODE_DECLARATION_CONFIG_CLASS_STAMP
 
 from tatolab.runtime._engine import (
-    FunctionNodeEvaluatedAsItsHelpersNode,
+    FunctionNodeEvaluatedAsAStandaloneNode,
     hand_an_unread_message_on,
     read_the_control_value_at_an_input_port,
     read_the_message_at_an_input_port_unread,
@@ -67,8 +67,8 @@ def the_node_class_a_promoted_function_node_runs_as(
     ports_named_like_a_runner_member = sorted(
         port
         for port in (*prepared.input_ports, *prepared.output_ports)
-        if port in vars(_FunctionNodeRunAsItsHelpersNode)
-        or port in _FunctionNodeRunAsItsHelpersNode.__annotations__
+        if port in vars(_FunctionNodeRunAsAStandaloneNode)
+        or port in _FunctionNodeRunAsAStandaloneNode.__annotations__
     )
     ports_carrying_an_unread_message = _ports_carrying_an_unread_message(prepared)
     if ports_named_like_a_runner_member:
@@ -98,8 +98,8 @@ def the_node_class_a_promoted_function_node_runs_as(
     class_attributes["__doc__"] = f"Function node `{node_id}` ({import_path}), run in its own helper."
     class_attributes["__module__"] = __name__
     runner_class = type(
-        f"FunctionNodeRunAsItsHelpersNode_{function_node.__name__}",
-        (_FunctionNodeRunAsItsHelpersNode,),
+        f"FunctionNodeRunAsAStandaloneNode_{function_node.__name__}",
+        (_FunctionNodeRunAsAStandaloneNode,),
         class_attributes,
     )
     runner_class._prepared = prepared
@@ -107,17 +107,17 @@ def the_node_class_a_promoted_function_node_runs_as(
     runner_class._link_data_access = link_data_access
     declared = node.process(execution="continuous")(runner_class)
     setattr(declared, NODE_DECLARATION_CONFIG_CLASS_STAMP, config_class)
-    declared.__init__ = _FunctionNodeRunAsItsHelpersNode.start_from_its_config
+    declared.__init__ = _FunctionNodeRunAsAStandaloneNode.start_from_its_config
     return declared
 
 
-def ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(
+def ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(
     node_class: Any,
 ) -> "dict[str, bool]":
     """`{node_id: ran_compiled}` for the function node `node_class` runs once promoted; empty for any other class."""
     if not (
         isinstance(node_class, type)
-        and issubclass(node_class, _FunctionNodeRunAsItsHelpersNode)
+        and issubclass(node_class, _FunctionNodeRunAsAStandaloneNode)
     ):
         return {}
     return {
@@ -127,7 +127,7 @@ def ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(
     }
 
 
-class _FunctionNodeRunAsItsHelpersNode:
+class _FunctionNodeRunAsAStandaloneNode:
     """Calls one function node with the newest value on each input and writes its outputs."""
 
     _prepared: FunctionNodeReadyToEvaluate
@@ -137,7 +137,7 @@ class _FunctionNodeRunAsItsHelpersNode:
     _compiled_config_values_handed_to_each_call: "list[float]"
     _body_run_as_python: Optional[FunctionNodeBodyRunAsPython]
     _control_values_written: int
-    _evaluation: FunctionNodeEvaluatedAsItsHelpersNode
+    _evaluation: FunctionNodeEvaluatedAsAStandaloneNode
 
     def start_from_its_config(self, config: Any = None) -> None:
         """Take the node's config and start its state from its initial record; set as `__init__` once declared."""
@@ -154,7 +154,7 @@ class _FunctionNodeRunAsItsHelpersNode:
         self._body_run_as_python = (
             called_through if isinstance(called_through, FunctionNodeBodyRunAsPython) else None
         )
-        self._evaluation = FunctionNodeEvaluatedAsItsHelpersNode(
+        self._evaluation = FunctionNodeEvaluatedAsAStandaloneNode(
             link_data_access=self._link_data_access,
             node_id=self._node_id,
             called_through=called_through,

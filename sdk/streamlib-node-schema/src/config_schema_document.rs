@@ -62,6 +62,8 @@ pub trait NodeConfigKeyDescription {
     const DESCRIPTION: &'static str;
 }
 
+/// The schema `#[node_config]` gives a described key in place of its
+/// type's: `T`'s, carrying the description `D` declares.
 pub struct NodeConfigKeyDescribedBy<T: ?Sized, D>(PhantomData<D>, PhantomData<Box<T>>);
 
 impl<T: JsonSchema + ?Sized, D: NodeConfigKeyDescription> JsonSchema

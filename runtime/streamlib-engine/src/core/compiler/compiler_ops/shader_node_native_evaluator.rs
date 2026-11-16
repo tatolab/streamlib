@@ -62,7 +62,7 @@ struct ImageInputResolvedForOneEvaluation {
     _claim_against_producer_reuse: SurfaceClaimedAgainstProducerReuse,
 }
 
-pub(crate) struct ShaderNodeNativeEvaluatorNode {
+pub(crate) struct ShaderNodeNativeEvaluator {
     node_name: String,
     descriptor: NodeDescriptor,
     island: ShaderNodeIslandProgram,
@@ -77,7 +77,7 @@ pub(crate) struct ShaderNodeNativeEvaluatorNode {
     refusal_last_logged: Option<String>,
 }
 
-impl ShaderNodeNativeEvaluatorNode {
+impl ShaderNodeNativeEvaluator {
     /// The evaluator of the island shader node `node` hosts, or of `node`
     /// alone running `program` when it hosts none; each float input starts at
     /// its pin value, else its declared default, else zero.
@@ -619,7 +619,7 @@ fn last_sample_of_the_first_channel(
     }
 }
 
-impl DynGeneratedNode for ShaderNodeNativeEvaluatorNode {
+impl DynGeneratedNode for ShaderNodeNativeEvaluator {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.output_pixel_buffer_pool = Some(
             ctx.gpu_full_access()

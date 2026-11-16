@@ -8,6 +8,25 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{SchemaError, SchemaResult};
 
+/// The fully-qualified import path of the class a node is —
+/// `my_app.filters:BlurNode` from Python, `my_app::filters::BlurNode`
+/// from Rust.
+///
+/// Two spellings of one concept, discriminated by the descriptor's sibling
+/// `runtime` field and by nothing in the string itself. Stored verbatim and
+/// never parsed — splitting on `:` or `::` to recover a short name re-invents
+/// the identity grammar this type replaced.
+///
+/// Every inhabitant is valid: the inner string is private, [`Self::new`] and
+/// [`Self::of_built_in_node`], which cannot be blank, are the only
+/// constructors, there is no `Default`, and [`Deserialize`] validates rather
+/// than inheriting `String`'s.
+///
+/// Two things are read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
+/// the runtime's built-ins, resolved from its own registry and never imported;
+/// and a Python path led by an import's folder,
+/// `imports/<folder>/<module>:<qualname>`, names a class in that import's own
+/// node code, imported from that folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]

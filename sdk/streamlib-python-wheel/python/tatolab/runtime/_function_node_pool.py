@@ -70,7 +70,7 @@ def the_node_class_the_function_node_pool_runs_as(
         class_attributes[carry["output_port"]] = Output(family)
     class_attributes["__doc__"] = "The stream's function node pool."
     class_attributes["__module__"] = __name__
-    pool_class = type("FunctionNodePoolNode", (_FunctionNodePoolNode,), class_attributes)
+    pool_class = type("FunctionNodePoolNode", (_FunctionNodePoolBase,), class_attributes)
     pool_class._carries = tuple(
         (carry["input_port"], carry["output_port"], carry["family"]) for carry in carries
     )
@@ -86,7 +86,7 @@ def _the_port_family_a_carry_declares(carry: "Mapping[str, Any]") -> "PortFamily
     return Channels
 
 
-class _FunctionNodePoolNode:
+class _FunctionNodePoolBase:
     """Reads each carried island and writes its value to the island's output."""
 
     _carries: "tuple[tuple[str, str, str], ...]"

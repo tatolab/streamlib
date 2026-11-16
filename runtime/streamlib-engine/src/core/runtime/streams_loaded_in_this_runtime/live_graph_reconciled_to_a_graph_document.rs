@@ -243,7 +243,7 @@ impl LoadedStreamInThisRuntime {
             }
         }
 
-        let node_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
+        let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
             .the_live_nodes()
             .into_iter()
             .map(|live_node| (live_node.node_uuid, live_node.node_run_id))
@@ -254,7 +254,7 @@ impl LoadedStreamInThisRuntime {
             .map(|live_link| live_link.link_as_given)
             .collect();
         let node_of = |node_uuid: &Uuid| {
-            node_of_each_node_uuid
+            node_run_id_of_each_node_uuid
                 .get(node_uuid)
                 .cloned()
                 .ok_or_else(|| {

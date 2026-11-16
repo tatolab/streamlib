@@ -5,10 +5,12 @@
 3 CLAUDE.md  # the glossary line that bans the word
 2 THIRD-PARTY-NOTICES.appendix.md  # third-party licence text
 3 THIRD-PARTY-NOTICES.md  # third-party licence text
-3 packages/clap/nodes/host.rs  # the clack host API's own names (StartedPluginAudioProcessor, AudioProcessor)
+15 packages/clap/nodes/host.rs  # the clack host API's audio processor (StartedPluginAudioProcessor, AudioProcessor)
 8 packages/streamlib-webrtc/CHANGELOG.md  # release history, written before the rename
+2 packages/tatolab-browser/streams/page-mixes-inputs/page_mixing_inputs.html  # the WebCodecs MediaStreamTrackProcessor API
 19 scripts/check_processor_word.py  # the lint itself
 5 scripts/run-structure-lints.sh  # runs the lint and names it
 17 scripts/test_check_processor_word.py  # the lint's own tests
 3 sdk/streamlib-python-wheel/THIRD-PARTY-NOTICES.md  # third-party licence text
+27 sdk/streamlib-python-wheel/tests/test_tatolab_namespace.py  # guards that the Python surface publishes none of the retired names
 3 sdk/streamlib-sdk/THIRD-PARTY-NOTICES.md  # third-party licence text

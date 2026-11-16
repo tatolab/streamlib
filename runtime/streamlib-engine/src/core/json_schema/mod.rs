@@ -112,6 +112,7 @@ pub struct GraphNodeOutput {
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
     /// what a link end, an exposure and a port address name it by.
     pub name: String,
+    /// Node configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     /// Checksum of config for change detection.
@@ -153,6 +154,7 @@ pub struct GraphFragmentOutput {
     pub groups: Vec<LabelledNodeGroup>,
 }
 
+/// Container for node input and output ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct GraphNodePortsOutput {
     /// Input ports that receive data.
@@ -214,6 +216,7 @@ pub enum PortKindOutput {
     Control,
 }
 
+/// A link (connection) between two node ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkOutput {
     /// Unique identifier for this link.
@@ -276,6 +279,8 @@ pub struct ConfigNodeReferenceEdgeOutput {
     pub referenced_node: String,
 }
 
+/// Every node's name by its node id, for rendering the ends a graph
+/// holds by id under the name a reader knows them by.
 pub(crate) struct NodeNamesByNodeRunId(
     std::collections::HashMap<crate::core::graph::NodeRunId, String>,
 );
@@ -446,6 +451,7 @@ fn node_kind_rendered_as_kind_and_language(
     }
 }
 
+/// Runtime environment for a node.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeRuntimeOutput {
@@ -454,6 +460,7 @@ pub enum NodeRuntimeOutput {
     Python,
 }
 
+/// Descriptor for a node type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct NodeDescriptorOutput {
     /// The import path of the class this node type is — the `type` a graph
@@ -479,6 +486,8 @@ pub struct NodeDescriptorOutput {
     /// Entrypoint for non-Rust runtimes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
+    /// The config type's JSON Schema, as JSON Schema draft 2020-12 — what an
+    /// agent reads to learn which keys this node's config takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
     /// Whether the node paces itself on real time, as a live device does: in a
@@ -493,6 +502,7 @@ pub struct NodeDescriptorOutput {
     pub examples: CodeExamplesOutput,
 }
 
+/// Descriptor for a node port.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortDescriptorOutput {
     /// Port name.
@@ -520,6 +530,7 @@ pub struct PortDescriptorOutput {
     pub family: crate::core::descriptors::PortFamilyDeclaration,
 }
 
+/// Code examples for a node in different languages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct CodeExamplesOutput {
     /// Rust code example.

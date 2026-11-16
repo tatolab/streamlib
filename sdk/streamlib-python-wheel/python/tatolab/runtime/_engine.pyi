@@ -29,7 +29,7 @@ from tatolab.stream import _node_context_protocols as _stream_protocols
 __all__ = [
     "MODULE_HOST_TABLE_ABI_MAJOR",
     "MODULE_HOST_TABLE_ABI_MINOR",
-    "FunctionNodeEvaluatedAsItsHelpersNode",
+    "FunctionNodeEvaluatedAsAStandaloneNode",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
@@ -56,8 +56,8 @@ MODULE_HOST_TABLE_ABI_MINOR: int
 """The module host table minor this runtime serves; a module's native code built for a newer one is refused."""
 
 @final
-class FunctionNodeEvaluatedAsItsHelpersNode:
-    """The function node a helper runs as its own node, once it is promoted out of its readers' islands."""
+class FunctionNodeEvaluatedAsAStandaloneNode:
+    """A function node a helper runs as a standalone node, once it is promoted out of its readers' islands."""
 
     def __new__(
         cls,
@@ -73,7 +73,7 @@ class FunctionNodeEvaluatedAsItsHelpersNode:
         outputs_that_may_hand_out_nothing: list[int] = ...,
         inputs_carrying_an_unread_message: list[int] = ...,
         outputs_carrying_an_unread_message: list[int] = ...,
-    ) -> FunctionNodeEvaluatedAsItsHelpersNode:
+    ) -> FunctionNodeEvaluatedAsAStandaloneNode:
         """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python.
 
         Of a compiled node's `input_count` inputs, the last set the config values these indices name.

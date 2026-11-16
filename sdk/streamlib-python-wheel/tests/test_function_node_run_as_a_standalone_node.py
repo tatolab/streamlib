@@ -26,8 +26,8 @@ from tatolab.runtime._function_node_compilation import (
     FunctionNodeRunAsPythonInItsReader,
     prepare_function_node_to_evaluate,
 )
-from tatolab.runtime._function_node_run_as_its_helpers_node import (
-    ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs,
+from tatolab.runtime._function_node_run_as_a_standalone_node import (
+    ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs,
     the_node_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._node_hosting import apply_configuration, construct_node_instance
@@ -525,13 +525,13 @@ def test_a_promoted_function_node_reports_whether_its_own_helper_runs_it_compile
         label_the_level, f"{__name__}:label_the_level", "label-1", data_plane
     )
 
-    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(compiled) == {
+    assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(compiled) == {
         "amplify-1": True
     }
-    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(
+    assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(
         run_as_python
     ) == {"label-1": False}
-    assert ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(Phase) == {}, (
+    assert ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(Phase) == {}, (
         "a class that runs no promoted function node reports none"
     )
 

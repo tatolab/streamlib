@@ -36,13 +36,14 @@ impl AStreamOfAProjectBringingViews {
     ) -> T {
         self.stream.compiler.scope(|graph, _tx| {
             let node = graph.traversal().v(node_id).first().unwrap();
-            let mut node = node
+            let mut node_instance = node
                 .get::<crate::core::graph::NodeInstanceComponent>()
                 .unwrap()
                 .0
                 .lock();
             call(
-                node.as_any_mut()
+                node_instance
+                    .as_any_mut()
                     .downcast_mut::<crate::core::nodes::NodeWhoseOutputsAClientWrites>()
                     .expect("a GraphInput runs as a node whose outputs a client writes"),
             )

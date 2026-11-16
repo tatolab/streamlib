@@ -50,7 +50,7 @@
     if (track === null) {
       return;
     }
-    const reader = new MediaStreamTrackNode({ track }).readable.getReader();
+    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     for (;;) {
       const { value: frame, done } = await reader.read();
       if (done) {
@@ -96,7 +96,7 @@
     }
     requestAnimationFrame(drawLevel);
 
-    const reader = new MediaStreamTrackNode({ track: track.clone() }).readable.getReader();
+    const reader = new MediaStreamTrackProcessor({ track: track.clone() }).readable.getReader();
     for (;;) {
       const { value: audio, done } = await reader.read();
       if (done) {

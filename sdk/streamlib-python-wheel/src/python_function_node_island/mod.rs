@@ -32,7 +32,7 @@ mod function_node_island_evaluators;
 use function_node_call_shapes::HowAFunctionNodeIsCalled;
 use function_node_island_evaluators::FunctionNodeHandedOverByTheBootstrap;
 pub(crate) use function_node_island_evaluators::{
-    FunctionNodeEvaluatedAsItsHelpersNode, FunctionNodeIslandEvaluatedInThisHelper,
+    FunctionNodeEvaluatedAsAStandaloneNode, FunctionNodeIslandEvaluatedInThisHelper,
 };
 
 /// One value a function node takes or gives.

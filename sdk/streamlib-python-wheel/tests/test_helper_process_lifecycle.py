@@ -20,7 +20,7 @@ from helper_process_test_support import (
 )
 from tatolab.runtime import _engine
 from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
-from tatolab.runtime._function_node_run_as_its_helpers_node import (
+from tatolab.runtime._function_node_run_as_a_standalone_node import (
     the_node_class_a_promoted_function_node_runs_as,
 )
 from tatolab.runtime._node_interpreter_bootstrap import (

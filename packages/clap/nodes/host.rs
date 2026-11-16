@@ -81,7 +81,7 @@ pub struct ClapPluginHost {
 
     instance: Arc<ParkingLotMutex<Option<PluginInstance<HostData>>>>,
 
-    audio_node: Arc<ParkingLotMutex<Option<StartedPluginAudioProcessor<HostData>>>>,
+    audio_processor: Arc<ParkingLotMutex<Option<StartedPluginAudioProcessor<HostData>>>>,
 
     shared_state: Arc<ParkingLotMutex<SharedState>>,
 
@@ -270,7 +270,7 @@ impl ClapPluginHost {
             entry: bundle,
             plugin_id: plugin_id_cstring,
             instance: Arc::new(ParkingLotMutex::new(None)),
-            audio_node: Arc::new(ParkingLotMutex::new(None)),
+            audio_processor: Arc::new(ParkingLotMutex::new(None)),
             shared_state,
             is_activated: false,
             sample_rate,
@@ -452,12 +452,12 @@ impl ClapPluginHost {
             .activate(|_, _| (), audio_config)
             .map_err(|e| Error::Configuration(format!("Failed to activate plugin: {:?}", e)))?;
 
-        let audio_node = activated.start_processing().map_err(|e| {
+        let audio_processor = activated.start_processing().map_err(|e| {
             Error::Configuration(format!("Failed to start audio processing: {:?}", e))
         })?;
 
         *self.instance.lock() = Some(instance);
-        *self.audio_node.lock() = Some(audio_node);
+        *self.audio_processor.lock() = Some(audio_processor);
 
         self.is_activated = true;
         self.sample_rate = sample_rate;
@@ -485,7 +485,7 @@ impl ClapPluginHost {
             return Ok(());
         }
 
-        *self.audio_node.lock() = None;
+        *self.audio_processor.lock() = None;
 
         *self.instance.lock() = None;
 
@@ -524,10 +524,10 @@ impl ClapPluginHost {
     }
 
     fn process_audio_channels_inplace(&mut self, num_samples: usize) -> Result<()> {
-        let mut node_guard = self.audio_node.lock();
-        let node = node_guard
+        let mut audio_processor_guard = self.audio_processor.lock();
+        let audio_processor = audio_processor_guard
             .as_mut()
-            .ok_or_else(|| Error::Configuration("Audio node not started".into()))?;
+            .ok_or_else(|| Error::Configuration("Audio processor not started".into()))?;
 
         let mut input_ports_base = AudioPorts::with_capacity(2, 1);
         let mut output_ports_base = AudioPorts::with_capacity(2, 1);
@@ -580,7 +580,7 @@ impl ClapPluginHost {
 
         let input_events_ref = input_events.as_input();
 
-        node
+        audio_processor
             .process(
                 &input_ports,
                 &mut output_ports,

@@ -447,6 +447,12 @@ enum Commands {
         fix: bool,
     },
 
+    /// CI gate keeping `tatolab` a PEP 420 namespace package. Fails on any
+    /// repository file ending in `tatolab/__init__.py`, and on any under the
+    /// runtime unit's lend (`target/tatolab-runtime/lib/tatolab/lend`) when one
+    /// is built. A node interpreter merges the lent `tatolab.runtime` with
+    /// its venv's `tatolab.stream` only while no portion of the namespace is a
+    /// regular package.
     CheckNoTatolabNamespacePackageInit,
 
     /// CI gate holding every graph document's package node types to the module
@@ -464,6 +470,21 @@ enum Commands {
     /// the workspace, so it is slower than `check-all-source-gates` alone.
     RunLocalCiGates,
 
+    /// Build the runtime unit at `target/tatolab-runtime/`, the install
+    /// prefix's own shape: `bin/tatolabd`, `bin/tatolab`, the lend at
+    /// `lib/tatolab/lend/` — the directory holding `tatolab/runtime/`, which a
+    /// node interpreter puts first on `PYTHONPATH` — and `wheel/`. Builds
+    /// `sdk/streamlib-python-wheel` as a wheel with the pinned maturin into
+    /// `wheel/`, replaces the lend with that wheel's contents, then builds
+    /// `tatolabd` and `tatolab` and copies them into `bin/`. It first stages the
+    /// platform's bundled Vulkan driver, so `_vulkan_driver/` lands beside
+    /// `_engine`. The one build of the runtime unit for developers, CI and the
+    /// installer; it installs and publishes nothing.
+    ///
+    /// Debug by default, the profile `maturin develop` builds; `--release`
+    /// builds what a release ships. Each run mints the engine build nonce its
+    /// two compiles share, so it recompiles the engine and everything above
+    /// it, and the next plain `cargo build` recompiles them again.
     BuildRuntime {
         /// Build with optimizations, as a release is built.
         #[arg(long)]

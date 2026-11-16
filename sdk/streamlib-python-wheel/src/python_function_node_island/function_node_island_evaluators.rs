@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use pyo3::exceptions::PyValueError;
 use streamlib::sdk::error::Result;
 use streamlib::sdk::iceoryx2::{
-    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE,
+    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE,
     FunctionNodeIslandEvaluatedAtEachRead, FunctionNodeIslandOutputForOneRead,
     FunctionNodeIslandOutputValue, HelperProcessLossCountBoardWriter,
 };
@@ -302,14 +302,14 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
     }
 }
 
-#[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersNode", frozen)]
-pub(crate) struct FunctionNodeEvaluatedAsItsHelpersNode {
+#[pyclass(name = "FunctionNodeEvaluatedAsAStandaloneNode", frozen)]
+pub(crate) struct FunctionNodeEvaluatedAsAStandaloneNode {
     function_node: Mutex<FunctionNodeInAnIsland>,
     call_breadcrumb_board_writer: Option<Arc<HelperProcessLossCountBoardWriter>>,
 }
 
 #[pymethods]
-impl FunctionNodeEvaluatedAsItsHelpersNode {
+impl FunctionNodeEvaluatedAsAStandaloneNode {
     #[new]
     #[pyo3(signature = (
         *,
@@ -342,7 +342,8 @@ impl FunctionNodeEvaluatedAsItsHelpersNode {
         inputs_carrying_an_unread_message: Vec<usize>,
         outputs_carrying_an_unread_message: Vec<usize>,
     ) -> PyResult<Self> {
-        let breadcrumb_number = BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE;
+        let breadcrumb_number =
+            BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE;
         let call_breadcrumb_board_writer =
             link_data_access.shared_loss_count_board_writer_of_this_helper();
         let writes_its_state_on_the_board = !initial_state_values.is_empty()

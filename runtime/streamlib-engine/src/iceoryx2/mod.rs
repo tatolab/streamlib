@@ -89,7 +89,7 @@ pub use message_group_loss_recovery_gate::{
     MessageGroupLossRecoveryDisposition, MessageGroupLossRecoveryGate,
 };
 pub use payload::MessageGroupBoundary;
-pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_NODE;
+pub use streamlib_ipc_types::BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE;
 
 pub(crate) use node::ChannelSizing;
 pub use node::{

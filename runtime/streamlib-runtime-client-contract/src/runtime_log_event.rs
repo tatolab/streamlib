@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// Top-level schema version. Bumped on any breaking change.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Origin of a log record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +135,8 @@ pub struct RuntimeLogEvent {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pipeline_id: Option<String>,
 
+    /// The run id of the node that emitted the record. `None` outside a node.
+    /// Schema 3 renamed it from the field schema 2 named for the old word.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub node_run_id: Option<String>,
 
@@ -257,7 +259,7 @@ mod tests {
     /// Parses one example JSONL line end to end.
     #[test]
     fn docs_example_line_parses() {
-        let line = r#"{"schema_version":2,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","action":"Rabc123-4","source":"rust","level":"info","message":"node started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","node_run_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
+        let line = r#"{"schema_version":3,"host_ts":1700000000000000000,"runtime_id":"Rabc123","stream":"main","action":"Rabc123-4","source":"rust","level":"info","message":"node started","target":"streamlib_media_builtins::camera_source","pipeline_id":"pl-42","node_run_id":"camera-1","rhi_op":null,"intercepted":false,"attrs":{"device":"/dev/video0"}}"#;
         let ev: RuntimeLogEvent = serde_json::from_str(line).expect("docs example must parse");
         assert_eq!(ev.schema_version, SCHEMA_VERSION);
         assert_eq!(ev.runtime_id, "Rabc123");

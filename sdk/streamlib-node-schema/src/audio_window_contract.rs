@@ -48,8 +48,28 @@ pub enum AudioWindowContract {
     /// The values as the port itself declared them.
     #[serde(rename = "declaration")]
     Declaration(AudioWindowContractDeclaredValues),
+    /// `audio_window = match_device`: the five values resolve at `setup()`
+    /// from the format of the device stream the declaring node opened.
+    /// Only a node that opens one can satisfy it.
+    ///
+    /// The empty braces are load-bearing. Under an internally-tagged enum a
+    /// *unit* variant accepts and silently discards sibling keys, so
+    /// `{"resolved_from": "match_device", "window_size": 512}` would read back
+    /// as a bare sentinel; an empty struct variant refuses it.
     #[serde(rename = "match_device")]
     MatchDevice {},
+    /// The five values a [`AudioWindowContract::MatchDevice`] port settled to,
+    /// taken from the format of the device stream its node opened.
+    ///
+    /// Rendering only — no authoring surface produces it. The `#[node]`
+    /// grammar and the wheel's declaration bridge each yield
+    /// [`AudioWindowContract::Declaration`] or
+    /// [`AudioWindowContract::MatchDevice`] and nothing else, so an author
+    /// cannot write it. It exists because a port that resolved 48 kHz stereo
+    /// from *this machine's* speaker and one whose author wrote those numbers
+    /// down are not the same fact, and `graph` is where the difference is
+    /// readable: a reader round-tripping the rendering back into a declaration
+    /// would otherwise pin a machine-specific format as if it had been chosen.
     #[serde(rename = "device")]
     Device(AudioWindowContractDeclaredValues),
 }

@@ -37,8 +37,8 @@ from tatolab.runtime._function_node_pool import (
     FunctionNodePool,
     the_node_class_the_function_node_pool_runs_as,
 )
-from tatolab.runtime._function_node_run_as_its_helpers_node import (
-    ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs,
+from tatolab.runtime._function_node_run_as_a_standalone_node import (
+    ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs,
 )
 from tatolab.runtime._not_ready_placeholder_frames import (
     PLACEHOLDER_FRAMES_PER_SECOND_OF_A_MANUAL_NODE,
@@ -361,7 +361,7 @@ class HelperProcessLifecycle:
         self._tell_the_parent_whether_the_node_is_ready()
         ready: "dict[str, Any]" = {"rpc": "ready"}
         function_nodes_ran_compiled = (
-            ran_compiled_by_node_id_of_the_promoted_function_node_a_node_class_runs(
+            ran_compiled_by_node_id_of_the_function_node_a_standalone_node_runs(
                 self._node_class
             )
         )

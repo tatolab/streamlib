@@ -238,7 +238,7 @@ fn register_the_described_node_type(
                             shader_node_program: program.clone(),
                             evaluator_of_the_island_it_hosts: Box::new(move |node| {
                                 Ok(Box::new(
-                                    super::shader_node_native_evaluator::ShaderNodeNativeEvaluatorNode::for_the_node(
+                                    super::shader_node_native_evaluator::ShaderNodeNativeEvaluator::for_the_node(
                                         node,
                                         descriptor_for_constructor.clone(),
                                         program.clone(),

@@ -126,7 +126,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_input_port_pin_values::read_each_unlinked_input_port_as_its_pin_value,
         module
     )?)?;
-    module.add_class::<python_function_node_island::FunctionNodeEvaluatedAsItsHelpersNode>()?;
+    module.add_class::<python_function_node_island::FunctionNodeEvaluatedAsAStandaloneNode>()?;
     module.add_class::<python_function_node_island::UnreadMessageAFunctionNodeHandsOn>()?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
