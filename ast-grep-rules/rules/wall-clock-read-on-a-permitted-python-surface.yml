@@ -1,0 +1,14 @@
+# Not a refusal: scripts/check_ast_grep_required_matches.py requires a finding in
+# each file listed here, and requires this list to equal the ignores of the rule
+# named on the next line, so a permitted file that stops reading the wall clock
+# leaves that rule's ignores in the same change.
+# required-by: no-wall-clock-read-in-python
+id: wall-clock-read-on-a-permitted-python-surface
+language: python
+severity: hint
+message: This permitted surface reads the wall clock.
+files:
+  - sdk/streamlib-python-wheel/python/tatolab/runtime/_helper_process_log_forwarding.py
+  - sdk/tatolab-stream/tests/test_function_node_side_effect_check.py
+rule:
+  matches: wall-clock-read-in-python

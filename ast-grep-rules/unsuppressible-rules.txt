@@ -9,3 +9,5 @@ no-iceoryx2-node-outside-the-domain-constructor
 no-iceoryx2-global-config
 no-publish-subscribe-service-outside-the-engine-wrapper
 no-escalate-in-lifecycle
+no-wall-clock-read
+no-wall-clock-read-in-python

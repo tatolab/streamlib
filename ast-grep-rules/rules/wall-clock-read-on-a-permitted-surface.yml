@@ -1,0 +1,16 @@
+# Not a refusal: scripts/check_ast_grep_required_matches.py requires a finding in
+# each file listed here, and requires this list to equal the ignores of the rule
+# named on the next line, so a permitted file that stops reading the wall clock
+# leaves that rule's ignores in the same change.
+# required-by: no-wall-clock-read
+id: wall-clock-read-on-a-permitted-surface
+language: rust
+severity: hint
+message: This permitted surface reads the wall clock.
+files:
+  - runtime/streamlib-engine/src/core/logging/worker.rs
+  - runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/helper_log_record/mod.rs
+  - runtime/streamlib-engine/src/core/logging/project_log_route.rs
+  - runtime/streamlib-api-server/src/mcp_project_change_feed.rs
+rule:
+  matches: wall-clock-read-in-rust

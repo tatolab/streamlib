@@ -1,0 +1,37 @@
+# A read of the wall clock in Rust: `SystemTime::now`, chrono's `Utc::now` and
+# `Local::now`, `UNIX_EPOCH.elapsed`, and the `CLOCK_REALTIME` clock id, in code
+# or inside a macro's arguments.
+id: wall-clock-read-in-rust
+language: rust
+rule:
+  any:
+    - kind: scoped_identifier
+      regex: '(^|::)(SystemTime|Utc|Local)::now$'
+    - kind: identifier
+      regex: '^now$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^(SystemTime|Utc|Local)$'
+    - kind: field_expression
+      all:
+        - has:
+            field: value
+            regex: '(^|::)UNIX_EPOCH$'
+        - has:
+            field: field
+            regex: '^elapsed$'
+    - kind: identifier
+      regex: '^elapsed$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^\.$'
+        follows:
+          kind: identifier
+          regex: '^UNIX_EPOCH$'
+    - kind: identifier
+      regex: '^CLOCK_REALTIME$'

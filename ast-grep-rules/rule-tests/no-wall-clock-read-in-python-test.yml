@@ -1,0 +1,24 @@
+id: no-wall-clock-read-in-python
+valid:
+  - "stamp = monotonic_now_ns()"
+  - "also = time.clock_gettime_ns(time.CLOCK_MONOTONIC)"
+  - |
+    """Never time.time() or datetime.now() on the data plane."""
+    import time
+  - "# time.time_ns() is the wall clock"
+  - "elapsed = time.monotonic()"
+invalid:
+  - |
+    import time
+
+
+    def stamp() -> int:
+        return time.time_ns()
+  - "stamp = time.time()"
+  - "stamp = time.clock_gettime_ns(time.CLOCK_REALTIME)"
+  - "stamp = datetime.now(timezone.utc)"
+  - "stamp = datetime.datetime.utcnow()"
+  - "today = datetime.today()"
+  - |
+    def f():
+        """Docstring."""; return time.time()

@@ -1,0 +1,31 @@
+id: no-wall-clock-read
+language: rust
+severity: error
+message: A wall-clock read outside the permitted observability surfaces; read the monotonic clock.
+note: >-
+  Monotonic is the only clock on the data plane. A wall-clock value and a media
+  timestamp share a unit and are different quantities, so a subtraction across
+  them is always a bug. Use `MediaClock::now()` in Rust or `monotonic_now_ns()`
+  in Python; for a unique name rather than a timestamp,
+  `mint_machine_global_unique_name_suffix()`. Wall clock is permitted only on the
+  observability surfaces this rule ignores: a log record's `host_ts` and
+  `source_ts`, log file naming, and a project change feed's `refused_at`.
+  Widening that list is an owner decision, and the rule takes no
+  ast-grep-ignore.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - xtask/**/*.rs
+  - packages/test-fixtures/**/*.rs
+ignores:
+  # log record host_ts: host receipt, the sort key across a merged log stream
+  - runtime/streamlib-engine/src/core/logging/worker.rs
+  # log record host_ts: host receipt for records relayed from a helper process
+  - runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/helper_log_record/mod.rs
+  # log file naming: started_at_millis, read by people off the JSONL file name
+  - runtime/streamlib-engine/src/core/logging/project_log_route.rs
+  # a project change feed's refused_at, in the same UTC as a transaction's applied_at
+  - runtime/streamlib-api-server/src/mcp_project_change_feed.rs
+rule:
+  matches: wall-clock-read-in-rust

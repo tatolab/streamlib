@@ -1,0 +1,27 @@
+id: no-wall-clock-read-in-python
+language: python
+severity: error
+message: A wall-clock read outside the permitted observability surfaces; read the monotonic clock.
+note: >-
+  Monotonic is the only clock on the data plane. A wall-clock value and a media
+  timestamp share a unit and are different quantities, so a subtraction across
+  them is always a bug. Use `MediaClock::now()` in Rust or `monotonic_now_ns()`
+  in Python; for a unique name rather than a timestamp,
+  `mint_machine_global_unique_name_suffix()`. Wall clock is permitted only on the
+  observability surfaces this rule ignores: a log record's `host_ts` and
+  `source_ts`, log file naming, and a project change feed's `refused_at`.
+  Widening that list is an owner decision, and the rule takes no
+  ast-grep-ignore.
+files:
+  - runtime/**/*.py
+  - sdk/**/*.py
+  - adapters/**/*.py
+  - xtask/**/*.py
+  - packages/test-fixtures/**/*.py
+ignores:
+  # log record source_ts: stamps the record at its Python origin, before the relay hop
+  - sdk/streamlib-python-wheel/python/tatolab/runtime/_helper_process_log_forwarding.py
+  # never-called bodies the @node.function side-effect check is tested against refusing
+  - sdk/tatolab-stream/tests/test_function_node_side_effect_check.py
+rule:
+  matches: wall-clock-read-in-python
