@@ -178,9 +178,7 @@ impl NodeInterpreterLaunchRecordOfOneStream {
         );
         for node_type in registered {
             self.stream_identity.publish_on_this_streams_topic(
-                RuntimeEvent::RuntimeDidRegisterNodeType {
-                    node_type: node_type,
-                },
+                RuntimeEvent::RuntimeDidRegisterNodeType { node_type },
             );
         }
     }

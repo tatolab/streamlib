@@ -6,7 +6,12 @@ and holds its exception list to the tree and to the list it shrinks from."""
 
 import unittest
 
-from check_processor_word import findings, parse_exception_list, processor_word_count
+from check_processor_word import (
+    counts_after_renames,
+    findings,
+    parse_exception_list,
+    processor_word_count,
+)
 
 
 class ProcessorWordCountTest(unittest.TestCase):
@@ -64,6 +69,14 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(len(findings({"a.rs": 3}, {"a.rs": 3}, {"a.rs": 2})), 1)
         self.assertEqual(len(findings({"b.rs": 1}, {"b.rs": 1}, {})), 1)
         self.assertEqual(findings({"a.rs": 1}, {"a.rs": 1}, {"a.rs": 2}), [])
+
+
+class CountsAfterRenamesTest(unittest.TestCase):
+    def test_an_entry_follows_its_file(self) -> None:
+        self.assertEqual(
+            counts_after_renames({"a/old/x.rs": 2, "b.rs": 1}, {"a/old/x.rs": "a/new/x.rs"}),
+            {"a/new/x.rs": 2, "b.rs": 1},
+        )
 
 
 if __name__ == "__main__":

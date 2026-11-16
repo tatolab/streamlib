@@ -108,12 +108,10 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/color/tone.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/color/transfer.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compilation_plan.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/apply_node_config_update_op.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/cross_floor_check_in_the_projects_interpreter.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/function_node_pool.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/graph_generator_run_in_the_projects_interpreter.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/input_port_pin_values.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/prepare_node_op.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/node_interpreter_shutdown_ladder.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/project_node_types_listed_from_source.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_island.rs

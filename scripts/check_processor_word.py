@@ -8,7 +8,8 @@ The word counts in any case and inside any identifier (`ManualProcessor`,
 `processor_id`, `processors/`); "preprocessor" is a different word and passes.
 The files still holding it are listed in lint-exceptions/processor-word.txt as
 `<count> <path>`, an optional `# reason` after it. With `--compare-to <git-ref>`,
-the list may only shrink from the one at that ref: no new path, no higher count.
+the list may only shrink from the one at that ref: no new path, no higher count,
+an entry following its file across a rename.
 """
 
 import argparse
@@ -78,6 +79,36 @@ def findings(
     return failures
 
 
+def paths_renamed_since(git_ref: str) -> dict[str, str]:
+    """Each tracked file git sees as renamed since `git_ref`, old path to new."""
+    fields = subprocess.run(
+        ["git", "diff", "--name-status", "-M", "-z", git_ref],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    renamed = {}
+    index = 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        if status.startswith(("R", "C")):
+            if status.startswith("R"):
+                renamed[fields[index + 1]] = fields[index + 2]
+            index += 3
+        else:
+            index += 2
+    return renamed
+
+
+def counts_after_renames(counts: dict[str, int], renamed: dict[str, str]) -> dict[str, int]:
+    """`counts` with each renamed file's entry under its new path."""
+    moved: dict[str, int] = {}
+    for path, count in counts.items():
+        new_path = renamed.get(path, path)
+        moved[new_path] = max(count, moved.get(new_path, 0))
+    return moved
+
+
 def tracked_processor_word_counts() -> dict[str, int]:
     tracked_paths = subprocess.run(
         ["git", "ls-files", "-z"], capture_output=True, text=True, check=True
@@ -110,7 +141,9 @@ def main() -> int:
                 text=True,
                 check=True,
             ).stdout
-            compared_counts = parse_exception_list(compared_text)
+            compared_counts = counts_after_renames(
+                parse_exception_list(compared_text), paths_renamed_since(arguments.compare_to)
+            )
     except (OSError, ValueError, subprocess.CalledProcessError) as unreadable:
         print(f"{EXCEPTION_LIST}: {unreadable}", file=sys.stderr)
         return 1
