@@ -110,7 +110,7 @@ pub(crate) use frame_conversion::vulkan_color_converter::{
 };
 
 #[cfg(target_os = "macos")]
-pub use memory_and_buffers::vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
+pub(crate) use memory_and_buffers::vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
 
 #[cfg(target_os = "linux")]
 pub(crate) use memory_and_buffers::vulkan_host_mapping_read_by_gpu::HostMappingReadByGpu;

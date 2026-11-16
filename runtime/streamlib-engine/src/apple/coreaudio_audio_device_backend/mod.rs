@@ -39,8 +39,8 @@ mod following_the_device_against_the_default_devices;
 pub use audio_objects_and_device_discovery::{
     CoreAudioStreamDirection, built_in_audio_device_uid, default_audio_device_uid,
 };
-pub use capture_stream::CoreAudioCaptureStream;
-pub use playback_stream::CoreAudioPlaybackStream;
+pub(crate) use capture_stream::CoreAudioCaptureStream;
+pub(crate) use playback_stream::CoreAudioPlaybackStream;
 
 use crate::apple::permissions::{
     AvFoundationCaptureDeviceAuthorizationAuthority, PrivacyGatedCaptureDevice,
@@ -70,12 +70,12 @@ const NO_AUHAL_OUTPUT_UNIT: &str = "CoreAudio offers no AUHAL output unit";
 const CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS: u32 = 25;
 
 /// Audio over CoreAudio, one AUHAL unit per stream.
-pub struct CoreAudioAudioDeviceBackend;
+pub(crate) struct CoreAudioAudioDeviceBackend;
 
 impl CoreAudioAudioDeviceBackend {
     /// Confirm this Mac has the AUHAL unit and an audio device in either
     /// direction, or say why this arm cannot serve so the chain can demote.
-    pub fn find_a_device() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
+    pub(crate) fn find_a_device() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
         if hal_output_component().is_none() {
             return Err(DeviceBackendArmUnavailableReason::of(NO_AUHAL_OUTPUT_UNIT));
         }

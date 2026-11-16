@@ -123,11 +123,11 @@ pub const PINNED_MATURIN_REQUIREMENT_FOR_UVX: &str = "maturin@1.9.6";
 mod bundled_vulkan_driver_on_this_host {
     /// The script that writes MoltenVK and the Vulkan loader into the maturin
     /// project's package tree, relative to the workspace.
-    pub const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
+    pub(super) const BUNDLED_VULKAN_DRIVER_STAGING_SCRIPT_RELATIVE_TO_WORKSPACE: &str =
         "scripts/stage_macos_bundled_vulkan_driver.sh";
 
     /// Why a lend without the bundled Vulkan driver is refused.
-    pub const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str =
+    pub(super) const WHO_HAS_NO_VULKAN_DRIVER_BUT_THE_BUNDLED_ONE: &str =
         "a stock Mac has no Vulkan driver of its own";
 }
 

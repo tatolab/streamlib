@@ -20,18 +20,18 @@ use super::corevideo_ffi::CVPixelBufferRef;
 // ==========================================================================
 
 /// vImage error code (ssize_t on 64-bit).
-pub type vImage_Error = isize;
+pub(crate) type vImage_Error = isize;
 
 /// Opaque reference to a vImageConverter.
-pub type vImageConverterRef = *mut c_void;
+pub(crate) type vImageConverterRef = *mut c_void;
 
 /// Opaque reference to a CV image format descriptor.
-pub type vImageCVImageFormatRef = *mut c_void;
+pub(crate) type vImageCVImageFormatRef = *mut c_void;
 
 /// vImage buffer descriptor - just a view pointing to existing memory.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct vImage_Buffer {
+pub(crate) struct vImage_Buffer {
     /// Pointer to the top-left pixel of the buffer.
     pub data: *mut c_void,
     /// Height in pixels.
@@ -46,55 +46,55 @@ pub struct vImage_Buffer {
 // vImage Error Codes
 // ==========================================================================
 
-pub const kvImageNoError: vImage_Error = 0;
-pub const kvImageRoiLargerThanInputBuffer: vImage_Error = -21766;
-pub const kvImageInvalidKernelSize: vImage_Error = -21767;
-pub const kvImageInvalidEdgeStyle: vImage_Error = -21768;
-pub const kvImageInvalidOffset_X: vImage_Error = -21769;
-pub const kvImageInvalidOffset_Y: vImage_Error = -21770;
-pub const kvImageMemoryAllocationError: vImage_Error = -21771;
-pub const kvImageNullPointerArgument: vImage_Error = -21772;
-pub const kvImageInvalidParameter: vImage_Error = -21773;
-pub const kvImageBufferSizeMismatch: vImage_Error = -21774;
-pub const kvImageUnknownFlagsBit: vImage_Error = -21775;
-pub const kvImageInternalError: vImage_Error = -21776;
-pub const kvImageInvalidRowBytes: vImage_Error = -21777;
-pub const kvImageInvalidImageFormat: vImage_Error = -21778;
-pub const kvImageColorSyncIsAbsent: vImage_Error = -21779;
-pub const kvImageOutOfPlaceOperationRequired: vImage_Error = -21780;
-pub const kvImageInvalidImageObject: vImage_Error = -21781;
-pub const kvImageInvalidCVImageFormat: vImage_Error = -21782;
-pub const kvImageUnsupportedConversion: vImage_Error = -21783;
+pub(crate) const kvImageNoError: vImage_Error = 0;
+pub(crate) const kvImageRoiLargerThanInputBuffer: vImage_Error = -21766;
+pub(crate) const kvImageInvalidKernelSize: vImage_Error = -21767;
+pub(crate) const kvImageInvalidEdgeStyle: vImage_Error = -21768;
+pub(crate) const kvImageInvalidOffset_X: vImage_Error = -21769;
+pub(crate) const kvImageInvalidOffset_Y: vImage_Error = -21770;
+pub(crate) const kvImageMemoryAllocationError: vImage_Error = -21771;
+pub(crate) const kvImageNullPointerArgument: vImage_Error = -21772;
+pub(crate) const kvImageInvalidParameter: vImage_Error = -21773;
+pub(crate) const kvImageBufferSizeMismatch: vImage_Error = -21774;
+pub(crate) const kvImageUnknownFlagsBit: vImage_Error = -21775;
+pub(crate) const kvImageInternalError: vImage_Error = -21776;
+pub(crate) const kvImageInvalidRowBytes: vImage_Error = -21777;
+pub(crate) const kvImageInvalidImageFormat: vImage_Error = -21778;
+pub(crate) const kvImageColorSyncIsAbsent: vImage_Error = -21779;
+pub(crate) const kvImageOutOfPlaceOperationRequired: vImage_Error = -21780;
+pub(crate) const kvImageInvalidImageObject: vImage_Error = -21781;
+pub(crate) const kvImageInvalidCVImageFormat: vImage_Error = -21782;
+pub(crate) const kvImageUnsupportedConversion: vImage_Error = -21783;
 
 // ==========================================================================
 // vImage Flags
 // ==========================================================================
 
-pub type vImage_Flags = u32;
+pub(crate) type vImage_Flags = u32;
 
 /// Default flags - no special behavior.
-pub const kvImageNoFlags: vImage_Flags = 0;
+pub(crate) const kvImageNoFlags: vImage_Flags = 0;
 /// Do not clamp output to representable range.
-pub const kvImageDoNotClamp: vImage_Flags = 1;
+pub(crate) const kvImageDoNotClamp: vImage_Flags = 1;
 /// Don't allocate temp buffers - pass your own.
-pub const kvImageLeaveAlphaUnchanged: vImage_Flags = 2;
+pub(crate) const kvImageLeaveAlphaUnchanged: vImage_Flags = 2;
 /// Return only size of temp buffer needed.
-pub const kvImageGetTempBufferSize: vImage_Flags = 4;
+pub(crate) const kvImageGetTempBufferSize: vImage_Flags = 4;
 /// Print diagnostics to console.
-pub const kvImagePrintDiagnosticsToConsole: vImage_Flags = 8;
+pub(crate) const kvImagePrintDiagnosticsToConsole: vImage_Flags = 8;
 /// Allow converter to skip alpha channel processing for performance.
-pub const kvImageNoAllocate: vImage_Flags = 16;
+pub(crate) const kvImageNoAllocate: vImage_Flags = 16;
 /// High quality resampling (slower).
-pub const kvImageHighQualityResampling: vImage_Flags = 64;
+pub(crate) const kvImageHighQualityResampling: vImage_Flags = 64;
 
 // ==========================================================================
 // CVPixelBuffer Lock Flags
 // ==========================================================================
 
-pub type CVPixelBufferLockFlags = u64;
+pub(crate) type CVPixelBufferLockFlags = u64;
 
 /// Lock for read-only access.
-pub const kCVPixelBufferLock_ReadOnly: CVPixelBufferLockFlags = 0x00000001;
+pub(crate) const kCVPixelBufferLock_ReadOnly: CVPixelBufferLockFlags = 0x00000001;
 
 // ==========================================================================
 // vImage Functions (Accelerate Framework)
@@ -116,7 +116,7 @@ unsafe extern "C" {
     /// - alphaIsOpaqueHint: 0 for normal alpha, 1 if alpha is always opaque
     ///
     /// Returns a new format reference, or NULL on failure.
-    pub fn vImageCVImageFormat_Create(
+    pub(crate) fn vImageCVImageFormat_Create(
         pixelFormatType: u32,
         matrix: *const c_void,       // vImage_YpCbCrToARGBMatrix, NULL for RGB
         chromaSiting: *const c_void, // vImageChromaSiting, NULL for RGB
@@ -125,13 +125,15 @@ unsafe extern "C" {
     ) -> vImageCVImageFormatRef;
 
     /// Get the CVPixelFormatType from a vImageCVImageFormat.
-    pub fn vImageCVImageFormat_GetFormatCode(format: vImageCVImageFormatRef) -> u32;
+    pub(crate) fn vImageCVImageFormat_GetFormatCode(format: vImageCVImageFormatRef) -> u32;
 
     /// Release a vImageCVImageFormat.
-    pub fn vImageCVImageFormat_Release(format: vImageCVImageFormatRef);
+    pub(crate) fn vImageCVImageFormat_Release(format: vImageCVImageFormatRef);
 
     /// Retain a vImageCVImageFormat.
-    pub fn vImageCVImageFormat_Retain(format: vImageCVImageFormatRef) -> vImageCVImageFormatRef;
+    pub(crate) fn vImageCVImageFormat_Retain(
+        format: vImageCVImageFormatRef,
+    ) -> vImageCVImageFormatRef;
 
     // ========================================================================
     // vImage Converter
@@ -149,7 +151,7 @@ unsafe extern "C" {
     /// - error: Receives error code on failure
     ///
     /// Returns a converter, or NULL on failure.
-    pub fn vImageConverter_CreateForCVToCVImageFormat(
+    pub(crate) fn vImageConverter_CreateForCVToCVImageFormat(
         srcFormat: vImageCVImageFormatRef,
         srcRange: *const c_void, // vImage_CGImageRange, NULL for full range
         dstFormat: vImageCVImageFormatRef,
@@ -160,16 +162,18 @@ unsafe extern "C" {
     ) -> vImageConverterRef;
 
     /// Release a vImageConverter.
-    pub fn vImageConverter_Release(converter: vImageConverterRef);
+    pub(crate) fn vImageConverter_Release(converter: vImageConverterRef);
 
     /// Retain a vImageConverter.
-    pub fn vImageConverter_Retain(converter: vImageConverterRef) -> vImageConverterRef;
+    pub(crate) fn vImageConverter_Retain(converter: vImageConverterRef) -> vImageConverterRef;
 
     /// Get the number of source buffers required by the converter.
-    pub fn vImageConverter_GetNumberOfSourceBuffers(converter: vImageConverterRef) -> usize;
+    pub(crate) fn vImageConverter_GetNumberOfSourceBuffers(converter: vImageConverterRef) -> usize;
 
     /// Get the number of destination buffers required by the converter.
-    pub fn vImageConverter_GetNumberOfDestinationBuffers(converter: vImageConverterRef) -> usize;
+    pub(crate) fn vImageConverter_GetNumberOfDestinationBuffers(
+        converter: vImageConverterRef,
+    ) -> usize;
 
     // ========================================================================
     // Conversion Functions
@@ -185,7 +189,7 @@ unsafe extern "C" {
     /// - flags: Conversion flags
     ///
     /// Returns kvImageNoError on success, or an error code.
-    pub fn vImageConvert_AnyToAny(
+    pub(crate) fn vImageConvert_AnyToAny(
         converter: vImageConverterRef,
         srcs: *const *const vImage_Buffer,
         dsts: *const *const vImage_Buffer,
@@ -196,7 +200,7 @@ unsafe extern "C" {
     /// Get the size of temporary buffer needed for conversion.
     ///
     /// Call with kvImageGetTempBufferSize flag to get size without allocating.
-    pub fn vImageConverter_GetTempBufferSize(
+    pub(crate) fn vImageConverter_GetTempBufferSize(
         converter: vImageConverterRef,
         flags: vImage_Flags,
     ) -> usize;
@@ -215,7 +219,7 @@ unsafe extern "C" {
     /// - lockFlags: 0 for read-write, kCVPixelBufferLock_ReadOnly for read-only
     ///
     /// Returns kCVReturnSuccess on success.
-    pub fn CVPixelBufferLockBaseAddress(
+    pub(crate) fn CVPixelBufferLockBaseAddress(
         pixelBuffer: CVPixelBufferRef,
         lockFlags: CVPixelBufferLockFlags,
     ) -> i32;
@@ -227,7 +231,7 @@ unsafe extern "C" {
     /// - unlockFlags: Same flags used when locking
     ///
     /// Returns kCVReturnSuccess on success.
-    pub fn CVPixelBufferUnlockBaseAddress(
+    pub(crate) fn CVPixelBufferUnlockBaseAddress(
         pixelBuffer: CVPixelBufferRef,
         unlockFlags: CVPixelBufferLockFlags,
     ) -> i32;
@@ -235,10 +239,10 @@ unsafe extern "C" {
     /// Get the base address of a locked CVPixelBuffer.
     ///
     /// Buffer must be locked first with CVPixelBufferLockBaseAddress.
-    pub fn CVPixelBufferGetBaseAddress(pixelBuffer: CVPixelBufferRef) -> *mut c_void;
+    pub(crate) fn CVPixelBufferGetBaseAddress(pixelBuffer: CVPixelBufferRef) -> *mut c_void;
 
     /// Get the bytes per row (stride) of a CVPixelBuffer.
-    pub fn CVPixelBufferGetBytesPerRow(pixelBuffer: CVPixelBufferRef) -> usize;
+    pub(crate) fn CVPixelBufferGetBytesPerRow(pixelBuffer: CVPixelBufferRef) -> usize;
 }
 
 // ==========================================================================
@@ -251,7 +255,7 @@ impl vImage_Buffer {
     /// # Safety
     /// The CVPixelBuffer must be locked with CVPixelBufferLockBaseAddress before
     /// calling this, and remain locked while the vImage_Buffer is in use.
-    pub unsafe fn from_locked_pixel_buffer(
+    pub(crate) unsafe fn from_locked_pixel_buffer(
         pixel_buffer: CVPixelBufferRef,
         width: usize,
         height: usize,
@@ -270,7 +274,7 @@ impl vImage_Buffer {
 }
 
 /// Convert vImage error code to human-readable description.
-pub fn vimage_error_description(error: vImage_Error) -> &'static str {
+pub(crate) fn vimage_error_description(error: vImage_Error) -> &'static str {
     match error {
         kvImageNoError => "No error",
         kvImageRoiLargerThanInputBuffer => "ROI larger than input buffer",

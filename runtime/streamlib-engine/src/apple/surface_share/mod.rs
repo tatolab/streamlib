@@ -11,10 +11,10 @@
 //! processes it spawned, by the audit token the kernel appends to every
 //! message.
 
-pub mod cross_process_timeline_pair;
+pub(crate) mod cross_process_timeline_pair;
 mod gpu_pool_claimant_process;
-pub mod mach_surface_share_service;
-pub mod state;
+pub(crate) mod mach_surface_share_service;
+pub(crate) mod state;
 mod viewer_process_admission;
 
 pub use cross_process_timeline_pair::{
@@ -25,4 +25,4 @@ pub use mach_surface_share_service::{
     MachSurfaceShareService, MachSurfaceShareServiceRendezvous, SurfaceShareHelperProcessAdmission,
 };
 pub use state::IOSurfaceShareState;
-pub use viewer_process_admission::admit_a_viewer_process;
+pub(crate) use viewer_process_admission::admit_a_viewer_process;

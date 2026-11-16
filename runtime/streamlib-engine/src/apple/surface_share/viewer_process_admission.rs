@@ -10,7 +10,7 @@ use crate::core::error::{Error, Result};
 
 /// Admit process `viewer_process_id` to the service, refused unless it is a
 /// running process of the user this runtime runs as.
-pub fn admit_a_viewer_process(
+pub(crate) fn admit_a_viewer_process(
     rendezvous: &MachSurfaceShareServiceRendezvous,
     viewer_process_id: u32,
 ) -> Result<SurfaceShareHelperProcessAdmission> {

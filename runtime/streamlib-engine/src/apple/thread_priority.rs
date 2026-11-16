@@ -10,7 +10,7 @@ use crate::core::{Error, Result};
 /// - `RealTime`: Uses Mach time-constraint policy for strict latency guarantees
 /// - `High`: Uses POSIX SCHED_RR with elevated priority
 /// - `Normal`: No changes (default OS scheduling)
-pub fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
+pub(crate) fn apply_thread_priority(priority: ThreadPriority) -> Result<()> {
     match priority {
         ThreadPriority::RealTime => set_realtime_priority(),
         ThreadPriority::High => set_high_priority(),

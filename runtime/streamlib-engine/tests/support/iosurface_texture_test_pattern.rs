@@ -5,6 +5,6 @@
 //! helper verifies, shared so the two sides cannot drift apart.
 
 /// The byte the engine writes at `index` of the texture's packed rows.
-pub fn engine_pattern_byte(index: usize) -> u8 {
+pub(crate) fn engine_pattern_byte(index: usize) -> u8 {
     (index.wrapping_mul(29).wrapping_add(3)) as u8
 }
