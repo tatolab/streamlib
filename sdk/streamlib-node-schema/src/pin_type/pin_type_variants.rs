@@ -178,56 +178,56 @@ pub enum VectorComponentCount {
     Four,
 }
 
-/// A texture format, spelled as the escalate wire spells it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case")]
-pub enum TexturePixelFormat {
-    /// Four 8-bit channels, red first, read as 0 to 1.
-    Rgba8Unorm,
-    /// Four 8-bit channels, red first, sRGB-encoded.
-    Rgba8UnormSrgb,
-    /// Four 8-bit channels, blue first, read as 0 to 1.
-    Bgra8Unorm,
-    /// Four 8-bit channels, blue first, sRGB-encoded.
-    Bgra8UnormSrgb,
-    /// Four 16-bit float channels.
-    Rgba16Float,
-    /// Four 32-bit float channels.
-    Rgba32Float,
-    /// 8-bit luma, then interleaved half-size chroma.
-    Nv12,
-}
-
-impl TexturePixelFormat {
-    /// Every format, in the order [`crate::IMAGE_TEXTURE_FORMAT_WIRE_NAMES`] lists their names.
-    pub const EVERY_FORMAT: [Self; 7] = [
-        Self::Rgba8Unorm,
-        Self::Rgba8UnormSrgb,
-        Self::Bgra8Unorm,
-        Self::Bgra8UnormSrgb,
-        Self::Rgba16Float,
-        Self::Rgba32Float,
-        Self::Nv12,
-    ];
-
-    /// The format's name on the escalate wire, as it serializes.
-    pub const fn wire_name(self) -> &'static str {
-        match self {
-            Self::Rgba8Unorm => "rgba8_unorm",
-            Self::Rgba8UnormSrgb => "rgba8_unorm_srgb",
-            Self::Bgra8Unorm => "bgra8_unorm",
-            Self::Bgra8UnormSrgb => "bgra8_unorm_srgb",
-            Self::Rgba16Float => "rgba16_float",
-            Self::Rgba32Float => "rgba32_float",
-            Self::Nv12 => "nv12",
+/// Declares [`TexturePixelFormat`], its [`TexturePixelFormat::EVERY_FORMAT`] and its
+/// [`TexturePixelFormat::wire_name`] from one list, so a format cannot be declared without being
+/// listed, and it serializes as the wire name it is listed with.
+macro_rules! texture_pixel_formats {
+    ($($(#[$attribute:meta])* $format:ident => $wire_name:literal),+ $(,)?) => {
+        /// A texture format, spelled as the escalate wire spells it.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[cfg_attr(
+            feature = "contract-json-schema",
+            derive(schemars_1::JsonSchema),
+            schemars(crate = "schemars_1")
+        )]
+        pub enum TexturePixelFormat {
+            $(
+                $(#[$attribute])*
+                #[serde(rename = $wire_name)]
+                $format,
+            )+
         }
-    }
+
+        impl TexturePixelFormat {
+            /// Every format, in declaration order.
+            pub const EVERY_FORMAT: [Self; [$(Self::$format),+].len()] = [$(Self::$format),+];
+
+            /// The format's name on the escalate wire, as it serializes.
+            pub const fn wire_name(self) -> &'static str {
+                match self {
+                    $(Self::$format => $wire_name,)+
+                }
+            }
+        }
+    };
 }
+
+texture_pixel_formats![
+    /// Four 8-bit channels, red first, read as 0 to 1.
+    Rgba8Unorm => "rgba8_unorm",
+    /// Four 8-bit channels, red first, sRGB-encoded.
+    Rgba8UnormSrgb => "rgba8_unorm_srgb",
+    /// Four 8-bit channels, blue first, read as 0 to 1.
+    Bgra8Unorm => "bgra8_unorm",
+    /// Four 8-bit channels, blue first, sRGB-encoded.
+    Bgra8UnormSrgb => "bgra8_unorm_srgb",
+    /// Four 16-bit float channels.
+    Rgba16Float => "rgba16_float",
+    /// Four 32-bit float channels.
+    Rgba32Float => "rgba32_float",
+    /// 8-bit luma, then interleaved half-size chroma.
+    Nv12 => "nv12",
+];
 
 /// What an asset holds, as its media facts or its kind name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

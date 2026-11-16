@@ -107,10 +107,10 @@ pub struct PinAnnotations {
     /// The control that edits or shows it: one of the Studio's, or a module's qualified name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<String>,
-    /// The frame rate a Texture output's stream has, stated or read from a setting.
+    /// The frame rate a Texture output's stream has, stated or read from a config key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_rate: Option<ImageOutputPortFrameRate>,
-    /// The sample rate an Audio output's stream has, stated or read from a setting.
+    /// The sample rate an Audio output's stream has, stated or read from a config key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate: Option<ChannelsOutputPortSampleRate>,
     /// The sample type an Audio output's stream has.

@@ -4,7 +4,6 @@
 use serde_json::json;
 
 use super::*;
-use crate::IMAGE_TEXTURE_FORMAT_WIRE_NAMES;
 
 fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
     match name {
@@ -91,7 +90,12 @@ fn there_is_one_row_per_built_in_name_in_order_with_its_typescript_literal() {
         );
         assert!(!row.flows.is_empty(), "{:?} allows no flow", row.name);
         assert!(!row.label.is_empty() && !row.documentation.is_empty());
-        assert!(!row.python_form.is_empty());
+        assert!(
+            !row.python_forms.is_empty(),
+            "{:?} has no Python form",
+            row.name
+        );
+        assert!(row.python_forms.iter().all(|form| !form.is_empty()));
     }
 }
 
@@ -114,10 +118,93 @@ fn each_texture_pixel_format_serializes_as_its_wire_name() {
     for format in TexturePixelFormat::EVERY_FORMAT {
         assert_eq!(wire_name_of(format), format.wire_name());
     }
-    assert_eq!(
-        IMAGE_TEXTURE_FORMAT_WIRE_NAMES,
-        TexturePixelFormat::EVERY_FORMAT.map(TexturePixelFormat::wire_name)
-    );
+}
+
+/// Annotations stating only the field `name` names.
+fn annotations_stating(name: PinAnnotationName) -> PinAnnotations {
+    let none = PinAnnotations::default();
+    match name {
+        PinAnnotationName::Range => PinAnnotations {
+            range: Some(PinNumberRange::default()),
+            ..none
+        },
+        PinAnnotationName::Step => PinAnnotations {
+            step: Some(0.1),
+            ..none
+        },
+        PinAnnotationName::Unit => PinAnnotations {
+            unit: Some("Hz".into()),
+            ..none
+        },
+        PinAnnotationName::Meaning => PinAnnotations {
+            meaning: Some("frequency".into()),
+            ..none
+        },
+        PinAnnotationName::Control => PinAnnotations {
+            control: Some("slider".into()),
+            ..none
+        },
+        PinAnnotationName::FrameRate => PinAnnotations {
+            frame_rate: Some(crate::ImageOutputPortFrameRate::FromConfig {
+                config_key: "fps".into(),
+            }),
+            ..none
+        },
+        PinAnnotationName::SampleRate => PinAnnotations {
+            sample_rate: Some(crate::ChannelsOutputPortSampleRate::Stated(48_000)),
+            ..none
+        },
+        PinAnnotationName::SampleType => PinAnnotations {
+            sample_type: Some(crate::ChannelsOutputPortSampleType::F32),
+            ..none
+        },
+        PinAnnotationName::Residency => PinAnnotations {
+            residency: Some(crate::ArrayOutputPortResidency::Gpu),
+            ..none
+        },
+    }
+}
+
+#[test]
+fn each_annotation_name_is_the_key_of_the_one_field_it_names() {
+    let every_field_stated = PinAnnotations {
+        range: Some(PinNumberRange::default()),
+        step: Some(0.1),
+        unit: Some("Hz".into()),
+        meaning: Some("frequency".into()),
+        control: Some("slider".into()),
+        frame_rate: Some(crate::ImageOutputPortFrameRate::FromConfig {
+            config_key: "fps".into(),
+        }),
+        sample_rate: Some(crate::ChannelsOutputPortSampleRate::Stated(48_000)),
+        sample_type: Some(crate::ChannelsOutputPortSampleType::F32),
+        residency: Some(crate::ArrayOutputPortResidency::Gpu),
+    };
+    let every_key: Vec<String> = serde_json::to_value(every_field_stated)
+        .expect("writes")
+        .as_object()
+        .unwrap_or_else(|| panic!("annotations serialize as an object"))
+        .keys()
+        .cloned()
+        .collect();
+    let every_name: Vec<PinAnnotationName> = every_key
+        .iter()
+        .map(|key| {
+            serde_json::from_value(json!(key)).unwrap_or_else(|_| panic!("`{key}` has no name"))
+        })
+        .collect();
+    let distinct_names: std::collections::HashSet<PinAnnotationName> =
+        every_name.iter().copied().collect();
+    assert_eq!(distinct_names.len(), every_key.len());
+    for name in every_name {
+        let written = serde_json::to_value(annotations_stating(name)).expect("writes");
+        let keys: Vec<&String> = written
+            .as_object()
+            .unwrap_or_else(|| panic!("annotations serialize as an object"))
+            .keys()
+            .collect();
+        assert_eq!(keys, [&wire_name_of(name)], "{name:?}");
+    }
 }
 
 #[test]

@@ -11,11 +11,6 @@ macro_rules! built_in_pin_type_names {
     ($($name:ident),+ $(,)?) => {
         /// The name of each built-in pin type: the `type` tag of its [`PinType`].
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[cfg_attr(
-            feature = "contract-json-schema",
-            derive(schemars_1::JsonSchema),
-            schemars(crate = "schemars_1")
-        )]
         #[serde(rename_all = "snake_case")]
         pub enum BuiltInPinTypeName {
             $($name),+
@@ -83,11 +78,6 @@ impl PinType {
 
 /// An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
 #[serde(rename_all = "snake_case")]
 pub enum PinAnnotationName {
     Range,
@@ -114,8 +104,8 @@ pub struct PinTypeDescription {
     pub flows: &'static [PinFlow],
     /// The annotations a pin of it may state.
     pub annotations: &'static [PinAnnotationName],
-    /// How a Python declaration writes it.
-    pub python_form: &'static str,
+    /// Each way a Python declaration writes it, as the authoring surface spells it.
+    pub python_forms: &'static [&'static str],
     /// How the TypeScript SDK writes it: its name as a string literal.
     pub typescript_form: &'static str,
 }
@@ -141,14 +131,19 @@ pub fn built_in_pin_types() -> [PinTypeDescription; BuiltInPinTypeName::EVERY_NA
 
 /// The row of one built-in pin type.
 pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
-    let row = |label, documentation, flows, annotations, python_form, typescript_form| {
+    let row = |label,
+               documentation,
+               flows,
+               annotations,
+               python_forms: &'static [&'static str],
+               typescript_form| {
         PinTypeDescription {
             name,
             label,
             documentation,
             flows,
             annotations,
-            python_form,
+            python_forms,
             typescript_form,
         }
     };
@@ -158,7 +153,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "True or false.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "bool",
+            &["bool"],
             "\"boolean\"",
         ),
         BuiltInPinTypeName::Integer => row(
@@ -166,7 +161,9 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A whole number, exact to 2^53, or within the exact size the type states.",
             VALUE_THEN_STREAM,
             NUMBER_ANNOTATIONS,
-            "int",
+            &[
+                "int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+            ],
             "\"integer\"",
         ),
         BuiltInPinTypeName::Float => row(
@@ -174,7 +171,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A number, held as a 64-bit float unless the type states a size.",
             VALUE_THEN_STREAM,
             NUMBER_ANNOTATIONS,
-            "float",
+            &["float", "Float32", "Float64"],
             "\"float\"",
         ),
         BuiltInPinTypeName::String => row(
@@ -182,7 +179,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "Text.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "str",
+            &["str"],
             "\"string\"",
         ),
         BuiltInPinTypeName::Menu => row(
@@ -190,7 +187,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "One of a fixed list of option names.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Literal",
+            &["Literal"],
             "\"menu\"",
         ),
         BuiltInPinTypeName::Color => row(
@@ -198,7 +195,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "An sRGB colour with alpha, four numbers from 0 to 1.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Color",
+            &["Color"],
             "\"color\"",
         ),
         BuiltInPinTypeName::Vector => row(
@@ -206,7 +203,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "Two, three or four numbers, named x, y, z and w.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Vector2, Vector3, Vector4",
+            &["Vector2", "Vector3", "Vector4"],
             "\"vector\"",
         ),
         BuiltInPinTypeName::Rectangle => row(
@@ -214,7 +211,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A rectangle by its left and top edges, width and height.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Rectangle",
+            &["Rectangle"],
             "\"rectangle\"",
         ),
         BuiltInPinTypeName::Transform => row(
@@ -222,7 +219,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A 4 by 4 matrix, row by row.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Transform",
+            &["Transform"],
             "\"transform\"",
         ),
         BuiltInPinTypeName::Texture => row(
@@ -230,7 +227,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A GPU picture, in one of the pixel formats the type states.",
             STREAM_THEN_VALUE,
             &[FrameRate, Meaning, Control],
-            "Texture",
+            &["Texture"],
             "\"texture\"",
         ),
         BuiltInPinTypeName::Audio => row(
@@ -238,7 +235,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A stream of audio samples.",
             STREAM_ONLY,
             &[SampleRate, SampleType, Meaning, Control],
-            "Audio",
+            &["Audio"],
             "\"audio\"",
         ),
         BuiltInPinTypeName::EncodedVideo => row(
@@ -246,7 +243,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "Encoded video, one access unit per message, in one of the codecs the type states.",
             STREAM_ONLY,
             MEANING_ONLY,
-            "EncodedVideo",
+            &["EncodedVideo"],
             "\"encoded_video\"",
         ),
         BuiltInPinTypeName::EncodedAudio => row(
@@ -254,7 +251,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "Encoded audio, one packet per message, in one of the codecs the type states.",
             STREAM_ONLY,
             MEANING_ONLY,
-            "EncodedAudio",
+            &["EncodedAudio"],
             "\"encoded_audio\"",
         ),
         BuiltInPinTypeName::Tensor => row(
@@ -262,7 +259,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "An array of numbers with a shape.",
             STREAM_THEN_VALUE,
             &[Residency, Meaning],
-            "Tensor",
+            &["Tensor"],
             "\"tensor\"",
         ),
         BuiltInPinTypeName::Asset => row(
@@ -270,7 +267,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "One of the project's assets, of the media the type states.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "Asset",
+            &["Asset"],
             "\"asset\"",
         ),
         BuiltInPinTypeName::Trigger => row(
@@ -278,7 +275,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "An event with no payload; its message's timestamp is the event.",
             TRIGGER_ONLY,
             VALUE_ANNOTATIONS,
-            "Trigger",
+            &["Trigger"],
             "\"trigger\"",
         ),
         BuiltInPinTypeName::ListOf => row(
@@ -286,7 +283,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A list of values of the one type it names.",
             VALUE_THEN_STREAM,
             VALUE_ANNOTATIONS,
-            "list",
+            &["list"],
             "\"list_of\"",
         ),
         BuiltInPinTypeName::Bundle => row(
@@ -295,7 +292,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
              own: two bundles with the same members are one type.",
             VALUE_THEN_STREAM,
             MEANING_ONLY,
-            "dataclass",
+            &["dataclass"],
             "\"bundle\"",
         ),
         BuiltInPinTypeName::Named => row(
@@ -303,7 +300,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A type a module declares by its class, carried as the bytes that class packs.",
             STREAM_THEN_VALUE,
             MEANING_ONLY,
-            "named_pin_type",
+            &["named_pin_type"],
             "\"named\"",
         ),
         BuiltInPinTypeName::NodeReference => row(
@@ -311,7 +308,11 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "A setting naming another node of the graph. It never takes a wire.",
             VALUE_ONLY,
             &[],
-            "NodeReference",
+            &[
+                "NodeReference",
+                "NodeReferenceToNodeType",
+                "SoleReferrerNodeReferenceToNodeType",
+            ],
             "\"node_reference\"",
         ),
         BuiltInPinTypeName::PinTypeChoice => row(
@@ -320,7 +321,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
              takes a wire.",
             VALUE_ONLY,
             &[],
-            "PinTypeChoice",
+            &["PinTypeChoice"],
             "\"pin_type_choice\"",
         ),
     }

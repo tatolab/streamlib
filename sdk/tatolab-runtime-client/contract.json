@@ -3529,7 +3529,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "bool",
+      "python_forms": [
+        "bool"
+      ],
       "typescript_form": "\"boolean\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3552,7 +3554,17 @@
         "meaning",
         "control"
       ],
-      "python_form": "int",
+      "python_forms": [
+        "int",
+        "Int8",
+        "Int16",
+        "Int32",
+        "Int64",
+        "UInt8",
+        "UInt16",
+        "UInt32",
+        "UInt64"
+      ],
       "typescript_form": "\"integer\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3575,7 +3587,11 @@
         "meaning",
         "control"
       ],
-      "python_form": "float",
+      "python_forms": [
+        "float",
+        "Float32",
+        "Float64"
+      ],
       "typescript_form": "\"float\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3595,7 +3611,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "str",
+      "python_forms": [
+        "str"
+      ],
       "typescript_form": "\"string\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3615,7 +3633,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Literal",
+      "python_forms": [
+        "Literal"
+      ],
       "typescript_form": "\"menu\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3635,7 +3655,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Color",
+      "python_forms": [
+        "Color"
+      ],
       "typescript_form": "\"color\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3655,7 +3677,11 @@
         "meaning",
         "control"
       ],
-      "python_form": "Vector2, Vector3, Vector4",
+      "python_forms": [
+        "Vector2",
+        "Vector3",
+        "Vector4"
+      ],
       "typescript_form": "\"vector\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3675,7 +3701,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Rectangle",
+      "python_forms": [
+        "Rectangle"
+      ],
       "typescript_form": "\"rectangle\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3695,7 +3723,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Transform",
+      "python_forms": [
+        "Transform"
+      ],
       "typescript_form": "\"transform\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3716,7 +3746,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Texture",
+      "python_forms": [
+        "Texture"
+      ],
       "typescript_form": "\"texture\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3734,7 +3766,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Audio",
+      "python_forms": [
+        "Audio"
+      ],
       "typescript_form": "\"audio\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3749,7 +3783,9 @@
       "annotations": [
         "meaning"
       ],
-      "python_form": "EncodedVideo",
+      "python_forms": [
+        "EncodedVideo"
+      ],
       "typescript_form": "\"encoded_video\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3764,7 +3800,9 @@
       "annotations": [
         "meaning"
       ],
-      "python_form": "EncodedAudio",
+      "python_forms": [
+        "EncodedAudio"
+      ],
       "typescript_form": "\"encoded_audio\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3781,7 +3819,9 @@
         "residency",
         "meaning"
       ],
-      "python_form": "Tensor",
+      "python_forms": [
+        "Tensor"
+      ],
       "typescript_form": "\"tensor\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3798,7 +3838,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Asset",
+      "python_forms": [
+        "Asset"
+      ],
       "typescript_form": "\"asset\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3817,7 +3859,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "Trigger",
+      "python_forms": [
+        "Trigger"
+      ],
       "typescript_form": "\"trigger\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3834,7 +3878,9 @@
         "meaning",
         "control"
       ],
-      "python_form": "list",
+      "python_forms": [
+        "list"
+      ],
       "typescript_form": "\"list_of\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3853,7 +3899,9 @@
       "annotations": [
         "meaning"
       ],
-      "python_form": "dataclass",
+      "python_forms": [
+        "dataclass"
+      ],
       "typescript_form": "\"bundle\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3872,7 +3920,9 @@
       "annotations": [
         "meaning"
       ],
-      "python_form": "named_pin_type",
+      "python_forms": [
+        "named_pin_type"
+      ],
       "typescript_form": "\"named\"",
       "x-since": 3,
       "x-stability": "experimental"
@@ -3885,7 +3935,11 @@
         "value"
       ],
       "annotations": [],
-      "python_form": "NodeReference",
+      "python_forms": [
+        "NodeReference",
+        "NodeReferenceToNodeType",
+        "SoleReferrerNodeReferenceToNodeType"
+      ],
       "typescript_form": "\"node_reference\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -3901,7 +3955,9 @@
         "value"
       ],
       "annotations": [],
-      "python_form": "PinTypeChoice",
+      "python_forms": [
+        "PinTypeChoice"
+      ],
       "typescript_form": "\"pin_type_choice\"",
       "x-since": 3,
       "x-stability": "experimental",
@@ -12082,7 +12138,7 @@
                 "type": "null"
               }
             ],
-            "description": "The frame rate a Texture output's stream has, stated or read from a setting."
+            "description": "The frame rate a Texture output's stream has, stated or read from a config key."
           },
           "sample_rate": {
             "anyOf": [
@@ -12093,7 +12149,7 @@
                 "type": "null"
               }
             ],
-            "description": "The sample rate an Audio output's stream has, stated or read from a setting."
+            "description": "The sample rate an Audio output's stream has, stated or read from a config key."
           },
           "sample_type": {
             "anyOf": [

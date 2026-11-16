@@ -160,7 +160,7 @@ fn the_pin_type_entry_of(
         "documentation": row.documentation,
         "flows": row.flows,
         "annotations": row.annotations,
-        "python_form": row.python_form,
+        "python_forms": row.python_forms,
         "typescript_form": row.typescript_form,
         "x-since": PIN_TYPES_SINCE_CONTRACT_VERSION,
         "x-stability": ControlOperationStability::Experimental,
@@ -301,7 +301,7 @@ mod tests {
                 "{}",
                 row["name"]
             );
-            for field in ["label", "documentation", "python_form", "typescript_form"] {
+            for field in ["label", "documentation", "typescript_form"] {
                 assert!(row[field].is_string(), "{} has no `{field}`", row["name"]);
             }
             assert!(
@@ -310,6 +310,13 @@ mod tests {
                     .is_some_and(|flows| !flows.is_empty())
             );
             assert!(row["annotations"].is_array());
+            assert!(
+                row["python_forms"]
+                    .as_array()
+                    .is_some_and(|forms| !forms.is_empty() && forms.iter().all(Value::is_string)),
+                "{} has no Python form",
+                row["name"]
+            );
         }
     }
 

@@ -4445,11 +4445,11 @@ export interface PinAnnotations {
    */
   control?: string | null;
   /**
-   * The frame rate a Texture output's stream has, stated or read from a setting.
+   * The frame rate a Texture output's stream has, stated or read from a config key.
    */
   frame_rate?: ImageOutputPortFrameRate | null;
   /**
-   * The sample rate an Audio output's stream has, stated or read from a setting.
+   * The sample rate an Audio output's stream has, stated or read from a config key.
    */
   sample_rate?: ChannelsOutputPortSampleRate | null;
   /**
