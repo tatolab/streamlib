@@ -13,7 +13,7 @@ use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::SPIRV_MAGIC_LE;
 use super::linux_and_macos::prepare_ray_tracing_kernel_registration;
-use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRayTracingBindingKind, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas,
@@ -320,7 +320,7 @@ fn register_ray_tracing_kernel_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RegisterRayTracingKernel(req),
     )
     .expect("must produce a response");
@@ -338,7 +338,7 @@ fn register_acceleration_structure_or_panic(
     let response = handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         req,
     )
     .expect("must produce a response");
@@ -458,7 +458,7 @@ impl ARayTracedSceneUnderTest {
         handle_escalate_op(
             &self.sandbox,
             &self.registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunRayTracingKernel(req),
         )
         .expect("must produce a response")

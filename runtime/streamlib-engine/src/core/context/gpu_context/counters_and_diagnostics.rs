@@ -4,11 +4,6 @@
 use super::*;
 
 impl GpuContext {
-    /// Read-once GPU capability snapshot. Mirrors the underlying
-    /// `HostVulkanDevice`'s capability getters into one struct so
-    /// callers (camera processor, adapters) can decide
-    /// vendor-specific branching + DMA-BUF / external-memory paths
-    /// at setup time.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn gpu_capabilities(&self) -> GpuCapabilitiesSnapshot {
         let dev = &self.device.inner;

@@ -15,14 +15,13 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "live-references");
     stream
-        .add_processor(
-            ProcessorSpec::new(gateway, serde_json::json!({}))
-                .with_display_name("Cloudflare Gateway"),
+        .add_node(
+            NodeSpec::new(gateway, serde_json::json!({})).with_display_name("Cloudflare Gateway"),
         )
         .expect("the gateway adds");
     let track = stream
-        .add_processor(
-            ProcessorSpec::new(
+        .add_node(
+            NodeSpec::new(
                 track_import_path.clone(),
                 serde_json::json!({"gateway": {"node": "Cloudflare Gateway"}}),
             )
@@ -37,7 +36,7 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
         ])
     );
     let refusal = stream
-        .update_processor_config(&track, serde_json::json!({"gateway": {"node": "nowhere"}}))
+        .update_node_config(&track, serde_json::json!({"gateway": {"node": "nowhere"}}))
         .expect_err("a reference to a node the graph does not hold is refused")
         .to_string();
     assert!(
@@ -45,8 +44,8 @@ fn a_live_add_or_config_update_naming_a_node_the_graph_does_not_hold_is_refused_
         "{refusal}"
     );
     let refusal = stream
-        .add_processor(
-            ProcessorSpec::new(
+        .add_node(
+            NodeSpec::new(
                 track_import_path,
                 serde_json::json!({"gateway": {"node": "nowhere"}}),
             )

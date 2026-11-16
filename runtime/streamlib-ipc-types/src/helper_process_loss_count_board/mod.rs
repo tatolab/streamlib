@@ -238,10 +238,7 @@ impl HelperProcessFunctionNodeStateBoardEntry {
     }
 }
 
-/// The breadcrumb number of the function node a helper runs as its own
-/// processor, once that node is promoted out of its readers' islands; the nodes
-/// of the islands feeding it are numbered after it.
-pub const BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR: u32 = 0;
+pub const BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE: u32 = 0;
 
 impl HelperProcessFunctionNodeCallBreadcrumbBoardEntry {
     /// The breadcrumb number of the function node whose call is under way, or

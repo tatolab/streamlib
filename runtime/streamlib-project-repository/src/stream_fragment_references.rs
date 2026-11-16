@@ -5,9 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
-use streamlib_processor_schema::{
-    IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, ProcessorClassImportPath,
-};
+use streamlib_node_schema::{IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR, NodeClassImportPath};
 use uuid::Uuid;
 
 use crate::project_file::TatolabProjectFile;
@@ -349,7 +347,7 @@ fn each_node_type_the_imports_own_code_defines_led_by_its_folder(
         };
         if the_imports_own_code_defines(import_directory, node_type) {
             *node_type =
-                ProcessorClassImportPath::of_a_class_in_an_import_folder(import_folder, node_type)
+                NodeClassImportPath::of_a_class_in_an_import_folder(import_folder, node_type)
                     .map_err(|refusal| refusal.to_string())?
                     .as_str()
                     .to_owned();
@@ -368,8 +366,7 @@ fn the_imports_own_code_defines(import_directory: &Path, node_type: &str) -> boo
         || qualname.is_empty()
         || node_type.contains("::")
         || node_type.contains(IMPORT_FOLDER_OF_A_NODE_TYPE_SEPARATOR)
-        || ProcessorClassImportPath::new(node_type)
-            .map_or(true, |path| path.names_a_built_in_node())
+        || NodeClassImportPath::new(node_type).map_or(true, |path| path.names_a_built_in_node())
     {
         return false;
     }

@@ -48,9 +48,6 @@ mod avfoundation_frame_delivery;
 #[cfg(test)]
 mod tests;
 
-/// How long a stop waits for a frame already on the sample-buffer queue to
-/// finish before saying it could not confirm delivery stopped — well inside
-/// the engine's budget for a processor to stop.
 const DELIVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The AVFoundation backend. The framework is always present, so this arm
@@ -304,16 +301,13 @@ struct CaptureDeviceConfiguredOnItsControlQueue {
 // stream that opens it — which is that one caller.
 unsafe impl Send for CaptureDeviceConfiguredOnItsControlQueue {}
 
-/// Everything that starts and stops the stream's capture, behind one lock: the
-/// processor's start and stop and the user's permission answer all reach it,
-/// from different threads.
 struct AvFoundationCaptureSessionControl {
     capture_device: CaptureDeviceConfiguredOnItsControlQueue,
     pixel_format_to_deliver: PixelFormat,
     opened_device: VideoCaptureDevice,
     stream_format: VideoCaptureStreamFormat,
     gpu_context: GpuContextLimitedAccess,
-    processor_id_of_the_capturing_node: String,
+    node_run_id_of_the_capturing_node: String,
     failure_recorder: DeviceStreamFailureRecorder,
     capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     camera_access: CameraAccessForTheStream,
@@ -396,7 +390,7 @@ impl AvFoundationVideoCaptureStream {
             opened_device: opened_device.clone(),
             stream_format,
             gpu_context: request.gpu_context.clone(),
-            processor_id_of_the_capturing_node: request.processor_id_of_the_capturing_node.clone(),
+            node_run_id_of_the_capturing_node: request.node_run_id_of_the_capturing_node.clone(),
             failure_recorder,
             capture_instant_resolver: Arc::clone(&capture_instant_resolver),
             camera_access: CameraAccessForTheStream::AwaitingTheUsersAnswer {
@@ -545,7 +539,7 @@ impl AvFoundationCaptureSessionControl {
             stream_format: self.stream_format,
             pixel_format_delivered: self.pixel_format_to_deliver,
             gpu_context: self.gpu_context.clone(),
-            processor_id_of_the_capturing_node: self.processor_id_of_the_capturing_node.clone(),
+            node_run_id_of_the_capturing_node: self.node_run_id_of_the_capturing_node.clone(),
             capture_instant_resolver: Arc::clone(&self.capture_instant_resolver),
             capture_progress: Mutex::new(AvFoundationCaptureProgress::default()),
             project_log_route_entry_of_the_starting_thread:

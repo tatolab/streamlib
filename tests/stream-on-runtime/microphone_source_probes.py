@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Probe that reads the microphone module's blocks from a processor interpreter.
+"""Probe that reads the microphone module's blocks from a node interpreter.
 
 Reports what each Channels block read for the first few blocks as one JSON
 marker line on `tatolabd`'s standard error — the boundary under test is native
-capture in the microphone's helper process reaching a Python processor in its
+capture in the microphone's helper process reaching a Python node in its
 own interpreter, as numpy over the borrowed sample.
 """
 

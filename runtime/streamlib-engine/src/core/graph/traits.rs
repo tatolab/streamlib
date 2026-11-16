@@ -15,7 +15,6 @@ pub trait GraphWeight {
     fn id(&self) -> &str;
 }
 
-/// Trait for node weights (processors) with component storage.
 pub trait GraphNodeWithComponents: GraphWeight {
     /// Access the component map.
     fn components(&self) -> &ComponentMap;

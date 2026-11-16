@@ -335,7 +335,7 @@ fn a_stream_failed_for_crashing_the_runtime_is_held_at_the_start_reading_none_of
     let held = runner.loaded_stream_of_the_id(&crasher).unwrap();
     assert!(held.is_held_stopped() && held.runtime_context.lock().is_none());
     assert_eq!(held.node_count(), 2);
-    let source_type = MockOutputOnlyProcessor::Processor::processor_class_import_path();
+    let source_type = MockOutputOnlyNode::Node::node_class_import_path();
     assert!(
         held.node_types_this_stream_resolves()
             .placeholder_of_the_node_type_not_described(&source_type)
@@ -558,7 +558,7 @@ fn a_record_of_a_stream_whose_node_asks_for_a_capture_device(
         "stream": stream_name,
         "nodes": [{
             "name": "camera",
-            "type": MockSourceRefusingAnAccessNobodyAskedFor::Processor::processor_class_import_path().as_str(),
+            "type": MockSourceRefusingAnAccessNobodyAskedFor::Node::node_class_import_path().as_str(),
             "config": {},
         }],
         "links": [],
@@ -587,7 +587,7 @@ fn the_reload_at_the_start_never_lets_a_node_ask_the_user_and_its_node_refuses_b
         .loaded_stream_of_the_id_when_loaded(&camera)
         .expect("the rest of the stream re-loads");
     let refusal = reloaded
-        .wait_until_every_processor_is_running(STREAM_ACTION_TEST_DEADLINE)
+        .wait_until_every_node_is_running(STREAM_ACTION_TEST_DEADLINE)
         .expect_err("the node may not ask, so its setup refuses")
         .to_string();
     assert!(
@@ -630,7 +630,7 @@ fn a_run_after_the_reload_lets_the_node_ask_the_user() {
     runner
         .loaded_stream_of_the_id_when_loaded(&camera)
         .expect("the started stream is loaded")
-        .wait_until_every_processor_is_running(STREAM_ACTION_TEST_DEADLINE)
+        .wait_until_every_node_is_running(STREAM_ACTION_TEST_DEADLINE)
         .expect("a start someone asked for may ask the user, so the node sets up");
     let listing = runner
         .list_streams()

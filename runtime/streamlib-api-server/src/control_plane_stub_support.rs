@@ -45,7 +45,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
             ::streamlib::sdk::error::Result<::streamlib::sdk::descriptors::PortFamily>,
         > {
             Box::pin(async move {
-                Err(::streamlib::sdk::error::Error::ProcessorNotFound(format!(
+                Err(::streamlib::sdk::error::Error::NodeNotFound(format!(
                     "the stub stream runs no `GraphInput` declaring the Input `{input_name}`"
                 )))
             })
@@ -67,15 +67,15 @@ pub(crate) use every_reserved_slot_reader_is_unreachable;
 /// rather than on poll, because these return `BoxFuture` from a non-async fn.
 macro_rules! graph_mutation_ops_are_unreachable {
     ($surface:literal) => {
-        fn add_processor_async(
+        fn add_node_async(
             &self,
-            _spec: ::streamlib::sdk::processors::ProcessorSpec,
+            _spec: ::streamlib::sdk::nodes::NodeSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
             ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph>,
         > {
             unreachable!(concat!(
-                "the control plane serves no processor-creation ",
+                "the control plane serves no node-creation ",
                 $surface
             ))
         }
@@ -88,12 +88,12 @@ macro_rules! graph_mutation_ops_are_unreachable {
                 $surface
             ))
         }
-        fn remove_processor_async(
+        fn remove_node_async(
             &self,
-            _processor_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            _node_run_id: ::streamlib::sdk::graph::NodeRunId,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!(
-                "the control plane serves no processor-removal ",
+                "the control plane serves no node-removal ",
                 $surface
             ))
         }
@@ -142,21 +142,21 @@ macro_rules! graph_mutation_ops_are_unreachable {
         > {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
-        fn add_processor(
+        fn add_node(
             &self,
-            _spec: ::streamlib::sdk::processors::ProcessorSpec,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+            _spec: ::streamlib::sdk::nodes::NodeSpec,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::NodeRunId> {
             unreachable!(concat!(
-                "the control plane serves no processor-creation ",
+                "the control plane serves no node-creation ",
                 $surface
             ))
         }
-        fn remove_processor(
+        fn remove_node(
             &self,
-            _processor_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _node_run_id: &::streamlib::sdk::graph::NodeRunId,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!(
-                "the control plane serves no processor-removal ",
+                "the control plane serves no node-removal ",
                 $surface
             ))
         }
@@ -183,8 +183,8 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
             &self,
-            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
-            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _function_node_id: &::streamlib::sdk::graph::NodeRunId,
+            _reader_id: &::streamlib::sdk::graph::NodeRunId,
             _promotion_request_number: u64,
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {
@@ -329,18 +329,18 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 &self,
                 stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
-                Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
+                Vec<::streamlib::sdk::descriptors::NodeDescriptor>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
                     stream_id,
                 )?;
-                Ok(::streamlib::sdk::processors::PROCESSOR_REGISTRY.list_registered())
+                Ok(::streamlib::sdk::nodes::NODE_REGISTRY.list_registered())
             }
             fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
                 &self,
                 stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
-                Vec<::streamlib::sdk::descriptors::ProcessorDescriptor>,
+                Vec<::streamlib::sdk::descriptors::NodeDescriptor>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
                     stream_id,
@@ -352,8 +352,8 @@ macro_rules! a_stub_runtime_loading_this_stub_as_its_only_stream {
                 stream_id: &str,
             ) -> ::streamlib::sdk::error::Result<
                 Vec<(
-                    ::streamlib::sdk::descriptors::ProcessorDescriptor,
-                    ::streamlib::sdk::processors::InstalledModuleOfANodeType,
+                    ::streamlib::sdk::descriptors::NodeDescriptor,
+                    ::streamlib::sdk::nodes::InstalledModuleOfANodeType,
                 )>,
             > {
                 $crate::control_plane_stub_support::refuse_a_stream_the_stub_runtime_does_not_load(
@@ -586,19 +586,13 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 /// What a stub runtime answers an `add_node` with when the test has armed a
 /// refusal, standing in for an engine-side one — a name already taken, an
 /// unknown class.
-pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
+pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
 
-/// Implement the graph-mutating [`RuntimeOperations`] methods for a front-end stub: a graph
-/// edit applied live is recorded on a `recorded_graph_mutations` field and answered as applied,
-/// an added node taking its name cast or [`STUB_ADDED_NODE_NAME`], so a front-end test asserts
-/// the operation its tool reached. An `armed_add_processor_refusal` the test filled makes an add
-/// refuse instead, standing in for an engine's refusal. Every other mutation stays unreachable:
-/// a front end edits a graph through the one operation alone, and asks no stream to shut down.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
-        fn add_processor_async(
+        fn add_node_async(
             &self,
-            _spec: ::streamlib::sdk::processors::ProcessorSpec,
+            _spec: ::streamlib::sdk::nodes::NodeSpec,
         ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
             ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph>,
@@ -611,9 +605,9 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::NodeInTheGraph> {
             unreachable!("the MCP front end names a node by its UUID, never looks one up by name")
         }
-        fn remove_processor_async(
+        fn remove_node_async(
             &self,
-            _processor_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+            _node_run_id: ::streamlib::sdk::graph::NodeRunId,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!("the MCP front end edits a graph through `apply_a_stream_graph_operation_live` alone")
         }
@@ -680,9 +674,9 @@ macro_rules! graph_mutation_ops_record_the_call {
             );
             self.recorded_graph_mutations.lock().push(graph_operation);
             let armed_refusal = is_an_add
-                .then(|| self.armed_add_processor_refusal.lock().clone())
+                .then(|| self.armed_add_node_refusal.lock().clone())
                 .flatten();
-            let answers_after = is_an_add.then_some(self.add_processor_answers_after).flatten();
+            let answers_after = is_an_add.then_some(self.add_node_answers_after).flatten();
             Box::pin(async move {
                 if let Some(answers_after) = answers_after {
                     ::tokio::time::sleep(answers_after).await;
@@ -696,15 +690,15 @@ macro_rules! graph_mutation_ops_record_the_call {
                 }
             })
         }
-        fn add_processor(
+        fn add_node(
             &self,
-            _spec: ::streamlib::sdk::processors::ProcessorSpec,
-        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
+            _spec: ::streamlib::sdk::nodes::NodeSpec,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::NodeRunId> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
         }
-        fn remove_processor(
+        fn remove_node(
             &self,
-            _processor_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _node_run_id: &::streamlib::sdk::graph::NodeRunId,
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
         }
@@ -731,8 +725,8 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
             &self,
-            _function_node_id: &::streamlib::sdk::graph::ProcessorUniqueId,
-            _reader_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+            _function_node_id: &::streamlib::sdk::graph::NodeRunId,
+            _reader_id: &::streamlib::sdk::graph::NodeRunId,
             _promotion_request_number: u64,
             _reason: &str,
         ) -> ::streamlib::sdk::error::Result<()> {

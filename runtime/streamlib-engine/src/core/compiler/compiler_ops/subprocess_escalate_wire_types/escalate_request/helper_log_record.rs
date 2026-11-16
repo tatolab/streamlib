@@ -64,8 +64,7 @@ pub(crate) struct EscalateRequestLog {
     /// Pipeline identifier. Null for runtime-level records.
     pub(crate) pipeline_id: Option<String>,
 
-    /// Processor identifier. Null outside a processor.
-    pub(crate) processor_id: Option<String>,
+    pub(crate) node_run_id: Option<String>,
 
     /// RHI operation the record was made inside, for a captured engine
     /// record that names one. Absent from a record that names none, and from

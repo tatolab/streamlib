@@ -9,10 +9,10 @@ fn test_component_mutation_persists() {
     let mut graph = test_graph();
     let id = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -21,12 +21,12 @@ fn test_component_mutation_persists() {
         .v(id.as_str())
         .first_mut()
         .unwrap()
-        .insert(MockState(ProcessorState::Idle));
+        .insert(MockState(NodeState::Idle));
 
     {
         let node = graph.traversal_mut().v(id.as_str()).first_mut().unwrap();
         if let Some(state) = node.get_mut::<MockState>() {
-            state.0 = ProcessorState::Running;
+            state.0 = NodeState::Running;
         }
     }
 
@@ -38,7 +38,7 @@ fn test_component_mutation_persists() {
         .get::<MockState>()
         .unwrap();
 
-    assert_eq!(state.0, ProcessorState::Running);
+    assert_eq!(state.0, NodeState::Running);
 }
 
 #[test]
@@ -46,10 +46,10 @@ fn test_arc_shared_component_modification() {
     let mut graph = test_graph();
     let id = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -77,14 +77,14 @@ fn test_arc_shared_component_modification() {
 }
 
 #[test]
-fn test_drop_removes_processor() {
+fn test_drop_removes_node() {
     let mut graph = test_graph();
     let id = graph
         .traversal_mut()
-        .add_v(MockProcessor::Processor::node(Default::default()))
+        .add_v(MockNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -101,18 +101,18 @@ fn test_drop_removes_link() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let link_id = graph

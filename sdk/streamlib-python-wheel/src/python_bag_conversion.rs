@@ -15,7 +15,7 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyT
 use rmpv::Value;
 use streamlib::sdk::iceoryx2::RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES;
 
-use crate::python_processor_context::PythonGpuContextLimitedAccess;
+use crate::python_node_context::PythonGpuContextLimitedAccess;
 
 /// Hand one message's payload, a `PortPayloadBorrow`, to the `from_bytes` of
 /// the target an author named with `read(port, into=T)`, and return what it
@@ -80,21 +80,6 @@ fn name_of_the_read_target_for_error_message(read_target: &Bound<'_, PyAny>) -> 
 // =============================================================================
 
 thread_local! {
-    /// The GPU capability the typed read running on this thread is offering,
-    /// and only while it is constructing.
-    ///
-    /// Thread-local rather than passed: `read(port, into=T)` builds its result
-    /// with `T.from_bytes(payload)`, which is the whole contract — an argument
-    /// the engine added would be one every target had to accept, and most
-    /// targets are ordinary records that want nothing to do with a GPU.
-    ///
-    /// What this is keyed on is what it guarantees: one OS thread, one read at
-    /// a time. A processor's callbacks run on its own dedicated thread, so the
-    /// window is exactly one `from_bytes` call deep. The green-thread execution
-    /// flavor, if it is ever built, would
-    /// break that — a switch inside `from_bytes` is not nested reentrancy, and a
-    /// resumed read would see the wrong offer — so that flavor owes this a
-    /// rework onto `contextvars`, which follows the switch.
     static GPU_LIMITED_ACCESS_OFFERED_TO_THE_TYPED_READ:
         RefCell<Option<Py<PythonGpuContextLimitedAccess>>> = const { RefCell::new(None) };
 }

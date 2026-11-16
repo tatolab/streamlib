@@ -25,11 +25,11 @@ from helper_process_test_support import (
 )
 from tatolab.runtime import _engine
 from tatolab.runtime import _parent_process_bridge as parent_process_bridge
-from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
+from tatolab.runtime._node_interpreter_bootstrap import (
     ParentProcessBridge,
     ParentProcessLogSink,
-    load_processor_class,
+    load_node_class,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -78,7 +78,7 @@ def test_a_log_record_rides_the_escalate_log_op_to_the_parent(stand_in_parent):
     assert record["source"] == "python"
     assert record["level"] == "info"
     assert record["message"] == "a frame arrived"
-    assert record["processor_id"] == "P-helper-test"
+    assert record["node_run_id"] == "P-helper-test"
     assert record["attrs"] == {"width": 1920}
     assert record["intercepted"] is False
 
@@ -118,7 +118,7 @@ class StandInBridgeWatchingTheSequenceLock:
 
 
 def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
-    """A helper has two threads sending records — its processor's and the
+    """A helper has two threads sending records — its node's and the
     engine-log forwarder's — and one sequence between them. A number taken
     before a frame that goes out after the next one's would put the sequence
     backwards on the wire, where a reader reads a step backwards as a new
@@ -135,9 +135,9 @@ def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
     sink._bridge = cast(ParentProcessBridge, bridge)
     records_each_sender_sends = 20
 
-    def send_the_processors_records() -> None:
+    def send_the_nodes_records() -> None:
         for _ in range(records_each_sender_sends):
-            sink("info", "from the processor", None)
+            sink("info", "from the node", None)
 
     def send_the_forwarders_records() -> None:
         for _ in range(records_each_sender_sends):
@@ -147,7 +147,7 @@ def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
                     "target": "iceoryx2",
                     "message": "from the forwarder",
                     "pipeline_id": None,
-                    "processor_id": None,
+                    "node_run_id": None,
                     "rhi_op": None,
                     "attrs": {},
                     "emitted_at_wall_clock_nanoseconds": 1_700_000_000_000_000_000,
@@ -155,7 +155,7 @@ def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
             )
 
     senders = [
-        threading.Thread(target=send_the_processors_records),
+        threading.Thread(target=send_the_nodes_records),
         threading.Thread(target=send_the_forwarders_records),
     ]
     for sender in senders:
@@ -197,7 +197,7 @@ def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    with pytest.raises(processor_interpreter_bootstrap.EscalateRequestError):
+    with pytest.raises(node_interpreter_bootstrap.EscalateRequestError):
         bridge.request_from_parent({"op": escalate_op}, timeout_seconds=0.1)
     request = stand_in_parent.receive()
     assert request["op"] == escalate_op
@@ -220,7 +220,7 @@ def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
 def test_a_late_refusal_created_nothing_so_nothing_is_released(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    with pytest.raises(processor_interpreter_bootstrap.EscalateRequestError):
+    with pytest.raises(node_interpreter_bootstrap.EscalateRequestError):
         bridge.request_from_parent({"op": "acquire_pixel_buffer"}, timeout_seconds=0.1)
     request = stand_in_parent.receive()
 
@@ -243,7 +243,7 @@ def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
     channel closes before the caller reads it; otherwise what the answer
     created is neither handed back nor released."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
-    slot = processor_interpreter_bootstrap._PendingEscalateResponse()
+    slot = node_interpreter_bootstrap._PendingEscalateResponse()
     bridge._pending_escalate_responses["r-delivered"] = slot
     answer = {
         "rpc": "escalate_response",
@@ -275,7 +275,7 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ReleasesAStructureInTeardownProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ReleasesAStructureInTeardownProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -329,7 +329,7 @@ def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
         bridge, "wait_for_every_release_queued_so_far", interrupted_while_waiting
     )
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}

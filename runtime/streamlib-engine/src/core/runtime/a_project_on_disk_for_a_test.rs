@@ -57,8 +57,6 @@ fn the_test_project_at(project_directory: &Path) -> Uuid {
     project_file.project
 }
 
-/// The options loading the stream `stream_name` of the test project `stream_environment`
-/// lives in, under the id `stream_name`, starting its processor interpreters there.
 pub fn options_loading_a_stream_of_the_test_project_in(
     stream_environment: StreamEnvironment,
     stream_name: &str,

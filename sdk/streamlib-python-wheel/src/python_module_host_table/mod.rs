@@ -53,7 +53,7 @@ use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 
 use crate::python_helper_stream_clock::helper_stream_time_ns_of_a_machine_instant;
 use crate::python_logging::monotonic_clock_now_ns;
-use crate::python_processor_link_data_access::HelperProcessDataPlaneLentToNativeCode;
+use crate::python_node_link_data_access::HelperProcessDataPlaneLentToNativeCode;
 
 use audio_capture_streams::{
     AudioCaptureStreamsOpenedForOneNode, audio_capture_stream_close, audio_capture_stream_liveness,

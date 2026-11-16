@@ -9,12 +9,9 @@ use std::io::Write;
 use serde::Deserialize;
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
 
-/// The `--processor` / `--pipeline` / `--rhi` / `--level` / `--source` / `--intercepted-only`
-/// narrowing applied to each record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeLogRecordFilters {
-    /// Only records from this processor id.
-    pub(crate) processor_id: Option<String>,
+    pub(crate) node_run_id: Option<String>,
     /// Only records from this pipeline id.
     pub(crate) pipeline_id: Option<String>,
     /// Only records carrying an `rhi_op`.
@@ -30,8 +27,8 @@ pub(crate) struct RuntimeLogRecordFilters {
 impl RuntimeLogRecordFilters {
     /// Whether `event` survives every filter that is set.
     pub(crate) fn admits(&self, event: &RuntimeLogEvent) -> bool {
-        if let Some(processor_id) = &self.processor_id
-            && event.processor_id.as_ref() != Some(processor_id)
+        if let Some(node_run_id) = &self.node_run_id
+            && event.node_run_id.as_ref() != Some(node_run_id)
         {
             return false;
         }
@@ -136,7 +133,7 @@ mod tests {
             &[a_log_record(json!({
                 "target": "streamlib_media_builtins::camera_source",
                 "pipeline_id": "pipe",
-                "processor_id": "proc",
+                "node_run_id": "proc",
                 "rhi_op": "acquire_texture",
                 "attrs": {
                     "width": 1920,
@@ -152,7 +149,7 @@ mod tests {
             rendered_records,
             [
                 "21:04:27.573 [ INFO] [Rabc/rust] streamlib_media_builtins::camera_source — \
-              Creating Runner pipeline_id=pipe processor_id=proc rhi_op=acquire_texture \
+              Creating Runner pipeline_id=pipe node_run_id=proc rhi_op=acquire_texture \
               device=\"Logitech Café\" origin=\"Settings::defaults()\" v=0.00001 width=1920\n"
             ]
         );
@@ -165,7 +162,7 @@ mod tests {
             a_log_record(json!({"message": "info-rust"})),
             a_log_record(json!({"message": "warn-python", "level": "warn", "source": "python"})),
             a_log_record(
-                json!({"message": "rhi-op", "rhi_op": "acquire", "processor_id": "proc-1"}),
+                json!({"message": "rhi-op", "rhi_op": "acquire", "node_run_id": "proc-1"}),
             ),
             a_log_record(
                 json!({"message": "intercepted", "intercepted": true, "pipeline_id": "pipe-1"}),
@@ -207,7 +204,7 @@ mod tests {
             ),
             (
                 RuntimeLogRecordFilters {
-                    processor_id: Some("proc-1".to_owned()),
+                    node_run_id: Some("proc-1".to_owned()),
                     ..Default::default()
                 },
                 &["rhi-op"],
@@ -221,7 +218,7 @@ mod tests {
             ),
             (
                 RuntimeLogRecordFilters {
-                    processor_id: Some("absent".to_owned()),
+                    node_run_id: Some("absent".to_owned()),
                     ..Default::default()
                 },
                 &[],

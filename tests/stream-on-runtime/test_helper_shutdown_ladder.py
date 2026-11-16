@@ -31,14 +31,14 @@ from helper_process_observation import (
     helper_process_ids_started_in,
     helper_process_is_still_alive,
 )
-from interpreter_lifecycle_processors import TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
+from interpreter_lifecycle_nodes import TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
 from interpreter_lifecycle_streams import (
     a_helper_still_importing,
     a_process_the_stream_started_outlives_it,
     a_teardown_only_a_forced_shutdown_cuts_short,
-    one_processor_asleep_in_its_callback,
-    three_processors_slow_to_tear_down,
-    two_processors_asleep_recording_their_teardown,
+    one_node_asleep_in_its_callback,
+    three_nodes_slow_to_tear_down,
+    two_nodes_asleep_recording_their_teardown,
 )
 from node_module_whose_describe_holds_the_load import NodeModuleWhoseDescribeHoldsTheLoad
 from runtime_process_under_test import (
@@ -76,11 +76,11 @@ DESCRIBING_INTERPRETER_OUTLIVING_AN_INTERRUPTED_LOAD_BUDGET_SECONDS = 5.0
 
 
 @pytest.mark.requires_gpu
-def test_ctrl_c_with_a_processor_asleep_in_its_callback_exits_in_about_two_seconds(
+def test_ctrl_c_with_a_node_asleep_in_its_callback_exits_in_about_two_seconds(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
     """A helper asleep in `process()` costs one interrupt, and its `teardown()` runs."""
-    tatolabd = start_tatolabd_running_stream(one_processor_asleep_in_its_callback)
+    tatolabd = start_tatolabd_running_stream(one_node_asleep_in_its_callback)
     tatolabd.await_marker("ASLEEP_IN_PROCESS")
     interrupted_at = time.monotonic()
     tatolabd.interrupt()
@@ -104,7 +104,7 @@ def test_three_helpers_slow_to_stop_cost_about_one_ladder(
     Each takes the one-second callback budget and three seconds of teardown, so
     one after another is over twelve seconds and at once is about four.
     """
-    tatolabd = start_tatolabd_running_stream(three_processors_slow_to_tear_down)
+    tatolabd = start_tatolabd_running_stream(three_nodes_slow_to_tear_down)
     tatolabd.await_marker("SLOW_TO_TEAR_DOWN_ASLEEP", occurrence=3)
     interrupted_at = time.monotonic()
     tatolabd.interrupt()
@@ -186,7 +186,7 @@ def test_sighup_tears_the_graph_down_gracefully(
     """
     inherited_hangup_disposition = signal.signal(signal.SIGHUP, signal.SIG_DFL)
     try:
-        tatolabd = start_tatolabd_running_stream(one_processor_asleep_in_its_callback)
+        tatolabd = start_tatolabd_running_stream(one_node_asleep_in_its_callback)
     finally:
         signal.signal(signal.SIGHUP, inherited_hangup_disposition)
     tatolabd.await_marker("ASLEEP_IN_PROCESS")
@@ -209,7 +209,7 @@ def test_sigterm_from_the_app_that_started_tatolabd_stops_every_helper_gracefull
     teardown_record_directory = tmp_path / "teardown-records"
     teardown_record_directory.mkdir()
     tatolabd = start_tatolabd_running_stream(
-        two_processors_asleep_recording_their_teardown,
+        two_nodes_asleep_recording_their_teardown,
         extra_environment={TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE: str(teardown_record_directory)},
     )
     tatolabd.await_marker("ASLEEP_IN_PROCESS", occurrence=2)
@@ -241,7 +241,7 @@ def kill_a_tatolabd_holding_two_helpers_asleep_in_their_callbacks(
 ) -> "list[int]":
     """SIGKILL `tatolabd`, never its helpers, and name the helpers that were alive."""
     tatolabd = start_tatolabd_running_stream(
-        two_processors_asleep_recording_their_teardown,
+        two_nodes_asleep_recording_their_teardown,
         extra_environment={TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE: str(teardown_record_directory)},
     )
     tatolabd.await_marker("ASLEEP_IN_PROCESS", occurrence=2)
@@ -305,7 +305,7 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
 ):
     """Whatever a stream starts inherits no copy of `tatolabd`'s own output.
 
-    A processor starts a survivor that sleeps thirty seconds in a session of its
+    A node starts a survivor that sleeps thirty seconds in a session of its
     own, holding every descriptor it could inherit. Reading `tatolabd`'s output
     to its end must finish within a second of `tatolabd`'s own exit.
 
@@ -352,7 +352,7 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
 def test_ctrl_c_while_a_helper_is_still_importing_exits_promptly(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A helper thirty seconds into importing its processor holds `tatolabd`
+    """A helper thirty seconds into importing its node holds `tatolabd`
     for one interrupt, not for its import."""
     tatolabd = start_tatolabd_running_stream(a_helper_still_importing)
     tatolabd.await_stderr_containing("helper process started")
@@ -378,7 +378,7 @@ def test_a_ctrl_c_while_a_slow_describe_loads_ends_tatolabd_before_anything_star
     The describe of the stream's one node parks the load `tatolab open --play` asked
     for. A Ctrl-C to `tatolabd` then ends it cleanly — the load given up, not
     reported as loaded; no engine started; the stream never listed past
-    `preparing`; and no processor interpreter left behind, the describing one
+    `preparing`; and no node interpreter left behind, the describing one
     included.
     """
     tatolabd = start_tatolabd_running_stream(

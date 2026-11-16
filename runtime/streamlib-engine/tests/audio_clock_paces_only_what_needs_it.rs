@@ -17,26 +17,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::nodes::NodeSpec;
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::context::{
     AudioCaptureStream, AudioDeviceBackend, AudioDeviceStreamRequest, CaptureDeviceAccessPrompting,
     RequestedAudioStreamFormat, SilentNullAudioDeviceBackend,
 };
-use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
+use streamlib_engine::core::nodes::NODE_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
-/// Recorded from inside the graph, because a processor's `start()` is exactly
-/// where the runtime used to have the clock already running.
 static AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO: AtomicBool = AtomicBool::new(false);
 static AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED: AtomicBool = AtomicBool::new(false);
 
-/// A processor with nothing to do with audio — the graph the clock must not
-/// wake up for.
-#[streamlib::sdk::processor(execution = manual)]
-pub struct ProcessorThatNeedsNoAudioClock;
+#[streamlib::sdk::node(execution = manual)]
+pub struct NodeThatNeedsNoAudioClock;
 
-impl streamlib_engine::ManualProcessor for ProcessorThatNeedsNoAudioClock::Processor {
+impl streamlib_engine::ManualNode for NodeThatNeedsNoAudioClock::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -50,14 +46,12 @@ impl streamlib_engine::ManualProcessor for ProcessorThatNeedsNoAudioClock::Proce
     }
 }
 
-/// A processor that opens a deviceless capture stream through the seam, the
-/// way `MicrophoneSource` does.
-#[streamlib::sdk::processor(execution = manual)]
-pub struct ProcessorThatPacesOnTheAudioClock {
+#[streamlib::sdk::node(execution = manual)]
+pub struct NodeThatPacesOnTheAudioClock {
     capture_stream: Option<Box<dyn AudioCaptureStream>>,
 }
 
-impl streamlib_engine::ManualProcessor for ProcessorThatPacesOnTheAudioClock::Processor {
+impl streamlib_engine::ManualNode for NodeThatPacesOnTheAudioClock::Node {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // The null arm by name rather than through the chain's probe: what is
         // under test is the timer that paces a *deviceless* graph, and the
@@ -90,7 +84,7 @@ impl streamlib_engine::ManualProcessor for ProcessorThatPacesOnTheAudioClock::Pr
     }
 }
 
-fn run_a_graph_of(processor: ProcessorSpec) {
+fn run_a_graph_of(node: NodeSpec) {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = runner
@@ -99,7 +93,7 @@ fn run_a_graph_of(processor: ProcessorSpec) {
             "main",
         ))
         .expect("an empty stream loads");
-    stream.add_processor(processor).expect("add the processor");
+    stream.add_node(node).expect("add the node");
     stream.start().expect("stream start");
     stream.stop().expect("stream stop");
 }
@@ -110,11 +104,11 @@ fn run_a_graph_of(processor: ProcessorSpec) {
 #[test]
 #[serial]
 fn a_graph_with_no_audio_in_it_never_starts_the_audio_clock() {
-    PROCESSOR_REGISTRY.register::<ProcessorThatNeedsNoAudioClock::Processor>();
+    NODE_REGISTRY.register::<NodeThatNeedsNoAudioClock::Node>();
     AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO.store(true, Ordering::SeqCst);
 
-    run_a_graph_of(ProcessorSpec::new(
-        ProcessorThatNeedsNoAudioClock::processor_class_import_path(),
+    run_a_graph_of(NodeSpec::new(
+        NodeThatNeedsNoAudioClock::node_class_import_path(),
         serde_json::json!({}),
     ));
 
@@ -128,11 +122,11 @@ fn a_graph_with_no_audio_in_it_never_starts_the_audio_clock() {
 #[test]
 #[serial]
 fn a_capture_stream_that_paces_on_the_clock_starts_it() {
-    PROCESSOR_REGISTRY.register::<ProcessorThatPacesOnTheAudioClock::Processor>();
+    NODE_REGISTRY.register::<NodeThatPacesOnTheAudioClock::Node>();
     AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED.store(false, Ordering::SeqCst);
 
-    run_a_graph_of(ProcessorSpec::new(
-        ProcessorThatPacesOnTheAudioClock::processor_class_import_path(),
+    run_a_graph_of(NodeSpec::new(
+        NodeThatPacesOnTheAudioClock::node_class_import_path(),
         serde_json::json!({}),
     ));
 

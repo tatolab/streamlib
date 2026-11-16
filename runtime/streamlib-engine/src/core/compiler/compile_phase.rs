@@ -6,11 +6,8 @@ use std::fmt;
 /// Compilation phase in the 3-phase pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum CompilePhase {
-    /// Phase 1: Attaching infrastructure components to processor nodes.
     Prepare,
-    /// Phase 2: Spawning processor threads (threads create instances).
     Spawn,
-    /// Phase 3: Wiring links between processors (ring buffers).
     Wire,
 }
 

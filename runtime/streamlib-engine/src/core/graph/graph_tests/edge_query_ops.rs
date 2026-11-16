@@ -10,26 +10,26 @@ fn test_e_all_returns_all_links() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream1_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream2_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -52,18 +52,18 @@ fn test_e_by_id_returns_specific_link() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -88,18 +88,18 @@ fn test_link_from_port_and_to_port() {
 
     let upstream_id = graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
     let downstream_id = graph
         .traversal_mut()
-        .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockInputOnlyNode::Node::node(Default::default()))
         .expect("the node is named")
         .first()
-        .expect("should create processor")
+        .expect("should create node")
         .id
         .to_string();
 
@@ -116,10 +116,10 @@ fn test_link_from_port_and_to_port() {
 
     let link = graph.traversal().e(link_id.as_str()).first().unwrap();
 
-    assert_eq!(link.source().processor_id().as_str(), upstream_id.as_str());
+    assert_eq!(link.source().node_run_id().as_str(), upstream_id.as_str());
     assert_eq!(link.source().port_name(), "out1");
     assert_eq!(
-        link.to_port().processor_id().as_str(),
+        link.to_port().node_run_id().as_str(),
         downstream_id.as_str()
     );
     assert_eq!(link.to_port().port_name(), "in1");

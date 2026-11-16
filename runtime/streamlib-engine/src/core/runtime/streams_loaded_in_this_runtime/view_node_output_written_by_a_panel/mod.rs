@@ -15,10 +15,8 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, the_value_lifetime_a_graph_input_config_declares,
 };
-use crate::core::graph::{Graph, GraphNodeWithComponents, ProcessorInstanceComponent};
-use crate::core::processors::{
-    NodeTypesOneStreamResolves, NodeWhoseOutputsAClientWritesProcessor, ProcessorInstance,
-};
+use crate::core::graph::{Graph, GraphNodeWithComponents, NodeInstanceComponent};
+use crate::core::nodes::{NodeInstance, NodeTypesOneStreamResolves, NodeWhoseOutputsAClientWrites};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 
@@ -40,7 +38,7 @@ impl LoadedStreamInThisRuntime {
             port_name.clone(),
             value,
             move |graph, why_a_node_that_has_not_failed_does_not_run| {
-                let (node_name, processor_instance) = the_running_view_node_of_the_id(
+                let (node_name, node_instance) = the_running_view_node_of_the_id(
                     graph,
                     &node_types,
                     &stream_id,
@@ -48,7 +46,7 @@ impl LoadedStreamInThisRuntime {
                     &port_name,
                     why_a_node_that_has_not_failed_does_not_run,
                 )?;
-                Ok((node_name, (), processor_instance))
+                Ok((node_name, (), node_instance))
             },
         )
         .await
@@ -118,7 +116,7 @@ impl LoadedStreamInThisRuntime {
                         });
                     }
                     let store = stream_handles.the_store_of_the_node(node.node_uuid)?;
-                    NodeWhoseOutputsAClientWritesProcessor::keep_a_value_written_to_a_stopped_top_level_graph_input(
+                    NodeWhoseOutputsAClientWrites::keep_a_value_written_to_a_stopped_top_level_graph_input(
                         node, store, &value,
                     )?;
                     Ok(family)
@@ -133,10 +131,6 @@ impl LoadedStreamInThisRuntime {
         })?
     }
 
-    /// Publish `value` on output `port_name` of the node `find_the_node` finds in the stream's
-    /// graph, handed why a node that has not failed does not run now, answering what it found
-    /// beside the node's name and processor. The stream's graph lock is held across a compile,
-    /// so the write waits off the async workers.
     async fn publish_a_value_on_an_output_of_the_running_node<
         FoundBesideTheNode: Send + 'static,
     >(
@@ -146,11 +140,9 @@ impl LoadedStreamInThisRuntime {
         find_the_node: impl FnOnce(
             &Graph,
             WhyANodeOfAStreamIsNotRunning,
-        ) -> Result<(
-            String,
-            FoundBesideTheNode,
-            Arc<Mutex<ProcessorInstance>>,
-        )> + Send
+        )
+            -> Result<(String, FoundBesideTheNode, Arc<Mutex<NodeInstance>>)>
+        + Send
         + 'static,
     ) -> Result<FoundBesideTheNode> {
         let why_a_node_that_has_not_failed_does_not_run =
@@ -171,17 +163,17 @@ impl LoadedStreamInThisRuntime {
         let compiler = Arc::clone(&self.compiler);
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
-                let (node_name, found_beside_the_node, processor_instance) =
+                let (node_name, found_beside_the_node, node_instance) =
                     compiler.scope(|graph, _tx| {
                         find_the_node(graph, why_a_node_that_has_not_failed_does_not_run)
                     })?;
-                let mut processor_instance = processor_instance.lock();
-                let node_whose_outputs_a_client_writes = processor_instance
+                let mut node_instance = node_instance.lock();
+                let node_whose_outputs_a_client_writes = node_instance
                     .as_any_mut()
-                    .downcast_mut::<NodeWhoseOutputsAClientWritesProcessor>()
+                    .downcast_mut::<NodeWhoseOutputsAClientWrites>()
                     .ok_or_else(|| {
                         Error::Runtime(format!(
-                            "node `{node_name}` runs a processor whose outputs no client writes"
+                            "node `{node_name}` runs a node whose outputs no client writes"
                         ))
                     })?;
                 node_whose_outputs_a_client_writes
@@ -198,18 +190,16 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// The name, family and processor of the running top-level `GraphInput` declaring the Input
-/// `input_name`, matched as its config's `port` casts.
 fn the_running_top_level_graph_input_declaring(
     graph: &Graph,
     stream_id: &str,
     input_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<(String, PortFamily, Arc<Mutex<ProcessorInstance>>)> {
+) -> Result<(String, PortFamily, Arc<Mutex<NodeInstance>>)> {
     let node = the_top_level_graph_input_declaring(graph, stream_id, input_name)?;
     let family = the_family_a_graph_input_carries(node)?;
-    let processor_instance = node
-        .get::<ProcessorInstanceComponent>()
+    let node_instance = node
+        .get::<NodeInstanceComponent>()
         .map(|instance| Arc::clone(&instance.0))
         .ok_or_else(|| {
             the_refusal_of_a_reach_for_a_node_not_running(
@@ -222,7 +212,7 @@ fn the_running_top_level_graph_input_declaring(
                 ),
             )
         })?;
-    Ok((node.display_name.clone(), family, processor_instance))
+    Ok((node.display_name.clone(), family, node_instance))
 }
 
 /// The top-level `GraphInput` of the stream `stream_id` declaring the Input `input_name`.
@@ -230,15 +220,15 @@ fn the_top_level_graph_input_declaring<'graph>(
     graph: &'graph Graph,
     stream_id: &str,
     input_name: &str,
-) -> Result<&'graph crate::core::graph::ProcessorNode> {
+) -> Result<&'graph crate::core::graph::GraphNode> {
     let input_cast = crate::core::graph::cast_exposed_name_to_url_safe(input_name)?;
     let graph_inputs: Vec<_> = graph
         .traversal()
         .v(())
         .iter()
-        .filter(|node| node.processor_type.as_str() == GRAPH_INPUT_NODE_TYPE)
+        .filter(|node| node.node_type.as_str() == GRAPH_INPUT_NODE_TYPE)
         .collect();
-    let declared_port_of = |node: &crate::core::graph::ProcessorNode| -> Option<String> {
+    let declared_port_of = |node: &crate::core::graph::GraphNode| -> Option<String> {
         node.config
             .as_ref()?
             .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
@@ -257,7 +247,7 @@ fn the_top_level_graph_input_declaring<'graph>(
             .map(|port| format!("`{port}`"))
             .collect();
         declared.sort();
-        return Err(Error::ProcessorNotFound(format!(
+        return Err(Error::NodeNotFound(format!(
             "no `GraphInput` on the top level of the stream `{stream_id}` declares the Input \
              `{input_name}` and runs; a client writes the Inputs of family array, channels or \
              records, and the stream's are: {}",
@@ -272,9 +262,7 @@ fn the_top_level_graph_input_declaring<'graph>(
 }
 
 /// The family the top-level `GraphInput` `node` carries, as its config names it.
-fn the_family_a_graph_input_carries(
-    node: &crate::core::graph::ProcessorNode,
-) -> Result<PortFamily> {
+fn the_family_a_graph_input_carries(node: &crate::core::graph::GraphNode) -> Result<PortFamily> {
     node.config
         .as_ref()
         .and_then(|config| config.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY))
@@ -292,7 +280,6 @@ fn the_family_a_graph_input_carries(
         })
 }
 
-/// The name and processor of the running node of a view type whose UUID is `node_id`.
 fn the_running_view_node_of_the_id(
     graph: &Graph,
     node_types: &NodeTypesOneStreamResolves,
@@ -300,26 +287,26 @@ fn the_running_view_node_of_the_id(
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<(String, Arc<Mutex<ProcessorInstance>>)> {
+) -> Result<(String, Arc<Mutex<NodeInstance>>)> {
     let Some(node) = graph
         .traversal()
         .v(())
         .iter()
         .find(|node| node.node_uuid.to_string() == node_id)
     else {
-        return Err(Error::ProcessorNotFound(format!(
+        return Err(Error::NodeNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`"
         )));
     };
-    if !node_types.is_a_view_type_of_this_streams_project(&node.processor_type) {
+    if !node_types.is_a_view_type_of_this_streams_project(&node.node_type) {
         return Err(Error::Configuration(format!(
             "node `{node_id}` ({}) of the stream `{stream_id}` is of the type `{}`, which is no \
              view its project brings, so no panel writes its outputs",
-            node.display_name, node.processor_type
+            node.display_name, node.node_type
         )));
     }
-    let processor_instance = node
-        .get::<ProcessorInstanceComponent>()
+    let node_instance = node
+        .get::<NodeInstanceComponent>()
         .map(|instance| Arc::clone(&instance.0))
         .ok_or_else(|| {
             the_refusal_of_a_reach_for_a_node_not_running(
@@ -332,7 +319,7 @@ fn the_running_view_node_of_the_id(
                 ),
             )
         })?;
-    Ok((node.display_name.clone(), processor_instance))
+    Ok((node.display_name.clone(), node_instance))
 }
 
 #[cfg(test)]

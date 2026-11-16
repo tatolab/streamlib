@@ -1,0 +1,503 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Reading an `audio_window` channel count off a Python value, through the
+//! engine's one parser of the stamp shape.
+
+use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::prelude::*;
+use streamlib::sdk::node_interpreter::AudioWindowFieldRefusal;
+
+use crate::python_bag_conversion::python_object_to_json_value;
+
+/// Read a `channels` value written either as a count or as the
+/// source-following spelling, raising a refusal behind `naming` — a
+/// `TypeError` for a value of the wrong kind, a `ValueError` for one the field
+/// cannot hold.
+pub(crate) fn read_a_channel_count_or_the_source_spelling(
+    value: &Bound<'_, PyAny>,
+    naming: impl std::fmt::Display,
+) -> PyResult<Option<u32>> {
+    // A value JSON cannot carry is no count and no spelling, which the parser
+    // refuses as the wrong kind of value, as it does `null`.
+    let value = python_object_to_json_value(value).unwrap_or(serde_json::Value::Null);
+    streamlib::sdk::node_interpreter::read_a_channel_count_or_the_source_spelling(&value).map_err(
+        |refusal| match refusal {
+            AudioWindowFieldRefusal::WrongKindOfValue(reason) => {
+                PyTypeError::new_err(format!("{naming} {reason}"))
+            }
+            AudioWindowFieldRefusal::UnusableValue(reason) => {
+                PyValueError::new_err(format!("{naming} {reason}"))
+            }
+        },
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::{PyDict, PyList};
+    use streamlib::sdk::descriptors::{NodeClassImportPath, NodeConfigJsonSchema, PortDescriptor};
+    use streamlib::sdk::node_interpreter::PythonNodeDeclaration;
+    use streamlib::sdk::nodes::EmptyConfig;
+
+    fn described_node_type_of(declared_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
+        let stamp = |name: &str| -> PyResult<serde_json::Value> {
+            python_object_to_json_value(&declared_class.getattr(name)?)
+        };
+        let module = declared_class.getattr("__module__")?.extract::<String>()?;
+        let qualname = declared_class
+            .getattr("__qualname__")?
+            .extract::<String>()?;
+        Ok(serde_json::json!({
+            "import_path": format!("{module}:{qualname}"),
+            "short_name": declared_class.getattr("__name__")?.extract::<String>()?,
+            "description": stamp("__tatolab_node_description__")?,
+            "kind": stamp("__tatolab_node_kind__")?,
+            "execution": stamp("__tatolab_node_execution__")?,
+            "scheduling_priority": stamp("__tatolab_node_scheduling_priority__")?,
+            "paced_by_real_time": stamp("__tatolab_node_paced_by_real_time__")?,
+            "config_schema": stamp("__tatolab_node_config_schema__")?,
+            "input_ports": stamp("__tatolab_node_input_ports__")?,
+            "output_ports": stamp("__tatolab_node_output_ports__")?,
+        }))
+    }
+
+    fn read_declaration_off(
+        declared_class: &Bound<'_, PyAny>,
+    ) -> Result<PythonNodeDeclaration, String> {
+        let described_node_type =
+            described_node_type_of(declared_class).map_err(|refusal| refusal.to_string())?;
+        let requested_import_path = NodeClassImportPath::new(
+            described_node_type["import_path"]
+                .as_str()
+                .unwrap_or_default(),
+        )
+        .map_err(|blank| blank.to_string())?;
+        PythonNodeDeclaration::read_from_described_node_type(
+            &described_node_type,
+            &requested_import_path,
+        )
+    }
+
+    // ---- the window contract, declared in both languages ----
+
+    /// The stream distribution's source root, put on `sys.path` because a
+    /// `cargo test` run has no installed `tatolab-stream`.
+    const STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../tatolab-stream");
+
+    /// A fresh copy of the real `tatolab.stream._node_declaration` module's
+    /// namespace, so a test reads a marker the real decorator built rather than
+    /// one it hand-wrote.
+    fn declaration_module_namespace(python: Python<'_>) -> Bound<'_, PyDict> {
+        let sys_path = python
+            .import("sys")
+            .unwrap()
+            .getattr("path")
+            .unwrap()
+            .cast_into::<PyList>()
+            .unwrap();
+        if !sys_path
+            .contains(STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
+            .unwrap()
+        {
+            sys_path
+                .insert(0, STREAM_DISTRIBUTION_SOURCE_ROOT_DIRECTORY)
+                .unwrap();
+        }
+        let namespace = python
+            .import("tatolab.stream._node_declaration")
+            .expect("the decorator module imports")
+            .dict()
+            .copy()
+            .unwrap();
+        namespace
+            .update(
+                python
+                    .import("tatolab.stream")
+                    .expect("the package imports")
+                    .dict()
+                    .as_mapping(),
+            )
+            .unwrap();
+        namespace
+    }
+
+    /// Run the real decorator module, run `class_body_source` against it, and
+    /// read the resulting class through the bridge the engine reads a declared
+    /// class by.
+    ///
+    /// A refusal raised at decoration and one raised at the bridge both land
+    /// in the `Err` arm, because to an author they are one refusal.
+    fn read_python_declaration(class_body_source: &str) -> Result<PythonNodeDeclaration, String> {
+        Python::initialize();
+        Python::attach(|python| {
+            let namespace = declaration_module_namespace(python);
+
+            let source = format!("__name__ = 'my_app.audio'\n\n\n{class_body_source}");
+            python
+                .run(
+                    &std::ffi::CString::new(source).unwrap(),
+                    Some(&namespace),
+                    None,
+                )
+                .map_err(|refusal| refusal.to_string())?;
+
+            let declared_class = namespace
+                .get_item("AudioConsumer")
+                .map_err(|refusal| refusal.to_string())?
+                .expect("the class bound");
+            read_declaration_off(&declared_class)
+        })
+    }
+
+    /// The input ports a Python class declares, as the engine reads them.
+    fn python_declared_ports(class_body_source: &str) -> Vec<PortDescriptor> {
+        read_python_declaration(class_body_source)
+            .expect("the declaration reads")
+            .descriptor
+            .inputs
+    }
+
+    #[test]
+    fn the_descriptor_carries_the_config_classs_derived_schema() {
+        let declaration = read_python_declaration(
+            "\
+import dataclasses
+
+
+@dataclasses.dataclass
+class AudioConsumerConfig:
+    gain: float = 1.0
+    label: str = 'unlabelled'
+
+
+@node.process(execution='manual')
+class AudioConsumer:
+    def __init__(self, config: AudioConsumerConfig) -> None:
+        self.config = config
+",
+        )
+        .expect("the declaration reads");
+
+        let document = declaration
+            .descriptor
+            .config_schema
+            .expect("a declared Python class always carries a config schema");
+        assert_eq!(document["type"], "object");
+        assert_eq!(document["properties"]["gain"]["type"], "number");
+        assert_eq!(document["properties"]["label"]["type"], "string");
+        assert_eq!(document["properties"]["label"]["default"], "unlabelled");
+        assert_eq!(document["properties"]["gain"]["default"], 1.0);
+        assert!(document.get("required").is_none(), "{document}");
+        assert_eq!(document["additionalProperties"], false);
+    }
+
+    /// What `/api/registry` actually serializes for a Python class.
+    ///
+    /// The endpoint's own test registers a descriptor by hand, and the test
+    /// above stops at the descriptor, so without this nothing in a GPU-free CI
+    /// run carries a Python class's schema as far as the served shape — and the
+    /// end-to-end proof needs a running graph, which needs a GPU.
+    #[test]
+    fn the_served_rendering_of_a_python_class_carries_its_config_schema() {
+        let declaration = read_python_declaration(
+            "\
+import dataclasses
+import typing
+
+
+@dataclasses.dataclass
+class AudioConsumerConfig:
+    gain: float = 1.0
+    label: str = 'unlabelled'
+    fallback: typing.Optional[str] = None
+
+
+@node.process(execution='manual')
+class AudioConsumer:
+    def __init__(self, config: AudioConsumerConfig) -> None:
+        self.config = config
+",
+        )
+        .expect("the declaration reads");
+
+        let served = serde_json::to_value(streamlib::sdk::json_schema::NodeDescriptorOutput::from(
+            &declaration.descriptor,
+        ))
+        .expect("the rendering serializes");
+
+        assert_eq!(
+            served["config_schema"]["properties"]["gain"]["type"],
+            "number"
+        );
+        assert_eq!(
+            served["config_schema"]["properties"]["label"]["default"],
+            "unlabelled"
+        );
+        assert_eq!(
+            served["config_schema"]["properties"]["gain"]["default"],
+            1.0
+        );
+        assert!(
+            served["config_schema"].get("required").is_none(),
+            "{served}"
+        );
+
+        // The null leg of the hop the document takes into Rust: a dropped key
+        // would read as "no default" rather than as the default the author
+        // wrote, and nothing else in a GPU-free run crosses a nil.
+        let fallback = &served["config_schema"]["properties"]["fallback"];
+        assert!(
+            fallback.get("default").is_some(),
+            "the null default was dropped: {fallback}"
+        );
+        assert_eq!(fallback["default"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
+        let declaration = read_python_declaration(
+            "\
+@node.process(execution='manual')
+class AudioConsumer:
+    def __init__(self) -> None:
+        self.frames = 0
+",
+        )
+        .expect("the declaration reads");
+
+        let mut what_rust_publishes = EmptyConfig::node_config_schema_document();
+        what_rust_publishes
+            .as_object_mut()
+            .expect("the document is an object")
+            .remove("title");
+
+        assert_eq!(
+            declaration.descriptor.config_schema,
+            Some(what_rust_publishes)
+        );
+    }
+
+    /// The message a refused Python declaration hands a user.
+    ///
+    /// `expect_err` is not available here: the success type is a production
+    /// type, and deriving `Debug` on it to satisfy a test would be the test
+    /// reshaping library code.
+    fn python_declaration_refusal(class_body_source: &str) -> String {
+        match read_python_declaration(class_body_source) {
+            Ok(_) => panic!("the declaration was accepted; a refusal was expected"),
+            Err(refusal) => refusal,
+        }
+    }
+
+    #[streamlib::sdk::node(
+        execution = reactive,
+        input(
+            "audio",
+            delivery_profile = "ordered",
+            audio_window(
+                sample_rate = 16_000,
+                channels = 1,
+                dtype = "f32",
+                window_size = 512,
+                hop = 160
+            ),
+            family = Channels,
+        ),
+    )]
+    struct RustDeclaredAudioConsumer;
+
+    impl streamlib::sdk::nodes::ReactiveNode for RustDeclaredAudioConsumer::Node {
+        fn process(
+            &mut self,
+            _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
+        ) -> streamlib::sdk::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The frame rate a Rust author declares on an Image output, spelled for
+    /// the same port the Python class below declares.
+    #[streamlib::sdk::node(
+        execution = manual,
+        output("video", family = Image, frame_rate = from_config("frames_per_second")),
+    )]
+    struct RustDeclaredFrameRateSource;
+
+    impl streamlib::sdk::nodes::ManualNode for RustDeclaredFrameRateSource::Node {
+        fn start(
+            &mut self,
+            _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
+        ) -> streamlib::sdk::error::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// One frame rate, two authoring languages, one family declaration.
+    #[test]
+    fn a_python_declared_frame_rate_and_a_rust_declared_one_are_the_same_declaration() {
+        let python_outputs = read_python_declaration(
+            "@node.process(execution='manual')\n\
+             class AudioConsumer:\n\
+             \x20   video = Output(Image, rate=from_config('frames_per_second'))\n",
+        )
+        .expect("the declaration reads")
+        .descriptor
+        .outputs;
+
+        let rust_descriptor =
+            <RustDeclaredFrameRateSource::Node as streamlib::sdk::nodes::GeneratedNode>::descriptor()
+                .expect("the macro emits a descriptor");
+
+        assert_eq!(
+            python_outputs[0].family, rust_descriptor.outputs[0].family,
+            "the two authoring surfaces must produce one declaration"
+        );
+        assert_eq!(
+            python_outputs[0].family.frame_rate.clone(),
+            Some(
+                streamlib::sdk::descriptors::ImageOutputPortFrameRate::FromConfig {
+                    config_key: "frames_per_second".to_string(),
+                }
+            )
+        );
+    }
+
+    /// A frame rate on an output whose family carries none is refused when the
+    /// class is described, naming the port.
+    #[test]
+    fn a_python_declared_frame_rate_on_a_packets_output_is_refused_naming_the_port() {
+        let refusal = python_declaration_refusal(
+            "@node.process(execution='manual')\n\
+             class AudioConsumer:\n\
+             \x20   encoded_video = Output(Packets, rate=30)\n",
+        );
+        assert!(
+            refusal.contains("encoded_video") || refusal.contains("rate"),
+            "got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
+        let python_ports = python_declared_ports(
+            "@node.process\n\
+             class AudioConsumer:\n\
+             \x20   audio = Input(Channels, delivery='ordered',\n\
+             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                  dtype='f32', window_size=512, hop=160))\n",
+        );
+
+        let rust_descriptor =
+            <RustDeclaredAudioConsumer::Node as streamlib::sdk::nodes::GeneratedNode>::descriptor()
+                .expect("the macro emits a descriptor");
+
+        assert_eq!(python_ports.len(), 1);
+        assert_eq!(
+            python_ports[0].audio_window, rust_descriptor.inputs[0].audio_window,
+            "the two authoring surfaces must produce one contract"
+        );
+        assert_eq!(
+            serde_json::to_value(&python_ports[0].audio_window).unwrap(),
+            serde_json::json!({
+                "resolved_from": "declaration",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "dtype": "f32",
+                "window_size": 512,
+                "hop": 160,
+            })
+        );
+    }
+
+    #[test]
+    fn a_python_declared_sentinel_is_refused_at_decoration() {
+        let refusal = python_declaration_refusal(
+            "@node.process(execution='manual')\n\
+             class AudioConsumer:\n\
+             \x20   audio = Input(Channels, delivery='ordered', window=AUDIO_WINDOW_MATCH_DEVICE)\n",
+        );
+
+        assert!(
+            refusal.contains("AUDIO_WINDOW_MATCH_DEVICE")
+                && refusal.contains("helper")
+                && refusal.contains("AudioWindowContract"),
+            "the refusal must name the sentinel, why it cannot resolve, and what to \
+             write instead; got {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_python_port_declaring_no_contract_reaches_the_descriptor_with_none() {
+        let ports = python_declared_ports(
+            "@node.process\n\
+             class AudioConsumer:\n\
+             \x20   audio = Input(Channels, delivery='newest')\n",
+        );
+
+        assert_eq!(ports[0].audio_window, None);
+        assert_eq!(ports[0].delivery_profile.as_deref(), Some("newest"));
+    }
+
+    /// The catalog lists what the descriptor carries, so a port an author spelled
+    /// `Video` has to arrive as the `video` every lookup casts to.
+    #[test]
+    fn a_python_port_reaches_the_descriptor_under_its_cast_name() {
+        let declaration = read_python_declaration(
+            "@node.process\n\
+             class AudioConsumer:\n\
+             \x20   Video = Input(Image, delivery='newest')\n\
+             \x20   Frames_Out = Output(Image)\n",
+        )
+        .expect("the declaration reads");
+
+        assert_eq!(declaration.descriptor.inputs[0].name, "video");
+        assert_eq!(declaration.descriptor.outputs[0].name, "frames_out");
+    }
+
+    #[test]
+    fn a_python_contract_beside_a_skipping_profile_is_refused_naming_both_knobs() {
+        let refusal = python_declaration_refusal(
+            "@node.process\n\
+             class AudioConsumer:\n\
+             \x20   audio = Input(Channels, delivery='newest',\n\
+             \x20       window=AudioWindowContract(sample_rate=16_000, channels=1,\n\
+             \x20                                  dtype='f32', window_size=512))\n",
+        );
+
+        assert!(
+            refusal.contains("audio_window")
+                && refusal.contains("newest")
+                && refusal.contains("ordered"),
+            "the refusal must name both knobs; got {refusal}"
+        );
+    }
+
+    /// The dtype vocabulary is spelled once per language, and nothing but this
+    /// keeps the two from drifting: a third dtype added on the Rust side would
+    /// otherwise be refused by the Python decorator before the bridge that
+    /// accepts it ever runs.
+    #[test]
+    fn both_languages_legalise_the_same_window_dtypes() {
+        Python::initialize();
+        Python::attach(|python| {
+            let namespace = declaration_module_namespace(python);
+
+            let python_dtypes = namespace
+                .get_item("_AUDIO_WINDOW_DTYPES")
+                .unwrap()
+                .expect("the decorator module names its dtypes")
+                .extract::<Vec<String>>()
+                .expect("the dtypes are strings");
+
+            assert_eq!(
+                python_dtypes,
+                streamlib::sdk::descriptors::AUDIO_WINDOW_DTYPE_DECLARATION_VALUES
+                    .map(String::from)
+                    .to_vec()
+            );
+        });
+    }
+}

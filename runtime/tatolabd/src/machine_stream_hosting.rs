@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use streamlib::sdk::logging::PrettyLogMirrorStandardStream;
 use streamlib::sdk::runtime::{
-    ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
+    ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedNodeThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, HowALoadedStreamEnded,
     HowThePreviousRuntimeRunEnded, LoadedStreamInThisRuntime, OpenDescriptorSoftLimitRaise, Runner,
     RunnerConstructionOptions, RuntimeRunInProgressRecord, StreamActionQueued,
@@ -42,7 +42,7 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
     lend_directory: &std::path::Path,
     tatolab_state_directory: &TatolabStateDirectory,
 ) {
-    use streamlib::sdk::processor_interpreter::{
+    use streamlib::sdk::node_interpreter::{
         BROWSER_HOST_SHARED_NATIVE_SERVICE_NAME, browser_host_executable_for_the_lend,
     };
     let Some(browser_host_executable) = browser_host_executable_for_the_lend(lend_directory)
@@ -73,7 +73,7 @@ fn offer_the_browser_host_when_the_runtime_unit_carries_it(
 /// bound it.
 pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
     tatolab_state_directory: &TatolabStateDirectory,
-    processor_interpreter_lend_directory: PathBuf,
+    node_interpreter_lend_directory: PathBuf,
     mut runtime_run_in_progress_record: RuntimeRunInProgressRecord,
     how_the_previous_run_ended: &HowThePreviousRuntimeRunEnded,
     loopback_http_listener_bound_by_the_machine_runtime_lock: Option<std::net::TcpListener>,
@@ -90,16 +90,16 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         }
     };
     log_the_open_descriptor_soft_limit_raise(&raise_the_open_descriptor_soft_limit_to_its_ceiling());
-    let lend_directory = processor_interpreter_lend_directory.clone();
+    let lend_directory = node_interpreter_lend_directory.clone();
     if let Err(lend_directory_refusal) =
-        engine.set_processor_interpreter_lend_directory(processor_interpreter_lend_directory)
+        engine.set_node_interpreter_lend_directory(node_interpreter_lend_directory)
     {
         return write_refusal_to_standard_error(&format!(
             "the engine could not be handed its lend directory: {lend_directory_refusal}"
         ));
     }
     match crate::runtime_unit_executable_beside_tatolabd::runtime_unit_executable_beside_this_one(
-        streamlib::sdk::processor_interpreter::RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
+        streamlib::sdk::node_interpreter::RUNTIME_UNIT_UV_EXECUTABLE_FILE_NAME,
     ) {
         Ok(runtime_unit_uv) => {
             if let Err(uv_refusal) = engine.set_runtime_unit_uv_executable(runtime_unit_uv) {
@@ -131,7 +131,7 @@ pub(crate) fn host_the_machines_streams_until_a_machine_shutdown(
         &lend_directory,
         tatolab_state_directory,
     );
-    streamlib_media_builtins::register_media_builtin_processor_types();
+    streamlib_media_builtins::register_media_builtin_node_types();
     #[cfg(feature = "machine-directories-under-a-test-root")]
     crate::crash_on_demand_test_node::register_the_crash_on_demand_test_node();
     #[cfg(feature = "machine-directories-under-a-test-root")]
@@ -281,7 +281,7 @@ fn exit_status_once_the_engine_is_torn_down(
         EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(_) => {
             EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED as u8
         }
-        EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(_)
+        EngineTeardownOutcome::LeftBeneathAbandonedNodeThreads(_)
         | EngineTeardownOutcome::StillReferenced(_) => EXIT_STATUS_OF_A_REFUSAL,
         EngineTeardownOutcome::Dropped if run_outcome.is_err() => EXIT_STATUS_OF_A_REFUSAL,
         EngineTeardownOutcome::Dropped => 0,
@@ -304,7 +304,7 @@ fn refusals_written_once_the_engine_is_torn_down(
     }
     match engine_teardown_outcome {
         EngineTeardownOutcome::Dropped => {}
-        EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(description)
+        EngineTeardownOutcome::LeftBeneathAbandonedNodeThreads(description)
         | EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(description)
         | EngineTeardownOutcome::StillReferenced(description) => refusals.push(description.clone()),
     }
@@ -315,10 +315,7 @@ fn refusals_written_once_the_engine_is_torn_down(
 enum EngineTeardownOutcome {
     /// Every engine thread joined, and the engine dropped.
     Dropped,
-    /// Processor threads ignored shutdown past their budget, so the engine is
-    /// left alive beneath them until the process exits: a thread returning late
-    /// would otherwise run the engine's drop on its own thread.
-    LeftBeneathAbandonedProcessorThreads(String),
+    LeftBeneathAbandonedNodeThreads(String),
     /// A stream's teardown outlived its watchdog and its thread was
     /// abandoned, so the engine is left alive beneath it and the process ends
     /// with the watchdog's status.
@@ -348,13 +345,11 @@ fn tear_the_engine_down(
             .iter()
             .filter_map(|stream| stream_teardown_abandoned_by_its_watchdog(stream))
             .collect();
-    let abandoned_processor_threads: Vec<_> =
-        streams_loaded_at_or_after_the_machine_shutdown_request
-            .iter()
-            .flat_map(|stream| stream.processor_threads_abandoned_and_still_running())
-            .collect();
-    if !teardowns_abandoned_by_their_watchdogs.is_empty() || !abandoned_processor_threads.is_empty()
-    {
+    let abandoned_node_threads: Vec<_> = streams_loaded_at_or_after_the_machine_shutdown_request
+        .iter()
+        .flat_map(|stream| stream.node_threads_abandoned_and_still_running())
+        .collect();
+    if !teardowns_abandoned_by_their_watchdogs.is_empty() || !abandoned_node_threads.is_empty() {
         // The report goes straight to the real standard error, because the
         // forgotten engine never drops its hold on the process logging
         // pathway, which is what gives the standard streams back.
@@ -362,8 +357,8 @@ fn tear_the_engine_down(
         std::mem::forget(streams_loaded_at_or_after_the_machine_shutdown_request);
         std::mem::forget(engine);
         return if teardowns_abandoned_by_their_watchdogs.is_empty() {
-            EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
-                DescriptionOfTheAbandonedProcessorThreads(&abandoned_processor_threads).to_string(),
+            EngineTeardownOutcome::LeftBeneathAbandonedNodeThreads(
+                DescriptionOfTheAbandonedNodeThreads(&abandoned_node_threads).to_string(),
             )
         } else {
             EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
@@ -418,10 +413,10 @@ mod tests {
     fn an_engine_left_alive_after_a_refused_run_writes_the_run_refusal_then_the_teardown() {
         for (engine_teardown_outcome, teardown_description) in [
             (
-                EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
-                    "a processor thread was abandoned".to_owned(),
+                EngineTeardownOutcome::LeftBeneathAbandonedNodeThreads(
+                    "a node thread was abandoned".to_owned(),
                 ),
-                "a processor thread was abandoned",
+                "a node thread was abandoned",
             ),
             (
                 EngineTeardownOutcome::LeftBeneathAStreamTeardownItsWatchdogAbandoned(
@@ -478,8 +473,8 @@ mod tests {
             EXIT_STATUS_OF_A_REFUSAL
         );
         for engine_teardown_outcome in [
-            EngineTeardownOutcome::LeftBeneathAbandonedProcessorThreads(
-                "a processor thread was abandoned".to_owned(),
+            EngineTeardownOutcome::LeftBeneathAbandonedNodeThreads(
+                "a node thread was abandoned".to_owned(),
             ),
             EngineTeardownOutcome::StillReferenced("a live reference was left".to_owned()),
         ] {

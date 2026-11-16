@@ -11,12 +11,11 @@ fn register_a_family_type(
     short: &str,
     inputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
     outputs: &[(&str, streamlib::sdk::descriptors::PortFamily)],
-) -> ProcessorClassImportPath {
+) -> NodeClassImportPath {
     use streamlib::sdk::descriptors::PortFamilyDeclaration;
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let mut descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short).unwrap(),
+    let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let mut descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short).unwrap(),
         import_path.clone(),
         "graph variable test",
     );
@@ -36,13 +35,13 @@ fn register_a_family_type(
             PortFamilyDeclaration::of_family(*family),
         ));
     }
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
 fn an_image_variable_read_by_two_readers(
-    camera: &ProcessorClassImportPath,
-    second_reader: &ProcessorClassImportPath,
+    camera: &NodeClassImportPath,
+    second_reader: &NodeClassImportPath,
 ) -> serde_json::Value {
     serde_json::json!({
         "stream": "image-variable",
@@ -153,10 +152,10 @@ fn a_get_read_as_the_wrong_family_is_refused_at_load_naming_the_get_and_its_vari
 fn a_variable_holding_a_gateway_reference_renders_a_reference_edge_and_loads_back() {
     let gateway = register_test_type("VariableGateway", "_unused_in", "_unused_out");
     let track_import_path =
-        ProcessorClassImportPath::new(format!("{}::VariableTrack", module_path!())).unwrap();
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
-        ProcessorDescriptor::new(
-            ProcessorClassShortName::new("VariableTrack").unwrap(),
+        NodeClassImportPath::new(format!("{}::VariableTrack", module_path!())).unwrap();
+    let _ = NODE_REGISTRY.register_descriptor_only(
+        NodeDescriptor::new(
+            NodeClassShortName::new("VariableTrack").unwrap(),
             track_import_path.clone(),
             "graph variable test",
         )
@@ -311,9 +310,9 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
     let camera_id = first
         .the_node_named("camera")
         .expect("the camera node is in the graph")
-        .processor_id;
+        .node_run_id;
     let removal_refusal = first
-        .remove_processor(&camera_id)
+        .remove_node(&camera_id)
         .expect_err("removing the node the GraphOutput's link names is refused")
         .to_string();
     assert!(
@@ -321,9 +320,8 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
         "{removal_refusal}"
     );
     let name_refusal = first
-        .add_processor(
-            ProcessorSpec::new(display.clone(), serde_json::json!({}))
-                .with_display_name("Overlay In"),
+        .add_node(
+            NodeSpec::new(display.clone(), serde_json::json!({})).with_display_name("Overlay In"),
         )
         .expect_err("a node added live under an interface node's name is refused");
     assert!(
@@ -366,11 +364,10 @@ fn a_streams_interface_renders_as_drawn_loads_back_and_a_family_mismatch_is_refu
 fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port_is_refused() {
     use streamlib::sdk::descriptors::{PortFamily, PortFamilyDeclaration};
     let import_path =
-        ProcessorClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!()))
-            .unwrap();
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
-        ProcessorDescriptor::new(
-            ProcessorClassShortName::new("InterfaceTrackReceive").unwrap(),
+        NodeClassImportPath::new(format!("{}::InterfaceTrackReceive", module_path!())).unwrap();
+    let _ = NODE_REGISTRY.register_descriptor_only(
+        NodeDescriptor::new(
+            NodeClassShortName::new("InterfaceTrackReceive").unwrap(),
             import_path.clone(),
             "graph interface test",
         )
@@ -406,13 +403,13 @@ fn a_live_config_update_under_which_a_declared_output_no_longer_matches_its_port
     let receive_id = stream
         .the_node_named("receive")
         .expect("the receive node is in the graph")
-        .processor_id;
+        .node_run_id;
 
     stream
-        .update_processor_config(&receive_id, serde_json::json!({"family": "packets"}))
+        .update_node_config(&receive_id, serde_json::json!({"family": "packets"}))
         .expect("an update keeping the family is taken");
     let refusal = stream
-        .update_processor_config(&receive_id, serde_json::json!({"family": "records"}))
+        .update_node_config(&receive_id, serde_json::json!({"family": "records"}))
         .expect_err("an update changing the family under the declared Output is refused")
         .to_string();
     assert!(

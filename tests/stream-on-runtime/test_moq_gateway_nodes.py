@@ -11,7 +11,7 @@ import pytest
 
 from conftest import TatolabdUnderTest
 from fixture_moq_relay import fixture_moq_relay_url  # noqa: F401  (a pytest fixture)
-from moq_gateway_processors import RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER
+from moq_gateway_nodes import RECORD_RECEIVED_THROUGH_THE_RELAY_MARKER
 from moq_gateway_streams import (
     FIXTURE_RELAY_URL_ENVIRONMENT_VARIABLE,
     counting_records_sent_to_the_relay_and_read_back,

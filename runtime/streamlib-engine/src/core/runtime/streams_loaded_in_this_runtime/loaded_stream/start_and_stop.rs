@@ -17,12 +17,12 @@ use crate::core::context::{
 use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{
-    GraphNodeWithComponents, GraphState, ObservableGraphReadiness, ProcessorPauseGateComponent,
-    ProcessorUniqueId, StateComponent, StepProgressOfOneNodeComponent,
+    GraphNodeWithComponents, GraphState, ObservableGraphReadiness, NodePauseGateComponent,
+    NodeRunId, StateComponent, StepProgressOfOneNodeComponent,
 };
 use crate::core::media_clock::MediaClock;
-use crate::core::processors::{ProcessorSpec, ProcessorState};
-use crate::core::pubsub::{Event, PUBSUB, ProcessorEvent, RuntimeEvent};
+use crate::core::nodes::{NodeSpec, NodeState};
+use crate::core::pubsub::{Event, PUBSUB, NodeEvent, RuntimeEvent};
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::{
     LiveLinkAsGiven, LiveNodeAsTheGraphHoldsIt, the_live_links_as_given_by_node_uuid_of,
     the_live_nodes_as_given_of,
@@ -105,10 +105,7 @@ impl LoadedStreamInThisRuntime {
                     node.get::<StepProgressOfOneNodeComponent>()
                         .is_some_and(|step_progress| step_progress.0.paces_its_own_callbacks())
                         && !node.get::<StateComponent>().is_some_and(|state| {
-                            matches!(
-                                state.current(),
-                                ProcessorState::Stopped | ProcessorState::Error
-                            )
+                            matches!(state.current(), NodeState::Stopped | NodeState::Error)
                         })
                 })
                 .map(|node| node.display_name.clone())
@@ -126,8 +123,6 @@ impl LoadedStreamInThisRuntime {
         self.start_with_the_graph_state(GraphState::Running)
     }
 
-    /// Start the stream as [`Self::start`] does with every processor it
-    /// prepares paused, so none processes until [`Self::resume`].
     pub fn start_paused(self: &Arc<Self>) -> Result<()> {
         self.start_with_the_graph_state(GraphState::Paused)
     }
@@ -259,16 +254,6 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
-    /// Stop the stream: every processor removed, its audio clock stopped, its
-    /// surface store closed and every surface it registered released, and its
-    /// runtime context cleared. Never touches the engine's GPU device, surface
-    /// service, iceoryx2 node or tokio.
-    ///
-    /// Runs every step even when removing the processors failed, and reports
-    /// that failure once the rest is down. Idempotent. The stream stays loaded,
-    /// its name taken, until [`Runner::unload_stream`] ends it.
-    ///
-    /// [`Runner::unload_stream`]: crate::core::runtime::Runner::unload_stream
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -306,28 +291,27 @@ impl LoadedStreamInThisRuntime {
         }
 
         let this_streams_runtime_context_while_started = self.runtime_context.lock().clone();
-        let (processor_count, nodes_torn_down, links_torn_down) =
-            self.compiler.scope(|graph, tx| {
-                let nodes_torn_down = the_live_nodes_as_given_of(graph);
-                let links_torn_down = the_live_links_as_given_by_node_uuid_of(graph);
-                let processor_ids: Vec<ProcessorUniqueId> = graph.traversal().v(()).ids();
-                let count = processor_ids.len();
-                for proc_id in processor_ids {
-                    tx.log(PendingOperation::RemoveProcessor(proc_id));
-                }
-                graph.set_state(GraphState::Idle);
-                (count, nodes_torn_down, links_torn_down)
-            });
-        tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
+        let (node_count, nodes_torn_down, links_torn_down) = self.compiler.scope(|graph, tx| {
+            let nodes_torn_down = the_live_nodes_as_given_of(graph);
+            let links_torn_down = the_live_links_as_given_by_node_uuid_of(graph);
+            let node_run_ids: Vec<NodeRunId> = graph.traversal().v(()).ids();
+            let count = node_run_ids.len();
+            for proc_id in node_run_ids {
+                tx.log(PendingOperation::RemoveNode(proc_id));
+            }
+            graph.set_state(GraphState::Idle);
+            (count, nodes_torn_down, links_torn_down)
+        });
+        tracing::info!("[stop] Queued removal of {} node(s)", node_count);
 
-        let mut processor_removal_outcome = Ok(());
+        let mut node_removal_outcome = Ok(());
         if let Some(this_streams_runtime_context) = this_streams_runtime_context_while_started {
-            tracing::debug!("[stop] Committing processor teardown");
+            tracing::debug!("[stop] Committing node teardown");
             self.teardown_progress_note()
-                .note_what_the_teardown_is_waiting_on("removing every processor");
-            processor_removal_outcome = self.compiler.commit(&this_streams_runtime_context);
-            if let Err(removal_failure) = &processor_removal_outcome {
-                tracing::error!("[stop] Removing the processors failed: {removal_failure}");
+                .note_what_the_teardown_is_waiting_on("removing every node");
+            node_removal_outcome = self.compiler.commit(&this_streams_runtime_context);
+            if let Err(removal_failure) = &node_removal_outcome {
+                tracing::error!("[stop] Removing the nodes failed: {removal_failure}");
             }
             *self.graph_only_nodes_as_drawn.lock() = GraphOnlyNodesAsDrawn::default();
             self.compiler.scope(|this_streams_graph, _tx| {
@@ -359,13 +343,9 @@ impl LoadedStreamInThisRuntime {
         *self.status.lock() = RuntimeStatus::Stopped;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimeStopped);
         tracing::info!("[stop] The stream `{}` stopped", self.stream_id());
-        (processor_removal_outcome, nodes_torn_down, links_torn_down)
+        (node_removal_outcome, nodes_torn_down, links_torn_down)
     }
 
-    /// Stop this stream's playback and keep its graph: every processor instance, device claim,
-    /// surface and the clock torn down as [`Self::stop`] does, then each node and link put back
-    /// unbuilt under its UUID, so the stream reads and edits held stopped and its next
-    /// [`Self::start`] runs the graph fresh. Reads no graph document and describes no type.
     #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -377,19 +357,19 @@ impl LoadedStreamInThisRuntime {
         let (teardown_outcome, nodes_of_the_graph, links_of_the_graph) =
             self.stop_holding_the_start_or_stop_lock();
 
-        let mut processor_of_each_node_uuid: HashMap<Uuid, ProcessorUniqueId> =
+        let mut node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> =
             HashMap::with_capacity(nodes_of_the_graph.len());
         for node in nodes_of_the_graph {
-            let spec = ProcessorSpec::new(node.processor_type, node.config)
+            let spec = NodeSpec::new(node.node_type, node.config)
                 .with_display_name(node.display_name)
                 .with_pins_and_studio_fields(node.pins, node.studio)
                 .with_exposed_config_fields(node.exposed_config_fields)
                 .with_node_uuid(node.node_uuid);
-            let put_back = self.add_processor_of_a_validated_graph_load(spec)?;
-            processor_of_each_node_uuid.insert(node.node_uuid, put_back.processor_id);
+            let put_back = self.add_node_of_a_validated_graph_load(spec)?;
+            node_run_id_of_each_node_uuid.insert(node.node_uuid, put_back.node_run_id);
         }
-        let processor_of = |node_uuid: &Uuid| -> Result<ProcessorUniqueId> {
-            processor_of_each_node_uuid
+        let node_of = |node_uuid: &Uuid| -> Result<NodeRunId> {
+            node_run_id_of_each_node_uuid
                 .get(node_uuid)
                 .cloned()
                 .ok_or_else(|| {
@@ -402,8 +382,8 @@ impl LoadedStreamInThisRuntime {
         } in links_of_the_graph
         {
             self.connect(
-                OutputLinkPortRef::new(processor_of(&link.source_node)?, &link.source_port),
-                InputLinkPortRef::new(processor_of(&link.target_node)?, &link.target_port),
+                OutputLinkPortRef::new(node_of(&link.source_node)?, &link.source_port),
+                InputLinkPortRef::new(node_of(&link.target_node)?, &link.target_port),
             )?;
         }
         let node_names_the_graph_only_nodes_hold = graph_only_nodes_as_drawn.node_names_cast();
@@ -418,8 +398,6 @@ impl LoadedStreamInThisRuntime {
         teardown_outcome
     }
 
-    /// Whether this stream is held stopped: loaded as a graph model that reads and edits, with
-    /// no processor, runtime context or clock until its start.
     pub fn is_held_stopped(&self) -> bool {
         self.is_held_stopped.load(Ordering::Acquire)
     }
@@ -429,25 +407,17 @@ impl LoadedStreamInThisRuntime {
         self.is_held_stopped.store(true, Ordering::Release);
     }
 
-    // =========================================================================
-    // Per-processor pause/resume
-    // =========================================================================
-
-    /// Pause a specific processor.
-    pub fn pause_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn pause_node(&self, node_run_id: &NodeRunId) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         self.compiler.scope(|graph, _tx| {
             let node = graph
                 .traversal()
-                .v(processor_id)
+                .v(node_run_id)
                 .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
 
-            let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                Error::Runtime(format!(
-                    "Processor '{}' has no ProcessorPauseGate",
-                    processor_id
-                ))
+            let pause_gate = node.get::<NodePauseGateComponent>().ok_or_else(|| {
+                Error::Runtime(format!("Node '{}' has no NodePauseGate", node_run_id))
             })?;
 
             if pause_gate.is_paused() {
@@ -460,32 +430,28 @@ impl LoadedStreamInThisRuntime {
 
             // One still in setup takes the gate's state when its setup returns.
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to_only_from(ProcessorState::Running, ProcessorState::Paused);
+                state.transition_to_only_from(NodeState::Running, NodeState::Paused);
             }
 
-            let event = Event::processor(processor_id, ProcessorEvent::Paused);
+            let event = Event::node(node_run_id, NodeEvent::Paused);
             PUBSUB.publish(&event.topic(), &event);
 
-            tracing::info!("[{}] Processor paused", processor_id);
+            tracing::info!("[{}] Node paused", node_run_id);
             Ok(())
         })
     }
 
-    /// Resume a specific processor.
-    pub fn resume_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
+    pub fn resume_node(&self, node_run_id: &NodeRunId) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         self.compiler.scope(|graph, _tx| {
             let node = graph
                 .traversal()
-                .v(processor_id)
+                .v(node_run_id)
                 .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
 
-            let pause_gate = node.get::<ProcessorPauseGateComponent>().ok_or_else(|| {
-                Error::Runtime(format!(
-                    "Processor '{}' has no ProcessorPauseGate",
-                    processor_id
-                ))
+            let pause_gate = node.get::<NodePauseGateComponent>().ok_or_else(|| {
+                Error::Runtime(format!("Node '{}' has no NodePauseGate", node_run_id))
             })?;
 
             if !pause_gate.is_paused() {
@@ -497,29 +463,28 @@ impl LoadedStreamInThisRuntime {
                 .store(false, std::sync::atomic::Ordering::Release);
 
             if let Some(state) = node.get::<StateComponent>() {
-                state.transition_to_only_from(ProcessorState::Paused, ProcessorState::Running);
+                state.transition_to_only_from(NodeState::Paused, NodeState::Running);
             }
 
-            let event = Event::processor(processor_id, ProcessorEvent::Resumed);
+            let event = Event::node(node_run_id, NodeEvent::Resumed);
             PUBSUB.publish(&event.topic(), &event);
 
-            tracing::info!("[{}] Processor resumed", processor_id);
+            tracing::info!("[{}] Node resumed", node_run_id);
             Ok(())
         })
     }
 
-    /// Whether a specific processor is paused.
-    pub fn is_processor_paused(&self, processor_id: &ProcessorUniqueId) -> Result<bool> {
+    pub fn is_node_paused(&self, node_run_id: &NodeRunId) -> Result<bool> {
         self.compiler.scope(|graph, _tx| {
             let node = graph
                 .traversal()
-                .v(processor_id)
+                .v(node_run_id)
                 .first()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
 
             let pause_gate = node
-                .get::<ProcessorPauseGateComponent>()
-                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+                .get::<NodePauseGateComponent>()
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
 
             Ok(pause_gate.is_paused())
         })
@@ -529,11 +494,6 @@ impl LoadedStreamInThisRuntime {
     // Graph readiness
     // =========================================================================
 
-    /// Take hold of every processor's state, to wait on without the graph.
-    ///
-    /// The graph lock is released before anything blocks on what it hands
-    /// back: the transitions being waited for are made by processor threads
-    /// that need that lock.
     pub fn observable_graph_readiness(&self) -> ObservableGraphReadiness {
         ObservableGraphReadiness::new(self.compiler.scope(|graph, _tx| {
             graph
@@ -570,26 +530,22 @@ impl LoadedStreamInThisRuntime {
         capture_devices
     }
 
-    /// Block until every processor in this stream has finished `setup` and
-    /// reached `Running`, giving up after `timeout`.
-    pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
+    pub fn wait_until_every_node_is_running(&self, timeout: Duration) -> Result<()> {
         self.observable_graph_readiness()
-            .wait_until_every_processor_is_running(timeout)
+            .wait_until_every_node_is_running(timeout)
     }
 
     // =========================================================================
     // Whole-stream pause/resume
     // =========================================================================
 
-    /// Pause every processor in this stream; one a compile prepares while it
-    /// is paused starts paused.
     pub fn pause(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Pausing;
         self.publish_on_this_streams_topic(RuntimeEvent::RuntimePausing);
 
-        let processor_ids =
-            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Paused);
+        let node_run_ids =
+            self.set_the_graph_state_and_take_every_prepared_node_run_id(GraphState::Paused);
         if let Some(this_streams_runtime_context) = self.runtime_context.lock().clone() {
             this_streams_runtime_context
                 .stream_clock
@@ -597,10 +553,10 @@ impl LoadedStreamInThisRuntime {
         }
 
         let mut failures = Vec::new();
-        for processor_id in &processor_ids {
-            if let Err(e) = self.pause_processor(processor_id) {
-                tracing::warn!("[{}] Failed to pause: {}", processor_id, e);
-                failures.push((processor_id.clone(), e));
+        for node_run_id in &node_run_ids {
+            if let Err(e) = self.pause_node(node_run_id) {
+                tracing::warn!("[{}] Failed to pause: {}", node_run_id, e);
+                failures.push((node_run_id.clone(), e));
             }
         }
 
@@ -609,34 +565,28 @@ impl LoadedStreamInThisRuntime {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimePaused);
         } else {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimePauseFailed {
-                error: format!("{} processor(s) rejected pause", failures.len()),
+                error: format!("{} node(s) rejected pause", failures.len()),
             });
         }
         Ok(())
     }
 
-    /// Set this stream's graph state to `graph_state` and take the id of every
-    /// processor a compile prepared, under one graph lock: a processor prepared
-    /// after it takes its pause gate from `graph_state`, and one prepared
-    /// before it is in the ids.
-    fn set_the_graph_state_and_take_every_prepared_processor_id(
+    fn set_the_graph_state_and_take_every_prepared_node_run_id(
         &self,
         graph_state: GraphState,
-    ) -> Vec<ProcessorUniqueId> {
+    ) -> Vec<NodeRunId> {
         self.compiler.scope(|graph, _tx| {
             graph.set_state(graph_state);
             graph
                 .traversal()
                 .v(())
                 .iter()
-                .filter(|node| node.has::<ProcessorPauseGateComponent>())
+                .filter(|node| node.has::<NodePauseGateComponent>())
                 .map(|node| node.id.clone())
                 .collect()
         })
     }
 
-    /// Resume every processor in this stream, then compile every graph change
-    /// logged while it was paused.
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Starting;
@@ -647,14 +597,14 @@ impl LoadedStreamInThisRuntime {
                 .stream_clock
                 .carry_on_from_where_the_pause_held_it();
         }
-        let processor_ids =
-            self.set_the_graph_state_and_take_every_prepared_processor_id(GraphState::Running);
+        let node_run_ids =
+            self.set_the_graph_state_and_take_every_prepared_node_run_id(GraphState::Running);
 
         let mut failures = Vec::new();
-        for processor_id in &processor_ids {
-            if let Err(e) = self.resume_processor(processor_id) {
-                tracing::warn!("[{}] Failed to resume: {}", processor_id, e);
-                failures.push((processor_id.clone(), e));
+        for node_run_id in &node_run_ids {
+            if let Err(e) = self.resume_node(node_run_id) {
+                tracing::warn!("[{}] Failed to resume: {}", node_run_id, e);
+                failures.push((node_run_id.clone(), e));
             }
         }
 
@@ -669,7 +619,7 @@ impl LoadedStreamInThisRuntime {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResumed);
         } else {
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeResumeFailed {
-                error: format!("{} processor(s) rejected resume", failures.len()),
+                error: format!("{} node(s) rejected resume", failures.len()),
             });
         }
         committed

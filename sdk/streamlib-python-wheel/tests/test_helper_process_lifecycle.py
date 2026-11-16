@@ -1,13 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The lifecycle a helper process runs its processor through: setup, ready,
-process, pause and resume, the reactive wait, pacing and configuration.
-
-Everything here drives the helper's own halves against a stand-in parent, so
-what the loop does is asserted directly rather than inferred from a running
-graph.
-"""
 
 import json
 import os
@@ -26,14 +19,14 @@ from helper_process_test_support import (
     frame_index_payload,
 )
 from tatolab.runtime import _engine
-from tatolab.runtime import _processor_interpreter_bootstrap as processor_interpreter_bootstrap
-from tatolab.runtime._function_node_run_as_its_helpers_processor import (
-    the_processor_class_a_promoted_function_node_runs_as,
+from tatolab.runtime import _node_interpreter_bootstrap as node_interpreter_bootstrap
+from tatolab.runtime._function_node_run_as_a_standalone_node import (
+    the_node_class_a_promoted_function_node_runs_as,
 )
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime._node_interpreter_bootstrap import (
     HelperProcessLifecycle,
     ParentProcessBridge,
-    load_processor_class,
+    load_node_class,
 )
 from tatolab.stream import node
 
@@ -49,7 +42,7 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send(
@@ -92,7 +85,7 @@ def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
         link_data_access = _engine.open_node_link_data_access_for_helper_process()
         HelperProcessLifecycle(
             bridge,
-            the_processor_class_a_promoted_function_node_runs_as(
+            the_node_class_a_promoted_function_node_runs_as(
                 function_node, f"{__name__}:{function_node.__name__}", node_id, link_data_access
             ),
             "R-helper-test",
@@ -115,13 +108,13 @@ def test_a_promoted_function_nodes_ready_says_how_its_own_helper_runs_it(
     assert not lifecycle_thread.is_alive()
 
 
-def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_parent):
+def test_a_node_that_cannot_set_itself_up_reports_the_failure(stand_in_parent):
     """`setup` is the one hook whose failure the parent is blocked on, so it
     must arrive as an error rather than be logged and answered `ready`."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RefusesSetupProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RefusesSetupProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -134,7 +127,7 @@ def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_pare
     lifecycle_thread.join(timeout=5.0)
 
 
-def test_a_manual_processor_whose_start_raised_fails_its_node(
+def test_a_manual_node_whose_start_raised_fails_its_node(
     stand_in_parent, log_records_this_process_sends_its_stand_in_parent
 ):
     """`run` is unanswered, so a `start()` that raised reaches the parent as the
@@ -146,7 +139,7 @@ def test_a_manual_processor_whose_start_raised_fails_its_node(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesInStartProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RaisesInStartProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -185,7 +178,7 @@ def test_a_manual_node_not_ready_from_start_is_reported_and_its_config_update_re
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:NotReadyInStartProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:NotReadyInStartProbe")
     )
 
     def the_next_frame_other_than_a_log() -> dict:
@@ -240,7 +233,7 @@ def test_a_running_manual_node_reported_from_another_thread_is_fed_transparent_f
     CONTEXT_THE_REPORTED_FROM_ANOTHER_THREAD_PROBE_KEPT.clear()
     transparent_frame_sends: "list[tuple[int, int]]" = []
     monkeypatch.setattr(
-        processor_interpreter_bootstrap.TransparentFramesOnTheImageOutputsOfANodeNotReady,
+        node_interpreter_bootstrap.TransparentFramesOnTheImageOutputsOfANodeNotReady,
         "send_one_transparent_frame_on_each_image_output",
         lambda self, context, image_width, image_height: transparent_frame_sends.append(
             (image_width, image_height)
@@ -249,7 +242,7 @@ def test_a_running_manual_node_reported_from_another_thread_is_fed_transparent_f
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ReportedFromAnotherThreadProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ReportedFromAnotherThreadProbe")
     )
 
     def the_next_frame_other_than_a_log() -> dict:
@@ -328,7 +321,7 @@ def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:NotReadyUntilToldOtherwiseProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:NotReadyUntilToldOtherwiseProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -378,20 +371,13 @@ def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_
 def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_cleanly(
     stand_in_parent,
 ):
-    """The first raise of a run sends the parent what `process()` raised, the
-    raises after it send nothing, and the first clean call sends `null`; the
-    processor keeps being driven throughout.
-
-    Fail-without-fix: the raise is only logged, no `set_process_raising_because`
-    arrives, and the graph shows the node `Running` with nothing amiss.
-    """
     from helper_process_probes import RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES
 
     RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = True
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -449,7 +435,7 @@ def test_a_raise_report_the_parent_refused_is_sent_again_on_the_next_call(stand_
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -503,7 +489,7 @@ def test_a_clean_call_after_a_refused_raise_report_tells_the_parent_it_runs_clea
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RaisesUntilToldNotToProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -550,7 +536,7 @@ def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ImportsADmaBufOffLinuxProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ImportsADmaBufOffLinuxProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -570,7 +556,7 @@ def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_pa
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -587,18 +573,10 @@ def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_pa
 
 
 def test_an_idle_reactive_helper_answers_a_command_the_moment_it_arrives(stand_in_parent):
-    """A reactive helper parked on its listener wakes for a parent's command as
-    well as for a notify, so an idle processor hears `stop` or `on_pause` at
-    once rather than when its wait next times out.
-
-    Fail-without-fix: wait on the listener alone with the old 100 ms bound and
-    each command sent to the parked loop waits out most of that bound, putting
-    the median round trip near 100 ms.
-    """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
     stand_in_parent.send(
         {
@@ -665,13 +643,13 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         assert bridge.lifecycle_command_arrival_fd() > 1024
         bridge.start_reading()
         lifecycle_thread = drive_lifecycle_on_a_thread(
-            bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+            bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
         )
 
         inbound_link_id = "L-high-fd-in"
         outbound_link_id = "L-high-fd-out"
         downstream = _engine.open_node_link_data_access_for_helper_process()
-        processor_interpreter_bootstrap.wire_link_data_access(
+        node_interpreter_bootstrap.wire_link_data_access(
             downstream,
             {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
         )
@@ -690,7 +668,7 @@ def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_
         stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
         upstream = _engine.open_node_link_data_access_for_helper_process()
-        processor_interpreter_bootstrap.wire_link_data_access(
+        node_interpreter_bootstrap.wire_link_data_access(
             upstream,
             {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
         )
@@ -729,7 +707,7 @@ def test_an_unknown_lifecycle_command_is_survived(stand_in_parent):
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     stand_in_parent.send({"cmd": "reticulate_splines"})
@@ -739,8 +717,6 @@ def test_an_unknown_lifecycle_command_is_survived(stand_in_parent):
     assert not lifecycle_thread.is_alive()
 
 
-# The interval the engine's scheduling loop runs a continuous processor
-# declaring none at.
 THE_ENGINES_CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
 
 
@@ -763,7 +739,7 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -783,7 +759,7 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     return run_sent_ns
 
 
-def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
+def test_a_continuous_node_runs_once_per_interval_longer_than_the_command_wait(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
     """A 250 ms interval over 1.1 s is a call at the start and four ticks, so
@@ -801,15 +777,13 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
     )
 
 
-def test_a_paused_continuous_processor_is_not_called_until_it_resumes(
+def test_a_paused_continuous_node_is_not_called_until_it_resumes(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """The native runner skips a paused continuous processor's `process()`;
-    the helper's continuous loop does the same."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
@@ -840,12 +814,9 @@ def test_a_paused_continuous_processor_is_not_called_until_it_resumes(
     assert calls_after_resuming > 0, "process() never ran after the resume"
 
 
-def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
+def test_a_continuous_node_runs_at_the_start_rather_than_one_interval_in(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """The native runner calls a continuous processor at once and then paces
-    it, so a Python source's first bag does not trail a Rust one's by an
-    interval."""
     run_sent_ns = run_the_pacing_probe(
         stand_in_parent, interval_ms=1000, running_seconds=0.6
     )
@@ -854,23 +825,17 @@ def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     first_call_after_run_ms = (when_the_pacing_probe_processed_ns[0] - run_sent_ns) / 1e6
     assert first_call_after_run_ms < 500, (
         f"the first process() came {first_call_after_run_ms:.0f} ms after run; a "
-        f"continuous processor runs at the start"
+        f"continuous node runs at the start"
     )
 
 
-def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
+def test_a_continuous_node_with_no_interval_never_runs_faster_than_the_floor(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """An interval of zero runs as often as the engine's floor allows and no
-    more, so a processor with nothing to do does not take a whole core.
-
-    Fail-without-fix: the zero-interval loop calls `process()` back to back
-    with no wait at all, hundreds of thousands of times a second.
-    """
     run_the_pacing_probe(stand_in_parent, interval_ms=0, running_seconds=0.5)
 
     process_calls = len(when_the_pacing_probe_processed_ns)
-    assert process_calls >= 2, "the zero-interval loop never ran the processor"
+    assert process_calls >= 2, "the zero-interval loop never ran the node"
     measured_span_seconds = (
         when_the_pacing_probe_processed_ns[-1] - when_the_pacing_probe_processed_ns[0]
     ) / 1_000_000_000
@@ -889,7 +854,7 @@ def reconfigure_a_set_up_probe(stand_in_parent, probe_name: str, configuration: 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:{probe_name}")
+        bridge, load_node_class(f"{PROBE_MODULE}:{probe_name}")
     )
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     stand_in_parent.receive()
@@ -904,7 +869,7 @@ def reconfigure_a_set_up_probe(stand_in_parent, probe_name: str, configuration: 
     return answer
 
 
-def test_a_configuration_the_processor_takes_is_answered_ok(stand_in_parent):
+def test_a_configuration_the_node_takes_is_answered_ok(stand_in_parent):
     answer = reconfigure_a_set_up_probe(
         stand_in_parent, "TakesReconfigurationProbe", {"gain": 3}
     )
@@ -919,15 +884,9 @@ def test_a_configuration_the_processor_takes_is_answered_ok(stand_in_parent):
         ("RefusesSetupProbe", "setup did not succeed"),
     ],
 )
-def test_a_configuration_the_processor_does_not_take_is_refused_naming_the_cause(
+def test_a_configuration_the_node_does_not_take_is_refused_naming_the_cause(
     stand_in_parent, probe_name, the_cause_named
 ):
-    """The parent reports a refused update to its caller and keeps the graph's
-    previous configuration, which it can only do if the refusal reaches it.
-
-    Fail-without-fix: the helper logs the refusal and answers `ok`, so the
-    parent reports a configuration the processor never took.
-    """
     answer = reconfigure_a_set_up_probe(stand_in_parent, probe_name, {"gain": 3})
     assert answer["rpc"] == "error"
     assert the_cause_named in answer["error"]

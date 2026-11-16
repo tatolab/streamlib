@@ -209,7 +209,7 @@ fn the_graph_of_a_stream_reading_the_image_asset(
         "stream": stream_name,
         "nodes": [{
             "name": "overlay",
-            "type": crate::core::test_support::MockSourceReadingAnImageAsset::Processor::processor_class_import_path().as_str(),
+            "type": crate::core::test_support::MockSourceReadingAnImageAsset::Node::node_class_import_path().as_str(),
             "config": { "image": { "asset": image } },
         }],
         "links": [],

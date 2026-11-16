@@ -35,7 +35,6 @@ use crate::encoded_video_publication::{
 use crate::image_frame_on_the_video_port::ImageFrameReadByTheEncoder;
 use crate::video_encoder_settings::{VideoEncodeSessionShape, VideoEncoderSettings};
 
-/// The variable a processor interpreter is handed the surface-share socket in.
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
 /// Imports kept, one per producer pool slot; a producer's pool is far smaller.

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::core::context::StoreScopedToThisNode;
 use crate::core::error::Result;
-use crate::iceoryx2::HelperPlacedProcessorLossCounts;
+use crate::iceoryx2::HelperPlacedNodeLossCounts;
 
 const FUNCTION_NODE_STATE_STORE_KEY: &str = "function_node_state";
 
@@ -76,7 +76,7 @@ pub type TheStoreOfEachNodeOfAStream =
 /// the helper calling it.
 struct FunctionNodeStateWrittenOnAHelpersBoard {
     state_fields: Vec<String>,
-    loss_counts_of_the_helper_writing_it: Weak<HelperPlacedProcessorLossCounts>,
+    loss_counts_of_the_helper_writing_it: Weak<HelperPlacedNodeLossCounts>,
     function_node_breadcrumb_number: u32,
 }
 
@@ -92,10 +92,7 @@ impl FunctionNodeStateWrittenOnAHelpersBoard {
         })
     }
 
-    fn is_written_by_the_helper_of(
-        &self,
-        loss_counts: &Arc<HelperPlacedProcessorLossCounts>,
-    ) -> bool {
+    fn is_written_by_the_helper_of(&self, loss_counts: &Arc<HelperPlacedNodeLossCounts>) -> bool {
         std::ptr::eq(
             self.loss_counts_of_the_helper_writing_it.as_ptr(),
             Arc::as_ptr(loss_counts),
@@ -179,7 +176,7 @@ impl FunctionNodeStatesCarriedForOneStream {
         &self,
         function_node_uuid: Uuid,
         state_fields: Vec<String>,
-        loss_counts: &Arc<HelperPlacedProcessorLossCounts>,
+        loss_counts: &Arc<HelperPlacedNodeLossCounts>,
         function_node_breadcrumb_number: u32,
     ) {
         let mut by_function_node_uuid = self.by_function_node_uuid.lock();
@@ -203,10 +200,7 @@ impl FunctionNodeStatesCarriedForOneStream {
     /// Read the state of every node the helper whose board `loss_counts` reads
     /// last wrote, and keep it past that board, in memory and in the store: the
     /// helper went away, or a new spawn's board replaces its own.
-    pub fn keep_every_state_the_helper_wrote(
-        &self,
-        loss_counts: &Arc<HelperPlacedProcessorLossCounts>,
-    ) {
+    pub fn keep_every_state_the_helper_wrote(&self, loss_counts: &Arc<HelperPlacedNodeLossCounts>) {
         for (function_node_uuid, carried) in self.by_function_node_uuid.lock().iter_mut() {
             if carried
                 .written_now_on
@@ -429,7 +423,7 @@ mod tests {
                 .note_the_helper_writing_the_state_of_a_function_node(
                     node_uuid,
                     vec!["phase".to_string()],
-                    &Arc::new(HelperPlacedProcessorLossCounts::default()),
+                    &Arc::new(HelperPlacedNodeLossCounts::default()),
                     1,
                 );
         }
@@ -546,7 +540,7 @@ mod tests {
         states.note_the_helper_writing_the_state_of_a_function_node(
             lfo,
             vec!["phase".to_string()],
-            &Arc::new(HelperPlacedProcessorLossCounts::default()),
+            &Arc::new(HelperPlacedNodeLossCounts::default()),
             1,
         );
         states.forget_every_state();

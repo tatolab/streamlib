@@ -97,7 +97,7 @@ def test_a_composing_type_read_over_a_link_arrives_built_from_the_message():
     )  # fmt: skip
 
     ctx = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test"
+        {}, destination, "runtime-under-test", "node-under-test"
     )
     source.write_to_output_port(
         OUTPUT_PORT,

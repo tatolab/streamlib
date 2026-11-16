@@ -124,7 +124,7 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterRayTracingKernel(req),
         )
         .expect("must produce a response"),

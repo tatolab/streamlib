@@ -25,15 +25,15 @@ use super::subprocess_escalate::publish_the_layouts_a_dispatch_left_its_bound_te
 use crate::core::context::surfaces_and_their_stores::surface_backing_resolution::ResolvedSurfaceBacking;
 use crate::core::context::{
     BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, GpuContext,
-    NativeNodeOutputPixelBufferFrame, ProcessorOutputPixelBufferPoolOfOneNativeNode,
+    NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
     RuntimeContextFullAccess, RuntimeContextLimitedAccess, SurfaceBoundKernelBindingResource,
     SurfaceClaimedAgainstProducerReuse, TextureRegistration,
 };
-use crate::core::descriptors::ProcessorDescriptor;
+use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::{GraphNodeWithComponents, ProcessorNode, ShaderNodeFusedGroupOfAnIsland};
-use crate::core::processors::DynGeneratedProcessor;
+use crate::core::graph::{GraphNode, GraphNodeWithComponents, ShaderNodeFusedGroupOfAnIsland};
+use crate::core::nodes::DynGeneratedNode;
 use crate::core::rhi::{ShaderCompilationTargetStage, StorageBuffer, TextureFormat};
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
@@ -62,31 +62,28 @@ struct ImageInputResolvedForOneEvaluation {
     _claim_against_producer_reuse: SurfaceClaimedAgainstProducerReuse,
 }
 
-/// The processor a shader node island runs as in this process, on the node
-/// whose Image leaves the island.
-pub(crate) struct ShaderNodeNativeEvaluatorProcessor {
+pub(crate) struct ShaderNodeNativeEvaluator {
     node_name: String,
-    descriptor: ProcessorDescriptor,
+    descriptor: NodeDescriptor,
     island: ShaderNodeIslandProgram,
     fused_group: Option<Arc<ShaderNodeFusedGroupOfAnIsland>>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
-    output_pixel_buffer_pool: Option<ProcessorOutputPixelBufferPoolOfOneNativeNode>,
-    stored_pixel_buffer_pool_by_member:
-        HashMap<usize, ProcessorOutputPixelBufferPoolOfOneNativeNode>,
+    output_pixel_buffer_pool: Option<NodeOutputPixelBufferPoolOfOneNativeNode>,
+    stored_pixel_buffer_pool_by_member: HashMap<usize, NodeOutputPixelBufferPoolOfOneNativeNode>,
     kernels_by_slang_source: HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>,
     newest_image_frame_by_input_port: HashMap<String, ImageFrameTakenAtAnInputPort>,
     value_by_float_input_port: HashMap<String, f32>,
     refusal_last_logged: Option<String>,
 }
 
-impl ShaderNodeNativeEvaluatorProcessor {
+impl ShaderNodeNativeEvaluator {
     /// The evaluator of the island shader node `node` hosts, or of `node`
     /// alone running `program` when it hosts none; each float input starts at
     /// its pin value, else its declared default, else zero.
     pub(crate) fn for_the_node(
-        node: &ProcessorNode,
-        descriptor: ProcessorDescriptor,
+        node: &GraphNode,
+        descriptor: NodeDescriptor,
         program: ShaderNodeProgram,
     ) -> Self {
         let (island, fused_group) = match node.get::<ShaderNodeIslandHostedHereComponent>() {
@@ -256,7 +253,7 @@ impl ShaderNodeNativeEvaluatorProcessor {
                 self.stored_pixel_buffer_pool_by_member
                     .entry(member)
                     .or_insert_with(|| {
-                        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node(&format!(
+                        gpu.create_node_output_pixel_buffer_pool_for_a_native_node(&format!(
                             "{node_name}-stored-member-{member}"
                         ))
                     })
@@ -622,11 +619,11 @@ fn last_sample_of_the_first_channel(
     }
 }
 
-impl DynGeneratedProcessor for ShaderNodeNativeEvaluatorProcessor {
+impl DynGeneratedNode for ShaderNodeNativeEvaluator {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.output_pixel_buffer_pool = Some(
             ctx.gpu_full_access()
-                .create_processor_output_pixel_buffer_pool_for_a_native_node(&self.node_name),
+                .create_node_output_pixel_buffer_pool_for_a_native_node(&self.node_name),
         );
         Ok(())
     }
@@ -678,7 +675,7 @@ impl DynGeneratedProcessor for ShaderNodeNativeEvaluatorProcessor {
         &self.node_name
     }
 
-    fn descriptor(&self) -> Option<ProcessorDescriptor> {
+    fn descriptor(&self) -> Option<NodeDescriptor> {
         Some(self.descriptor.clone())
     }
 

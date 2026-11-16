@@ -180,7 +180,7 @@ fn a_runner_whose_unit_carries_two_samples(
     }
     let runner = Runner::new().expect("the runner builds");
     runner
-        .set_processor_interpreter_lend_directory(lend_directory)
+        .set_node_interpreter_lend_directory(lend_directory)
         .expect("the lend directory is handed over");
     runner
         .record_streams_in_the_state_directory(streams_directory)

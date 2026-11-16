@@ -25,7 +25,7 @@ pub(crate) struct LogRecord {
     pub target: String,
     pub message: String,
     pub pipeline_id: Option<String>,
-    pub processor_id: Option<String>,
+    pub node_run_id: Option<String>,
     pub rhi_op: Option<String>,
     pub intercepted: bool,
     pub channel: Option<String>,

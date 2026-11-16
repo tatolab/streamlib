@@ -245,11 +245,6 @@ unsafe impl Send for VulkanVideoSession {}
 unsafe impl Sync for VulkanVideoSession {}
 
 impl VulkanVideoSession {
-    /// Build a new session. Runs `vkCreateVideoSessionKHR`,
-    /// `vkGetVideoSessionMemoryRequirementsKHR`, VMA allocations for
-    /// each requested binding, and `vkBindVideoSessionMemoryKHR` —
-    /// all under the host's device-level resource lock so
-    /// concurrent processor submissions on NVIDIA Linux cannot race.
     pub fn new(
         vulkan_device: &Arc<dyn VulkanVideoCodecDevice>,
         descriptor: &VideoSessionDescriptor<'_>,
@@ -287,9 +282,6 @@ impl VulkanVideoSession {
         let device = vulkan_device.device();
         let allocator = vulkan_device.allocator();
 
-        // Session creation + memory binding run under the device
-        // resource lock so concurrent processor submissions on NVIDIA
-        // Linux cannot race.
         let _device_lock = vulkan_device.lock_device();
 
         let raw_session =

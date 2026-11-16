@@ -1,19 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Naming the Vulkan driver the lend carries to the Vulkan loader.
-//!
-//! A stock Mac has no Vulkan driver, and neither has a Linux machine with no
-//! GPU driver installed, so the lend carries one and its ICD manifest in its
-//! bundled Vulkan driver directory: MoltenVK on macOS, Mesa's lavapipe on
-//! Linux. The same rule as
-//! `tatolab/runtime/_bundled_vulkan_driver.py`, which a processor interpreter
-//! runs again on the environment it inherits — so the manifest is named by its
-//! canonical path, and naming it twice adds nothing.
-
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use streamlib::sdk::processor_interpreter::{
+use streamlib::sdk::node_interpreter::{
     BUNDLED_ICD_MANIFEST_FILE_NAME, bundled_vulkan_driver_directory_in_the_lend,
 };
 
@@ -31,11 +21,10 @@ pub(crate) const DRIVER_SEARCH_ADDING_ENVIRONMENT_VARIABLE: &str = "VK_ADD_DRIVE
 /// manifest, a driver-replacing variable is set, or the manifest is already
 /// named.
 pub(crate) fn vk_add_driver_files_naming_the_bundled_icd_manifest(
-    processor_interpreter_lend_directory: &Path,
+    node_interpreter_lend_directory: &Path,
     environment_variable: impl Fn(&str) -> Option<OsString>,
 ) -> Option<OsString> {
-    let bundled_icd_manifest =
-        bundled_icd_manifest_in_the_lend(processor_interpreter_lend_directory);
+    let bundled_icd_manifest = bundled_icd_manifest_in_the_lend(node_interpreter_lend_directory);
     if !bundled_icd_manifest.is_file() {
         return None;
     }

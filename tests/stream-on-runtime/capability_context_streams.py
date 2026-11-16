@@ -11,7 +11,7 @@ what it read.
 from tatolab.stream import StreamBuilder, graph_generator
 
 import capability_context_probes
-from zero_argument_process_processor import ZeroArgumentProcess
+from zero_argument_process_node import ZeroArgumentProcess
 
 
 def _add_a_source_into_a_reporting_sink(
@@ -101,5 +101,5 @@ def a_worker_thread_source_into_a_worker_thread_bag_sink(stream_builder: StreamB
 
 @graph_generator
 def zero_argument_process(stream_builder: StreamBuilder) -> None:
-    """The one processor whose `process` takes no ctx."""
+    """The one node whose `process` takes no ctx."""
     stream_builder.add(ZeroArgumentProcess)

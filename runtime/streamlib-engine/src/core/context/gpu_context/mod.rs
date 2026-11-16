@@ -136,8 +136,6 @@ pub struct GpuContext {
     device: Arc<GpuDevice>,
     texture_pool: TexturePool,
     pixel_buffer_pool_manager: Arc<PixelBufferPoolManager>,
-    /// The generation every lease-aware ring this context owns most recently
-    /// minted per slot — pixel-buffer pools and processor output pools alike.
     lease_aware_pool_minted_frame_generations: Arc<LeaseAwarePoolMintedFrameGenerations>,
     /// Surface store for cross-process GPU surface sharing. Each loaded
     /// stream's view holds a slot of its own, set as the stream starts and
@@ -219,13 +217,6 @@ pub struct GpuContext {
             >,
         >,
     >,
-    /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
-    /// threads so concurrent GPU resource creation (video
-    /// sessions, DPB images) can't race on the device. The
-    /// compiler acquires this during Phase 4 of spawn_processor and
-    /// releases it after waiting for the device to go idle. A flag +
-    /// Condvar rather than a `Mutex<()>` guard, so enter and exit can
-    /// run on different threads.
     escalate_gate: Arc<super::escalate_gate::EscalateGate>,
     /// Compute kernels built for the `register_compute_kernel` escalate op,
     /// keyed so that re-creating an identical kernel is free of compilation.
@@ -384,22 +375,6 @@ impl GpuContext {
         &self.escalate_gate
     }
 
-    /// Wrap this `GpuContext` in a [`GpuContextLimitedAccess`] view.
-    ///
-    /// Intended for callers that already hold the raw `GpuContext` — setup
-    /// hooks ([`crate::core::runtime::Runner::install_setup_hook`]),
-    /// runtime orchestrators, and crate-external integration tests — and
-    /// need to invoke the typestate API surface (most notably
-    /// [`GpuContextLimitedAccess::escalate`] for serialized elevation to
-    /// [`GpuContextFullAccess`]).
-    ///
-    /// This does NOT weaken the capability moat: processor code never
-    /// holds a raw `GpuContext` (the field is `pub(crate)` on
-    /// `RuntimeContext`), so processors still reach the typestate
-    /// surface only through their `RuntimeContextLimitedAccess` /
-    /// `RuntimeContextFullAccess` borrows. The Limited view returned
-    /// here exposes a strict subset of `GpuContext`'s public API and is
-    /// safe to clone (it does not grant Full).
     pub fn limited_access(&self) -> GpuContextLimitedAccess {
         GpuContextLimitedAccess::new(self.clone())
     }
@@ -454,30 +429,14 @@ impl GpuContext {
         &self.texture_pool
     }
 
-    /// Get the shared command queue.
-    ///
-    /// All processors should use this shared queue rather than creating their own.
     pub fn command_queue(&self) -> &RhiCommandQueue {
         self.device.command_queue()
     }
 
-    /// Create a command buffer from the shared queue.
-    ///
-    /// Command buffers are single-use: create, record commands, commit.
-    /// This is the recommended way to submit GPU work in processors.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
         self.command_queue().create_command_buffer()
     }
 
-    /// Build an engine-owned command-buffer recorder bound to the
-    /// device's default queue.
-    ///
-    /// Wraps the long-lived command pool + reset-able primary command
-    /// buffer + per-frame barrier/copy/dispatch recording + queue-mutex-
-    /// guarded submit-with-timeline-signal shape that processors
-    /// reinvented inline pre-#751. See
-    /// [`RhiCommandRecorder`](crate::vulkan::rhi::RhiCommandRecorder)
-    /// for the per-frame usage protocol.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_command_recorder(
         &self,

@@ -6,15 +6,6 @@
 
 use super::*;
 
-/// Drive the readiness floor over one source format, asserting the two things
-/// that together make it meaningful: every window it promises can actually be
-/// produced, in the count the contract resolves to — and it clears at all,
-/// since a floor that never says yes satisfies the first vacuously and would
-/// leave a reactive processor undispatched forever.
-///
-/// Small quanta on purpose: the queue must cross one window's worth in steps
-/// smaller than the priming and chunk slack, or a floor blind to that slack
-/// steps straight over the gap where it would overclaim.
 fn assert_the_readiness_floor_holds_for(
     contract: ResolvedAudioWindowContract,
     source: SourceAudioFormat,
@@ -209,8 +200,6 @@ fn a_full_mailbox_that_still_cannot_make_a_window_says_so_once() {
     assert!(stage.a_full_window_would_be_ready_after(600, true));
 }
 
-/// And it must eventually say yes, or a reactive processor on a windowed port
-/// would never be dispatched at all.
 #[test]
 fn the_readiness_floor_says_yes_well_inside_the_depth_the_mailbox_is_sized_to() {
     let contract = contract(16_000, 1, "f32", 16_000, 160);

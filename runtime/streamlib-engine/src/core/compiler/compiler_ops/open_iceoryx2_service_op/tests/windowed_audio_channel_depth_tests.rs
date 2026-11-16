@@ -46,12 +46,12 @@ fn write_a_mono_16k_audio_block_on_out1(
 /// An app-process source whose `out1` is linked, unwired, to an app-process
 /// `newest` consumer. Hands back the source's id and the link.
 fn add_a_source_linked_to_a_plain_consumer(graph: &mut Graph) -> (String, LinkUniqueId) {
-    use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+    use crate::core::test_support::{MockInputOnlyNode, MockOutputOnlyNode};
 
     let source_id = add_mock_output_only(graph);
-    attach_mock_instance::<MockOutputOnlyProcessor::Processor>(graph, &source_id);
+    attach_mock_instance::<MockOutputOnlyNode::Node>(graph, &source_id);
     let plain_consumer_id = add_mock_input_only(graph);
-    attach_mock_instance::<MockInputOnlyProcessor::Processor>(graph, &plain_consumer_id);
+    attach_mock_instance::<MockInputOnlyNode::Node>(graph, &plain_consumer_id);
     let plain_link = add_link_from_out1_to_in1(graph, &source_id, &plain_consumer_id);
     (source_id, plain_link)
 }
@@ -64,11 +64,11 @@ fn add_a_source_linked_to_a_plain_consumer(graph: &mut Graph) -> (String, LinkUn
 /// refused as onto a channel created shallower than its ring.
 #[test]
 fn a_windowed_reader_connected_after_the_publisher_opened_the_channel_fits_it() {
-    use crate::core::test_support::MockOutputOnlyProcessor;
+    use crate::core::test_support::MockOutputOnlyNode;
 
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
-    attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+    attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
     let _held = open_the_source_side_for_a_reader_on_the_reserved_slot(
         &mut graph,
         &OutputLinkPortRef::new(&source_id, "out1"),
@@ -121,15 +121,15 @@ fn the_publisher_joins_a_channel_a_link_opened_at_its_depth() {
 /// does.
 #[test]
 fn a_port_the_publisher_holds_keeps_its_channel_after_its_last_link_is_disconnected() {
-    use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+    use crate::core::test_support::{MockInputOnlyNode, MockOutputOnlyNode};
 
     let mut graph = Graph::new();
     let source_id = add_mock_output_only(&mut graph);
     let (_, source_output, _) =
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
     let source_output = source_output.expect("an output-only mock holds an output writer");
     let consumer_id = add_mock_input_only(&mut graph);
-    attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &consumer_id);
+    attach_mock_instance::<MockInputOnlyNode::Node>(&mut graph, &consumer_id);
     let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &consumer_id);
     open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
         .expect("the link wires");
@@ -400,9 +400,8 @@ fn a_declared_borrow_quota_reaches_the_resolution_and_a_helpers_wiring() {
     let mut graph = Graph::new();
     let borrowing_id = graph
         .traversal_mut()
-        .add_v(ProcessorSpec::new(
-            crate::core::test_support::MockBorrowingConsumerProcessor::processor_class_import_path(
-            ),
+        .add_v(NodeSpec::new(
+            crate::core::test_support::MockBorrowingConsumerNode::node_class_import_path(),
             serde_json::Value::Null,
         ))
         .expect("the node is named")
@@ -425,10 +424,10 @@ fn a_declared_borrow_quota_reaches_the_resolution_and_a_helpers_wiring() {
         crate::iceoryx2::DEFAULT_INPUT_PORT_BORROW_QUOTA
     );
 
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &borrowing_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let dest_link_wiring = out_of_process_link_wiring_of(&graph, &borrowing_id.as_str().into())
         .expect("a helper stub's node carries its link wiring");
@@ -464,10 +463,10 @@ fn a_declared_borrow_quota_reaches_the_resolution_and_a_helpers_wiring() {
 fn a_helper_placed_windowed_port_is_handed_the_windowed_ring_depth() {
     let mut graph = Graph::new();
     let dest_id = add_mock_windowed_audio_consumer(&mut graph);
-    let dest_instance = attach_processor_instance(
+    let dest_instance = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let Some(declared) =
         audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "audio")

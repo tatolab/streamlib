@@ -1,57 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! streamlib — public authoring API surface.
-//!
-//! # Three-tier path system
-//!
-//! Every consumer import path falls into exactly one of three tiers,
-//! and the path itself tells the reader which tier they're in.
-//!
-//! **Tier 1 — `streamlib::sdk::*`** — public SDK API. Default for all
-//! consumer code. Examples / apps / domain packages should never need
-//! anything outside this tier.
-//!
-//! ```ignore
-//! use streamlib::sdk::runtime::Runner;
-//! use streamlib::sdk::processors::ProcessorSpec;
-//! use streamlib::sdk::rhi::Texture;
-//! use streamlib::sdk::iceoryx2::OutputWriter;
-//! ```
-//!
-//! **Tier 2 — `streamlib::sdk::engine::*`** — the SDK's curated
-//! engine-bridge surface. Adapter crates and HOST-RHI examples that
-//! legitimately need raw GPU primitives reach through this namespace.
-//! It's part of the SDK's public API; the `engine` segment signals
-//! "you're touching engine-bridge primitives via the SDK's official
-//! extension surface."
-//!
-//! ```ignore
-//! use streamlib::sdk::engine::HostGpuDeviceExt;
-//! use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
-//! ```
-//!
-//! **Tier 3 — `streamlib::engine_internal::*`** — direct passthrough
-//! to the `pub` surface of the `streamlib-engine` crate. For very
-//! rare cases where the SDK's curated `sdk::engine` surface doesn't
-//! expose what's needed AND extending the SDK isn't right. Reads as
-//! "I'm reaching past the curated boundary; I know what I'm doing."
-//!
-//! Engine-internal `core::*` modules (`compiler`,
-//! `signals`, etc.) are `pub(crate)` in the engine, so
-//! `streamlib::engine_internal::core::<internal>` does not compile
-//! by construction — even Tier 3 cannot reach module paths the
-//! engine has marked private. Items inside those modules that
-//! genuinely need cross-crate access are explicitly re-exported
-//! item-by-item at `streamlib_engine::core::*` or at the engine
-//! crate root. The set of those re-exports IS the engine's external
-//! surface; if one is missing, file an issue rather than reaching
-//! around the boundary.
-//!
-//! Direct `streamlib_engine::*` imports outside the engine itself and
-//! this facade source are refused by the ast-grep rule
-//! `no-streamlib-engine-outside-the-engine`.
-
 // Allow `::streamlib::*` paths emitted by the procedural macro to
 // resolve back to this crate when invoked from external consumer
 // crates (e.g. domain packages, customer apps).
@@ -87,8 +36,8 @@ pub mod sdk {
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
+    pub use streamlib_engine::core::node_interpreter;
     pub use streamlib_engine::core::prelude;
-    pub use streamlib_engine::core::processor_interpreter;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
@@ -100,15 +49,11 @@ pub mod sdk {
 
     // ---- App authoring sugar ----
 
-    /// [`App`] — thin authoring sugar over [`runtime::Runner`]. Construct, add
-    /// processors, connect ports, run; every method forwards to an existing
-    /// `Runner` op.
     pub mod app;
 
-    pub use app::{AddedProcessor, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
+    pub use app::{AddedNode, App, AppPortEndpoint, THE_STREAM_ID_AN_APP_LOADS};
 
-    // ---- Processors namespace ----
-    pub use streamlib_engine::sdk::processors;
+    pub use streamlib_engine::sdk::nodes;
 
     // ---- Runtime-control requests ----
     /// `request_the_shutdown_of_every_loaded_stream` — ask whoever owns the
@@ -128,8 +73,6 @@ pub mod sdk {
     /// `serde_json` re-export — required by macro-emitted paths.
     pub use streamlib_engine::serde_json;
 
-    /// `schemars` re-export — a processor crate derives `JsonSchema` on its
-    /// config type through this path and adds no dependency of its own.
     pub use streamlib_engine::schemars;
 
     /// `crossbeam_channel` re-export — required by macro-emitted paths.
@@ -137,29 +80,9 @@ pub mod sdk {
 
     // ---- Procedural macros ----
 
-    /// `#[streamlib::sdk::processor(execution = …, …)]` attribute macro —
-    /// declares a processor's execution mode and ports. It declares no
-    /// identity: a processor is named by the import path of the class it is,
-    /// which the macro captures at its expansion site.
-    pub use streamlib_engine::processor;
+    pub use streamlib_engine::node;
 
-    /// `#[streamlib::sdk::processor_config]` attribute macro — each config
-    /// key's `#[description = …]` is the description its schema serves, and a
-    /// key a config leaves out is filled from the struct's `Default`.
-    ///
-    /// A struct without `Default` is refused at compile time:
-    ///
-    /// ```compile_fail
-    /// use streamlib::sdk::schemars::JsonSchema;
-    ///
-    /// #[streamlib::sdk::processor_config]
-    /// #[derive(serde::Deserialize, JsonSchema)]
-    /// #[schemars(crate = "streamlib::sdk::schemars")]
-    /// pub struct ConfigWithoutADefault {
-    ///     pub width: u32,
-    /// }
-    /// ```
-    pub use streamlib_engine::processor_config;
+    pub use streamlib_engine::node_config;
 
     // ---- Permission helpers ----
 
@@ -271,13 +194,12 @@ pub mod engine_internal {
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     pub use streamlib_engine::permissions;
     pub use streamlib_engine::{
-        ContinuousProcessor, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualProcessor,
-        MediaClock, NativeTextureHandle, OutputPortMarker, PROCESSOR_REGISTRY, PooledTextureHandle,
-        ProcessorSpec, ReactiveProcessor, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
+        ContinuousNode, Error, GpuContext, GraphSnapshot, InputPortMarker, ManualNode, MediaClock,
+        NODE_REGISTRY, NativeTextureHandle, NodeSpec, OutputPortMarker, PooledTextureHandle,
+        ReactiveNode, Result, Runner, RuntimeContext, RuntimeContextFullAccess,
         RuntimeContextLimitedAccess, StreamClock, StreamClockSpec, Texture, TextureDescriptor,
         TextureFormat, TexturePool, TexturePoolDescriptor, TextureUsages, core, crossbeam_channel,
-        iceoryx2, input, logging, output, platform, processor, processor_config, schemars, sdk,
-        serde_json,
+        iceoryx2, input, logging, node, node_config, output, platform, schemars, sdk, serde_json,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::{

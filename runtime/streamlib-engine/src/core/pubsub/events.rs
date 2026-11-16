@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::Result;
-use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
+use crate::core::graph::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::core::runtime::LoadedStreamTag;
 use serde::{Deserialize, Serialize};
 
@@ -31,9 +31,8 @@ pub mod topics {
     /// Window events (resize, focus, close)
     pub const WINDOW: &str = "input:window";
 
-    /// Get topic for specific processor
-    pub fn processor(processor_id: &str) -> String {
-        format!("processor:{}", processor_id)
+    pub fn node(node_run_id: &str) -> String {
+        format!("node:{}", node_run_id)
     }
 }
 
@@ -91,9 +90,9 @@ pub enum Event {
     },
     /// Keyboard, mouse and window input, published on the input topics.
     KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent),
-    ProcessorEvent {
-        processor_id: ProcessorUniqueId,
-        event: ProcessorEvent,
+    NodeEvent {
+        node_run_id: NodeRunId,
+        event: NodeEvent,
     },
     Custom {
         topic: String,
@@ -116,7 +115,7 @@ impl Event {
                 KeyboardMouseOrWindowInputEvent::MouseInput { .. } => topics::MOUSE.to_string(),
                 KeyboardMouseOrWindowInputEvent::WindowEvent { .. } => topics::WINDOW.to_string(),
             },
-            Event::ProcessorEvent { processor_id, .. } => topics::processor(processor_id.as_str()),
+            Event::NodeEvent { node_run_id, .. } => topics::node(node_run_id.as_str()),
             Event::Custom { topic, .. } => topic.clone(),
         }
     }
@@ -144,10 +143,9 @@ impl Event {
         Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::WindowEvent { event })
     }
 
-    /// Create a processor event
-    pub fn processor(processor_id: impl Into<ProcessorUniqueId>, event: ProcessorEvent) -> Self {
-        Event::ProcessorEvent {
-            processor_id: processor_id.into(),
+    pub fn node(node_run_id: impl Into<NodeRunId>, event: NodeEvent) -> Self {
+        Event::NodeEvent {
+            node_run_id: node_run_id.into(),
             event,
         }
     }
@@ -170,15 +168,8 @@ impl Event {
             Event::KeyboardMouseOrWindowInput(inner) => {
                 format!("KeyboardMouseOrWindowInput.{}", debug_variant_name(inner))
             }
-            Event::ProcessorEvent {
-                processor_id,
-                event,
-            } => {
-                format!(
-                    "ProcessorEvent.{} ({})",
-                    debug_variant_name(event),
-                    processor_id
-                )
+            Event::NodeEvent { node_run_id, event } => {
+                format!("NodeEvent.{} ({})", debug_variant_name(event), node_run_id)
             }
             Event::Custom { topic, .. } => {
                 format!("Custom.{}", topic)
@@ -241,23 +232,17 @@ pub enum RuntimeEvent {
         error: String,
     },
 
-    // ===== Runtime Processor Events =====
-    // Emitted by Runtime when user adds/removes processors
-    /// Emitted when runtime will add a processor to the graph
-    RuntimeWillAddProcessor {
-        processor_id: ProcessorUniqueId,
+    RuntimeWillAddNode {
+        node_run_id: NodeRunId,
     },
-    /// Emitted when runtime did add a processor to the graph
-    RuntimeDidAddProcessor {
-        processor_id: ProcessorUniqueId,
+    RuntimeDidAddNode {
+        node_run_id: NodeRunId,
     },
-    /// Emitted when runtime will remove a processor from the graph
-    RuntimeWillRemoveProcessor {
-        processor_id: ProcessorUniqueId,
+    RuntimeWillRemoveNode {
+        node_run_id: NodeRunId,
     },
-    /// Emitted when runtime did remove a processor from the graph
-    RuntimeDidRemoveProcessor {
-        processor_id: ProcessorUniqueId,
+    RuntimeDidRemoveNode {
+        node_run_id: NodeRunId,
     },
 
     // ===== Runtime Link Events =====
@@ -286,16 +271,13 @@ pub enum RuntimeEvent {
         to_port: String,
     },
 
-    // ===== Processor State Events =====
-    /// Emitted when a processor's configuration is updated
-    ProcessorConfigDidChange {
-        processor_id: ProcessorUniqueId,
+    NodeConfigDidChange {
+        node_run_id: NodeRunId,
     },
-    /// Emitted when a processor's state changes (started, stopped, paused, etc.)
-    ProcessorStateDidChange {
-        processor_id: ProcessorUniqueId,
-        old_state: ProcessorState,
-        new_state: ProcessorState,
+    NodeStateDidChange {
+        node_run_id: NodeRunId,
+        old_state: NodeState,
+        new_state: NodeState,
     },
 
     // ===== Compiler Events =====
@@ -308,23 +290,19 @@ pub enum RuntimeEvent {
     CompilerDidFail {
         error: String,
     },
-    /// Emitted when compiler will create a processor instance
-    CompilerWillCreateProcessor {
-        processor_id: ProcessorUniqueId,
-        processor_type: ProcessorClassImportPath,
+    CompilerWillCreateNode {
+        node_run_id: NodeRunId,
+        node_type: NodeClassImportPath,
     },
-    /// Emitted when compiler did create a processor instance
-    CompilerDidCreateProcessor {
-        processor_id: ProcessorUniqueId,
-        processor_type: ProcessorClassImportPath,
+    CompilerDidCreateNode {
+        node_run_id: NodeRunId,
+        node_type: NodeClassImportPath,
     },
-    /// Emitted when compiler will destroy a processor instance
-    CompilerWillDestroyProcessor {
-        processor_id: ProcessorUniqueId,
+    CompilerWillDestroyNode {
+        node_run_id: NodeRunId,
     },
-    /// Emitted when compiler did destroy a processor instance
-    CompilerDidDestroyProcessor {
-        processor_id: ProcessorUniqueId,
+    CompilerDidDestroyNode {
+        node_run_id: NodeRunId,
     },
     /// Emitted when compiler will wire a link (create ring buffer)
     CompilerWillWireLink {
@@ -358,10 +336,8 @@ pub enum RuntimeEvent {
     /// Emitted after graph changed
     GraphDidChange,
 
-    // ===== Factory/Registration Events =====
-    /// Emitted when a new processor type is registered with the factory
-    RuntimeDidRegisterProcessorType {
-        processor_type: ProcessorClassImportPath,
+    RuntimeDidRegisterNodeType {
+        node_type: NodeClassImportPath,
     },
 }
 
@@ -390,7 +366,7 @@ pub enum LinkPortDirection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum ProcessorEvent {
+pub enum NodeEvent {
     // ===== State Control Commands =====
     Start,
     Stop,
@@ -404,8 +380,8 @@ pub enum ProcessorEvent {
     Resumed,
     Error(String),
     StateChanged {
-        old_state: ProcessorState,
-        new_state: ProcessorState,
+        old_state: NodeState,
+        new_state: NodeState,
     },
 
     // ===== Link Lifecycle Events =====
@@ -436,15 +412,13 @@ pub enum ProcessorEvent {
         value: serde_json::Value,
     },
 
-    // ===== Custom Processor Commands =====
     Custom {
         command: String,
         args: serde_json::Value,
     },
 }
 
-// Re-export ProcessorState from the canonical location
-pub(super) use crate::core::processors::ProcessorState;
+pub(super) use crate::core::nodes::NodeState;
 
 // ===== Input Types =====
 
@@ -645,9 +619,8 @@ mod tests {
         let window = Event::window(WindowEventType::Closed);
         assert_eq!(window.topic(), topics::WINDOW);
 
-        // Processor → processor:{id}
-        let proc = Event::processor("audio-mixer", ProcessorEvent::Started);
-        assert_eq!(proc.topic(), topics::processor("audio-mixer"));
+        let proc = Event::node("audio-mixer", NodeEvent::Started);
+        assert_eq!(proc.topic(), topics::node("audio-mixer"));
 
         // Custom → custom topic string
         let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
@@ -676,8 +649,8 @@ mod tests {
             Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::WindowEvent { .. })
         ));
 
-        let proc = Event::processor("test", ProcessorEvent::Started);
-        assert!(matches!(proc, Event::ProcessorEvent { .. }));
+        let proc = Event::node("test", NodeEvent::Started);
+        assert!(matches!(proc, Event::NodeEvent { .. }));
 
         let custom = Event::custom("my-topic", serde_json::json!({"key": "value"}));
         assert!(matches!(custom, Event::Custom { .. }));
@@ -700,8 +673,8 @@ mod tests {
             "KeyboardMouseOrWindowInput.WindowEvent"
         );
         assert_eq!(
-            Event::processor("audio-mixer", ProcessorEvent::Started).log_name(),
-            "ProcessorEvent.Started (audio-mixer)"
+            Event::node("audio-mixer", NodeEvent::Started).log_name(),
+            "NodeEvent.Started (audio-mixer)"
         );
     }
 
@@ -766,7 +739,7 @@ mod tests {
                 stream: a_loaded_stream_identity(),
                 event: RuntimeEvent::GraphDidChange,
             },
-            Event::processor("test-proc", ProcessorEvent::Started),
+            Event::node("test-proc", NodeEvent::Started),
             Event::custom("my-topic", serde_json::json!({"key": "value"})),
             Event::keyboard(KeyCode::A, Modifiers::default(), KeyState::Pressed),
             Event::mouse(MouseButton::Left, (100.5, 200.25), MouseState::Pressed),

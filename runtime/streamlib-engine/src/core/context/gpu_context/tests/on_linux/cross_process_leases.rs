@@ -284,7 +284,7 @@ fn a_returned_slot_is_never_rehanded_while_its_last_frame_is_leased_and_is_freed
         return;
     };
     let mut native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-leased-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("a-leased-node");
     let leased_frame =
         acquire_one_native_node_frame_id(&mut native_node).expect("the node's first frame");
     let consumer = check_out_leases.mint_holder_id();

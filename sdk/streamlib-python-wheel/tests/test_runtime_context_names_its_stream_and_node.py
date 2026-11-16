@@ -26,7 +26,7 @@ def test_both_contexts_name_the_stream_and_node_the_parent_named(
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
     )
     limited_access_context = _engine.limited_access_view_of_runtime_context_for_helper_process(
         full_access_context
@@ -38,7 +38,7 @@ def test_both_contexts_name_the_stream_and_node_the_parent_named(
             "main",
             "/home/someone/apps/desk",
         )
-        assert context.node_id == "processor-under-test"
+        assert context.node_id == "node-under-test"
 
 
 def test_a_context_no_parent_spawned_names_nothing(monkeypatch: pytest.MonkeyPatch):
@@ -52,7 +52,7 @@ def test_a_context_no_parent_spawned_names_nothing(monkeypatch: pytest.MonkeyPat
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
     )
 
     assert (context.node_name, context.stream_id, context.stream_project_directory) == ("", "", "")

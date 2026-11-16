@@ -1,19 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor's losses, read from `graph` on a running node.
-
-Every Python processor runs in its own helper process and counts its losses
-there. The helper mirrors each count onto a blackboard `tatolabd` created for
-that spawn, and `tatolabd` renders the board under the node's `metrics` exactly
-as it renders a native processor's own counts. Asserted from the outside — the
-`graph` a control-plane client reads — because the failure this guards against
-is a helper that lost most of its bags while its node reads healthy.
-
-Each stream is launched with `tatolab open --play` on this test's `tatolabd`, from a
-project directory holding its `stream.py` and processors. Running initializes a
-GPU context, so the whole module needs a device.
-"""
 
 from __future__ import annotations
 
@@ -42,8 +29,8 @@ COUNT_TIMEOUT_SECONDS = 30.0
 HELPER_LINK_CEILING_BYTES = 64 * 1024
 OVERSIZED_BAG_PADDING_BYTES = 256 * 1024
 
-LOSS_COUNTING_PROCESSORS_MODULE = "processors.loss_counting"
-LOSS_COUNTING_PROCESSORS_SOURCE = f'''\
+LOSS_COUNTING_NODES_MODULE = "nodes.loss_counting"
+LOSS_COUNTING_NODES_SOURCE = f'''\
 """A source faster than its ordered consumer, and a port that writes past its ceiling."""
 
 import json
@@ -144,7 +131,7 @@ class NewestSink:
 LOSS_COUNTING_STREAM_SOURCE = f'''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from {LOSS_COUNTING_PROCESSORS_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
+from {LOSS_COUNTING_NODES_MODULE} import FastBagSource, NewestSink, SlowOrderedSink
 
 
 @graph_generator
@@ -156,8 +143,6 @@ def main(stream_builder: StreamBuilder) -> None:
     stream_builder.connect(source.output("oversized_bags"), oversized_sink.input("bags"))
 '''
 
-# The keys a native processor's `metrics` carries when none of its links feeds
-# a windowed port.
 APP_PROCESS_METRICS_KEYS = {
     "frames_dropped",
     "dropped_bags_by_link",
@@ -216,13 +201,10 @@ def await_metrics_satisfying(
 def launch_the_loss_counting_node(
     make_tatolab_project: "Callable[..., Any]", start_tatolabd: "Callable[..., TatolabdUnderTest]"
 ) -> LossCountingStreamRunning:
-    """Write `stream.py` beside its processors, start `tatolabd` under the lowered
-    helper-link ceiling, `tatolab open --play` the stream on it, and hand back the stream
-    once it runs."""
     project_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/loss_counting.py": LOSS_COUNTING_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/loss_counting.py": LOSS_COUNTING_NODES_SOURCE,
             "stream.py": LOSS_COUNTING_STREAM_SOURCE,
         }
     )
@@ -341,15 +323,6 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
 def test_a_killed_helper_is_restarted_and_its_counts_keep_counting_from_where_it_died(
     make_tatolab_project, start_tatolabd
 ):
-    """A helper killed without warning is started again as the same node, with
-    a new instance of its class in a new process, and its link's counts carry
-    on from what the dead helper last wrote — never back to zero — until the
-    processor is removed.
-
-    Fail-without-fix: leave a dead helper down and the node never reads
-    `Running` again; drop the dead board's counts and the link's losses go
-    backwards in `graph` at the restart.
-    """
     loss_counting_stream = launch_the_loss_counting_node(make_tatolab_project, start_tatolabd)
     tatolabd = loss_counting_stream.tatolabd
     link_id = the_link_into(loss_counting_stream.graph(), "slow-sink")

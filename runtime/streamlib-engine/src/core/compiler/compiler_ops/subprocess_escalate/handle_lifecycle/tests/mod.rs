@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::EscalateHandleRegistry;
-use crate::core::compiler::compiler_ops::subprocess_escalate::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use crate::core::compiler::compiler_ops::subprocess_escalate::WhatAHelperPlacedNodeReaches;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::test_support::LiveSurfaceShareServiceForATest;
 #[cfg(target_os = "linux")]
@@ -10,8 +10,8 @@ use crate::core::test_support::rig_only_capability_skip::{
     RigOnlyCapability, skip_unless_this_machine_has,
 };
 
+mod node_output_pool_slot_tests;
 mod one_off_acquisition_count_and_memory_budget_tests;
-mod processor_output_pool_slot_tests;
 mod tensor_storage_buffer_tests;
 #[cfg(target_os = "linux")]
 mod texture_export_flavour_tests;
@@ -46,7 +46,7 @@ fn release_a_handle_over_the_escalate_op(
     handle_id_or_refusal_of(super::super::handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
             request_id: "req-release".to_string(),
             handle_id: handle_id.to_string(),
@@ -55,10 +55,8 @@ fn release_a_handle_over_the_escalate_op(
     .map(|_| ())
 }
 
-/// Ask one of the helper's processor output pools for its next frame over the
-/// real escalate op, answering the published frame id or the refusal.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn next_processor_output_frame_over_the_escalate_op(
+fn next_node_output_frame_over_the_escalate_op(
     sandbox: &crate::core::context::GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
     pool_key: &str,
@@ -66,7 +64,7 @@ fn next_processor_output_frame_over_the_escalate_op(
 ) -> std::result::Result<String, String> {
     use super::super::handle_escalate_op;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
-        EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
+        EscalateRequestAcquireTexture, EscalateRequestNodeOutputPool,
     };
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
         EscalateRequest, EscalateResponse,
@@ -76,13 +74,13 @@ fn next_processor_output_frame_over_the_escalate_op(
     match handle_escalate_op(
         sandbox,
         registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
             request_id: "req-pooled".to_string(),
             width: 64,
             height: 32,
             format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
-            processor_output_pool: Some(EscalateRequestProcessorOutputPool {
+            node_output_pool: Some(EscalateRequestNodeOutputPool {
                 pool_key: pool_key.to_string(),
                 rotation_depth,
             }),

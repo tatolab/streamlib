@@ -57,23 +57,16 @@ fn test_runtime_creation() {
     // Runtime creates successfully
 }
 
-/// `Runner::new()` must not walk any compile-time-linked registration
-/// source: the engine substrate ships empty.
-///
-/// `PROCESSOR_REGISTRY` is a process-global `LazyLock` and earlier
-/// tests in the same binary may have populated it, so the
-/// assertion is over the *delta* `Runner::new()` introduces, not
-/// the absolute size.
 #[test]
 #[serial]
-fn runner_new_registers_zero_processors() {
-    use crate::core::processors::PROCESSOR_REGISTRY;
-    let before = PROCESSOR_REGISTRY.list_registered().len();
+fn runner_new_registers_zero_nodes() {
+    use crate::core::nodes::NODE_REGISTRY;
+    let before = NODE_REGISTRY.list_registered().len();
     let _runtime = Runner::new().expect("Runner::new");
-    let after = PROCESSOR_REGISTRY.list_registered().len();
+    let after = NODE_REGISTRY.list_registered().len();
     assert_eq!(
         after, before,
-        "Runner::new() must not register any processors — the engine \
+        "Runner::new() must not register any nodes — the engine \
          substrate ships empty (issue #793). Delta: {before} → {after}."
     );
 }
@@ -176,35 +169,32 @@ fn test_new_inside_tokio_uses_external_handle() {
     ));
 }
 
-/// Fail-without-fix: the request wrote the configuration onto the node
-/// before the processor was asked, so one it refused at commit stayed in
-/// `graph` as though it had been taken.
 #[test]
 #[serial]
 fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {
     use crate::core::compiler::PendingOperation;
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::nodes::NodeSpec;
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
     ensure_test_mocks_registered();
     let project_directory = a_project_directory_this_test_owns();
     let runner = Runner::new().expect("Runner::new");
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
-    let processor_id = stream
-        .add_processor(ProcessorSpec::new(
-            MockSourceTakingOneSetting::processor_class_import_path(),
+    let node_run_id = stream
+        .add_node(NodeSpec::new(
+            MockSourceTakingOneSetting::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the mock is added");
 
     stream
-        .update_processor_config(&processor_id, serde_json::json!({"frame_width": 3}))
+        .update_node_config(&node_run_id, serde_json::json!({"frame_width": 3}))
         .expect("the update is queued");
 
     let config_on_the_node = stream.compiler.scope(|graph, _tx| {
         graph
             .traversal()
-            .v(&processor_id)
+            .v(&node_run_id)
             .first()
             .expect("the node is in the graph")
             .config
@@ -214,8 +204,8 @@ fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_gra
     assert!(
         stream.compiler.logged_pending_operations().iter().any(|op| matches!(
             op,
-            PendingOperation::UpdateProcessorConfig { processor_id: queued_for, config_to_apply }
-                if *queued_for == processor_id && *config_to_apply == serde_json::json!({"frame_width": 3})
+            PendingOperation::UpdateNodeConfig { node_run_id: queued_for, config_to_apply }
+                if *queued_for == node_run_id && *config_to_apply == serde_json::json!({"frame_width": 3})
         )),
         "the update carries its configuration to the commit"
     );
@@ -225,22 +215,22 @@ fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_gra
 #[serial]
 fn a_configuration_its_node_types_config_schema_refuses_is_refused_and_never_queued() {
     use crate::core::compiler::PendingOperation;
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::nodes::NodeSpec;
     use crate::core::test_support::{MockSourceTakingOneSetting, ensure_test_mocks_registered};
 
     ensure_test_mocks_registered();
     let project_directory = a_project_directory_this_test_owns();
     let runner = Runner::new().expect("Runner::new");
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path(), "main");
-    let processor_id = stream
-        .add_processor(ProcessorSpec::new(
-            MockSourceTakingOneSetting::processor_class_import_path(),
+    let node_run_id = stream
+        .add_node(NodeSpec::new(
+            MockSourceTakingOneSetting::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the mock is added");
 
     let refusal = stream
-        .update_processor_config(&processor_id, serde_json::json!({"frame_width": "wide"}))
+        .update_node_config(&node_run_id, serde_json::json!({"frame_width": "wide"}))
         .expect_err("a string where the schema states an integer is refused")
         .to_string();
 
@@ -251,7 +241,7 @@ fn a_configuration_its_node_types_config_schema_refuses_is_refused_and_never_que
             .compiler
             .logged_pending_operations()
             .iter()
-            .any(|op| matches!(op, PendingOperation::UpdateProcessorConfig { .. })),
+            .any(|op| matches!(op, PendingOperation::UpdateNodeConfig { .. })),
         "a refused update reaches no commit"
     );
 }

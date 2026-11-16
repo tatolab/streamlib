@@ -4,10 +4,10 @@
 //! The input port a config field takes when a node exposes it: a Channels input
 //! of the field's name that a link drives.
 
-use crate::core::descriptors::{PortFamily, PortFamilyDeclaration, ProcessorClassImportPath};
+use crate::core::descriptors::{NodeClassImportPath, PortFamily, PortFamilyDeclaration};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{PortInfo, PortKind};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 /// The input port each field of `exposed_config_fields` takes on node `node_name` of type
 /// `node_type`, refused naming the field when the type is natively compiled, when its config
@@ -15,7 +15,7 @@ use crate::core::processors::NodeTypesOneStreamResolves;
 /// when one of `declared_ports` already has its name.
 pub(crate) fn the_input_ports_of_the_exposed_config_fields(
     node_name: &str,
-    node_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     node_types: &NodeTypesOneStreamResolves,
     declared_ports: &[PortInfo],
     exposed_config_fields: &[String],
@@ -120,9 +120,9 @@ mod tests {
     };
     use crate::core::compiler::compiler_ops::function_node_island::the_island_feeding_a_link;
     use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
-    use crate::core::descriptors::{PortFamily, ProcessorClassImportPath};
+    use crate::core::descriptors::{NodeClassImportPath, PortFamily};
     use crate::core::graph::Graph;
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::nodes::NodeSpec;
     use crate::core::test_support::MockSourceTakingOneSetting;
 
     const SCALE: &str = "nodes.math:Scale";
@@ -147,20 +147,17 @@ mod tests {
         graph: &mut Graph,
         import_path: &str,
         exposed_config_fields: &[&str],
-    ) -> crate::core::Result<crate::core::graph::ProcessorUniqueId> {
+    ) -> crate::core::Result<crate::core::graph::NodeRunId> {
         Ok(graph
             .traversal_mut()
             .add_v(
-                ProcessorSpec::new(
-                    ProcessorClassImportPath::new(import_path).unwrap(),
-                    json!({}),
-                )
-                .with_exposed_config_fields(
-                    exposed_config_fields
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect(),
-                ),
+                NodeSpec::new(NodeClassImportPath::new(import_path).unwrap(), json!({}))
+                    .with_exposed_config_fields(
+                        exposed_config_fields
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                    ),
             )?
             .first()
             .unwrap()
@@ -261,7 +258,7 @@ mod tests {
         let mut graph = a_graph_with_a_scale_taking_a_gain_and_a_label();
         let refusal = add_a_node_exposing(
             &mut graph,
-            MockSourceTakingOneSetting::processor_class_import_path().as_str(),
+            MockSourceTakingOneSetting::node_class_import_path().as_str(),
             &["frame_width"],
         )
         .unwrap_err()

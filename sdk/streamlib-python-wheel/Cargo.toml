@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-# `tatolab.runtime`'s native half: a processor interpreter imports this cdylib
+# `tatolab.runtime`'s native half: a node interpreter imports this cdylib
 # for the bindings its node's calls go through. No engine is hosted here.
 
 [package]
@@ -14,7 +14,7 @@ authors.workspace = true
 # four levels up. Same license, declared inline.
 license = "GPL-3.0-only"
 repository.workspace = true
-description = "tatolab.runtime — the bindings a processor interpreter's node calls go through"
+description = "tatolab.runtime — the bindings a node interpreter's node calls go through"
 publish = false
 
 [lib]

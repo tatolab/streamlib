@@ -110,16 +110,6 @@ impl HostVulkanTexture {
         Ok(*self.cached_image_view.get_or_init(|| view))
     }
 
-    /// One-shot UNDEFINED → GENERAL barrier on a freshly-allocated
-    /// `vk::Image`. Used by [`crate::core::context::GpuContext::transition_storage_image_to_general`]
-    /// to give example / processor code a way to bring a storage-image
-    /// texture into the layout compute / RT kernels expect — without
-    /// pulling vulkanalia into the consumer.
-    ///
-    /// Synchronous: submits to the graphics queue and waits on a fence
-    /// before returning. The image must not have content the caller
-    /// cares about; UNDEFINED-source transitions allow the driver to
-    /// discard contents.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn transition_to_general(
         vulkan_device: &Arc<HostVulkanDevice>,

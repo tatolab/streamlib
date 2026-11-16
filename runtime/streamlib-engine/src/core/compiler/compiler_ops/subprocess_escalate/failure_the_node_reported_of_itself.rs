@@ -6,7 +6,7 @@
 
 use parking_lot::Mutex;
 
-use super::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::port_stream_facts::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestFailTheNode;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseOk;
@@ -31,7 +31,7 @@ impl FailureTheNodeReportedOfItself {
 
 /// Record the node's failure for the lifecycle loop to show.
 pub(super) fn handle_fail_the_node(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestFailTheNode,
 ) -> EscalateResponse {
@@ -50,7 +50,7 @@ mod tests {
 
     #[test]
     fn the_first_reason_a_node_gives_is_the_one_kept() {
-        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
+        let what_the_node_reaches = WhatAHelperPlacedNodeReaches::default();
         assert_eq!(
             what_the_node_reaches
                 .failure_the_node_reported_of_itself

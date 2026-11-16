@@ -27,9 +27,6 @@ pub(crate) const ENGINE_TEARDOWN_WATCHDOG_BUDGET: Duration = Duration::from_secs
 /// from the third interrupt's 130.
 pub const EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED: i32 = 124;
 
-/// How many threads one process may abandon — processor threads past their
-/// join budget and stream teardowns past their watchdog — before the runtime
-/// ends. Engine-chosen: each one holds the engine alive beneath it.
 const THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS: usize = 32;
 
 /// How long a watchdog waits for the note of what its teardown is waiting on.
@@ -293,7 +290,7 @@ mod tests {
                 "the test's teardown",
                 A_WATCHDOG_BUDGET_A_TEST_CAN_OUTLIVE,
             );
-            note_what_the_engine_teardown_is_waiting_on("the processor thread of HungProbe");
+            note_what_the_engine_teardown_is_waiting_on("the node thread of HungProbe");
             std::thread::sleep(Duration::from_secs(30));
             panic!("the watchdog did not end a teardown that outlived it");
         }
@@ -321,7 +318,7 @@ mod tests {
             started.elapsed()
         );
         assert!(
-            stderr.contains("the processor thread of HungProbe"),
+            stderr.contains("the node thread of HungProbe"),
             "the watchdog did not say what the teardown was waiting on:\n{stderr}"
         );
         let helper_process_group: libc::pid_t = std::fs::read_to_string(&record_path)
@@ -341,7 +338,7 @@ mod tests {
                 .expect("the run's record is left behind");
         assert!(
             run_in_progress_record.starts_with(
-                "\texit 124: the test's teardown outlived its watchdog, waiting on the processor \
+                "\texit 124: the test's teardown outlived its watchdog, waiting on the node \
                  thread of HungProbe"
             ),
             "the watchdog's end was not pinned on no stream: {run_in_progress_record:?}"
@@ -383,12 +380,12 @@ mod tests {
         let message = the_watchdogs_expiry_message(
             "run()'s teardown",
             Duration::from_secs(15),
-            "the processor thread of Recorder (p-1)",
+            "the node thread of Recorder (p-1)",
         );
         assert!(message.contains("run()'s teardown"), "{message}");
         assert!(message.contains("15s"), "{message}");
         assert!(
-            message.contains("the processor thread of Recorder (p-1)"),
+            message.contains("the node thread of Recorder (p-1)"),
             "{message}"
         );
         assert!(message.contains("124"), "{message}");

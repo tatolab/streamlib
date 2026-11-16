@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use quote::quote;
-use streamlib_processor_schema::{
+use streamlib_node_schema::{
     ArrayOutputPortResidency, AudioWindowContractDeclaredValues, ChannelsOutputPortSampleRate,
     ChannelsOutputPortSampleType, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,
 };
@@ -61,7 +61,7 @@ fn a_port_is_declared_under_its_cast_and_keeps_its_spelling_for_the_marker() {
     assert_eq!(parsed.outputs[0].declared_marker_ident, "videoOut");
     assert_eq!(parsed.outputs[0].cast_name, "videoout");
 
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
     assert_eq!(schema.inputs[0].name, "videoin");
     assert_eq!(schema.outputs[0].name, "videoout");
 }
@@ -186,7 +186,7 @@ fn the_unknown_port_key_error_offers_every_key_a_port_accepts() {
     }
 }
 
-fn declared_contract(parsed: &ParsedProcessorAttr) -> &AudioWindowContractDeclaredValues {
+fn declared_contract(parsed: &ParsedNodeAttr) -> &AudioWindowContractDeclaredValues {
     match parsed.inputs[0]
         .audio_window
         .as_ref()
@@ -485,7 +485,7 @@ fn a_ports_family_and_its_keys_reach_the_schema() {
         output("packets", family = Packets, codec = "h264"),
         output("tensor", family = Array, names = ["boxes"], residency = "gpu"),
     });
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
 
     let signals = &schema.inputs[0].family;
     assert_eq!(signals.family, PortFamily::Channels);
@@ -562,12 +562,12 @@ fn an_image_outputs_frame_rate_reaches_the_schema_stated_or_from_config() {
         output("preview", family = Image, frame_rate = from_config("frames_per_second")),
         output("bare", family = Image),
     });
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
 
     assert_eq!(
         schema.outputs[0].family.frame_rate,
         Some(ImageOutputPortFrameRate::Stated(
-            streamlib_processor_schema::ImageStreamFrameRate {
+            streamlib_node_schema::ImageStreamFrameRate {
                 numerator: 30,
                 denominator: 1
             }
@@ -629,7 +629,7 @@ fn the_projected_schema_carries_the_contract_the_port_declared() {
         ),
     });
 
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
     assert_eq!(
         serde_json::to_value(&schema.inputs[0].audio_window).unwrap(),
         serde_json::json!({
@@ -716,7 +716,7 @@ fn a_port_following_the_source_projects_its_count_as_the_source() {
         ),
     });
 
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
     assert_eq!(
         serde_json::to_value(&schema.inputs[0].audio_window).unwrap(),
         serde_json::json!({
@@ -739,7 +739,7 @@ fn a_contract_less_ports_projection_carries_no_audio_window_key() {
         input("video_in", family = Image, delivery_profile = "newest"),
     });
 
-    let schema = parsed.to_processor_schema();
+    let schema = parsed.to_node_schema();
     let json = serde_json::to_value(&schema.inputs[0]).unwrap();
     assert_eq!(
         json,

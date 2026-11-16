@@ -1,19 +1,15 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A port a Rust processor declares is registered under its cast, the way
-//! `@node.process` declares a Python port, and `connect` reaches it by the spelling the
-//! author declared or by the cast.
-
 #![deny(non_camel_case_types)]
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use streamlib_engine::core::{OutputPortMarker, Result, RuntimeContextFullAccess};
@@ -31,30 +27,29 @@ fn an_empty_stream_loaded_into(
         .expect("an empty stream loads")
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     output("videoOut", family = Image),
 )]
 pub struct CamelCaseVideoSource;
 
-impl streamlib_engine::ManualProcessor for CamelCaseVideoSource::Processor {
+impl streamlib_engine::ManualNode for CamelCaseVideoSource::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
 }
 
-fn camel_case_video_source_registered() -> ProcessorClassImportPath {
-    PROCESSOR_REGISTRY.register::<CamelCaseVideoSource::Processor>();
-    CamelCaseVideoSource::processor_class_import_path()
+fn camel_case_video_source_registered() -> NodeClassImportPath {
+    NODE_REGISTRY.register::<CamelCaseVideoSource::Node>();
+    CamelCaseVideoSource::node_class_import_path()
 }
 
 /// A descriptor-only sink with one input, `video_in`. Idempotent under
 /// `serial_test`.
-fn video_sink_registered() -> ProcessorClassImportPath {
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::VideoSink", module_path!())).unwrap();
-    let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new("VideoSink").unwrap(),
+fn video_sink_registered() -> NodeClassImportPath {
+    let import_path = NodeClassImportPath::new(format!("{}::VideoSink", module_path!())).unwrap();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new("VideoSink").unwrap(),
         import_path.clone(),
         "rust port name cast test",
     )
@@ -66,7 +61,7 @@ fn video_sink_registered() -> ProcessorClassImportPath {
             streamlib::sdk::descriptors::PortFamily::Image,
         ),
     ));
-    match PROCESSOR_REGISTRY.register_descriptor_only(descriptor) {
+    match NODE_REGISTRY.register_descriptor_only(descriptor) {
         // Registered by an earlier test in this binary.
         Ok(()) | Err(Error::Configuration(_)) => {}
         Err(refusal) => panic!("the sink fixture is refused: {refusal}"),
@@ -79,9 +74,9 @@ fn video_sink_registered() -> ProcessorClassImportPath {
 fn a_camel_case_rust_port_registers_its_cast_and_its_marker_carries_it() {
     let source = camel_case_video_source_registered();
 
-    let descriptor = PROCESSOR_REGISTRY
+    let descriptor = NODE_REGISTRY
         .descriptor(&source)
-        .expect("the macro-declared processor registers");
+        .expect("the macro-declared node registers");
     let output_port_names: Vec<&str> = descriptor
         .outputs
         .iter()
@@ -105,10 +100,10 @@ fn connect_reaches_a_camel_case_rust_port_by_its_spelling_or_its_cast() {
         let runner = Runner::new().unwrap();
         let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
         let source_id = stream
-            .add_processor(ProcessorSpec::new(source.clone(), serde_json::json!({})))
+            .add_node(NodeSpec::new(source.clone(), serde_json::json!({})))
             .unwrap();
         let sink_id = stream
-            .add_processor(ProcessorSpec::new(sink.clone(), serde_json::json!({})))
+            .add_node(NodeSpec::new(sink.clone(), serde_json::json!({})))
             .unwrap();
 
         stream
@@ -130,9 +125,9 @@ fn connect_reaches_a_camel_case_rust_port_by_its_spelling_or_its_cast() {
 #[serial]
 fn a_hand_built_descriptor_with_a_port_name_not_cast_is_refused_by_name() {
     let import_path =
-        ProcessorClassImportPath::new(format!("{}::HandBuiltSource", module_path!())).unwrap();
-    let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new("HandBuiltSource").unwrap(),
+        NodeClassImportPath::new(format!("{}::HandBuiltSource", module_path!())).unwrap();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new("HandBuiltSource").unwrap(),
         import_path.clone(),
         "rust port name cast test",
     )
@@ -145,15 +140,15 @@ fn a_hand_built_descriptor_with_a_port_name_not_cast_is_refused_by_name() {
         ),
     ));
 
-    match PROCESSOR_REGISTRY.register_descriptor_only(descriptor) {
+    match NODE_REGISTRY.register_descriptor_only(descriptor) {
         Err(Error::DescriptorPortNameNotCast {
-            processor_class_import_path,
+            node_class_import_path,
             port_name,
         }) => {
-            assert_eq!(processor_class_import_path, import_path);
+            assert_eq!(node_class_import_path, import_path);
             assert_eq!(port_name, "videoOut");
         }
         other => panic!("expected DescriptorPortNameNotCast, got {other:?}"),
     }
-    assert!(PROCESSOR_REGISTRY.descriptor(&import_path).is_none());
+    assert!(NODE_REGISTRY.descriptor(&import_path).is_none());
 }

@@ -6,12 +6,11 @@ use std::thread::JoinHandle;
 use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
-use crate::core::compiler::ProcessorThreadKind;
+use crate::core::compiler::NodeThreadKind;
 
-/// Thread handle for dedicated-thread processors.
 pub struct ThreadHandleComponent {
     pub join_handle: JoinHandle<()>,
-    pub kind: ProcessorThreadKind,
+    pub kind: NodeThreadKind,
 }
 
 impl JsonSerializableComponent for ThreadHandleComponent {

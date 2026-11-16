@@ -62,7 +62,7 @@ impl Runner {
 }
 
 use crate::core::test_support::{
-    MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR, MockInputOnlyProcessor, MockOutputOnlyProcessor,
+    MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR, MockInputOnlyNode, MockOutputOnlyNode,
     MockSourceRefusingAnAccessNobodyAskedFor, a_temporary_directory_at_owner_only_mode,
     ensure_test_mocks_registered, write_an_executable_script_from_a_child_process,
 };
@@ -75,7 +75,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::runtime::STREAM_RECORD_SCHEMA_VERSION;
 
-use streamlib_processor_schema::ProcessorClassImportPath;
+use streamlib_node_schema::NodeClassImportPath;
 
 use streamlib_runtime_client_contract::directory_at_an_explicit_mode;
 
@@ -87,7 +87,7 @@ fn a_runner_recording_its_streams_in(streams_directory: Option<&Path>) -> Arc<Ru
     ensure_test_mocks_registered();
     let runner = Runner::new().expect("the runner builds");
     runner
-        .set_processor_interpreter_lend_directory(PathBuf::from(LEND_DIRECTORY_FOR_TEST))
+        .set_node_interpreter_lend_directory(PathBuf::from(LEND_DIRECTORY_FOR_TEST))
         .expect("the lend directory is handed over");
     if let Some(streams_directory) = streams_directory {
         runner
@@ -104,7 +104,7 @@ fn the_graph_of_a_stream_named(stream_name: &str) -> serde_json::Value {
         "stream": stream_name,
         "nodes": [{
             "name": "source",
-            "type": MockOutputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+            "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
             "config": {},
         }],
         "links": [],

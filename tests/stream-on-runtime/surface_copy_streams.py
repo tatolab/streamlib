@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per surface-copy scenario: a test-pattern frame fed to one probe,
-which runs in a processor interpreter of its own."""
+which runs in a node interpreter of its own."""
 
 from typing import Any
 

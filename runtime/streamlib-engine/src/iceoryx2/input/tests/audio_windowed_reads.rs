@@ -3,8 +3,6 @@
 
 use super::*;
 
-/// A windowed port reports data only when a full window can be emitted, so
-/// a reactive processor is never dispatched with nothing to read.
 #[test]
 fn a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
     let (publisher, subscriber) = open_channel_for_one_link("window/readiness", 8);

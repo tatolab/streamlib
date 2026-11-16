@@ -7,7 +7,7 @@ really runs.
 Each probe runs in its own helper process, reaches the frame's pixels as device
 memory there — CUDA on Linux, Metal on macOS — and reports what it observed as
 one `MARKER:PROBE_RESULT` JSON line, the same child→parent log forwarding every
-processor's records ride.
+node's records ride.
 
 On Linux the device path crosses the process boundary twice per surface: the
 parent allocates and publishes the export staging, the child imports it, and

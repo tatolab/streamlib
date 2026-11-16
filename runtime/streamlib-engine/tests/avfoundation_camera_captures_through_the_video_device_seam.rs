@@ -149,7 +149,7 @@ fn the_default_camera_delivers_stamped_frames_with_real_content() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
-            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            node_run_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the default camera opens");
@@ -283,11 +283,6 @@ fn the_default_camera_delivers_stamped_frames_with_real_content() {
     );
 }
 
-/// A camera takes seconds to power up; a stop arriving meanwhile must not wait
-/// for it, or it can run past the engine's five-second budget for a processor
-/// to stop and the processor's thread is abandoned. A stop that waited for the
-/// session to stop takes a second or more on a cold camera; one that does not
-/// wait takes microseconds, and the bound sits between them.
 #[test]
 fn a_stop_while_the_camera_powers_up_does_not_wait_for_the_camera() {
     const A_STOP_THAT_DOES_NOT_WAIT_FOR_THE_CAMERA: Duration = Duration::from_millis(500);
@@ -298,7 +293,7 @@ fn a_stop_while_the_camera_powers_up_does_not_wait_for_the_camera() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
-            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            node_run_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         })
         .expect("the default camera opens");
@@ -326,7 +321,7 @@ fn a_named_camera_that_is_not_attached_is_refused_naming_it() {
             max_width: CAPTURE_CAP_WIDTH,
             max_height: CAPTURE_CAP_HEIGHT,
             gpu_context: gpu.limited_access(),
-            processor_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
+            node_run_id_of_the_capturing_node: "avfoundation-seam-camera".to_string(),
             capture_device_access_prompting: CaptureDeviceAccessPrompting::MayAskTheUser,
         }) {
             Ok(_) => panic!("a camera that is not attached cannot open"),

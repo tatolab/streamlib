@@ -2,19 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::compiler_ops::shader_node_island::RunningShaderNodesALiveEditRestarts;
-use crate::core::graph::{Graph, LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
 
 /// Categorized operations ready for execution.
 ///
 /// Built from [`PendingOperation`]s after validation and dependency analysis.
 #[derive(Debug, Default)]
 pub(super) struct CompilationPlan {
-    pub(super) processors_to_add: Vec<ProcessorUniqueId>,
-    pub(super) processors_to_remove: Vec<ProcessorUniqueId>,
+    pub(super) nodes_to_add: Vec<NodeRunId>,
+    pub(super) nodes_to_remove: Vec<NodeRunId>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    /// Each processor to reconfigure, beside the configuration it is handed.
-    pub(super) config_updates: Vec<(ProcessorUniqueId, serde_json::Value)>,
+    pub(super) config_updates: Vec<(NodeRunId, serde_json::Value)>,
     /// Each function node to promote out of the islands of the reader whose
     /// helper it crashed, beside that reader and why.
     pub(super) function_node_promotions:
@@ -25,8 +24,8 @@ pub(super) struct CompilationPlan {
 /// it crashed.
 #[derive(Debug, Clone)]
 pub(super) struct FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
-    pub(super) function_node_id: ProcessorUniqueId,
-    pub(super) reader_id: ProcessorUniqueId,
+    pub(super) function_node_id: NodeRunId,
+    pub(super) reader_id: NodeRunId,
     pub(super) promotion_request_number: u64,
     pub(super) reason: String,
 }
@@ -34,8 +33,8 @@ pub(super) struct FunctionNodePromotionOutOfTheIslandsOfTheReaderItCrashed {
 impl CompilationPlan {
     /// Returns true if there are no operations to execute.
     pub(super) fn is_empty(&self) -> bool {
-        self.processors_to_add.is_empty()
-            && self.processors_to_remove.is_empty()
+        self.nodes_to_add.is_empty()
+            && self.nodes_to_remove.is_empty()
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
@@ -49,8 +48,8 @@ impl CompilationPlan {
         restarted: &RunningShaderNodesALiveEditRestarts,
     ) {
         for node_id in &restarted.nodes {
-            if !self.processors_to_add.contains(node_id) {
-                self.processors_to_add.push(node_id.clone());
+            if !self.nodes_to_add.contains(node_id) {
+                self.nodes_to_add.push(node_id.clone());
             }
         }
         for link_id in &restarted.links {
@@ -60,71 +59,49 @@ impl CompilationPlan {
         }
     }
 
-    /// Take each of `node_ids` out of the processors to build, with every link
-    /// into or out of it out of the links to wire.
     pub(super) fn leave_unbuilt_each_node_whose_thread_was_abandoned(
         &mut self,
         graph: &Graph,
-        node_ids: &[ProcessorUniqueId],
+        node_ids: &[NodeRunId],
     ) {
         if node_ids.is_empty() {
             return;
         }
-        self.processors_to_add
-            .retain(|processor_id| !node_ids.contains(processor_id));
+        self.nodes_to_add
+            .retain(|node_run_id| !node_ids.contains(node_run_id));
         self.links_to_add.retain(|link_id| {
             graph.traversal().e(link_id).first().is_none_or(|link| {
-                !node_ids.contains(link.source().processor_id())
-                    && !node_ids.contains(link.to_port().processor_id())
+                !node_ids.contains(link.source().node_run_id())
+                    && !node_ids.contains(link.to_port().node_run_id())
             })
         });
     }
 
-    /// Record each config update for a processor this same batch constructs on
-    /// that processor's graph node, and take it out of `config_updates`.
-    ///
-    /// Such a processor is built from its node's config, so construction is
-    /// where it takes the update. Built from the old config and then asked to
-    /// reconfigure instead, a processor that takes no reconfiguration refuses
-    /// and fails the very commit that adds it.
-    pub(super) fn hand_config_updates_to_processors_this_batch_constructs(
-        &mut self,
-        graph: &mut Graph,
-    ) {
+    pub(super) fn hand_config_updates_to_nodes_this_batch_constructs(&mut self, graph: &mut Graph) {
         let Self {
-            processors_to_add,
+            nodes_to_add,
             config_updates,
             ..
         } = self;
-        if processors_to_add.is_empty() || config_updates.is_empty() {
+        if nodes_to_add.is_empty() || config_updates.is_empty() {
             return;
         }
-        for (processor_id, config_to_apply) in config_updates.extract_if(.., |(processor_id, _)| {
-            processors_to_add.contains(processor_id)
-        }) {
-            if let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() {
+        for (node_run_id, config_to_apply) in
+            config_updates.extract_if(.., |(node_run_id, _)| nodes_to_add.contains(node_run_id))
+        {
+            if let Some(node) = graph.traversal_mut().v(&node_run_id).first_mut() {
                 node.set_config(config_to_apply);
             }
         }
     }
 
-    /// Drop any queued link wiring whose endpoint processor this same batch
-    /// removes. petgraph's `remove_node` cascades a node's incident edges, so a
-    /// link scheduled to wire against a processor that this commit also tears
-    /// down no longer exists by the WIRE phase — wiring it would raise a
-    /// spurious [`Error::LinkNotFound`]. Disconnect-then-remove and
-    /// connect-then-immediate-stop are legitimate live-graph edits; reconciling
-    /// the plan keeps processor removal idempotent to the links its own
-    /// cascade removes.
-    ///
-    /// [`Error::LinkNotFound`]: crate::core::error::Error::LinkNotFound
-    pub(super) fn drop_link_adds_into_removed_processors(&mut self, graph: &Graph) {
+    pub(super) fn drop_link_adds_into_removed_nodes(&mut self, graph: &Graph) {
         let Self {
             links_to_add,
-            processors_to_remove,
+            nodes_to_remove,
             ..
         } = self;
-        if processors_to_remove.is_empty() || links_to_add.is_empty() {
+        if nodes_to_remove.is_empty() || links_to_add.is_empty() {
             return;
         }
         links_to_add.retain(|link_id| {
@@ -132,11 +109,11 @@ impl CompilationPlan {
                 tracing::debug!("[commit] link-add {link_id} skipped — link absent from graph");
                 return false;
             };
-            let source_removed = processors_to_remove.contains(link.source().processor_id());
-            let target_removed = processors_to_remove.contains(link.to_port().processor_id());
+            let source_removed = nodes_to_remove.contains(link.source().node_run_id());
+            let target_removed = nodes_to_remove.contains(link.to_port().node_run_id());
             if source_removed || target_removed {
                 tracing::debug!(
-                    "[commit] link-add {link_id} skipped — endpoint processor removed in same batch"
+                    "[commit] link-add {link_id} skipped — endpoint node removed in same batch"
                 );
                 return false;
             }
@@ -149,18 +126,16 @@ impl CompilationPlan {
 mod tests {
     use super::*;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::nodes::NodeSpec;
 
-    /// Build `source_output → target_input` between two live mock processors
-    /// and return `(source_id, link_id)`.
-    fn graph_with_one_link() -> (Graph, ProcessorUniqueId, LinkUniqueId) {
+    fn graph_with_one_link() -> (Graph, NodeRunId, LinkUniqueId) {
         crate::core::test_support::ensure_test_mocks_registered();
 
         let mut graph = Graph::new();
         let source_id = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path(),
+            .add_v(NodeSpec::new(
+                crate::core::test_support::MockOutputOnlyNode::node_class_import_path(),
                 serde_json::Value::Null,
             ))
             .expect("the node is named")
@@ -170,8 +145,8 @@ mod tests {
             .clone();
         let target_id = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path(),
+            .add_v(NodeSpec::new(
+                crate::core::test_support::MockInputOnlyNode::node_class_import_path(),
                 serde_json::Value::Null,
             ))
             .expect("the node is named")
@@ -193,43 +168,31 @@ mod tests {
         (graph, source_id, link_id)
     }
 
-    /// A link scheduled for wiring whose source processor the same batch
-    /// removes is dropped from `links_to_add`: `remove_node` will cascade the
-    /// edge away, so the WIRE phase would otherwise `LinkNotFound`. Mentally
-    /// revert `drop_link_adds_into_removed_processors` to a no-op and the link
-    /// survives — reproducing the shutdown-time crash the dynamic-reconfigure
-    /// example hit (connect-then-immediate-stop leaves a doomed link add that
-    /// runtime teardown removes the endpoints of in the same commit).
     #[test]
     fn drops_link_add_when_its_endpoint_is_removed_in_the_same_batch() {
         let (graph, source_id, link_id) = graph_with_one_link();
 
         let mut plan = CompilationPlan {
             links_to_add: vec![link_id],
-            processors_to_remove: vec![source_id],
+            nodes_to_remove: vec![source_id],
             ..Default::default()
         };
-        plan.drop_link_adds_into_removed_processors(&graph);
+        plan.drop_link_adds_into_removed_nodes(&graph);
 
         assert!(
             plan.links_to_add.is_empty(),
-            "a link whose endpoint processor is removed in the same batch must not \
+            "a link whose endpoint node is removed in the same batch must not \
              stay queued for the WIRE phase",
         );
     }
 
-    /// Fail-without-fix: a processor added and reconfigured in one batch — every
-    /// update requested before the runtime starts — was built from its old
-    /// config and then asked to reconfigure, which a processor that takes no
-    /// reconfiguration refuses, failing the start.
     #[test]
-    fn a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built()
-    {
+    fn a_config_update_for_a_node_this_batch_constructs_lands_on_its_node_before_it_is_built() {
         let (mut graph, constructed_in_this_batch, _link_id) = graph_with_one_link();
-        let already_running: ProcessorUniqueId = "P-already-running".into();
+        let already_running: NodeRunId = "P-already-running".into();
 
         let mut plan = CompilationPlan {
-            processors_to_add: vec![constructed_in_this_batch.clone()],
+            nodes_to_add: vec![constructed_in_this_batch.clone()],
             config_updates: vec![
                 (
                     constructed_in_this_batch.clone(),
@@ -243,12 +206,12 @@ mod tests {
             ],
             ..Default::default()
         };
-        plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph);
+        plan.hand_config_updates_to_nodes_this_batch_constructs(&mut graph);
 
         assert_eq!(
             plan.config_updates,
             vec![(already_running, serde_json::json!({"gain": 5}))],
-            "only a processor that is already running is asked to reconfigure",
+            "only a node that is already running is asked to reconfigure",
         );
         let config_on_the_node = graph
             .traversal()
@@ -271,7 +234,7 @@ mod tests {
             links_to_add: vec![link_id.clone()],
             ..Default::default()
         };
-        plan.drop_link_adds_into_removed_processors(&graph);
+        plan.drop_link_adds_into_removed_nodes(&graph);
 
         assert_eq!(
             plan.links_to_add,

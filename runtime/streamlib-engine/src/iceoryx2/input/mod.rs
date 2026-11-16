@@ -1,25 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Input mailboxes for receiving frames from upstream processors.
-//!
-//! # Two-type split: handle vs. inner
-//!
-//! - [`InputMailboxesInner`] holds the actual state — the
-//!   `HashMap<port, PortConfig>` of per-port mailboxes plus the
-//!   channel subscribers and listener behind their own lock. All
-//!   per-frame `receive_pending` + mailbox push/pop work runs here.
-//! - [`InputMailboxes`] is the public handle that processor structs
-//!   hold via the macro-emitted `inputs: InputMailboxes` field. It
-//!   wraps an `Arc<InputMailboxesInner>` behind an opaque handle;
-//!   `process()` reaches input data through `read_raw` / `read_msgpack` /
-//!   `has_data`, which borrow the inner and invoke it directly.
-//!
-//! Host-side wiring code that mutates the inner (`add_port`,
-//! `add_channel_subscriber`, `set_listener`, `listener_fd`,
-//! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
-//! directly via the methods declared on the inner type.
-
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -307,14 +288,6 @@ enum InstalledInputPortAudioWindowing {
     /// The port declared no window contract. Unchanged in every respect: bags
     /// reach the reader exactly as they were published.
     NotWindowed,
-    /// The port declared `audio_window = match_device` and nothing has settled
-    /// it yet.
-    ///
-    /// The port exists and its mailbox counts, because the wiring path runs
-    /// before any processor reaches `setup()` and a bag arriving in between
-    /// must land somewhere countable. What it will not do is hand a reader
-    /// anything: it has no contract to window by, and the raw bags underneath
-    /// are exactly what the contract exists to stop reaching `process()`.
     AwaitingItsDeviceStreamFormat,
     /// The port windows through this stage.
     Windowed(SharedAudioWindowStage),
@@ -348,25 +321,7 @@ impl InstalledInputPortAudioWindowing {
     }
 }
 
-/// Host-side inner state for input mailboxes. Owns the per-port
-/// mailbox map plus the channel subscribers and listener. All
-/// per-frame `receive_pending` + queue-pop work runs here.
-///
-/// Held via `Arc<InputMailboxesInner>`; the [`InputMailboxes`] handle
-/// stores a separate `Arc::into_raw`-encoded strong reference to the
-/// same inner.
-///
-/// Wiring against wiring is serialized by its caller — the compiler under
-/// the processor mutex, a helper one wiring command at a time — because a
-/// check-then-install pair such as `has_listener` then `set_listener` is not
-/// atomic. Reads need no such caller.
 pub struct InputMailboxesInner {
-    /// Taken by every access to a subscriber or the listener, from whichever
-    /// thread: wiring and unwiring, a processor reading on its own thread, a
-    /// helper reading with no GIL attached.
-    ///
-    /// Lock order: this, then `ports` or the dropped-bag counts, then a
-    /// windowed port's stage. Never take an earlier one while holding a later.
     inbound_link_subscribers_and_listener: parking_lot::Mutex<InboundLinkSubscribersAndListener>,
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     /// Counts every listener installed, so a runner can tell a listener
@@ -375,8 +330,6 @@ pub struct InputMailboxesInner {
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
     discarded_sample_counts: Arc<DiscardedSampleCountsByInboundLink>,
     device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
-    /// The upstream stream facts the node's inbound links reach, reached
-    /// once the processor is created for its node.
     upstream_stream_facts_by_inbound_link:
         std::sync::OnceLock<Arc<UpstreamStreamFactsByInboundLink>>,
     input_ports_fed_by_function_node_islands:
@@ -403,8 +356,6 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Reach the upstream stream facts of the node this processor was
-    /// created for.
     pub(crate) fn reach_upstream_stream_facts_by_inbound_link(
         &self,
         upstream_stream_facts_by_inbound_link: Arc<UpstreamStreamFactsByInboundLink>,
@@ -433,7 +384,7 @@ impl InputMailboxesInner {
             .ok_or_else(|| {
                 Error::Link(format!(
                     "input port '{port}' has no node whose inbound links it could read — the \
-                     processor was not created for a node"
+                     node was not created for a node"
                 ))
             })?
             .stream_facts_of_inbound_link(port, inbound_link.map(InboundLinkName::as_str))
@@ -476,13 +427,6 @@ impl InputMailboxesInner {
             .load(std::sync::atomic::Ordering::Acquire)
     }
 
-    /// Returns the underlying listener fd if a listener has been configured.
-    ///
-    /// The fd is owned by the [`Listener`] — callers must NOT `close()` it and
-    /// MUST stop using it before [`InputMailboxesInner`] is dropped. Suitable
-    /// for registering with an epoll set, a kqueue, or `poll` from the
-    /// processor's execution thread — never `select`, which refuses a
-    /// descriptor of 1024 or above.
     pub fn listener_fd(&self) -> Option<i32> {
         // SAFETY: native_handle() is unsafe per iceoryx2-bb-posix because storing
         // the value across the Listener's lifetime would dangle. We return the
@@ -519,16 +463,6 @@ impl InputMailboxesInner {
         Ok(())
     }
 
-    /// Check if a port has any payloads available. This first
-    /// receives any pending data from the iceoryx2 Subscriber.
-    ///
-    /// On a port declaring a window contract this means a full window, not an
-    /// arrived bag: the contract promises `process()` exact-size blocks, so a
-    /// reactive processor that woke and found nothing would contradict it.
-    ///
-    /// A port an island feeds has data when a read now would hand out a
-    /// message, which for an island reading links from outside it means
-    /// evaluating it; the output evaluated is held for the read that follows.
     pub fn has_data(&self, port: &str) -> bool {
         if self.pin_value_read_by_an_unlinked(port).is_some() {
             return true;
@@ -648,12 +582,6 @@ impl InputMailboxesInner {
         self.ports.lock().get(port).map(PortReadiness::of)
     }
 
-    /// Whether any port would hand a reader something.
-    ///
-    /// Answers under the lock for every port that needs no judging, and
-    /// collects only the windowed ones — normally none — so a processor with no
-    /// window contract pays no allocation on a path the reactive runner walks
-    /// once per wake and once per drain iteration.
     fn any_ports_read_would_return_something(
         &self,
         reader_input_ports_islands_read: &HashSet<&str>,
@@ -720,20 +648,7 @@ impl Default for InputMailboxesInner {
 // InputMailboxes
 // =============================================================================
 
-/// Public input mailboxes handle. The macro emits
-/// `pub inputs: InputMailboxes` on every processor struct that
-/// declares input ports.
-///
-/// The sole field is an opaque pointer to the host's
-/// [`InputMailboxesInner`]. `Clone` bumps the `Arc<InputMailboxesInner>`
-/// strong count; `Drop` decrements it.
-///
-/// A port is named in any spelling that casts to the name it registered
-/// under, so `"videoOut"` reaches the port registered as `videoout`.
 pub struct InputMailboxes {
-    /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
-    /// on a freshly-constructed processor before
-    /// `set_iceoryx2_resources` fires.
     pub(crate) handle: *const c_void,
 }
 
@@ -884,7 +799,7 @@ impl InputMailboxes {
             Some(inner) => inner.upstream_stream_facts(port, inbound_link),
             None => Err(Error::Link(format!(
                 "InputMailboxes not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
+                 resources on this node instance"
             ))),
         }
     }
@@ -906,22 +821,6 @@ impl InputMailboxes {
         }
     }
 
-    /// Settle this processor's own input port declaring
-    /// `audio_window = match_device`, from the format of the device stream it
-    /// just opened.
-    ///
-    /// The `RuntimeContextFullAccess` is the gate rather than a value this
-    /// reads: the Full capability typestate exists only in `setup()` and
-    /// `teardown()`, which is where the plan puts a processor's resource
-    /// requests, and taking it here is what keeps a dynamic contract off the
-    /// `process()` surface. There is no Python spelling of this and no control
-    /// -plane verb for it — only a processor that opens a device stream holds
-    /// the format to settle one with.
-    ///
-    /// Refuses a handle that was never given its inner — a processor with no
-    /// iceoryx2 input resources at all, which cannot have the port this names.
-    /// An input port that simply has no link is not that: its contract settles
-    /// and waits, and the port materialises resolved when a link is wired.
     pub fn settle_a_ports_device_matched_audio_window_contract(
         &self,
         _full_access_gate: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -931,7 +830,7 @@ impl InputMailboxes {
         let Some(inner) = self.host_inner() else {
             return Err(Error::Configuration(format!(
                 "input port '{port}' declares `audio_window = match_device` but this \
-                 processor's inputs are not wired, so there is nothing to settle the \
+                 node's inputs are not wired, so there is nothing to settle the \
                  contract on. Connect the port, or drop the contract from it"
             )));
         };

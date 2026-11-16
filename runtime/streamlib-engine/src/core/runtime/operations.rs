@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::error::Result;
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
-use crate::core::processors::ProcessorSpec;
+use crate::core::graph::{LinkUniqueId, NodeRunId};
+use crate::core::nodes::NodeSpec;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -17,51 +17,23 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeInTheGraph {
     /// The node's per-run id.
-    pub processor_id: ProcessorUniqueId,
+    pub node_run_id: NodeRunId,
     /// The node's name.
     pub name: String,
 }
 
-/// The operations on one loaded stream's graph.
-///
-/// Implemented by [`LoadedStreamInThisRuntime`](crate::core::runtime::LoadedStreamInThisRuntime),
-/// and by the control plane's test stubs. Callers use this trait and don't
-/// need to know the underlying implementation.
-///
-/// # Thread Safety
-///
-/// Implementations must be `Send + Sync` to allow sharing across threads.
-/// Graph operations should return quickly - compilation happens asynchronously.
-///
-/// # Sync vs Async Methods
-///
-/// Both sync and async variants are provided:
-/// - **Async methods** (`*_async`): Safe to call from any context including tokio tasks.
-///   Use these from async code: `ctx.runtime().add_processor_async(spec).await`
-/// - **Sync methods**: Convenience wrappers that block on the async variants.
-///   Use these from sync code: `stream.add_processor(spec)`
-///
-/// The sync methods internally use `block_on`, so they must NOT be called from
-/// within a tokio task (will panic). Use the async variants in async contexts.
 pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
     // Async Methods (primary implementation - safe from any context)
     // =========================================================================
 
-    /// Add a processor to the graph asynchronously. Returns its id and the
-    /// name it received.
-    ///
-    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
-    fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
+    fn add_node_async(&self, spec: NodeSpec) -> BoxFuture<'_, Result<NodeInTheGraph>>;
 
     /// The node `node_name` names once cast, refused by name — listing the
     /// names the graph holds — when no node has it.
     fn the_node_named(&self, node_name: &str) -> Result<NodeInTheGraph>;
 
-    /// Remove a processor from the graph asynchronously.
-    ///
-    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
-    fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>>;
+    fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>>;
 
     /// Connect two ports asynchronously. Returns the link ID.
     ///
@@ -152,21 +124,9 @@ pub trait RuntimeOperations: Send + Sync {
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
     // =========================================================================
 
-    /// Add a processor to the graph. Returns the processor ID.
-    ///
-    /// Note: No `#[must_use]` - callers may intentionally ignore the ID in fire-and-forget scenarios.
-    ///
-    /// This is a blocking wrapper around [`add_processor_async`]. Do not call
-    /// from within a tokio task - use the async variant instead.
-    fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId>;
+    fn add_node(&self, spec: NodeSpec) -> Result<NodeRunId>;
 
-    /// Remove a processor from the graph.
-    ///
-    /// Note: No `#[must_use]` - callers may intentionally ignore the result in fire-and-forget scenarios.
-    ///
-    /// This is a blocking wrapper around [`remove_processor_async`]. Do not call
-    /// from within a tokio task - use the async variant instead.
-    fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()>;
+    fn remove_node(&self, node_run_id: &NodeRunId) -> Result<()>;
 
     /// Connect two ports. Returns the link ID.
     ///
@@ -210,8 +170,8 @@ pub trait RuntimeOperations: Send + Sync {
     /// link wiring still awaits.
     fn request_a_function_node_promotion_out_of_the_islands_of_the_reader_it_crashed(
         &self,
-        function_node_id: &ProcessorUniqueId,
-        reader_id: &ProcessorUniqueId,
+        function_node_id: &NodeRunId,
+        reader_id: &NodeRunId,
         promotion_request_number: u64,
         reason: &str,
     ) -> Result<()>;
@@ -220,6 +180,5 @@ pub trait RuntimeOperations: Send + Sync {
     // Introspection
     // =========================================================================
 
-    /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     fn to_json(&self) -> Result<serde_json::Value>;
 }

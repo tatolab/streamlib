@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Probes for `ModelInputTensorKernel`, from a processor interpreter.
+"""Probes for `ModelInputTensorKernel`, from a node interpreter.
 
 Each applies kernels to one test-pattern frame and compares every tensor with
 the same model input made by a torch reference on the CPU: bilinear resize,

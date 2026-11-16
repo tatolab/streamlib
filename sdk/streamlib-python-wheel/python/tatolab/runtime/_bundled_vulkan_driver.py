@@ -37,8 +37,8 @@ def point_the_vulkan_loader_at_the_bundled_driver(
 ) -> None:
     """Add the bundled ICD manifest to `VK_ADD_DRIVER_FILES`, once.
 
-    `tatolabd` names the manifest before any processor interpreter starts; this
-    covers any other importer of the lent package. Idempotent, so a processor
+    `tatolabd` names the manifest before any node interpreter starts; this
+    covers any other importer of the lent package. Idempotent, so a node
     interpreter importing it under `tatolabd`'s environment names it twice to
     no effect.
     """

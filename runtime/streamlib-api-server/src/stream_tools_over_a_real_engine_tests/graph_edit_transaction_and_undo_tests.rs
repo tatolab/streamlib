@@ -16,7 +16,7 @@ async fn five_edits_in_one_transaction_are_kept_across_a_restart_and_one_undo_re
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
 
     let applied = tool_answer(
         &tool_call_result(
@@ -220,7 +220,7 @@ async fn each_authors_undo_reverses_only_their_own_edits() {
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         async move {
@@ -416,7 +416,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
     let project = a_project_whose_main_stream_holds_one_source();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let sink_type = StreamToolsTestSink::processor_class_import_path();
+    let sink_type = StreamToolsTestSink::node_class_import_path();
     let call = |tool_name: &'static str, arguments: Value| {
         let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
         async move {

@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use sha2::{Digest, Sha256};
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::descriptors::NodeClassImportPath;
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::runtime::Runner;
-use streamlib_media_builtins::register_media_builtin_processor_types;
+use streamlib_media_builtins::register_media_builtin_node_types;
 
 /// Each golden graph document's SHA-256, pinned as it was added.
 const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
@@ -85,7 +85,7 @@ fn module_node_uuids_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
         .expect("a document holds nodes")
         .iter()
         .filter(|node| {
-            !ProcessorClassImportPath::new(node["type"].as_str().expect("a node has a type"))
+            !NodeClassImportPath::new(node["type"].as_str().expect("a node has a type"))
                 .expect("a type names a class")
                 .names_a_built_in_node()
         })
@@ -98,7 +98,7 @@ fn module_node_uuids_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
 /// built-ins left load on a runtime with no interpreter.
 #[test]
 fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
-    register_media_builtin_processor_types();
+    register_media_builtin_node_types();
 
     for path in golden_graph_document_paths() {
         let document_bytes = std::fs::read(&path).expect("a golden document reads");

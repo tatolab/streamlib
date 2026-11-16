@@ -19,7 +19,7 @@ use crate::core::graph::{
 
 const NOTHING_REMOVED: WhatTheCompileCarryingAPromotionRemoves<'static> =
     WhatTheCompileCarryingAPromotionRemoves {
-        processors: &[],
+        nodes: &[],
         links: &[],
     };
 
@@ -34,7 +34,7 @@ fn the_link_state_of(graph: &Graph, link_id: &LinkUniqueId) -> Option<LinkState>
 
 fn the_process_execution_promoted_to(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
+    node_id: &NodeRunId,
 ) -> Option<ProcessExecution> {
     graph
         .traversal()
@@ -47,9 +47,9 @@ fn the_process_execution_promoted_to(
 /// `lfo` feeds `remap`, which feeds a reader's helper as one island.
 struct OneIslandIntoOneReader {
     graph: Graph,
-    lfo: ProcessorUniqueId,
-    remap: ProcessorUniqueId,
-    reader: ProcessorUniqueId,
+    lfo: NodeRunId,
+    remap: NodeRunId,
+    reader: NodeRunId,
     lfo_into_remap: LinkUniqueId,
     remap_into_the_reader: LinkUniqueId,
 }
@@ -66,8 +66,7 @@ fn one_island_into_one_reader_driven_in(
     if reader_process_execution == ProcessExecution::Reactive {
         let source_that_wakes_the_reader = add_a_node(
             &mut graph,
-            crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path()
-                .as_str(),
+            crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
             JsonValue::Null,
         );
         link(
@@ -118,7 +117,7 @@ fn a_crashed_function_node_leaves_its_readers_island_and_what_it_reads_becomes_i
     )
     .unwrap();
 
-    assert_eq!(planned.processors_to_add, vec![remap.clone()]);
+    assert_eq!(planned.nodes_to_add, vec![remap.clone()]);
     assert_eq!(
         planned.links_to_add.iter().collect::<HashSet<_>>(),
         HashSet::from([&lfo_into_remap, &remap_into_the_reader])
@@ -219,7 +218,7 @@ fn every_function_node_downstream_of_the_crashed_one_moves_with_it() {
     .unwrap();
 
     assert_eq!(
-        planned.processors_to_add.iter().collect::<HashSet<_>>(),
+        planned.nodes_to_add.iter().collect::<HashSet<_>>(),
         HashSet::from([&lfo, &remap])
     );
     assert!(!runs_inside_the_read_of_each_node_it_feeds(&graph, &lfo));
@@ -312,7 +311,7 @@ fn a_promotion_whose_link_the_same_compile_removes_is_refused_changing_nothing()
         &reader,
         "function node `lfo` stalled.",
         &WhatTheCompileCarryingAPromotionRemoves {
-            processors: &[],
+            nodes: &[],
             links: std::slice::from_ref(&lfo_into_remap),
         },
     )
@@ -345,7 +344,7 @@ fn a_link_into_a_promoted_function_node_from_a_node_that_is_not_one_is_a_channel
     .unwrap();
     let process_node = add_a_node(
         &mut graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
 
@@ -415,7 +414,7 @@ fn graph_shows_each_promotion_under_the_promoted_nodes_metrics() {
             .traversal()
             .v(promoted_id)
             .first()
-            .and_then(|node| node.get::<ProcessorMetrics>())
+            .and_then(|node| node.get::<NodeMetrics>())
             .map(JsonSerializableComponent::to_json)
             .unwrap();
         assert_eq!(
@@ -447,7 +446,7 @@ fn a_graph_resolving_two_stateful_function_node_types() -> Graph {
     ])
 }
 
-fn every_node_of(graph: &Graph) -> Vec<ProcessorUniqueId> {
+fn every_node_of(graph: &Graph) -> Vec<NodeRunId> {
     graph.traversal().v(()).ids()
 }
 
@@ -485,7 +484,7 @@ fn a_stateful_node_two_readers_read_moves_out_of_the_islands_with_what_it_feeds(
     );
 }
 
-fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &ProcessorUniqueId) -> JsonValue {
+fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &NodeRunId) -> JsonValue {
     graph
         .traversal()
         .v(node_id)
@@ -497,7 +496,7 @@ fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &ProcessorUniqueId)
 
 fn the_report_its_own_helper_notes_on(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
+    node_id: &NodeRunId,
 ) -> std::sync::Arc<HowItsHelpersRanAFunctionNode> {
     graph
         .traversal()

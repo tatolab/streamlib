@@ -281,10 +281,6 @@ class PrivilegedCapabilityProbe:
         except RuntimeError as refusal:
             observation["escalate_refusal"] = str(refusal)
 
-        # A device texture acquires from a helper process: what comes back is
-        # the surface id a kernel dispatch binds and a downstream processor
-        # resolves — a name, deliberately not a local mapping. The `with`
-        # returns its pool slot at a known point, like the acquire above.
         with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src"]
         ) as acquired_texture:
@@ -298,16 +294,6 @@ class PrivilegedCapabilityProbe:
 
 @node.process(execution="manual")
 class PooledTextureExportProbe:
-    """Resurrected from #1737 (removed by #1754, carried by #1757): a pooled
-    texture acquired by a Python processor exports a device tensor of correct
-    shape through the handle itself.
-
-    The original also asserted a `pooled-texture-` id prefix (the escalate
-    acquire now mints a UUID handle id), a read-only tensor (this ticket makes
-    texture-backed exports writable), and a lease-bound full-access host-side
-    arm (that capability shape no longer exists) — the live substance is the
-    export itself.
-    """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         report_device_exchange_probe_observation(lambda: self._probe(ctx))

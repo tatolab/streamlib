@@ -59,7 +59,7 @@ pub(super) fn allocate_registered_texture_for_helper(
             {
                 return Err(crate::core::error::Error::NotSupported(format!(
                     "acquire_texture: {} exports no DMA-BUF and cannot export a {} texture with \
-                     usage {} as OPAQUE_FD, so it cannot cross to a processor interpreter",
+                     usage {} as OPAQUE_FD, so it cannot cross to a node interpreter",
                     device.name(),
                     parsed_format.wire_name(),
                     texture_usages_to_wire(parsed_usage).join(" | "),

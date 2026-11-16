@@ -24,8 +24,8 @@ pub use port_family_conversion::{
 };
 pub use video_frame::VideoFrame;
 
-use streamlib::sdk::descriptors::ProcessorClassImportPath;
-use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+use streamlib::sdk::descriptors::NodeClassImportPath;
+use streamlib::sdk::nodes::NODE_REGISTRY;
 
 /// Each built-in that left the runtime for a module, by its former public class
 /// name, with the module's node type and the distribution that installs it.
@@ -72,22 +72,21 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
 /// one that moved to a module, so a graph naming it is refused naming the
 /// module to install. In-process static registration (the api-server
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
-pub fn register_media_builtin_processor_types() {
-    PROCESSOR_REGISTRY.register::<port_family_conversion::ChannelsToArray::Processor>();
-    PROCESSOR_REGISTRY.register::<port_family_conversion::ArrayToChannels::Processor>();
-    PROCESSOR_REGISTRY.register::<port_family_conversion::ChannelsToRecords::Processor>();
-    PROCESSOR_REGISTRY.register::<port_family_conversion::RecordsToChannels::Processor>();
-    PROCESSOR_REGISTRY.register::<port_family_conversion::ImageToArray::Processor>();
-    PROCESSOR_REGISTRY.register::<port_family_conversion::ArrayToImage::Processor>();
+pub fn register_media_builtin_node_types() {
+    NODE_REGISTRY.register::<port_family_conversion::ChannelsToArray::Node>();
+    NODE_REGISTRY.register::<port_family_conversion::ArrayToChannels::Node>();
+    NODE_REGISTRY.register::<port_family_conversion::ChannelsToRecords::Node>();
+    NODE_REGISTRY.register::<port_family_conversion::RecordsToChannels::Node>();
+    NODE_REGISTRY.register::<port_family_conversion::ImageToArray::Node>();
+    NODE_REGISTRY.register::<port_family_conversion::ArrayToImage::Node>();
 
     for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
-        match ProcessorClassImportPath::new(*module_node_type) {
-            Ok(module_node_type) => PROCESSOR_REGISTRY
-                .register_built_in_node_type_moved_to_a_module(
-                    ProcessorClassImportPath::of_built_in_node(former_class_name),
-                    module_node_type,
-                    *module_distribution,
-                ),
+        match NodeClassImportPath::new(*module_node_type) {
+            Ok(module_node_type) => NODE_REGISTRY.register_built_in_node_type_moved_to_a_module(
+                NodeClassImportPath::of_built_in_node(former_class_name),
+                module_node_type,
+                *module_distribution,
+            ),
             Err(refusal) => tracing::error!(
                 former_class_name,
                 module_node_type,
@@ -107,25 +106,21 @@ mod built_in_node_type_tests {
 
     /// Every built-in this floor registers, each held to its class in
     /// `tatolab.stream` — its authored name, which the descriptor carries.
-    fn every_built_in_registered_on_this_floor() -> Vec<ProcessorClassImportPath> {
-        register_media_builtin_processor_types();
-        let built_ins: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
+    fn every_built_in_registered_on_this_floor() -> Vec<NodeClassImportPath> {
+        register_media_builtin_node_types();
+        let built_ins: Vec<NodeClassImportPath> = NODE_REGISTRY
             .list_registered()
             .into_iter()
-            .filter(|descriptor| {
-                descriptor
-                    .processor_class_import_path
-                    .names_a_built_in_node()
-            })
+            .filter(|descriptor| descriptor.node_class_import_path.names_a_built_in_node())
             .map(|descriptor| {
                 assert_eq!(
-                    descriptor.processor_class_import_path,
-                    ProcessorClassImportPath::of_built_in_node(
-                        descriptor.processor_class_short_name.as_str()
+                    descriptor.node_class_import_path,
+                    NodeClassImportPath::of_built_in_node(
+                        descriptor.node_class_short_name.as_str()
                     ),
                     "a built-in's type is its authored name in `tatolab.stream`"
                 );
-                descriptor.processor_class_import_path
+                descriptor.node_class_import_path
             })
             .collect();
         assert!(!built_ins.is_empty());
@@ -137,11 +132,10 @@ mod built_in_node_type_tests {
         let built_ins = every_built_in_registered_on_this_floor();
 
         assert!(
-            built_ins
-                .contains(&port_family_conversion::ChannelsToArray::processor_class_import_path())
+            built_ins.contains(&port_family_conversion::ChannelsToArray::node_class_import_path())
         );
-        let rust_module_paths: Vec<ProcessorClassImportPath> = PROCESSOR_REGISTRY
-            .registered_processor_class_import_paths()
+        let rust_module_paths: Vec<NodeClassImportPath> = NODE_REGISTRY
+            .registered_node_class_import_paths()
             .into_iter()
             .filter(|path| path.as_str().starts_with("streamlib_media_builtins::"))
             .collect();
@@ -156,7 +150,7 @@ mod built_in_node_type_tests {
     #[test]
     fn every_built_in_refuses_a_setting_it_does_not_take_naming_it() {
         for built_in_node_type in every_built_in_registered_on_this_floor() {
-            let refusal = PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(
+            let refusal = NODE_REGISTRY.refuse_a_node_this_runtime_cannot_add(
                 "probe",
                 &built_in_node_type,
                 &serde_json::json!({"a_setting_no_built_in_takes": 1}),
@@ -176,7 +170,7 @@ mod built_in_node_type_tests {
     /// type, and is refused naming the module's type and what to install.
     #[test]
     fn the_former_media_built_ins_are_refused_naming_the_module_to_install() {
-        register_media_builtin_processor_types();
+        register_media_builtin_node_types();
 
         for (former_class_name, module_node_type, module_distribution) in [
             (
@@ -216,10 +210,10 @@ mod built_in_node_type_tests {
                 "tatolab-moq",
             ),
         ] {
-            let former_node_type = ProcessorClassImportPath::of_built_in_node(former_class_name);
-            assert!(!PROCESSOR_REGISTRY.is_registered(&former_node_type));
+            let former_node_type = NodeClassImportPath::of_built_in_node(former_class_name);
+            assert!(!NODE_REGISTRY.is_registered(&former_node_type));
 
-            let refusal = PROCESSOR_REGISTRY
+            let refusal = NODE_REGISTRY
                 .refuse_a_node_this_runtime_cannot_add(
                     "former",
                     &former_node_type,

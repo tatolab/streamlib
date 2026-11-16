@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """`SpeakerSink` over a wired link with no runtime: the node's helper-side
-context opened directly, as a processor interpreter opens it.
+context opened directly, as a node interpreter opens it.
 
 Whatever audio arm this machine probes plays — a device, or the null backend
 discarding — so each test runs on a workstation and in a container alike. With
@@ -219,7 +219,7 @@ def test_start_before_setup_is_refused_by_name(speaker_wired_to_a_writer):
 
 
 def test_the_distribution_declares_the_node_for_the_node_catalog():
-    """The node type is the import path a processor interpreter imports the
+    """The node type is the import path a node interpreter imports the
     class back by, and the catalog reads it off the `tatolab.nodes` entry point."""
     from importlib.metadata import distribution
 

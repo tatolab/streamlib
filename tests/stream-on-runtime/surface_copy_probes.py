@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Probes for the engine's surface-to-surface copy, from a processor interpreter.
+"""Probes for the engine's surface-to-surface copy, from a node interpreter.
 
 A frame lands in a kernel's input texture through the engine: no array
 library takes part in the landing. numpy appears here only to check the

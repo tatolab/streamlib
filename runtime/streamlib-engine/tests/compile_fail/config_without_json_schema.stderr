@@ -1,4 +1,4 @@
-error[E0277]: `ProbeConfigWithoutTheDerive` is a processor `config =` type but does not derive `JsonSchema`
+error[E0277]: `ProbeConfigWithoutTheDerive` is a node `config =` type but does not derive `JsonSchema`
   --> tests/compile_fail/config_without_json_schema.rs:15:14
    |
 15 |     config = crate::ProbeConfigWithoutTheDerive,
@@ -21,4 +21,4 @@ help: the trait `JsonSchema` is not implemented for `ProbeConfigWithoutTheDerive
              (T0, T1, T2, T3, T4)
              (T0, T1, T2, T3, T4, T5)
            and $N others
-   = note: required for `ProbeConfigWithoutTheDerive` to implement `ProcessorConfigJsonSchema`
+   = note: required for `ProbeConfigWithoutTheDerive` to implement `NodeConfigJsonSchema`

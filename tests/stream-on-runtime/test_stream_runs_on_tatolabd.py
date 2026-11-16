@@ -44,7 +44,7 @@ WRAPPER_INVOCATION_TIMEOUT_SECONDS = 30.0
 
 
 def a_stream_function_defined_in_this_test_module(stream_builder: StreamBuilder) -> None:
-    """Never run: a test module is no place a processor interpreter imports."""
+    """Never run: a test module is no place a node interpreter imports."""
 
 
 def test_a_suite_stream_function_runs_as_a_one_stream_project_holding_its_graph_document(
@@ -194,7 +194,7 @@ def test_hand_written_graphs_of_one_reported_project_share_its_project_file(tmp_
     assert not (tmp_path / "unused").exists()
 
 
-def test_a_hand_written_graph_projects_interpreter_execs_the_processor_interpreter(
+def test_a_hand_written_graph_projects_interpreter_execs_the_node_interpreter(
     tmp_path: Path,
 ):
     project = write_a_hand_written_graph_project(tmp_path / "project", {"stream": "x", "nodes": []})

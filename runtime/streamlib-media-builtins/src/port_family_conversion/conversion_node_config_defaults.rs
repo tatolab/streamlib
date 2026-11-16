@@ -24,8 +24,6 @@ mod tests {
         ArrayToChannelsConfig, ArrayToImageConfig, ChannelsToRecordsConfig, RecordsToChannelsConfig,
     };
 
-    /// Each conversion node's `#[processor_config]` `Default` is a config its
-    /// node's setup accepts.
     #[test]
     fn each_conversion_node_given_no_config_takes_defaults_its_setup_accepts() {
         let array_to_channels: ArrayToChannelsConfig =

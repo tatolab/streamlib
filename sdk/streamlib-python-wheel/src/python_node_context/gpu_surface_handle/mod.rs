@@ -1,0 +1,546 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod neither_linux_nor_macos;
+
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError};
+use pyo3::prelude::*;
+use streamlib_adapter_cuda::dlpack::DeviceType;
+
+use crate::python_gpu_surface_pixel_exchange::{
+    CpuAccessGate, GpuSurfaceOwnedMemory, HOST_VISIBLE_DLPACK_DEVICE, dlpack_device_as_python_pair,
+    exchange_shape_for_max_version, host_visible_dlpack_capsule,
+    map_the_cpu_staging_without_reading_a_frame_in,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_gpu_surface_pixel_exchange::{
+    publish_tensor_storage_buffer_device_writes, tensor_storage_buffer_dlpack_capsule,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface;
+use crate::python_helper_process_pixel_exchange::{GpuSurfaceGeometry, PixelSurfaceGeometry};
+use streamlib::sdk::rhi::TensorStorageBufferLayout;
+
+use super::gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
+use super::left_by_a_propagating_exception;
+#[cfg(target_os = "linux")]
+use linux::tensor_storage_buffer_dlpack_device;
+#[cfg(target_os = "macos")]
+use macos::tensor_storage_buffer_dlpack_device;
+
+/// An owned GPU surface as seen from Python.
+///
+/// Owning the engine value (rather than an id to re-resolve) is what keeps a
+/// pool slot or a pooled texture alive until `close()` / the context manager
+/// releases it. The value itself sits behind an `Arc` shared with every DLPack
+/// capsule minted from this handle, so a tensor Python is still holding keeps
+/// the memory addressable after the handle is closed.
+#[pyclass(name = "GpuSurfaceHandle", module = "tatolab.stream", frozen)]
+pub(crate) struct PythonGpuSurfaceHandle {
+    /// `None` for pooled textures — see [`Self::surface_id`].
+    minted_surface_id: Option<String>,
+    /// Pixels with a width, height and format, or a tensor storage buffer
+    /// with a shape and dtype.
+    surface_geometry: GpuSurfaceGeometry,
+    /// Whether a writable tensor capsule went out, whose CUDA or Metal writes
+    /// every settle and every kernel bound to this handle must order ahead of
+    /// the read. Never cleared: the capsule outlives any scope, so torch can
+    /// write through it again.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool,
+    owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
+    cpu_access: CpuAccessGate,
+    /// Whether the readback staging already holds this lock scope's
+    /// frame, so the host-side accessors read it in once between `lock()`
+    /// and `unlock()` rather than per call.
+    ///
+    /// Only ever set for a surface the CPU cannot address directly; a
+    /// coherent mapping has nothing to read in.
+    #[cfg(target_os = "linux")]
+    cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool,
+    /// Whether this lock scope handed out a writable Metal capsule, whose
+    /// stores the framework's queue must retire before the unlock returns.
+    #[cfg(target_os = "macos")]
+    a_writable_metal_capsule_went_out_this_lock_scope: std::sync::atomic::AtomicBool,
+    /// Which DLPack side this handle serves when the consumer expresses
+    /// no preference — decided once, so `__dlpack_device__` and
+    /// `__dlpack__` cannot disagree across calls.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    natural_dlpack_side_is_device: std::sync::OnceLock<bool>,
+}
+
+impl PythonGpuSurfaceHandle {
+    fn new(
+        minted_surface_id: Option<String>,
+        surface_geometry: GpuSurfaceGeometry,
+        owned_memory: Arc<GpuSurfaceOwnedMemory>,
+    ) -> Self {
+        Self {
+            minted_surface_id,
+            surface_geometry,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool::new(false),
+            owned_memory: Mutex::new(Some(owned_memory)),
+            cpu_access: CpuAccessGate::new_unlocked(),
+            #[cfg(target_os = "linux")]
+            cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            a_writable_metal_capsule_went_out_this_lock_scope: std::sync::atomic::AtomicBool::new(
+                false,
+            ),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            natural_dlpack_side_is_device: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Order the CUDA or Metal writes a writable tensor capsule took ahead of
+    /// a kernel that reads this surface.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn order_tensor_device_writes_ahead_of_a_kernel_read(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<()> {
+        if !self
+            .a_writable_tensor_capsule_went_out
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let Some(owned_memory) = self.owned_memory.lock().clone() else {
+            return Ok(());
+        };
+        publish_tensor_storage_buffer_device_writes(python, &owned_memory)
+    }
+
+    /// Width, height and format, or the refusal a tensor surface gives every
+    /// pixel-shaped door.
+    fn pixel_geometry(&self) -> PyResult<PixelSurfaceGeometry> {
+        match &self.surface_geometry {
+            GpuSurfaceGeometry::Pixels(pixel_geometry) => Ok(*pixel_geometry),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            GpuSurfaceGeometry::TensorStorageBuffer(_) => {
+                Err(a_tensor_surface_is_not_a_pixel_surface())
+            }
+        }
+    }
+
+    /// The declared layout of a tensor surface; `None` for pixels.
+    fn tensor_layout(&self) -> Option<&TensorStorageBufferLayout> {
+        match &self.surface_geometry {
+            GpuSurfaceGeometry::Pixels(_) => None,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            GpuSurfaceGeometry::TensorStorageBuffer(tensor_layout) => Some(tensor_layout),
+        }
+    }
+
+    /// Refuse a pixel-shaped door on a tensor surface.
+    fn refuse_a_pixel_door_on_a_tensor_surface(&self) -> PyResult<()> {
+        self.pixel_geometry().map(|_| ())
+    }
+
+    /// A tensor surface's DLPack capsule, `None` for a pixel surface. It needs
+    /// no lock — there is no CPU door to open — and serves the device only: a
+    /// host copy is torch's `.cpu()`. The acquirer's capsule is writable, and
+    /// the close orders its writes; a resolver's is read-only. A write through
+    /// the acquirer's tensor after the close is out of contract, not revoked.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn tensor_storage_buffer_dlpack_capsule<'py>(
+        &self,
+        python: Python<'py>,
+        max_version: Option<(u32, u32)>,
+        dl_device: Option<(i32, i32)>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        if self.tensor_layout().is_none() {
+            return Ok(None);
+        }
+        let owned_memory = self.owned_memory()?;
+        let Some(storage_buffer) = owned_memory.tensor_storage_buffer() else {
+            return Ok(None);
+        };
+        if let Some(requested_device) = dl_device {
+            if requested_device.0 == DeviceType::Cpu as i32 {
+                return Err(PyBufferError::new_err(
+                    "a tensor surface lives on the device and exports no host view; copy it \
+                     with torch's `.cpu()` after `torch.from_dlpack`",
+                ));
+            }
+            let tensor_device = tensor_storage_buffer_dlpack_device(python, storage_buffer)?;
+            if requested_device != tensor_device {
+                return Err(PyBufferError::new_err(format!(
+                    "a tensor surface exports only on the DLPack device it lives on, \
+                     {tensor_device:?}; {requested_device:?} was requested"
+                )));
+            }
+        }
+        let writable = storage_buffer.writable;
+        if writable {
+            self.a_writable_tensor_capsule_went_out
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        tensor_storage_buffer_dlpack_capsule(
+            python,
+            &owned_memory,
+            exchange_shape_for_max_version(max_version),
+            !writable,
+        )
+        .map(Some)
+    }
+
+    /// A surface a helper process checked out of its parent — pixel buffer,
+    /// texture or tensor storage buffer, whichever the registration named —
+    /// behind the same handle surface the engine path mints.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(super) fn from_helper_checked_out_surface(checked_out: HelperCheckedOutSurface) -> Self {
+        let surface_id = checked_out.surface_id().to_string();
+        let surface_geometry = checked_out.geometry();
+        Self::new(
+            Some(surface_id.clone()),
+            surface_geometry,
+            // The release an acquired surface owes its parent rides the
+            // debt inside the checked-out value, so this holds nothing but
+            // the value and the id it travels under.
+            GpuSurfaceOwnedMemory::new(checked_out, Some(surface_id)),
+        )
+    }
+
+    /// Drop this handle's share of the owned memory. The resource goes away
+    /// once the last outstanding DLPack capsule does too; idempotent.
+    ///
+    /// The take is hoisted out of the drop expression so the mutex guard is
+    /// released before the value drops: a helper-checked-out surface's drop
+    /// re-attaches to the GIL for its `release_handle` round trip, and a
+    /// thread holding this mutex while waiting for the GIL deadlocks against
+    /// any GIL-holding thread reading the handle.
+    fn release_owned_engine_value(&self) {
+        let released_share = self.owned_memory.lock().take();
+        drop(released_share);
+    }
+
+    /// Borrow the shared memory anchor, or fail if the handle is closed.
+    pub(super) fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
+        self.owned_memory.lock().clone().ok_or_else(|| {
+            PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
+        })
+    }
+}
+
+impl Drop for PythonGpuSurfaceHandle {
+    /// Covers a handle the author never closed. Runs attached (pyclass
+    /// deallocation) — acceptable because the release path attaches with
+    /// `Python::attach` where it needs Python, which is re-entrant from an
+    /// attached thread; `close()` remains the detached fast path.
+    fn drop(&mut self) {
+        self.release_owned_engine_value();
+    }
+}
+
+#[pymethods]
+impl PythonGpuSurfaceHandle {
+    #[getter]
+    pub(super) fn surface_id(&self) -> PyResult<String> {
+        self.minted_surface_id.clone().ok_or_else(|| {
+            PyNotImplementedError::new_err(
+                "this surface carries no id: handles minted through the lease-bound full-access \
+                 capability or a raw DMA-BUF import are not registered anywhere a consumer \
+                 could resolve them",
+            )
+        })
+    }
+
+    #[getter]
+    fn width(&self) -> PyResult<u32> {
+        Ok(self.pixel_geometry()?.width)
+    }
+
+    #[getter]
+    fn height(&self) -> PyResult<u32> {
+        Ok(self.pixel_geometry()?.height)
+    }
+
+    #[getter]
+    fn format(&self) -> PyResult<&'static str> {
+        Ok(self.pixel_geometry()?.format_wire_name)
+    }
+
+    /// A tensor surface's dimensions, outermost first; `None` for pixels.
+    #[getter]
+    fn shape(&self) -> Option<Vec<u64>> {
+        self.tensor_layout()
+            .map(|tensor_layout| tensor_layout.shape().to_vec())
+    }
+
+    /// A tensor surface's element type; `None` for pixels.
+    #[getter]
+    fn dtype(&self) -> Option<&'static str> {
+        self.tensor_layout()
+            .map(|tensor_layout| tensor_layout.element_type().wire_name())
+    }
+
+    /// Row pitch in bytes, including any padding the allocation carries.
+    #[getter]
+    fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
+        let owned_memory = self.owned_memory()?;
+        // The staging's shape is the answer, so mapping it is enough; a
+        // pitch is not a reason to copy a frame.
+        map_the_cpu_staging_without_reading_a_frame_in(python, &owned_memory)?;
+        python.detach(|| Ok(owned_memory.host_visible_pixel_plane()?.bytes_per_row))
+    }
+
+    /// Base address of the host mapping, or `None` when the surface is
+    /// not locked. Callers that want a typed view use `as_numpy` or
+    /// `__dlpack__`; this is the escape hatch for building one by hand.
+    #[getter]
+    fn base_address(&self, python: Python<'_>) -> PyResult<Option<usize>> {
+        if !self.cpu_access.is_locked() {
+            return Ok(None);
+        }
+        let owned_memory = self.owned_memory()?;
+        self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
+        python.detach(|| {
+            Ok(Some(
+                owned_memory.host_visible_pixel_plane()?.base_address as usize,
+            ))
+        })
+    }
+
+    /// Release the underlying GPU resource. Idempotent.
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
+        // Releasing can return a slot to a pool under engine locks and talk to
+        // the surface-share daemon — detached, like every potentially-blocking
+        // engine call. A pending device write publishes first: the
+        // context-manager spelling reaches close without an explicit
+        // unlock, and dropping the edit silently there is data loss.
+        // A failed publish must not skip the release: the handle would
+        // stay open with its pool slot pinned, in the exact spelling
+        // (`with` → close) users write. Clean up, then surface the
+        // failure.
+        let settle_outcome = self.settle_this_lock_scopes_pending_writes(python);
+        python.detach(|| {
+            self.cpu_access.unlock();
+            self.release_owned_engine_value();
+        });
+        settle_outcome?;
+        Ok(())
+    }
+
+    fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        python_self
+    }
+
+    /// Leaving normally publishes any pending device write via `close`;
+    /// leaving by a propagating exception discards a staged one first — the
+    /// write did not finish, and the surface keeps the frame it already held.
+    /// A write that lands in the surface itself (a macOS Metal capsule) has
+    /// nothing to discard, so its queued stores still retire before the
+    /// scope closes. `False` never suppresses the raise, and a close that
+    /// fails under a raise is logged rather than replacing it.
+    #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
+    fn __exit__(
+        &self,
+        python: Python<'_>,
+        exception_type: Option<&Bound<'_, PyAny>>,
+        exception: Option<&Bound<'_, PyAny>>,
+        traceback: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<bool> {
+        let _ = (exception, traceback);
+        if left_by_a_propagating_exception(exception_type) {
+            self.discard_the_staged_write_a_propagating_exception_left();
+        }
+        let closed = self.close(python);
+        if left_by_a_propagating_exception(exception_type) {
+            if let Err(close_failure) = closed {
+                tracing::warn!(
+                    "closing surface {:?} under a propagating exception failed: {close_failure}",
+                    self.minted_surface_id
+                );
+            }
+            return Ok(false);
+        }
+        closed?;
+        Ok(false)
+    }
+
+    /// Open CPU access to the pixels, declaring read or write intent.
+    ///
+    /// This performs no wait: ordering against the producer comes from
+    /// publication, since a source finishes its GPU work before it writes the
+    /// surface id downstream. `read_only=False` is what marks an exported
+    /// tensor writable.
+    #[pyo3(signature = (read_only = true))]
+    fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
+        let owned_memory = self.owned_memory()?;
+        self.close_the_previous_lock_scope_before_a_new_one(python)?;
+        python.detach(|| -> PyResult<()> {
+            // The gate serves both sides, and neither is refused here for
+            // want of a host mapping: a surface the CPU cannot address
+            // directly reaches its pixels through the engine's staging,
+            // which the first host-side accessor opens, and its device
+            // export rides this same lock.
+            if !owned_memory.cpu_reach_goes_through_the_export_staging() {
+                owned_memory.host_visible_pixel_plane()?;
+            }
+            self.cpu_access.lock_for(read_only);
+            Ok(())
+        })
+    }
+
+    /// Close CPU access, publishing any pending write first — through
+    /// whichever staging holds the edit on Linux, by retiring the Metal
+    /// frameworks' queues on macOS. Idempotent.
+    fn unlock(&self, python: Python<'_>) -> PyResult<()> {
+        // The gate opens whether or not the publish succeeded — a
+        // surface left locked after a failed publish would refuse
+        // every later access with a message about locking, hiding
+        // the real failure this raises.
+        let settle_outcome = self.settle_this_lock_scopes_pending_writes(python);
+        python.detach(|| self.cpu_access.unlock());
+        settle_outcome?;
+        Ok(())
+    }
+
+    /// The DLPack device this surface's tensors live on.
+    ///
+    /// On Linux a device-exchange surface answers with the CUDA device its
+    /// memory is imported onto, performing the import if it has not happened
+    /// yet — the driver's classification of the pointer is what distinguishes
+    /// true device memory from a downgrade to pinned host memory, and
+    /// guessing here would contradict the capsule `__dlpack__` goes on to
+    /// hand back. On macOS it answers `kDLMetal` wherever the surface's
+    /// IOSurface exports a no-copy `MTLBuffer`.
+    fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
+        let owned_memory = self.owned_memory()?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(storage_buffer) = owned_memory.tensor_storage_buffer() {
+            return tensor_storage_buffer_dlpack_device(python, storage_buffer);
+        }
+        // Routed through the same once-per-handle decision `__dlpack__`
+        // serves, so a probe failure here (answered CPU) cannot be
+        // followed by a successful device capsule there.
+        if self.natural_side_is_device(python, &owned_memory) {
+            return self.dlpack_device_of_the_natural_device_side(python, &owned_memory);
+        }
+        Ok(dlpack_device_as_python_pair(HOST_VISIBLE_DLPACK_DEVICE))
+    }
+
+    /// A DLPack capsule over the pixels — what `torch.from_dlpack` and
+    /// `numpy.from_dlpack` consume.
+    ///
+    /// The tensor may outlive this handle: it holds its own share of the
+    /// surface, so the pool slot is not reused until the tensor is released.
+    /// A consumer that negotiates `max_version >= (1, 0)` gets the versioned
+    /// exchange shape, which is the only one that can report the surface as
+    /// writable.
+    #[pyo3(signature = (stream = None, max_version = None, dl_device = None, copy = None))]
+    fn __dlpack__<'py>(
+        &self,
+        python: Python<'py>,
+        stream: Option<&Bound<'py, PyAny>>,
+        max_version: Option<(u32, u32)>,
+        dl_device: Option<(i32, i32)>,
+        copy: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // No stream to order against: the host mapping is CPU memory, and the
+        // device path's ordering is the lock, not a CUDA stream.
+        let _ = stream;
+        // Refused rather than ignored — exporting in place when the consumer
+        // asked for a copy hands back a tensor aliasing memory it believes it
+        // owns, and the aliasing shows up much later as corruption.
+        if copy == Some(true) {
+            return Err(PyBufferError::new_err(
+                "this surface exports in place; ask the consumer to copy the tensor instead",
+            ));
+        }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(capsule) =
+            self.tensor_storage_buffer_dlpack_capsule(python, max_version, dl_device)?
+        {
+            return Ok(capsule);
+        }
+        self.cpu_access.require_locked()?;
+        let owned_memory = self.owned_memory()?;
+        let exchange_shape = exchange_shape_for_max_version(max_version);
+        let read_only = self.cpu_access.is_read_only();
+
+        // `dl_device` is the consumer's request for a particular side of a
+        // surface that has two. Absent means "wherever you naturally
+        // live" — the side `__dlpack_device__` already advertised, decided
+        // once per handle. A device-side failure after that raises: a
+        // consumer told the device must never be handed a host capsule.
+        let wants_host = match dl_device {
+            Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
+            None => !self.natural_side_is_device(python, &owned_memory),
+        };
+        if wants_host {
+            self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
+            return host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
+        }
+        self.dlpack_capsule_on_the_device_side(python, &owned_memory, exchange_shape, read_only)
+    }
+
+    /// The scoped device-tensor view over this surface's pixels, which a
+    /// third-party GPU package writes in place — each floor's write rule is
+    /// [`PythonGpuSurfaceDeviceTensorScope`]'s. Construction does no GPU
+    /// work; entering does.
+    ///
+    /// Independent of `lock()` by design: entering the scope *is* the
+    /// write declaration, structurally, so it neither requires nor
+    /// consults the CPU access gate — that gate belongs to the
+    /// handle-level `lock()` + `__dlpack__` spelling.
+    fn as_device_tensor(&self) -> PyResult<PythonGpuSurfaceDeviceTensorScope> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
+        Ok(PythonGpuSurfaceDeviceTensorScope::over(
+            self.owned_memory()?,
+        ))
+    }
+
+    /// A numpy view of the pixels, sharing memory with the surface.
+    ///
+    /// `(height, width, channels)` `uint8` for the 8-bit formats, with the
+    /// allocation's row pitch preserved in the strides.
+    fn as_numpy<'py>(python_self: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+        let python = python_self.py();
+        // Imported lazily so the wheel never takes a numpy dependency: a user
+        // reaching for a numpy view already has numpy.
+        let numpy = python.import("numpy").map_err(|_| {
+            PyRuntimeError::new_err("as_numpy needs numpy installed; `__dlpack__` works without it")
+        })?;
+        // `from_dlpack` consumes the exporting object and calls `__dlpack__`
+        // on it, so there is exactly one export path. `device="cpu"` is not
+        // decoration: an exchange surface's natural side is the GPU, and
+        // without the request numpy would be handed a device pointer and
+        // refuse it.
+        let host_request = pyo3::types::PyDict::new(python);
+        host_request.set_item("device", "cpu")?;
+        numpy
+            .call_method("from_dlpack", (python_self,), Some(&host_request))
+            .map_err(|from_dlpack_failure| {
+                // Only the specific unexpected-keyword TypeError means old
+                // numpy; any other failure is numpy's own and passes through
+                // with the hint chained as the cause, never replaced.
+                if from_dlpack_failure.is_instance_of::<PyTypeError>(python)
+                    && from_dlpack_failure.to_string().contains("device")
+                {
+                    let old_numpy_hint = PyRuntimeError::new_err(
+                        "as_numpy needs numpy 2.1 or newer, whose `from_dlpack` accepts a \
+                         `device` request; older numpy cannot ask for the host side of a \
+                         surface",
+                    );
+                    old_numpy_hint.set_cause(python, Some(from_dlpack_failure));
+                    return old_numpy_hint;
+                }
+                from_dlpack_failure
+            })
+    }
+}

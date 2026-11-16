@@ -11,7 +11,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::core::error::{Error, Result};
 use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
-use crate::core::processors::LinksAwaitingTheirOutOfProcessWireReply;
+use crate::core::nodes::LinksAwaitingTheirOutOfProcessWireReply;
 
 use crate::core::compiler::compiler_ops::subprocess_escalate::refusal_of_an_escalate_request;
 
@@ -39,12 +39,12 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
 ) -> Result<SubprocessBridgeThreads> {
     let (escalate_requests_tx, escalate_requests_rx) =
         mpsc::sync_channel(ESCALATE_REQUESTS_QUEUED_PER_HELPER);
-    let processor_id = parent_side.processor_id.clone();
+    let node_run_id = parent_side.node_run_id.clone();
 
     let worker_parent_side = Arc::clone(&parent_side);
     let worker_dispatch = Arc::clone(&escalate_request_dispatch);
     let escalate_worker_thread = thread::Builder::new()
-        .name(bridge_escalate_worker_thread_name(&processor_id))
+        .name(bridge_escalate_worker_thread_name(&node_run_id))
         .spawn(
             carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 escalate_worker_loop(escalate_requests_rx, &worker_parent_side, &worker_dispatch);
@@ -52,12 +52,12 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
         )
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
-                "[{processor_id}] could not start its bridge's escalate worker: {spawn_failure}"
+                "[{node_run_id}] could not start its bridge's escalate worker: {spawn_failure}"
             ))
         })?;
 
     let frame_demultiplexing_reader_thread = thread::Builder::new()
-        .name(bridge_reader_thread_name(&processor_id))
+        .name(bridge_reader_thread_name(&node_run_id))
         .spawn(
             carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 reader_loop(
@@ -71,7 +71,7 @@ pub(super) fn spawn_the_reader_and_the_escalate_worker(
         )
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
-                "[{processor_id}] could not start its bridge's reader: {spawn_failure}"
+                "[{node_run_id}] could not start its bridge's reader: {spawn_failure}"
             ))
         })?;
 
@@ -90,12 +90,12 @@ fn reader_loop(
     escalate_requests_tx: mpsc::SyncSender<serde_json::Value>,
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
 ) {
-    let processor_id = &parent_side.processor_id;
+    let node_run_id = &parent_side.node_run_id;
     loop {
         let msg = match read_frame(&mut reader) {
             Ok(v) => v,
             Err(e) => {
-                tracing::debug!("[{}] bridge reader exiting: {}", processor_id, e);
+                tracing::debug!("[{}] bridge reader exiting: {}", node_run_id, e);
                 break;
             }
         };
@@ -117,7 +117,7 @@ fn reader_loop(
                     tracing::warn!(
                         "[{}] its helper process answered for link '{}', which no link is \
                          waiting on",
-                        processor_id,
+                        node_run_id,
                         link_id
                     );
                 }
@@ -127,7 +127,7 @@ fn reader_loop(
                 tracing::warn!(
                     "[{}] its helper process answered a wire with no link named, so the link it \
                      meant stays unanswered",
-                    processor_id
+                    node_run_id
                 );
                 continue;
             }
@@ -178,7 +178,7 @@ fn reader_loop(
                         tracing::warn!(
                             "[{}] its bridge's escalate worker is gone, so no escalate request \
                              it sends can be answered; giving up on the helper process",
-                            processor_id
+                            node_run_id
                         );
                         break;
                     }
@@ -192,7 +192,7 @@ fn reader_loop(
         if lifecycle_tx.send(msg).is_err() {
             tracing::debug!(
                 "[{}] bridge reader exiting: lifecycle channel dropped",
-                processor_id
+                node_run_id
             );
             break;
         }
@@ -227,7 +227,7 @@ fn escalate_worker_loop(
         {
             tracing::warn!(
                 "[{}] bridge failed to write escalate response: {}",
-                parent_side.processor_id,
+                parent_side.node_run_id,
                 write_failure
             );
         }
@@ -240,9 +240,9 @@ pub(super) fn spawn_the_native_escalate_worker(
     parent_side: Arc<ParentSideOfOneSubprocessBridgeSharedByItsThreads>,
     escalate_request_dispatch: EscalateRequestDispatch,
 ) -> Result<JoinHandle<()>> {
-    let processor_id = parent_side.processor_id.clone();
+    let node_run_id = parent_side.node_run_id.clone();
     thread::Builder::new()
-        .name(bridge_native_escalate_worker_thread_name(&processor_id))
+        .name(bridge_native_escalate_worker_thread_name(&node_run_id))
         .spawn(
             carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe(move || {
                 native_escalate_worker_loop(
@@ -254,7 +254,7 @@ pub(super) fn spawn_the_native_escalate_worker(
         )
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
-                "[{processor_id}] could not start its native escalate worker: {spawn_failure}"
+                "[{node_run_id}] could not start its native escalate worker: {spawn_failure}"
             ))
         })
 }
@@ -269,12 +269,12 @@ fn native_escalate_worker_loop(
     parent_side: &ParentSideOfOneSubprocessBridgeSharedByItsThreads,
     escalate_request_dispatch: &EscalateRequestDispatch,
 ) {
-    let processor_id = &parent_side.processor_id;
+    let node_run_id = &parent_side.node_run_id;
     let read_half = match native_escalate_stream.try_clone() {
         Ok(read_half) => read_half,
         Err(clone_failure) => {
             tracing::warn!(
-                "[{processor_id}] native escalate worker could not clone its socket: \
+                "[{node_run_id}] native escalate worker could not clone its socket: \
                  {clone_failure}"
             );
             return;
@@ -286,7 +286,7 @@ fn native_escalate_worker_loop(
         let request = match read_frame(&mut reader) {
             Ok(request) => request,
             Err(read_failure) => {
-                tracing::debug!("[{processor_id}] native escalate worker exiting: {read_failure}");
+                tracing::debug!("[{node_run_id}] native escalate worker exiting: {read_failure}");
                 return;
             }
         };
@@ -309,7 +309,7 @@ fn native_escalate_worker_loop(
         };
         if let Err(write_failure) = write_frame(&mut writer, &answer) {
             tracing::warn!(
-                "[{processor_id}] native escalate worker failed to write an answer: \
+                "[{node_run_id}] native escalate worker failed to write an answer: \
                  {write_failure}"
             );
             return;
@@ -320,52 +320,50 @@ fn native_escalate_worker_loop(
 /// Refuse every link this subprocess was still to answer for, and say so once.
 pub(super) fn refuse_every_link_this_subprocess_still_owed(
     links_awaiting_their_wire_reply: &LinksAwaitingTheirOutOfProcessWireReply,
-    processor_id: &str,
+    node_run_id: &str,
     how_the_helper_was_noticed_gone: &str,
 ) {
     let refused =
         links_awaiting_their_wire_reply.refuse_every_link_still_awaiting_an_answer(&format!(
-            "the helper process hosting '{processor_id}' {how_the_helper_was_noticed_gone} before \
+            "the helper process hosting '{node_run_id}' {how_the_helper_was_noticed_gone} before \
              it opened its port for this link"
         ));
     if refused > 0 {
         tracing::warn!(
             "[{}] its helper process {} with {} link(s) it never opened a port for; each reads \
              error rather than wired",
-            processor_id,
+            node_run_id,
             how_the_helper_was_noticed_gone,
             refused
         );
     }
 }
 
-/// At most the first eight characters of a processor id, cut on a character
-/// boundary: Linux thread names are limited to 15 bytes.
-pub(super) fn processor_id_shortened_for_a_thread_name(processor_id: &str) -> &str {
-    let end = processor_id
+pub(super) fn node_run_id_shortened_for_a_thread_name(node_run_id: &str) -> &str {
+    let end = node_run_id
         .char_indices()
         .nth(8)
-        .map_or(processor_id.len(), |(byte_index, _)| byte_index);
-    &processor_id[..end]
+        .map_or(node_run_id.len(), |(byte_index, _)| byte_index);
+    &node_run_id[..end]
 }
 
-fn bridge_reader_thread_name(processor_id: &str) -> String {
+fn bridge_reader_thread_name(node_run_id: &str) -> String {
     format!(
         "br-{}",
-        processor_id_shortened_for_a_thread_name(processor_id)
+        node_run_id_shortened_for_a_thread_name(node_run_id)
     )
 }
 
-fn bridge_escalate_worker_thread_name(processor_id: &str) -> String {
+fn bridge_escalate_worker_thread_name(node_run_id: &str) -> String {
     format!(
         "br-esc-{}",
-        processor_id_shortened_for_a_thread_name(processor_id)
+        node_run_id_shortened_for_a_thread_name(node_run_id)
     )
 }
 
-fn bridge_native_escalate_worker_thread_name(processor_id: &str) -> String {
+fn bridge_native_escalate_worker_thread_name(node_run_id: &str) -> String {
     format!(
         "br-nat-{}",
-        processor_id_shortened_for_a_thread_name(processor_id)
+        node_run_id_shortened_for_a_thread_name(node_run_id)
     )
 }

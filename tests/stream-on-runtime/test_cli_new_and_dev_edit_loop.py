@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The MVP minute, with every processor in its own processor interpreter.
+"""The MVP minute, with every node in its own node interpreter.
 
 What `new` writes runs frame after frame, a graph of helpers goes live inside
 the startup budget their interpreters cost, and the edit loop — `dev` loading
@@ -31,9 +31,9 @@ from cli_launch_projects import (
     FIRST_FRAME_REPORTER_MODULE,
     LIVE_HELPER_MARKER_NAME,
     NODE_READY_TIMEOUT_SECONDS,
-    STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE,
+    STREAM_WITH_HELPER_PLACED_NODES_TEMPLATE,
     load_the_projects_stream,
-    project_files_with_helper_placed_processors,
+    project_files_with_helper_placed_nodes,
     stream_id_of_the_project,
     the_stream_stopped_log_line,
 )
@@ -45,7 +45,7 @@ from conftest import (
 from local_api_client import call_operation_tool_call
 from runtime_process_under_test import ENGINE_GRACEFUL_STOP_LOG_LINE, ENGINE_STARTED_LOG_LINE
 from runtime_unit_under_test import RuntimeUnitUnderTest
-from test_processor_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
+from test_node_interpreter_lend import assert_runs_in_a_process_of_its_own_beneath
 
 
 pytestmark = pytest.mark.requires_gpu
@@ -66,7 +66,7 @@ MINIMUM_FRAMES_FOR_LIVE_VIDEO = 120
 
 # A fleet rather than a pair, and few enough that the rig pays for it in
 # seconds.
-HELPER_PLACED_PROCESSOR_COUNT = 6
+HELPER_PLACED_NODE_COUNT = 6
 # The MVP sentence gives a minute for install, scaffold and run, and loading is
 # the only part of that this test can measure — so the budget is the half of
 # the minute the other parts do not need.
@@ -85,7 +85,7 @@ STARTER_SOURCE_OUTPUT_PORT = "video"
 # The edit loop's project: one test pattern source read by the reporter, the
 # node module each save edits.
 STREAM_WITH_THE_REPORTER_READING_ONE_TEST_PATTERN_SOURCE = (
-    STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % 1
+    STREAM_WITH_HELPER_PLACED_NODES_TEMPLATE % 1
 )
 EDITED_NODE_MODULE_PATH = FIRST_FRAME_REPORTER_MODULE.name
 
@@ -242,21 +242,21 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The N-processor-interpreter startup budget the MVP minute has to pay.
+    """The N-node-interpreter startup budget the MVP minute has to pay.
 
-    Every Python processor is its own processor interpreter, so a graph's load
-    cost grows with its processor count, and the sentence gives that growth a
+    Every Python node is its own node interpreter, so a graph's load
+    cost grows with its node count, and the sentence gives that growth a
     minute to disappear into. The budget is a flat ceiling on the whole fleet —
     see the constant for what a ceiling this generous can and cannot catch.
 
     What it measures is live traffic, not liveness: a helper reports only once
     a frame has reached it, so an interpreter that started and received nothing
     does not count. The distinct-pid assertions are the placement half — N
-    processors must be N processes beneath `tatolabd`, so a spawn path that
+    nodes must be N processes beneath `tatolabd`, so a spawn path that
     quietly reused one fails here rather than passing on the timing alone.
     """
     fleet_app = make_tatolab_project(
-        project_files_with_helper_placed_processors(HELPER_PLACED_PROCESSOR_COUNT),
+        project_files_with_helper_placed_nodes(HELPER_PLACED_NODE_COUNT),
         directory_name="fleet",
     )
     tatolabd = start_tatolabd()
@@ -267,28 +267,28 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     # timeout, and what a blown budget should say is how long it actually took.
     tatolabd.await_marker(
         LIVE_HELPER_MARKER_NAME,
-        occurrence=HELPER_PLACED_PROCESSOR_COUNT,
+        occurrence=HELPER_PLACED_NODE_COUNT,
         timeout=NODE_READY_TIMEOUT_SECONDS,
     )
     seconds_for_every_helper = time.monotonic() - launched_at
 
     reporting_pids = set(tatolabd.marker_payloads(LIVE_HELPER_MARKER_NAME))
-    assert len(reporting_pids) == HELPER_PLACED_PROCESSOR_COUNT, (
-        f"{HELPER_PLACED_PROCESSOR_COUNT} processors reported from "
-        f"{len(reporting_pids)} processes — every Python processor gets its own"
+    assert len(reporting_pids) == HELPER_PLACED_NODE_COUNT, (
+        f"{HELPER_PLACED_NODE_COUNT} nodes reported from "
+        f"{len(reporting_pids)} processes — every Python node gets its own"
     )
-    assert fleet.pid not in reporting_pids, "a processor reported from tatolab's own process"
+    assert fleet.pid not in reporting_pids, "a node reported from tatolab's own process"
     for reporting_pid in reporting_pids:
         assert_runs_in_a_process_of_its_own_beneath(reporting_pid, tatolabd.pid)
     assert seconds_for_every_helper < MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE, (
-        f"{HELPER_PLACED_PROCESSOR_COUNT} processor interpreters took "
+        f"{HELPER_PLACED_NODE_COUNT} node interpreters took "
         f"{seconds_for_every_helper:.2f}s to reach live traffic — the minute does "
         f"not absorb that"
     )
     fleet.interrupt()
     assert fleet.await_exit(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, fleet.recent_stderr()
     assert fleet.stop_the_stream(timeout=CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
-        f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still unload cleanly"
+        f"a graph of {HELPER_PLACED_NODE_COUNT} helpers must still unload cleanly"
     )
     tatolabd.await_stderr_containing(
         the_stream_stopped_log_line(stream_id_of_the_project(fleet_app)),

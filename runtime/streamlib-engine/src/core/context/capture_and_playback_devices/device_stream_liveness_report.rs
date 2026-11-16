@@ -41,28 +41,6 @@ impl std::fmt::Debug for DeviceStreamFailureReason {
     }
 }
 
-/// Whether a stream is still serving its device, and why it stopped if it is
-/// not.
-///
-/// Handed out and cloned rather than answered off the stream itself, because
-/// the thread that would act on the answer is never the one holding the
-/// stream: a source owns its stream on the processor and does its work on a
-/// publishing thread, so it hands that thread a report instead of the stream.
-///
-/// A device that dies is otherwise indistinguishable from one that went quiet
-/// — a finished reader thread looks exactly like a running one, and stopping
-/// the stream still succeeds — so without this an owner has no way to notice,
-/// retry, or fail.
-///
-/// Read-only by construction: stating a failure needs an
-/// [`DeviceStreamFailureRecorder`], which only the arm that owns the device
-/// holds. An owner cannot forge a death it then reads back as real.
-///
-/// A failure latches for the life of the stream, and nothing clears it.
-/// Restarting delivery on a stream whose device died does not revive it — the
-/// device is gone, and a report that forgot would let a source go back to
-/// looking healthy, which is the defect this exists to remove. Recovering
-/// means opening a new stream, which mints a new report with it.
 #[derive(Clone, Debug)]
 pub struct DeviceStreamLivenessReport {
     failure_that_ended_the_stream: Arc<OnceLock<DeviceStreamFailureReason>>,

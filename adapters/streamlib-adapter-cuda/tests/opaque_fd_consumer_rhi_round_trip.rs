@@ -1,42 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Stage 6 integration test for #588 — OPAQUE_FD plumbing chain end-to-end.
-//!
-//! Validates the full vertical slice that #589 (Python CUDA cdylib) and
-//! #590 (Deno CUDA cdylib) ride on:
-//!
-//! 1. Host allocates an OPAQUE_FD-exportable HOST_VISIBLE `VkBuffer` and
-//!    an exportable Vulkan timeline semaphore via the host RHI.
-//! 2. Host writes a known BGRA pattern through the buffer's mapped pointer
-//!    and signals the timeline.
-//! 3. Surface-share daemon round-trips the registration with
-//!    `handle_type="opaque_fd"` (Stage 4 wire-format extension).
-//! 4. A *separate* `ConsumerVulkanDevice` looks the surface up and imports
-//!    the OPAQUE_FD memory + timeline via the carve-out
-//!    (`ConsumerVulkanBuffer::from_opaque_fd` / `from_imported_opaque_fd`,
-//!    Stage 5).
-//! 5. Byte-equal assertion across host and consumer mapped pointers proves
-//!    both `VkDevice`s see the same GPU memory through the FD.
-//! 6. `CudaSurfaceAdapter<ConsumerVulkanDevice>` is instantiated against the
-//!    consumer device, the imported buffer + timeline are registered, and
-//!    `acquire_read` returns a view with the expected buffer + size.
-//!
-//! No `cudarc` calls — that's #589/#590's scope. This test asserts the
-//! OPAQUE_FD primitive plumbing only.
-//!
-//! Test gating:
-//! - `target_os = "linux"` — OPAQUE_FD plumbing is Linux-only by construction.
-//! - Skips with a print + early return if Vulkan isn't available, the
-//!   driver doesn't expose the OPAQUE_FD pool, or `from_opaque_fd_export`
-//!   fails (e.g. missing extension).
-//! - `#[serial]` — same `VkInstance` / `VkDevice` discipline as the
-//!   cpu-readback helper's carve-out (NVIDIA dual-device crash —
-//!   the NVIDIA dual-device crash).
-//!
-//! The consumer device is built on the host device's `deviceUUID`, as a
-//! processor interpreter is on the runtime's.
-
 #![cfg(target_os = "linux")]
 
 use std::os::fd::FromRawFd as _;

@@ -3,7 +3,7 @@
 
 """The sources and the probe the `AlphaOverCompositor` scenarios wire around it.
 
-Every node runs in a processor interpreter of its own. The probe reports one
+Every node runs in a node interpreter of its own. The probe reports one
 `MARKER:PROBE_RESULT` JSON line holding the composite's pixels; the test
 compares them with a reference composite built with numpy.
 """

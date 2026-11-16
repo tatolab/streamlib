@@ -40,7 +40,7 @@ async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_
             "add_node",
             json!({
                 "stream": STUB_STREAM_ASSET,
-                "type": "processors.grayscale_effect:GrayscaleEffect",
+                "type": "nodes.grayscale_effect:GrayscaleEffect",
                 "config": { "strength": 0.5 },
                 "name": "Gray",
                 "mode": "live",
@@ -57,10 +57,7 @@ async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_
             recorded.lock()
         );
     };
-    assert_eq!(
-        node.node_type,
-        "processors.grayscale_effect:GrayscaleEffect"
-    );
+    assert_eq!(node.node_type, "nodes.grayscale_effect:GrayscaleEffect");
     assert_eq!(node.config, json!({ "strength": 0.5 }));
     assert_eq!(node.name, "Gray");
     assert!(links.is_empty());
@@ -92,7 +89,7 @@ async fn tools_call_add_node_carries_back_an_engine_refusal_in_its_own_words() {
         "add_node",
         json!({
             "stream": STUB_STREAM_ASSET,
-            "type": "processors.grayscale_effect:GrayscaleEffect",
+            "type": "nodes.grayscale_effect:GrayscaleEffect",
             "name": "gray",
             "mode": "live",
         }),
@@ -145,14 +142,14 @@ pub(super) struct AddNodeTestSourceTakingOneSettingConfig {
 }
 
 /// A native source whose config refuses every key but `frame_width`.
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     config = crate::mcp::tests::graph_edit_tool_tests::AddNodeTestSourceTakingOneSettingConfig,
     output("video", family = Image),
 )]
 pub(super) struct AddNodeTestSourceTakingOneSetting;
 
-impl streamlib::sdk::processors::ManualProcessor for AddNodeTestSourceTakingOneSetting::Processor {
+impl streamlib::sdk::nodes::ManualNode for AddNodeTestSourceTakingOneSetting::Node {
     fn start(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
@@ -165,9 +162,8 @@ impl streamlib::sdk::processors::ManualProcessor for AddNodeTestSourceTakingOneS
 /// the node, its type and the setting, and adds nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn tools_call_add_node_refuses_a_setting_the_nodes_type_does_not_take_naming_it() {
-    streamlib::sdk::processors::PROCESSOR_REGISTRY
-        .register::<AddNodeTestSourceTakingOneSetting::Processor>();
-    let source_type = AddNodeTestSourceTakingOneSetting::processor_class_import_path();
+    streamlib::sdk::nodes::NODE_REGISTRY.register::<AddNodeTestSourceTakingOneSetting::Node>();
+    let source_type = AddNodeTestSourceTakingOneSetting::node_class_import_path();
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runtime = streamlib::sdk::runtime::Runner::new().unwrap();
     let stream = runtime
@@ -250,7 +246,7 @@ async fn tools_call_add_node_refuses_an_argument_it_does_not_take() {
         "add_node",
         json!({
             "stream": STUB_STREAM_ASSET,
-            "type": "processors.grayscale_effect:GrayscaleEffect",
+            "type": "nodes.grayscale_effect:GrayscaleEffect",
             "display_name": "gray",
             "mode": "live",
         }),

@@ -10,12 +10,12 @@ use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_str
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, RuntimeOperations,
 };
@@ -26,11 +26,10 @@ mod variable_and_interface_tests;
 
 /// Register a descriptor-only type with one input and one output port.
 /// Idempotent under `serial_test`.
-fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short).unwrap(),
+fn register_test_type(short: &str, input: &str, output: &str) -> NodeClassImportPath {
+    let import_path = NodeClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short).unwrap(),
         import_path.clone(),
         "graph round-trip test",
     )
@@ -50,7 +49,7 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
             streamlib::sdk::descriptors::PortFamily::Image,
         ),
     ));
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
@@ -122,14 +121,13 @@ fn the_refusal_of(
 
 /// Register a gateway type and a track type whose config key `gateway` takes
 /// a reference to a gateway.
-fn register_a_gateway_and_a_track_naming_one()
--> (ProcessorClassImportPath, ProcessorClassImportPath) {
+fn register_a_gateway_and_a_track_naming_one() -> (NodeClassImportPath, NodeClassImportPath) {
     let gateway = register_test_type("ReferenceEdgeGateway", "_unused_in", "_unused_out");
     let track_import_path =
-        ProcessorClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(
-        ProcessorDescriptor::new(
-            ProcessorClassShortName::new("ReferenceEdgeTrack").unwrap(),
+        NodeClassImportPath::new(format!("{}::ReferenceEdgeTrack", module_path!())).unwrap();
+    let _ = NODE_REGISTRY.register_descriptor_only(
+        NodeDescriptor::new(
+            NodeClassShortName::new("ReferenceEdgeTrack").unwrap(),
             track_import_path.clone(),
             "graph round-trip test",
         )

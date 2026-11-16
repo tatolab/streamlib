@@ -5,7 +5,7 @@
 
 Hand-written and gated against the compiled module by stubtest, the same way
 the engine wheel's own stub is. The engine never calls anything here — a
-processor extension's per-frame work is its own package's Rust, reached from
+node extension's per-frame work is its own package's Rust, reached from
 its own Python.
 """
 

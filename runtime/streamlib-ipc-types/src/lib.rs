@@ -80,7 +80,7 @@ pub use gpu_pool_slot_frame_descriptor_body::{
     GpuPoolSlotFrameDescriptorBody,
 };
 pub use helper_process_loss_count_board::{
-    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_ITS_PROCESSOR,
+    BREADCRUMB_NUMBER_OF_THE_FUNCTION_NODE_A_HELPER_RUNS_AS_A_STANDALONE_NODE,
     FUNCTION_NODE_CALLS_OVERRUNNING_THE_FRAME_INTERVAL_BEFORE_IT_IS_NAMED,
     HelperProcessFunctionNodeCallBreadcrumbBoardEntry, HelperProcessFunctionNodeOverrunBoardEntry,
     HelperProcessFunctionNodeStateBoardEntry, HelperProcessLossCountBoardKey,

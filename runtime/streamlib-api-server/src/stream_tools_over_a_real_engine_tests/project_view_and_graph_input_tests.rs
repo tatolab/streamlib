@@ -184,13 +184,13 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
 }
 
 /// A native reader of Records on its input `cue`, which does nothing with them.
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     input("cue", delivery_profile = "newest", family = Records)
 )]
 pub struct StreamToolsTestRecordsReader;
 
-impl ManualProcessor for StreamToolsTestRecordsReader::Processor {
+impl ManualNode for StreamToolsTestRecordsReader::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -203,9 +203,8 @@ const CUE_GRAPH_INPUT_NODE_UUID: &str = "c0ec0ec0-ec0e-4c0e-8c0e-c0ec0ec0ec0e";
 /// as its config's, read by two [`StreamToolsTestRecordsReader`]s.
 fn the_graph_of_a_stream_whose_cue_input_two_nodes_read(default: Value) -> Value {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED
-        .call_once(|| PROCESSOR_REGISTRY.register::<StreamToolsTestRecordsReader::Processor>());
-    let reader_type = StreamToolsTestRecordsReader::processor_class_import_path();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<StreamToolsTestRecordsReader::Node>());
+    let reader_type = StreamToolsTestRecordsReader::node_class_import_path();
     json!({
         "stream": "main",
         "nodes": [

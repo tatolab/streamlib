@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The pixel-exchange surface, proven from a processor's real placement.
+"""The pixel-exchange surface, proven from a node's real placement.
 
 Pixels reach Python in place: a numpy view or a DLPack tensor addresses the
 same bytes the engine allocated — now one process away, imported over the
@@ -11,7 +11,7 @@ are here: the row pitch survives into the strides, an export taken without a
 lock is refused, and a tensor that outlives its frame keeps addressing live
 memory rather than a recycled pool slot.
 
-Every probe runs in its own processor interpreter and reports one
+Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line through the helper log drain; each test starts
 the probe's stream on `tatolabd` and asserts on that line.
 """
@@ -57,7 +57,7 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
@@ -191,11 +191,11 @@ def test_a_dlpack_consumer_sees_the_same_pixels(start_tatolabd_running_stream):
 # ---------------------------------------------------------------------------
 
 
-def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_tatolabd_running_stream):
+def test_a_node_edits_a_synthetic_frames_pixels_in_place(start_tatolabd_running_stream):
     """The user-facing story: source → effect → the pixels really changed.
 
     The test pattern renders frames in a child of its own; a Python
-    processor in another child reaches into one and rewrites it. Re-resolving
+    node in another child reaches into one and rewrites it. Re-resolving
     the surface afterwards is what proves the edit went into the engine's
     memory rather than a copy handed to Python.
     """
@@ -231,7 +231,7 @@ def run_cross_process_edit(
         assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
         if "failure" in observation:
             pytest.fail(
-                f"a processor raised in its processor interpreter:\n{observation['failure']}"
+                f"a node raised in its node interpreter:\n{observation['failure']}"
             )
     by_role = {observation["role"]: observation for observation in observations}
     return by_role["editor"], by_role["verifier"]

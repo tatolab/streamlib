@@ -5604,7 +5604,7 @@ dependencies = [
  "streamlib-gpu-frame-import-client",
  "streamlib-ipc-types",
  "streamlib-macros",
- "streamlib-processor-schema",
+ "streamlib-node-schema",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "streamlib-slang-shader-compiler",
@@ -5631,7 +5631,7 @@ version = "0.68.82"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
- "streamlib-processor-schema",
+ "streamlib-node-schema",
  "thiserror 2.0.18",
 ]
 
@@ -5672,7 +5672,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_json",
- "streamlib-processor-schema",
+ "streamlib-node-schema",
  "syn 2.0.117",
  "unicode-normalization",
 ]
@@ -5690,6 +5690,19 @@ dependencies = [
  "streamlib",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "streamlib-node-schema"
+version = "0.68.82"
+dependencies = [
+ "rmp-serde",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "unicode-normalization",
+ "utoipa",
 ]
 
 [[package]]
@@ -5712,19 +5725,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-processor-schema"
-version = "0.68.82"
-dependencies = [
- "rmp-serde",
- "schemars 0.8.22",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "unicode-normalization",
- "utoipa",
-]
-
-[[package]]
 name = "streamlib-project-repository"
 version = "0.68.82"
 dependencies = [
@@ -5738,7 +5738,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "sha2",
- "streamlib-processor-schema",
+ "streamlib-node-schema",
  "streamlib-runtime-client-contract",
  "tempfile",
  "thiserror 2.0.18",

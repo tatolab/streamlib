@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use streamlib_processor_schema::{
+use streamlib_node_schema::{
     ConfigKeyHoldingANodeReference, NODE_REFERENCE_NODE_KEY, node_name_a_config_value_references,
 };
 
@@ -27,10 +27,10 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::json_schema::{
-    GraphFragmentOutput, GraphResponse, LinkOutput, LinkPortRefOutput, LinkStateOutput,
-    NodeKindOutput, ProcessorNodeOutput, ProcessorNodePortsOutput,
+    GraphFragmentOutput, GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput,
+    LinkPortRefOutput, LinkStateOutput, NodeKindOutput,
 };
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
@@ -306,10 +306,10 @@ fn config_keys_holding_a_node_reference_of(
     node: &GraphSnapshotNode,
     node_types: &NodeTypesOneStreamResolves,
 ) -> Vec<String> {
-    if node.processor_type.as_str() == SET_VARIABLE_NODE_TYPE {
+    if node.node_type.as_str() == SET_VARIABLE_NODE_TYPE {
         return vec![SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY.to_string()];
     }
-    config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.processor_type)
+    config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type)
         .into_iter()
         .map(|ConfigKeyHoldingANodeReference { config_key, .. }| config_key)
         .collect()
@@ -389,9 +389,7 @@ impl GraphFragmentAsDrawn {
             return;
         };
         for node in &fragment.nodes {
-            if node.fragment.is_some()
-                || is_a_graph_interface_node_type(node.processor_type.as_str())
-            {
+            if node.fragment.is_some() || is_a_graph_interface_node_type(node.node_type.as_str()) {
                 continue;
             }
             names.insert(cast_or_as_written(
@@ -415,9 +413,9 @@ impl GraphFragmentAsDrawn {
     /// them rendered with the live keys `running_links` holds.
     fn rendered_as_a_container(
         &self,
-        running_nodes_by_cast_name: &mut HashMap<String, ProcessorNodeOutput>,
+        running_nodes_by_cast_name: &mut HashMap<String, GraphNodeOutput>,
         running_links: &[LinkOutput],
-    ) -> ProcessorNodeOutput {
+    ) -> GraphNodeOutput {
         let stored = self.node.fragment.clone().unwrap_or_default();
         let mut nodes = Vec::new();
         for node in &stored.nodes {
@@ -500,13 +498,13 @@ impl GraphFragmentAsDrawn {
                 GraphInterfacePortDirection::Output => outputs.push(port),
             }
         }
-        ProcessorNodeOutput {
+        GraphNodeOutput {
             id: self
                 .node
                 .id
                 .map(|node_uuid| node_uuid.to_string())
                 .unwrap_or_default(),
-            processor_type: self.node.processor_type.clone(),
+            node_type: self.node.node_type.clone(),
             kind: Some(NodeKindOutput::Fragment),
             language: None,
             name: cast_or_as_written(&self.node.name),
@@ -516,7 +514,7 @@ impl GraphFragmentAsDrawn {
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            ports: ProcessorNodePortsOutput { inputs, outputs },
+            ports: GraphNodePortsOutput { inputs, outputs },
             components: serde_json::Map::new(),
             fragment: Some(GraphFragmentOutput {
                 nodes,
@@ -721,13 +719,13 @@ fn rendered_with_the_live_keys_of(
 }
 
 /// A node no running node stands for, rendered with its spec keys alone.
-fn rendered_as_stored(node: &GraphSnapshotNode) -> ProcessorNodeOutput {
-    ProcessorNodeOutput {
+fn rendered_as_stored(node: &GraphSnapshotNode) -> GraphNodeOutput {
+    GraphNodeOutput {
         id: node
             .id
             .map(|node_uuid| node_uuid.to_string())
             .unwrap_or_default(),
-        processor_type: node.processor_type.clone(),
+        node_type: node.node_type.clone(),
         kind: None,
         language: None,
         name: cast_or_as_written(&node.name),
@@ -737,7 +735,7 @@ fn rendered_as_stored(node: &GraphSnapshotNode) -> ProcessorNodeOutput {
         exposed_config_fields: node.exposed_config_fields.clone(),
         studio: node.studio.clone(),
         inputs_waiting_for_a_value: Vec::new(),
-        ports: ProcessorNodePortsOutput {
+        ports: GraphNodePortsOutput {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },

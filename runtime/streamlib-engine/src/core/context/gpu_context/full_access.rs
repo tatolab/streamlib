@@ -3,31 +3,6 @@
 
 use super::*;
 
-/// Privileged GPU capability handed to `setup()` and inside
-/// [`GpuContextLimitedAccess::escalate`] closures.
-///
-/// Exposes the full GPU API, including resource creation and
-/// device-wide operations.
-///
-/// Deliberately **not** `Clone`. Processors only ever see a
-/// `&GpuContextFullAccess` borrowed from a `RuntimeContextFullAccess`
-/// wrapper for the duration of a single lifecycle call (setup /
-/// teardown / start / stop / escalate closure). Removing `Clone` makes
-/// "stash a FullAccess in a field" a compile error: nothing can
-/// produce an owned value outside the runtime's construction path, so
-/// the capability can never escape its call.
-///
-/// ```compile_fail
-/// fn assert_not_clone<T: Clone>() {}
-/// assert_not_clone::<streamlib::sdk::context::GpuContextFullAccess>();
-/// ```
-///
-/// Constructed only by `Self::counting_one_offs_against_the_node` (`pub(in crate::core::context)`,
-/// so only [`GpuContextLimitedAccess::escalate`]'s engine-internal
-/// body can construct it). `handle` is a host-allocated
-/// `Box<Arc<GpuContext>>`; every method routes through
-/// `Self::host_inner`, and Drop runs [`std::boxed::Box::from_raw`]
-/// on the boxed Arc.
 pub struct GpuContextFullAccess {
     pub(crate) handle: *const std::ffi::c_void,
     /// The node this capability acquires one-offs for; `None` for the shared
@@ -118,17 +93,12 @@ impl GpuContextFullAccess {
         self.host_inner().wait_device_idle()
     }
 
-    /// An empty output pool the native node `processor_id_of_the_owning_node`
-    /// publishes its per-frame pixel buffers from. See
-    /// [`crate::core::context::ProcessorOutputPixelBufferPoolOfOneNativeNode`].
-    pub fn create_processor_output_pixel_buffer_pool_for_a_native_node(
+    pub fn create_node_output_pixel_buffer_pool_for_a_native_node(
         &self,
-        processor_id_of_the_owning_node: &str,
-    ) -> crate::core::context::ProcessorOutputPixelBufferPoolOfOneNativeNode {
+        node_run_id_of_the_owning_node: &str,
+    ) -> crate::core::context::NodeOutputPixelBufferPoolOfOneNativeNode {
         self.host_inner()
-            .create_processor_output_pixel_buffer_pool_for_a_native_node(
-                processor_id_of_the_owning_node,
-            )
+            .create_node_output_pixel_buffer_pool_for_a_native_node(node_run_id_of_the_owning_node)
     }
 
     /// Acquire a pixel buffer from the shared pool. LimitedAccess
@@ -569,9 +539,6 @@ impl GpuContextFullAccess {
         self.host_inner().supports_ray_tracing_pipeline()
     }
 
-    /// Read-once GPU capability snapshot. Backs the camera processor's
-    /// vendor-name / external-memory / cross-device-DMA-BUF-probe
-    /// branching without exposing host-internal `HostVulkanDevice`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn gpu_capabilities(&self) -> Result<GpuCapabilitiesSnapshot> {
         Ok(self.host_inner().gpu_capabilities())

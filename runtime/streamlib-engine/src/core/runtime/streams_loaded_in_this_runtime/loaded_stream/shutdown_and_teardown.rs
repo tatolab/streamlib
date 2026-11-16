@@ -29,10 +29,6 @@ impl LoadedStreamInThisRuntime {
         self.start_this_streams_shutdown_thread_once();
     }
 
-    /// Force this stream's shutdown: every helper's ladder skips to
-    /// terminating its process group, and a native processor thread still
-    /// inside its callback is abandoned. Starts its shutdown thread if no
-    /// request has.
     pub fn force_this_streams_shutdown(&self, reason: &str) {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         if self.this_streams_shutdown_escalation().raise_to_forced() {
@@ -260,19 +256,16 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// The processors whose threads were abandoned past their shutdown budget
-    /// and have not returned since.
-    pub fn processor_threads_abandoned_and_still_running(
+    pub fn node_threads_abandoned_and_still_running(
         &self,
-    ) -> Vec<crate::core::runtime::ProcessorDisplayNameAndId> {
-        self.compiler
-            .processor_threads_abandoned_and_still_running()
+    ) -> Vec<crate::core::runtime::NodeDisplayNameAndId> {
+        self.compiler.node_threads_abandoned_and_still_running()
     }
 
     /// Kill any describe this stream is running and refuse every later one —
     /// its host's user interrupted the load that started it.
-    pub fn interrupt_every_processor_interpreter_describe(&self) {
-        self.processor_interpreter_launch_record
+    pub fn interrupt_every_node_interpreter_describe(&self) {
+        self.node_interpreter_launch_record
             .interrupt_every_describe();
     }
 }

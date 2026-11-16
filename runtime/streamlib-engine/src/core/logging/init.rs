@@ -29,30 +29,6 @@ use streamlib_runtime_client_contract::runtime_log_event::Source;
 /// worker to write what is queued.
 const QUEUED_RECORDS_WRITTEN_AS_THE_LAST_HOLD_DROPS_BUDGET: Duration = Duration::from_secs(2);
 
-/// Env-var escape hatch. When set to `1` / `true`, streamlib skips
-/// **all** logging initialization (worker, stream JSONL files, stdio
-/// interceptor, polyglot sink, panic hook) and defers ownership of
-/// the global `tracing` subscriber to whatever the host process has
-/// already installed.
-///
-/// Use cases:
-///
-/// - **Throughput benchmarks** that need to install their own
-///   subscriber to capture per-processor counter events.
-/// - **Host applications** that own their own tracing setup
-///   end-to-end and don't want streamlib's defaults.
-///
-/// **Demotions when set** — these features rely on the streamlib
-/// worker existing, so opting in disables them:
-///
-/// - Each stream's JSONL log (`<project>/.tatolab/logs/`).
-/// - Stdio interception that converges python/deno cdylib subprocess
-///   stderr onto the same tracing dispatch as Rust events.
-/// - The streamlib panic hook that funnels Rust panics through the
-///   tracing worker.
-///
-/// The `DANGEROUSLY_` prefix is there to make the trade-off
-/// unmistakable to anyone reading a runbook or `env | grep`.
 pub(super) const DEFER_LOGGING_TO_HOST_ENV: &str = "STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST";
 
 fn host_owns_logging() -> bool {

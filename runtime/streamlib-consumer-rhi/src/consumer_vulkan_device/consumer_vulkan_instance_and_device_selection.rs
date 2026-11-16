@@ -29,9 +29,6 @@ impl Drop for VulkanInstanceDestroyedUnlessKept {
     }
 }
 
-/// The `deviceUUID` of the first device the loader enumerates, for a test with
-/// no runtime to name one; a processor interpreter imports only on the device
-/// the runtime named.
 #[doc(hidden)]
 pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
     vulkan_devices_the_loader_enumerates()?
@@ -162,7 +159,7 @@ pub(super) fn index_of_the_device_the_runtime_named(
     };
     Err(ConsumerRhiError::Gpu(format!(
         "the runtime built on Vulkan device {}, and no device this process enumerates carries \
-         that UUID — it saw: {devices_seen}. A processor interpreter inherits the runtime's \
+         that UUID — it saw: {devices_seen}. A node interpreter inherits the runtime's \
          loader environment; a driver variable set for this process alone can hide the \
          runtime's device",
         crate::lowercase_hex_of_vulkan_device_uuid(vulkan_device_uuid_the_runtime_named)

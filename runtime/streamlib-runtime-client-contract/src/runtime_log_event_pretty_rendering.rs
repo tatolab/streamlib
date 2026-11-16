@@ -39,8 +39,8 @@ pub fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
     if let Some(p) = &event.pipeline_id {
         let _ = write!(out, " pipeline_id={}", p);
     }
-    if let Some(p) = &event.processor_id {
-        let _ = write!(out, " processor_id={}", p);
+    if let Some(p) = &event.node_run_id {
+        let _ = write!(out, " node_run_id={}", p);
     }
     if let Some(r) = &event.rhi_op {
         let _ = write!(out, " rhi_op={}", r);
@@ -80,7 +80,7 @@ mod tests {
             message: message.to_string(),
             target: target.to_string(),
             pipeline_id: None,
-            processor_id: None,
+            node_run_id: None,
             rhi_op: None,
             source_ts: None,
             source_seq: None,
@@ -113,7 +113,7 @@ mod tests {
         );
         event.level = LogLevel::Warn;
         event.pipeline_id = Some("pl-42".to_string());
-        event.processor_id = Some("camera-1".to_string());
+        event.node_run_id = Some("camera-1".to_string());
         event.rhi_op = Some("acquire_texture".to_string());
         event
             .attrs
@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(
             rendered,
             "21:04:27.573 [ WARN] [Rabc/rust] streamlib_media_builtins::camera_source — \
-             frame captured pipeline_id=pl-42 processor_id=camera-1 rhi_op=acquire_texture \
+             frame captured pipeline_id=pl-42 node_run_id=camera-1 rhi_op=acquire_texture \
              device=\"/dev/video0\" frames=3\n"
         );
     }

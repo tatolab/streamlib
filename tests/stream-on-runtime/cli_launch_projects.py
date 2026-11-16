@@ -26,10 +26,7 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 
 FIRST_FRAME_REPORTER_MODULE = STREAM_ON_RUNTIME_SUITE_DIRECTORY / "first_frame_reporter.py"
 
-# The reporter is copied beside the entry file rather than into a package: that
-# is the other import shape a processor interpreter has to resolve from its
-# project, and the scaffold covers the packaged one.
-STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
+STREAM_WITH_HELPER_PLACED_NODES_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
 from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
@@ -60,10 +57,10 @@ def the_stream_stopped_log_line(stream_id: str) -> str:
     return f"[stop] The stream `{stream_id}` stopped"
 
 
-def project_files_with_helper_placed_processors(helper_count: int) -> "dict[str, str]":
+def project_files_with_helper_placed_nodes(helper_count: int) -> "dict[str, str]":
     """A project whose `stream.py` wires `helper_count` copies of the reporter to one test pattern source."""
     return {
-        "stream.py": STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % helper_count,
+        "stream.py": STREAM_WITH_HELPER_PLACED_NODES_TEMPLATE % helper_count,
         FIRST_FRAME_REPORTER_MODULE.name: FIRST_FRAME_REPORTER_MODULE.read_text(encoding="utf-8"),
     }
 

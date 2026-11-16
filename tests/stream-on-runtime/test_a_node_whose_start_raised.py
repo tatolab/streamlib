@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A manual Python processor whose `start()` raises, read from `graph`.
+"""A manual Python node whose `start()` raises, read from `graph`.
 
 Its node reads `Error` with what `start()` raised under `failed_because`, the
 rest of the stream keeps running, and a node that started cleanly renders no
@@ -25,8 +25,8 @@ pytestmark = pytest.mark.requires_gpu
 #: A cold spawn and import for each helper, with room for a loaded rig.
 FAILED_START_TIMEOUT_SECONDS = 30.0
 
-START_RAISING_PROCESSORS_SOURCE = '''\
-"""A manual processor whose `start()` raises, beside one whose `start()` returns."""
+START_RAISING_NODES_SOURCE = '''\
+"""A manual node whose `start()` raises, beside one whose `start()` returns."""
 
 from tatolab.stream import Output, Records, RuntimeContextFullAccess, node
 
@@ -54,7 +54,7 @@ class StartReturns:
 START_RAISING_STREAM_SOURCE = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from processors.start_raising import StartRaises, StartReturns
+from nodes.start_raising import StartRaises, StartReturns
 
 
 @graph_generator
@@ -83,8 +83,8 @@ def test_a_node_whose_start_raised_reads_error_with_what_it_raised(
     """
     project_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/start_raising.py": START_RAISING_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/start_raising.py": START_RAISING_NODES_SOURCE,
             "stream.py": START_RAISING_STREAM_SOURCE,
         }
     )

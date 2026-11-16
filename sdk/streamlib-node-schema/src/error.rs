@@ -1,0 +1,14 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum SchemaError {
+    /// Invalid schema name format.
+    #[error("invalid schema name '{name}': {reason}")]
+    InvalidName { name: String, reason: String },
+}
+
+/// Result type alias for schema operations.
+pub type SchemaResult<T> = std::result::Result<T, SchemaError>;

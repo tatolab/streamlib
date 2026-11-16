@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Result as StreamlibResult;
-use streamlib::sdk::processors::ProcessorState;
+use streamlib::sdk::nodes::NodeState;
 use streamlib::sdk::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics,
 };
@@ -365,13 +365,13 @@ impl EventListener for StreamGraphChangesForwardedToOneConnection {
             RuntimeEvent::GraphDidChange => {
                 self.forward(StreamGraphChangeKindOnTheWire::Edited, None);
             }
-            RuntimeEvent::ProcessorStateDidChange {
-                processor_id,
+            RuntimeEvent::NodeStateDidChange {
+                node_run_id,
                 new_state,
                 ..
             } => self.forward(
                 StreamGraphChangeKindOnTheWire::NodeStateChanged,
-                Some((processor_id.to_string(), node_state_on_the_wire(*new_state))),
+                Some((node_run_id.to_string(), node_state_on_the_wire(*new_state))),
             ),
             RuntimeEvent::RuntimeStarted
             | RuntimeEvent::RuntimeStartFailed { .. }
@@ -394,16 +394,16 @@ impl EventListener for StreamGraphChangesForwardedToOneConnection {
     }
 }
 
-fn node_state_on_the_wire(processor_state: ProcessorState) -> NodeStateOnTheWire {
-    match processor_state {
-        ProcessorState::Pending => NodeStateOnTheWire::Pending,
-        ProcessorState::Idle => NodeStateOnTheWire::Idle,
-        ProcessorState::Running => NodeStateOnTheWire::Running,
-        ProcessorState::Paused => NodeStateOnTheWire::Paused,
-        ProcessorState::Stopping => NodeStateOnTheWire::Stopping,
-        ProcessorState::Stopped => NodeStateOnTheWire::Stopped,
-        ProcessorState::Error => NodeStateOnTheWire::Error,
-        ProcessorState::Restarting => NodeStateOnTheWire::Restarting,
+fn node_state_on_the_wire(node_state: NodeState) -> NodeStateOnTheWire {
+    match node_state {
+        NodeState::Pending => NodeStateOnTheWire::Pending,
+        NodeState::Idle => NodeStateOnTheWire::Idle,
+        NodeState::Running => NodeStateOnTheWire::Running,
+        NodeState::Paused => NodeStateOnTheWire::Paused,
+        NodeState::Stopping => NodeStateOnTheWire::Stopping,
+        NodeState::Stopped => NodeStateOnTheWire::Stopped,
+        NodeState::Error => NodeStateOnTheWire::Error,
+        NodeState::Restarting => NodeStateOnTheWire::Restarting,
     }
 }
 
@@ -417,20 +417,20 @@ mod tests {
     /// one name from `graph` and another from `stream_graph_changed`.
     #[test]
     fn a_node_state_on_the_wire_is_spelled_as_graph_renders_it() {
-        for processor_state in [
-            ProcessorState::Pending,
-            ProcessorState::Idle,
-            ProcessorState::Running,
-            ProcessorState::Paused,
-            ProcessorState::Stopping,
-            ProcessorState::Stopped,
-            ProcessorState::Error,
-            ProcessorState::Restarting,
+        for node_state in [
+            NodeState::Pending,
+            NodeState::Idle,
+            NodeState::Running,
+            NodeState::Paused,
+            NodeState::Stopping,
+            NodeState::Stopped,
+            NodeState::Error,
+            NodeState::Restarting,
         ] {
             assert_eq!(
-                serde_json::to_value(node_state_on_the_wire(processor_state))
+                serde_json::to_value(node_state_on_the_wire(node_state))
                     .expect("a node state serializes"),
-                serde_json::json!(processor_state.to_string())
+                serde_json::json!(node_state.to_string())
             );
         }
     }

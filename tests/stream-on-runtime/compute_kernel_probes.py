@@ -7,7 +7,7 @@ A kernel is an object: built in `setup()` where the capability is Full,
 dispatched per frame in `process()`. Every probe runs in its own helper
 process and reports one `MARKER:PROBE_RESULT` JSON line.
 
-What is worth breaking a build over is that a Python processor can read one
+What is worth breaking a build over is that a Python node can read one
 surface and write a different one — the pass the v1 wire could not express —
 and that every way of getting the bindings wrong is refused by name before any
 GPU work is submitted.
@@ -89,7 +89,7 @@ class _ComputeKernelProbeBase:
     """Builds the conformance kernel in `setup`, reports from `setup`.
 
     Nothing upstream is needed: the probe acquires both surfaces itself, which
-    is the point — a kernel output is an engine-owned texture the processor
+    is the point — a kernel output is an engine-owned texture the node
     names, not something handed to it.
     """
 

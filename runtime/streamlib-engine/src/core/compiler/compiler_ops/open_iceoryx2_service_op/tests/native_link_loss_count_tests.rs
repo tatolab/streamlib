@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Links between engine-placed processors: notification and the losses each end renders.
-
 use super::*;
 
 /// What one helper destination was wired with, beside what each of its two
@@ -21,24 +19,24 @@ struct HelperDestinationFedByBothKindsOfSource {
 fn wire_both_kinds_of_source_into_a_helper_destination_driven_in(
     far_side_process_execution: ProcessExecution,
 ) -> HelperDestinationFedByBothKindsOfSource {
-    use crate::core::test_support::MockOutputOnlyProcessor;
+    use crate::core::test_support::MockOutputOnlyNode;
 
     let node = Iceoryx2Node::for_this_test_process();
     let mut graph = Graph::new();
     let engine_source_id = add_mock_output_only(&mut graph);
     let (_, engine_source_output, _) =
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &engine_source_id);
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &engine_source_id);
     let helper_source_id = add_mock_output_only(&mut graph);
-    let helper_source = attach_processor_instance(
+    let helper_source = attach_node_instance(
         &mut graph,
         &helper_source_id,
-        ProcessorInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
+        NodeInstance::new(Box::new(OutOfProcessSpawnHostStub::default())),
     );
     let dest_id = add_mock_input_only(&mut graph);
-    let dest = attach_processor_instance(
+    let dest = attach_node_instance(
         &mut graph,
         &dest_id,
-        ProcessorInstance::new(Box::new(
+        NodeInstance::new(Box::new(
             OutOfProcessSpawnHostStub::with_a_far_side_past_its_setup_command(
                 RecordingOutOfProcessFarSideLinkDelivery::default(),
                 far_side_process_execution,
@@ -430,18 +428,18 @@ fn a_producers_node_renders_the_groups_its_writer_gave_up_and_the_downstream_lin
 /// `manual` destination's link carries no notifier and opens no listener.
 #[test]
 fn a_destination_is_notified_and_listens_whatever_it_runs() {
-    use crate::core::test_support::{MockInputOnlyProcessor, MockReactiveInputOnlyProcessor};
+    use crate::core::test_support::{MockInputOnlyNode, MockReactiveInputOnlyNode};
 
     const SELF_DRIVEN: &str = "self-driven";
     const REACTIVE: &str = "reactive";
     for (tag, (source_output, dest_input)) in [
         (
             SELF_DRIVEN,
-            wire_one_test_link::<MockInputOnlyProcessor::Processor>(SELF_DRIVEN, false),
+            wire_one_test_link::<MockInputOnlyNode::Node>(SELF_DRIVEN, false),
         ),
         (
             REACTIVE,
-            wire_one_test_link::<MockReactiveInputOnlyProcessor::Processor>(REACTIVE, true),
+            wire_one_test_link::<MockReactiveInputOnlyNode::Node>(REACTIVE, true),
         ),
     ] {
         assert!(source_output.has_channel_publisher("out1"));

@@ -56,7 +56,7 @@
 # only into the owner-only graph documents under the runtime's state home, which
 # the run removes, and never printed, logged, or written into the output
 # directory — which the run checks, since the runtime's log is kept there. `tatolab graph`
-# renders every processor's config, so this script reads the graph in a pipe and
+# renders every node's config, so this script reads the graph in a pipe and
 # never persists it.
 #
 # Absent credentials are a cannot-run (exit 77) and never a pass.

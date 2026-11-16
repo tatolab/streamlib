@@ -41,11 +41,6 @@ pub struct SkiaWriteView<'g, D: VulkanRhiDevice + 'static> {
     /// view's drop hook can flush Skia before the inner guard's
     /// drop signals the timeline. See module docs.
     inner_guard: ManuallyDrop<WriteGuard<'g, VulkanSurfaceAdapter<D>>>,
-    /// Skia's `DirectContext` (wrapped to claim `Send + Sync` —
-    /// adapter-side mutex serializes access). The `Mutex` makes the
-    /// adapter `Sync` (the conformance suite's parallel-readers
-    /// thread test demands this); customers should still serialize
-    /// Skia work per processor in practice.
     direct_context: Arc<Mutex<SyncDirectContext>>,
     /// Held alongside the `Surface` so any post-flush layout
     /// inspection (`get_vk_image_info` / `set_vk_image_layout`) has

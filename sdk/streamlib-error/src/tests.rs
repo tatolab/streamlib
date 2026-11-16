@@ -7,13 +7,13 @@ use super::*;
 /// asked for a class by that name, and matching their spelling is what
 /// makes a typo findable. The install fix-it died with the module system.
 #[test]
-fn unknown_processor_type_names_the_class_that_is_not_registered() {
-    let msg = Error::UnknownProcessorType {
-        ident: ProcessorClassImportPath::new("my_app.filters:BlurProcessor").unwrap(),
+fn unknown_node_type_names_the_class_that_is_not_registered() {
+    let msg = Error::UnknownNodeType {
+        ident: NodeClassImportPath::new("my_app.filters:BlurNode").unwrap(),
     }
     .to_string();
     assert!(
-        msg.contains("my_app.filters:BlurProcessor"),
+        msg.contains("my_app.filters:BlurNode"),
         "the requested path must reach the user unaltered: {msg}"
     );
     assert!(
@@ -26,8 +26,8 @@ fn unknown_processor_type_names_the_class_that_is_not_registered() {
 fn a_describe_refusal_names_every_type_it_refused_and_why() {
     let msg = Error::NodeTypesNotDescribed {
         node_types: vec![
-            ProcessorClassImportPath::new("my_app.filters:Blur").unwrap(),
-            ProcessorClassImportPath::new("my_app.filters:Sharpen").unwrap(),
+            NodeClassImportPath::new("my_app.filters:Blur").unwrap(),
+            NodeClassImportPath::new("my_app.filters:Sharpen").unwrap(),
         ],
         refusal: "the interpreter printed no describe document".to_string(),
     }
@@ -43,8 +43,8 @@ fn a_describe_refusal_names_every_type_it_refused_and_why() {
 /// lacks names the runtime's own, to compare with the stream's library.
 #[test]
 fn an_unknown_node_type_names_this_runtimes_own_version() {
-    let msg = Error::UnknownProcessorType {
-        ident: ProcessorClassImportPath::new("tatolab.stream:NewThing").unwrap(),
+    let msg = Error::UnknownNodeType {
+        ident: NodeClassImportPath::new("tatolab.stream:NewThing").unwrap(),
     }
     .to_string();
     assert_eq!(

@@ -4,7 +4,7 @@
 """How the harness reads a node's `MARKER:<NAME>` lines off `tatolabd`'s standard error.
 
 The lines are the pretty log mirror's own: a node's `log.info` reaches it
-through the helper log drain and ends with the record's ` processor_id=<id>`.
+through the helper log drain and ends with the record's ` node_run_id=<id>`.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from runtime_process_under_test import (
 HELPER_LOG_LINE_PREFIX = (
     "04:31:48.995 [ INFO] [Rkw2n8cmioeuanqbpm42ybutl/python] streamlib::polyglot::python — "
 )
-HELPER_LOG_RECORD_FIELDS = " processor_id=Pxhsdghlr4yohiat6rbo7g5ds\n"
+HELPER_LOG_RECORD_FIELDS = " node_run_id=Pxhsdghlr4yohiat6rbo7g5ds\n"
 
 
 def helper_log_line(message: str) -> str:

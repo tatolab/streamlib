@@ -275,7 +275,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "-p",
                 "streamlib-macros",
                 "-p",
-                "streamlib-processor-schema",
+                "streamlib-node-schema",
                 "-p",
                 "streamlib-ipc-types",
                 "-p",
@@ -450,7 +450,7 @@ enum Commands {
     /// CI gate keeping `tatolab` a PEP 420 namespace package. Fails on any
     /// repository file ending in `tatolab/__init__.py`, and on any under the
     /// runtime unit's lend (`target/tatolab-runtime/lib/tatolab/lend`) when one
-    /// is built. A processor interpreter merges the lent `tatolab.runtime` with
+    /// is built. A node interpreter merges the lent `tatolab.runtime` with
     /// its venv's `tatolab.stream` only while no portion of the namespace is a
     /// regular package.
     CheckNoTatolabNamespacePackageInit,
@@ -473,7 +473,7 @@ enum Commands {
     /// Build the runtime unit at `target/tatolab-runtime/`, the install
     /// prefix's own shape: `bin/tatolabd`, `bin/tatolab`, the lend at
     /// `lib/tatolab/lend/` — the directory holding `tatolab/runtime/`, which a
-    /// processor interpreter puts first on `PYTHONPATH` — and `wheel/`. Builds
+    /// node interpreter puts first on `PYTHONPATH` — and `wheel/`. Builds
     /// `sdk/streamlib-python-wheel` as a wheel with the pinned maturin into
     /// `wheel/`, replaces the lend with that wheel's contents, then builds
     /// `tatolabd` and `tatolab` and copies them into `bin/`. It first stages the

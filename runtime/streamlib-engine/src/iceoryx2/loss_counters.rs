@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What a processor's ports lost, counted where `graph` reads them: bags per
-//! inbound link at a destination, samples a windowed port's flush discarded per
-//! inbound link, and bags per output port refused at a producer's channel
-//! ceiling — beside the bags each output port sent, which those losses are
-//! counted against.
-
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -313,13 +307,6 @@ impl InboundLinkDroppedBagCounter {
     }
 }
 
-/// Every inbound link's dropped-bag counter for one destination processor.
-///
-/// A link gets its counter when its subscriber binds, so a wired link that has
-/// lost nothing reports zero rather than going missing. A count is cumulative
-/// for the life of one wiring, not of the link id: disconnect takes it with the
-/// link, and reconnecting the same id starts from zero, because a count
-/// outliving its link would name something `graph` no longer has.
 #[derive(Default)]
 pub struct DroppedBagCountsByInboundLink {
     per_inbound_link: CumulativeCountsByName<InboundLinkDroppedBagCount>,
@@ -352,9 +339,6 @@ impl DroppedBagCountsByInboundLink {
             .snapshot_by_name_of(InboundLinkDroppedBagCount::taken_bag_count)
     }
 
-    /// Every live inbound link's counts summed — what a reader means by "this
-    /// processor's total dropped bags". The per-link counts stay the record;
-    /// this is derived from them and never counted separately.
     pub fn total_dropped_bag_count(&self) -> u64 {
         self.per_inbound_link.total()
     }
@@ -383,12 +367,6 @@ impl InboundLinkDiscardedSampleCounter {
     }
 }
 
-/// Every windowed inbound link's discarded-sample counter for one destination
-/// processor.
-///
-/// Only a link into a windowed port is given a counter, so a link into any other
-/// port carries no sample count rather than a zero. A count lives as long as one
-/// wiring, as a link's dropped-bag count does.
 #[derive(Default)]
 pub struct DiscardedSampleCountsByInboundLink {
     per_inbound_link: CumulativeCountsByName,
@@ -471,12 +449,6 @@ impl OutputPortBagCounters {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct OutputPortBagCountsAlreadyMirrored;
 
-/// Every output port's bag counters for one producing processor.
-///
-/// A refusal happens before the bag belongs to any link, so it is counted on the
-/// port that refused it, as a sent bag is. A port gets its counters when its
-/// channel publisher is installed and loses them when the publisher is released
-/// with the port's last link, the same life a link's count has.
 #[derive(Default)]
 pub struct BagCountsByOutputPort {
     per_output_port: CumulativeCountsByName<OutputPortRefusedWrittenAndGivenUpCounts>,

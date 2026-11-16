@@ -84,7 +84,7 @@ def one_link_into_one_port(request: pytest.FixtureRequest) -> Iterator[OneLinkIn
         1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     context = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test"
+        {}, destination, "runtime-under-test", "node-under-test"
     )
     yield OneLinkIntoOnePort(context, source, channel_service_name)
 

@@ -183,9 +183,6 @@ impl SimpleEncoder {
                 required_flags: vk::MemoryPropertyFlags::DEVICE_LOCAL,
                 ..Default::default()
             };
-            // Staging source image allocation runs under the host's device-level
-            // resource lock so concurrent processor submissions cannot race the
-            // create + bind on NVIDIA Linux.
             let (source_image, source_allocation) = {
                 let _device_lock = codec_device.lock_device();
                 allocator.create_image(src_image_info, &src_alloc_options)
@@ -222,9 +219,6 @@ impl SimpleEncoder {
                     | vk::MemoryPropertyFlags::HOST_COHERENT,
                 ..Default::default()
             };
-            // Staging buffer allocation runs under the host's device-level
-            // resource lock so concurrent processor submissions cannot race the
-            // create + bind on NVIDIA Linux.
             let (staging_buffer, staging_allocation) = {
                 let _device_lock = codec_device.lock_device();
                 allocator.create_buffer(stg_create_info, &stg_alloc_options)

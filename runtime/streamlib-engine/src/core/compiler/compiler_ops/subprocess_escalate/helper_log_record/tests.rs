@@ -53,7 +53,7 @@ fn sample_log(seq: &str, ts: &str, level: EscalateRequestLogLevel) -> EscalateRe
         intercepted: false,
         channel: None,
         pipeline_id: Some("pl-1".into()),
-        processor_id: Some("pr-1".into()),
+        node_run_id: Some("pr-1".into()),
         rhi_op: None,
         target: None,
         attrs: HashMap::new(),
@@ -77,7 +77,7 @@ fn schema_round_trip() {
         intercepted: true,
         channel: Some("fd1".into()),
         pipeline_id: Some("pl-42".into()),
-        processor_id: Some("camera-1".into()),
+        node_run_id: Some("camera-1".into()),
         rhi_op: None,
         target: None,
         attrs: attrs.clone(),
@@ -97,7 +97,7 @@ fn schema_round_trip() {
             assert_eq!(back.intercepted, original.intercepted);
             assert_eq!(back.channel, original.channel);
             assert_eq!(back.pipeline_id, original.pipeline_id);
-            assert_eq!(back.processor_id, original.processor_id);
+            assert_eq!(back.node_run_id, original.node_run_id);
             assert_eq!(back.attrs, original.attrs);
         }
         other => panic!("expected Log variant, got {other:?}"),
@@ -131,7 +131,7 @@ fn host_emits_jsonl_record_at_correct_level() {
     assert_eq!(record.source_seq, Some(42));
     assert_eq!(record.source_ts.as_deref(), Some("2026-04-23T14:00:00Z"));
     assert_eq!(record.pipeline_id.as_deref(), Some("pl-1"));
-    assert_eq!(record.processor_id.as_deref(), Some("pr-1"));
+    assert_eq!(record.node_run_id.as_deref(), Some("pr-1"));
     assert!(record.host_ts > 0, "host stamp must be non-zero");
 }
 
@@ -154,7 +154,7 @@ fn a_captured_engine_record_lands_as_rust_with_its_own_target() {
         intercepted: false,
         channel: None,
         pipeline_id: None,
-        processor_id: Some("Pcamera".into()),
+        node_run_id: Some("Pcamera".into()),
         rhi_op: Some("acquire_texture".into()),
         target: Some("streamlib_engine::iceoryx2::input".into()),
         attrs: HashMap::new(),
@@ -170,7 +170,7 @@ fn a_captured_engine_record_lands_as_rust_with_its_own_target() {
     assert_eq!(record.source, Source::Rust);
     assert_eq!(record.target, "streamlib_engine::iceoryx2::input");
     assert_eq!(record.rhi_op.as_deref(), Some("acquire_texture"));
-    assert_eq!(record.processor_id.as_deref(), Some("Pcamera"));
+    assert_eq!(record.node_run_id.as_deref(), Some("Pcamera"));
     assert_eq!(
         record.source_seq,
         Some(7),
@@ -316,7 +316,7 @@ fn cross_language_source_seq_monotonic_within_source() {
             intercepted: false,
             channel: None,
             pipeline_id: Some("pl-merge".into()),
-            processor_id: Some("pr-merge".into()),
+            node_run_id: Some("pr-merge".into()),
             rhi_op: None,
             target: None,
             attrs: HashMap::new(),

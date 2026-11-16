@@ -3,9 +3,9 @@
 
 # The integration suite: compile a fixture stream, start `tatolabd` on it, and
 # drive it over its local API. Its venv is the venv every fixture stream's
-# processor interpreters start from, so it holds `tatolab-stream`, the stream's
+# node interpreters start from, so it holds `tatolab-stream`, the stream's
 # own dependencies and the test tooling — and never `tatolab.runtime`, which a
-# processor interpreter borrows from the runtime unit's lend.
+# node interpreter borrows from the runtime unit's lend.
 [project]
 name = "stream-on-runtime-integration-suite"
 version = "0"
@@ -75,7 +75,7 @@ tatolab-virtualcamera = { path = "../../packages/tatolab-virtualcamera" }
 [tool.pytest.ini_options]
 # The suite directory is on the import path, so a fixture stream's
 # `<module>:<Class>` node types import here and, as the project directory the
-# compile document names, in every processor interpreter.
+# compile document names, in every node interpreter.
 pythonpath = ["."]
 testpaths = ["."]
 markers = [

@@ -1,33 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The shutdown-request handshake end-to-end: a processor inside a stream
-//! asks for its stream's shutdown, and the host waiting on that stream sees
-//! the stream end through its normal teardown.
-//!
-//! What it locks, against a REAL `Runner` (not a stub):
-//! - A processor reaching `ctx.runtime().request_this_streams_shutdown(..)` —
-//!   the same `Arc<dyn RuntimeOperations>` handle every in-graph processor
-//!   holds — ends `Runner::wait_until_the_stream_ends` well inside a watchdog
-//!   bound, and the wait returns `Ok(())` with the stream at
-//!   `RuntimeStatus::Stopped` and out of the stream table: teardown ran, and
-//!   the request never tore the stream down behind the host's back.
-//! - A request issued before the host waits still ends the wait.
-//! - A machine shutdown requested BEFORE the stream starts — by a host that
-//!   decides to abort before its run begins — is honored by the wait of the
-//!   engine that owns the machine's shutdown signals rather than discarded.
-//!
-//! Starts a real stream (GPU + iceoryx2), so this runs outside the `--lib`
-//! gate, which never builds `tests/` integration binaries.
-
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use serial_test::serial;
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::nodes::NodeSpec;
 use streamlib::sdk::runtime::{LoadedStreamInThisRuntime, Runner, RuntimeStatus};
-use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
+use streamlib_engine::core::nodes::NODE_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
 /// How long the host's wait is allowed to run before the test gives up on the
@@ -35,15 +16,12 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 /// is that the wait ends because of the request, not because of this bound.
 const SHUTDOWN_OBSERVED_WATCHDOG: Duration = Duration::from_secs(5);
 
-/// A processor that asks for its stream's shutdown as soon as it starts — the
-/// "a processor decides the run is over" case, using nothing but the public
-/// `RuntimeOperations` handle its context hands it.
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
 )]
-pub struct ShutdownRequestingTestProcessor;
+pub struct ShutdownRequestingTestNode;
 
-impl streamlib_engine::ManualProcessor for ShutdownRequestingTestProcessor::Processor {
+impl streamlib_engine::ManualNode for ShutdownRequestingTestNode::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -53,9 +31,8 @@ impl streamlib_engine::ManualProcessor for ShutdownRequestingTestProcessor::Proc
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        ctx.runtime().request_this_streams_shutdown(
-            "integration test: the processor decided the run is over",
-        )
+        ctx.runtime()
+            .request_this_streams_shutdown("integration test: the node decided the run is over")
     }
 }
 
@@ -114,18 +91,18 @@ fn assert_the_wait_ends_before_the_watchdog(
 
 #[test]
 #[serial]
-fn a_processor_shutdown_request_ends_the_hosts_wait_on_its_stream() {
-    PROCESSOR_REGISTRY.register::<ShutdownRequestingTestProcessor::Processor>();
+fn a_node_shutdown_request_ends_the_hosts_wait_on_its_stream() {
+    NODE_REGISTRY.register::<ShutdownRequestingTestNode::Node>();
 
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().expect("Runner::new");
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(
-            ShutdownRequestingTestProcessor::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            ShutdownRequestingTestNode::node_class_import_path(),
             serde_json::json!({}),
         ))
-        .expect("add the shutdown-requesting processor");
+        .expect("add the shutdown-requesting node");
     stream.start().expect("stream start");
 
     let waiting_runner = Arc::clone(&runner);
@@ -133,7 +110,7 @@ fn a_processor_shutdown_request_ends_the_hosts_wait_on_its_stream() {
     assert_the_wait_ends_before_the_watchdog(
         &runner,
         &stream,
-        "the processor's shutdown request",
+        "the node's shutdown request",
         move || waiting_runner.wait_until_the_stream_ends(&waited_on),
     );
 }

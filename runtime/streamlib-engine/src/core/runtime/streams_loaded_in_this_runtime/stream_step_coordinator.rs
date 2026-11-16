@@ -14,11 +14,11 @@ use std::time::Duration;
 use crate::core::context::{StreamClock, StreamClockSpec};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight, LinkState,
-    LinkStateComponent, ProcessorMetrics, ProcessorPauseGateComponent, StateComponent,
+    LinkStateComponent, NodeMetrics, NodePauseGateComponent, StateComponent,
     StepProgressOfOneNodeComponent, StepProgressReadingOfOneNode,
 };
 use crate::core::media_clock::MediaClock;
-use crate::core::processors::ProcessorState;
+use crate::core::nodes::NodeState;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::{Error, Result};
 
@@ -78,7 +78,7 @@ impl StepLedgerEntryOfOneLink {
 /// A stream's step ledger as read at one moment.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct StepLedgerReading {
-    pub(crate) nodes_by_processor_id: BTreeMap<String, StepLedgerEntryOfOneNode>,
+    pub(crate) nodes_by_node_run_id: BTreeMap<String, StepLedgerEntryOfOneNode>,
     pub(crate) links_by_link_id: BTreeMap<String, StepLedgerEntryOfOneLink>,
     /// Links in the graph left off the balance on this reading.
     pub(crate) link_ids_off_the_balance: BTreeSet<String>,
@@ -96,17 +96,17 @@ impl StepLedgerReading {
     /// or from a node paced by real time, which stands outside the barrier.
     pub(crate) fn read_off(graph: &Graph) -> Self {
         let mut reading = Self::default();
-        let mut processor_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
+        let mut node_run_ids_that_take_bags_on_their_own_pace = std::collections::HashSet::new();
         let mut written_bags_by_output_port: HashMap<(String, String), u64> = HashMap::new();
         let mut taken_and_dropped_bags_by_link_id: HashMap<String, (u64, u64)> = HashMap::new();
         let mut link_ids_into_a_windowed_port = std::collections::HashSet::new();
-        let mut processor_ids_paced_by_real_time = std::collections::HashSet::new();
-        let mut processor_ids_restarting_their_helper = std::collections::HashSet::new();
+        let mut node_run_ids_paced_by_real_time = std::collections::HashSet::new();
+        let mut node_run_ids_restarting_their_helper = std::collections::HashSet::new();
         for node in graph.traversal().v(()).iter() {
-            let metrics = node.get::<ProcessorMetrics>();
-            let processor_state = node.get::<StateComponent>().map(StateComponent::current);
-            if processor_state == Some(ProcessorState::Restarting) {
-                processor_ids_restarting_their_helper.insert(node.id().to_string());
+            let metrics = node.get::<NodeMetrics>();
+            let node_state = node.get::<StateComponent>().map(StateComponent::current);
+            if node_state == Some(NodeState::Restarting) {
+                node_run_ids_restarting_their_helper.insert(node.id().to_string());
             }
             let step_progress_of_its_host = node
                 .get::<StepProgressOfOneNodeComponent>()
@@ -120,22 +120,22 @@ impl StepLedgerReading {
                 None => step_progress_of_its_host,
             };
             if step_progress.stands_outside_the_step_barrier {
-                processor_ids_paced_by_real_time.insert(node.id().to_string());
+                node_run_ids_paced_by_real_time.insert(node.id().to_string());
             }
             let is_paused = node
-                .get::<ProcessorPauseGateComponent>()
-                .is_some_and(ProcessorPauseGateComponent::is_paused);
+                .get::<NodePauseGateComponent>()
+                .is_some_and(NodePauseGateComponent::is_paused);
             if step_progress.finishes_every_step || is_paused {
-                processor_ids_that_take_bags_on_their_own_pace.insert(node.id().to_string());
+                node_run_ids_that_take_bags_on_their_own_pace.insert(node.id().to_string());
             }
-            reading.nodes_by_processor_id.insert(
+            reading.nodes_by_node_run_id.insert(
                 node.id().to_string(),
                 StepLedgerEntryOfOneNode {
                     display_name: node.display_name.clone(),
                     step_progress,
-                    has_failed: processor_state == Some(ProcessorState::Error),
-                    is_restarting_its_helper_inside_the_barrier: processor_state
-                        == Some(ProcessorState::Restarting)
+                    has_failed: node_state == Some(NodeState::Error),
+                    is_restarting_its_helper_inside_the_barrier: node_state
+                        == Some(NodeState::Restarting)
                         && !is_paused
                         && !step_progress.stands_outside_the_step_barrier,
                 },
@@ -164,11 +164,11 @@ impl StepLedgerReading {
             }
         }
         for link in graph.traversal().e(()).iter() {
-            if processor_ids_that_take_bags_on_their_own_pace
-                .contains(link.to_port().processor_id().as_str())
+            if node_run_ids_that_take_bags_on_their_own_pace
+                .contains(link.to_port().node_run_id().as_str())
                 || link_ids_into_a_windowed_port.contains(link.id.as_str())
-                || processor_ids_paced_by_real_time.contains(link.source().processor_id().as_str())
-                || processor_ids_paced_by_real_time.contains(link.to_port().processor_id().as_str())
+                || node_run_ids_paced_by_real_time.contains(link.source().node_run_id().as_str())
+                || node_run_ids_paced_by_real_time.contains(link.to_port().node_run_id().as_str())
             {
                 reading.link_ids_off_the_balance.insert(link.id.to_string());
                 continue;
@@ -183,7 +183,7 @@ impl StepLedgerReading {
                 .unwrap_or_default();
             let written_bags = written_bags_by_output_port
                 .get(&(
-                    link.source().processor_id().to_string(),
+                    link.source().node_run_id().to_string(),
                     link.source().port_name().to_string(),
                 ))
                 .copied()
@@ -195,8 +195,8 @@ impl StepLedgerReading {
                     taken_bags,
                     dropped_bags,
                     is_wired,
-                    destination_is_restarting_its_helper: processor_ids_restarting_their_helper
-                        .contains(link.to_port().processor_id().as_str()),
+                    destination_is_restarting_its_helper: node_run_ids_restarting_their_helper
+                        .contains(link.to_port().node_run_id().as_str()),
                 },
             );
         }
@@ -205,7 +205,7 @@ impl StepLedgerReading {
 
     /// The display name of a node that failed or panicked, when one has.
     pub(crate) fn a_failed_node(&self) -> Option<&str> {
-        self.nodes_by_processor_id
+        self.nodes_by_node_run_id
             .values()
             .find(|node| node.has_ended())
             .map(|node| node.display_name.as_str())
@@ -219,7 +219,7 @@ impl StepLedgerReading {
         step_index: u64,
         in_flight_before_the_ledger_saw_it: &StepLedgerLinkBaselines,
     ) -> bool {
-        self.nodes_by_processor_id.values().all(|node| {
+        self.nodes_by_node_run_id.values().all(|node| {
             !node.is_restarting_its_helper_inside_the_barrier
                 && node.step_progress.lets_the_step_close(step_index)
         }) && self.links_by_link_id.iter().all(|(link_id, link)| {
@@ -380,7 +380,7 @@ fn run_the_step_barrier(
             let the_stream_runs = !waits_for_every_node_to_start
                 || stream_now
                     .observable_graph_readiness()
-                    .wait_until_every_processor_has_finished_setup(STEP_COORDINATOR_START_RECHECK);
+                    .wait_until_every_node_has_finished_setup(STEP_COORDINATOR_START_RECHECK);
             if the_stream_runs {
                 baselines.follow_the_links_in(&stream_now.step_ledger_reading());
                 if let Some(opened) = stream_clock.open_the_waiting_step() {
@@ -515,7 +515,7 @@ mod tests {
         links: impl IntoIterator<Item = StepLedgerEntryOfOneLink>,
     ) -> StepLedgerReading {
         StepLedgerReading {
-            nodes_by_processor_id: nodes
+            nodes_by_node_run_id: nodes
                 .into_iter()
                 .enumerate()
                 .map(|(index, progress)| (format!("p{index}"), a_node(progress)))
@@ -661,7 +661,7 @@ mod tests {
     fn a_node_restarting_its_helper_holds_the_step_open() {
         let mut reading = a_reading([AN_IDLE_REACTIVE_NODE], []);
         reading
-            .nodes_by_processor_id
+            .nodes_by_node_run_id
             .values_mut()
             .for_each(|node| node.is_restarting_its_helper_inside_the_barrier = true);
         assert!(!reading.lets_the_step_close(0, &StepLedgerLinkBaselines::default()));
@@ -725,7 +725,7 @@ mod tests {
     fn a_failed_node_is_named() {
         let mut reading = a_reading([AN_IDLE_REACTIVE_NODE], []);
         assert_eq!(reading.a_failed_node(), None);
-        if let Some(node) = reading.nodes_by_processor_id.values_mut().next() {
+        if let Some(node) = reading.nodes_by_node_run_id.values_mut().next() {
             node.has_failed = true;
         }
         assert_eq!(reading.a_failed_node(), Some("node"));

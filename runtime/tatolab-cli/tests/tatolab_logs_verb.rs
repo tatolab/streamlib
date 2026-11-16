@@ -26,7 +26,7 @@ fn the_logs_help_names_the_project_and_every_flag() {
         "--action <ID>",
         "-f, --follow",
         "like `tail -F`",
-        "--processor <ID>",
+        "--node-run-id <ID>",
         "--pipeline <ID>",
         "--rhi",
         "--level <LEVEL>",

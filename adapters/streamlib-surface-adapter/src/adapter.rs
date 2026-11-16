@@ -7,31 +7,6 @@ use crate::error::AdapterError;
 use crate::guard::{ReadGuard, WriteGuard};
 use crate::surface::{StreamlibSurface, SurfaceId};
 
-/// Public ABI for a streamlib surface adapter.
-///
-/// Adapters implement this trait to expose a host-allocated GPU surface
-/// to a customer in their framework's idiomatic shape (Vulkan, OpenGL,
-/// Skia, CPU readback, …). Customers acquire scoped read or write
-/// access through [`Self::acquire_read`] / [`Self::acquire_write`] —
-/// synchronization (timeline semaphores, layout transitions) happens
-/// inside the scope and never appears in the customer's API.
-///
-/// Two acquisition flavors are provided:
-///
-/// - Blocking [`Self::acquire_read`] / [`Self::acquire_write`] —
-///   waits on the acquire-side timeline semaphore (and, for write,
-///   for any contended reader/writer to release). Right shape for
-///   batch / one-shot consumers.
-/// - Non-blocking [`Self::try_acquire_read`] / [`Self::try_acquire_write`] —
-///   returns `Ok(None)` immediately if the surface is contended,
-///   never blocks the caller. Right shape for processor-graph nodes
-///   that must not stall their thread runner while waiting on a
-///   downstream consumer to finish.
-///
-/// The trait is `Send + Sync`. Concrete adapters typically wrap
-/// interior-mutable state behind a `Mutex` or `RwLock` so the trait's
-/// `&self` shape stays satisfiable without leaking a runtime-error
-/// "wrong mode" path that the typestate already prevents.
 pub trait SurfaceAdapter: Send + Sync {
     /// View handed out by [`Self::acquire_read`] for the guard's lifetime.
     type ReadView<'g>

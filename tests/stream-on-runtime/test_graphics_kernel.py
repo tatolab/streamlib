@@ -6,7 +6,7 @@
 Graphics dispatch is an always-present capability of `GpuContext`: there is no
 installation step and no runtime-absent case, so the pass here — a fullscreen
 triangle sampling an acquired texture into an acquired colour target — needs
-nothing from the application but the processor itself.
+nothing from the application but the node itself.
 
 A kernel is an object: built in `setup()` from Slang text the engine compiles,
 drawn per frame in `process()`, with bindings passed at draw by the shaders'
@@ -18,7 +18,7 @@ claim before a kernel exists, the rest before any GPU work is submitted.
 That a draw asks for no vertex buffer, index buffer or depth target is read
 off the declared surface in the stream suite.
 
-Every probe runs in its own processor interpreter and reports one
+Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
 `tatolabd` and asserts on that line.
 """
@@ -64,7 +64,7 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
@@ -75,8 +75,8 @@ def spelled_the_same_way(message: str) -> str:
 
 
 @pytest.mark.requires_gpu
-def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd_running_stream):
-    """The demo: a pass rendered from a processor interpreter, with named bindings and
+def test_a_python_node_draws_through_a_graphics_kernel(start_tatolabd_running_stream):
+    """The demo: a pass rendered from a node interpreter, with named bindings and
     no application-supplied bridge."""
     observed = run_probe(start_tatolabd_running_stream, "FullscreenTriangleDrawProbe")
 
@@ -95,7 +95,7 @@ def test_a_python_processor_draws_through_a_graphics_kernel(start_tatolabd_runni
 def test_a_rendered_texture_is_read_through_cpu_in_a_downstream_interpreter(
     start_tatolabd_running_stream,
 ):
-    """A render target a Python node drew into crosses to another processor
+    """A render target a Python node drew into crosses to another node
     interpreter, whose `cpu()` reads exactly the pixels the pass painted — on
     whatever flavour the device carries a render target across with."""
     observed = run_probe(start_tatolabd_running_stream, "RenderedFrameCpuReader")

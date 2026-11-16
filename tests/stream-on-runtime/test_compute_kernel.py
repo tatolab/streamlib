@@ -17,7 +17,7 @@ two distinct surfaces really are bound by name, and that every way of getting
 the bindings wrong is refused before any GPU work is submitted, with a message
 naming what the shader actually declares.
 
-Every probe runs in its own processor interpreter and reports one
+Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
 `tatolabd` and asserts on that line.
 """
@@ -69,11 +69,11 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
-def test_a_python_processor_reads_one_surface_and_writes_another(start_tatolabd_running_stream):
+def test_a_python_node_reads_one_surface_and_writes_another(start_tatolabd_running_stream):
     """The whole point: one dispatch, two distinct surfaces, bound by name."""
     observed = run_probe(start_tatolabd_running_stream, "ReadOneWriteAnotherProbe")
 
@@ -225,7 +225,7 @@ def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
 
     assert observed["surface_id"], "the acquire answers with a surface id"
     assert observed["takes_a_write_back"] is True, (
-        "a texture this processor acquired can take a recorded copy in, so the "
+        "a texture this node acquired can take a recorded copy in, so the "
         "engine's write-back answer must be yes"
     )
     assert observed["the_curve_published"] is True, (
@@ -243,7 +243,7 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     nothing durable — someone adds a `subprocess.run(["slangc", ...])` later and
     every test still passes. So `slangc` and `glslangValidator` are
     shadowed with stubs that exit 127 and say so, and `tatolabd` plus the
-    processor interpreter it spawns inherit that PATH. A kernel still builds, so
+    node interpreter it spawns inherit that PATH. A kernel still builds, so
     the compiler that built it is the one the runtime carries.
     """
     sabotaged = tmp_path / "no-shader-toolchain"

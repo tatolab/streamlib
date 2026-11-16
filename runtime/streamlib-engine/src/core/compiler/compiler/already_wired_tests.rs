@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-use crate::core::processors::OutOfProcessLinkWireReply;
+use crate::core::nodes::OutOfProcessLinkWireReply;
 
 #[test]
 fn a_link_nothing_has_wired_yet_is_planned() {

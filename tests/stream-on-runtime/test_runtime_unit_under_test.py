@@ -13,7 +13,7 @@ import pytest
 from runtime_unit_under_test import (
     LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT,
     MACHINE_DIRECTORIES_UNDER_A_TEST_ROOT_MARKER_FILE_NAME,
-    PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
+    NODE_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
     RUNTIME_UNIT_DIRECTORY_ENVIRONMENT_VARIABLE,
     RuntimeUnitUnderTest,
     locate_the_runtime_unit,
@@ -25,7 +25,7 @@ def a_runtime_unit_laid_out_at(runtime_unit_directory: Path) -> None:
     for relative_path in (
         Path("bin/tatolabd"),
         Path("bin/tatolab"),
-        LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT / PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
+        LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT / NODE_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
     ):
         (runtime_unit_directory / relative_path).parent.mkdir(parents=True, exist_ok=True)
         (runtime_unit_directory / relative_path).touch()

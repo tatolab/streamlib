@@ -195,8 +195,6 @@ fn the_typed_read_deserializes_the_bag_and_a_drained_port_is_not_an_error() {
     );
 }
 
-/// A processor names its own port in the spelling it declared, and the
-/// handle casts it to the name the port was registered under.
 #[test]
 fn a_port_is_read_by_any_spelling_that_casts_to_its_name() {
     let (publisher, subscriber) = open_channel_for_one_link("naming/cast", 4);

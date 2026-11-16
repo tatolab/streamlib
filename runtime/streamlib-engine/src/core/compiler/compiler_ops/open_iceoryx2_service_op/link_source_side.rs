@@ -1,23 +1,19 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The source side of a link: opening its channel's publisher, the reserved slot the runtime reads, releasing it, and wiring the source processor.
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkState,
-    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent, OutputLinkPortRef,
-    ProcessorLossCounts, SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
+    LinkStateComponent, LinkUniqueId, NodeLossCounts, OutOfProcessLinkWireRepliesComponent,
+    OutputLinkPortRef, SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
+use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
-use crate::core::processors::{
-    OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
-};
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelSizing, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES,
     DeliveryProfile, DeliveryResolution, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
@@ -27,9 +23,9 @@ use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 
 use super::{
     DestinationOfALinkAsItsWiringReadsIt, RoomForAWindowedReaderTheSourcesGraphCannotSee,
-    channel_service_name, get_single_processor, insert_loss_counts_on_processor_node_once,
-    notify_service_name_for, out_of_process_link_wiring_of, processor_to_reclaim_from,
-    publish_loss_counts_on_processor_node,
+    channel_service_name, get_single_node, insert_loss_counts_on_graph_node_once,
+    node_to_reclaim_from, notify_service_name_for, out_of_process_link_wiring_of,
+    publish_loss_counts_on_graph_node,
     refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring, resolve_channel_sizing,
 };
 
@@ -121,7 +117,7 @@ pub(crate) fn open_the_source_side_of_a_link(
     destination: &DestinationOfALinkAsItsWiringReadsIt,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<OpenedSourceSideOfALink> {
-    let source_proc_id = source.processor_id().clone();
+    let source_proc_id = source.node_run_id().clone();
     let source_port = source.port_name();
     let channel_service_name = channel_service_name(source)?;
     let link_wiring_of_a_source_out_of_process =
@@ -131,9 +127,7 @@ pub(crate) fn open_the_source_side_of_a_link(
         .v(&source_proc_id)
         .first()
         .map(|source_node| Arc::clone(source_node.stream_facts_of_output_ports()))
-        .ok_or_else(|| {
-            Error::ProcessorNotFound(format!("source processor '{source_proc_id}' not found"))
-        })?;
+        .ok_or_else(|| Error::NodeNotFound(format!("source node '{source_proc_id}' not found")))?;
     let destination_windows_its_reads = destination.audio_windowing.is_some();
     if destination_windows_its_reads {
         refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
@@ -218,11 +212,11 @@ pub(crate) fn open_the_source_side_of_a_link(
                 )),
             )
         } else {
-            let source_processor = get_single_processor(source_graph, &source_proc_id)?;
+            let source_node = get_single_node(source_graph, &source_proc_id)?;
             let output_writer = wire_rust_source(
                 source_graph,
                 &source_proc_id,
-                &source_processor,
+                &source_node,
                 source_port,
                 link_id,
                 &channel_data_service,
@@ -236,7 +230,7 @@ pub(crate) fn open_the_source_side_of_a_link(
             )?;
             (
                 None,
-                output_writer.map(SourceSideOfALinkWiredOn::ANativeProcessorsOutputWriter),
+                output_writer.map(SourceSideOfALinkWiredOn::ANativeNodesOutputWriter),
             )
         };
 
@@ -286,7 +280,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
     source: &OutputLinkPortRef,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<SourceSideHeldOpenForAReaderOnTheReservedSlot> {
-    let the_reserved_slot_reader = ProcessorUniqueId::new();
+    let the_reserved_slot_reader = NodeRunId::new();
     let link_id = LinkUniqueId::new();
     let destination = DestinationOfALinkAsItsWiringReadsIt {
         notify_service_name: notify_service_name_for(&the_reserved_slot_reader),
@@ -308,7 +302,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
     )?;
     let wired_on = opened.wired_on.as_ref().ok_or_else(|| {
         Error::Link(format!(
-            "output port '{source}' belongs to a processor holding no output writer, so it \
+            "output port '{source}' belongs to a node holding no output writer, so it \
              publishes nothing"
         ))
     })?;
@@ -333,7 +327,7 @@ pub(crate) fn open_the_source_side_for_a_reader_on_the_reserved_slot(
 /// `source_proc_id`, and the port's publisher when the link was its last.
 pub(super) fn release_the_source_side_of_a_link(
     graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
+    source_proc_id: &NodeRunId,
     source_port: &str,
     link_id: &LinkUniqueId,
 ) {
@@ -343,8 +337,8 @@ pub(super) fn release_the_source_side_of_a_link(
             source_port,
             link_id.as_str(),
         );
-    } else if let Some(source_processor) = processor_to_reclaim_from(graph, source_proc_id) {
-        let source_guard = source_processor.lock();
+    } else if let Some(source_node) = node_to_reclaim_from(graph, source_proc_id) {
+        let source_guard = source_node.lock();
         if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
             let channel_released = output_inner.remove_channel_link(source_port, link_id.as_str());
             tracing::debug!(
@@ -357,23 +351,17 @@ pub(super) fn release_the_source_side_of_a_link(
     }
 }
 
-/// Install (once) the source's single channel publisher, append this link's
-/// destination notifier onto the Rust source's [`OutputWriterInner`], and
-/// publish its loss counts onto its graph node. Hands back that output writer,
-/// or `None` for a processor that holds none.
-///
-/// [`OutputWriterInner`]: crate::iceoryx2::OutputWriterInner
 pub(super) fn wire_rust_source(
     graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    source_processor: &Arc<Mutex<ProcessorInstance>>,
+    source_proc_id: &NodeRunId,
+    source_node: &Arc<Mutex<NodeInstance>>,
     source_port: &str,
     link_id: &LinkUniqueId,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
     egress_config: ChannelEgressConfig,
 ) -> Result<Option<Arc<crate::iceoryx2::OutputWriterInner>>> {
-    let source_guard = source_processor.lock();
+    let source_guard = source_node.lock();
     let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
         return Ok(None);
     };
@@ -389,22 +377,14 @@ pub(super) fn wire_rust_source(
 
     let notifier = notify_service.create_notifier()?;
     output_inner.add_channel_link(source_port, link_id.as_str(), notifier);
-    publish_loss_counts_on_processor_node(graph, source_proc_id, &source_guard);
+    publish_loss_counts_on_graph_node(graph, source_proc_id, &source_guard);
     Ok(Some(output_inner))
 }
 
-/// Record this link's source-side wiring on a processor whose transport lives
-/// out of process, so it opens its own channel publisher + destination notifier
-/// from the envelope. One entry per link — the far side installs the single
-/// publisher once (keyed by source port) and appends a notifier per entry.
-///
-/// Hands back the cell this end's answer will land in, or `None` where the
-/// entry rides the far side's startup envelope instead and its `ready`
-/// confirms it.
 pub(super) fn wire_subprocess_source(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,
-    source_proc_id: &ProcessorUniqueId,
+    source_proc_id: &NodeRunId,
     source_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
@@ -436,7 +416,7 @@ pub(super) fn wire_subprocess_source(
 
     // The generation rides the entry, so the far side writes this channel's
     // refusals where the parent reads them for this channel and no earlier one.
-    let loss_counts = link_wiring.helper_placed_processor_loss_counts();
+    let loss_counts = link_wiring.helper_placed_node_loss_counts();
     entry["output_port_wiring_generation"] =
         serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
     let wire_reply = link_wiring
@@ -449,10 +429,10 @@ pub(super) fn wire_subprocess_source(
                 .output_frames_kept_by_its_output_links()
                 .forget_an_unwired_output_link(link_id.as_str());
         })?;
-    insert_loss_counts_on_processor_node_once(
+    insert_loss_counts_on_graph_node_once(
         graph,
         source_proc_id,
-        ProcessorLossCounts::CountedInItsHelperProcess(loss_counts),
+        NodeLossCounts::CountedInItsHelperProcess(loss_counts),
     );
     Ok(wire_reply)
 }

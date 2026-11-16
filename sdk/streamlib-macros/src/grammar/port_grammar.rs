@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib_processor_schema::{
+use streamlib_node_schema::{
     ArrayOutputPortResidency, AudioWindowContract, AudioWindowContractDeclaredValues,
     ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
@@ -319,12 +319,10 @@ fn parse_port_family_key(
                 Some(config_key) => ImageOutputPortFrameRate::FromConfig { config_key },
                 None => {
                     let frames_per_second: LitInt = content.parse()?;
-                    ImageOutputPortFrameRate::Stated(
-                        streamlib_processor_schema::ImageStreamFrameRate {
-                            numerator: frames_per_second.base10_parse()?,
-                            denominator: 1,
-                        },
-                    )
+                    ImageOutputPortFrameRate::Stated(streamlib_node_schema::ImageStreamFrameRate {
+                        numerator: frames_per_second.base10_parse()?,
+                        denominator: 1,
+                    })
                 }
             });
         }
@@ -386,7 +384,7 @@ fn parse_audio_window_contract(
                 format!(
                     "unknown `audio_window` value `{sentinel}` on port `{port_name}` — the \
                      only sentinel is `match_device`, which resolves the contract at \
-                     `setup()` from the device stream the processor opened. To state the \
+                     `setup()` from the device stream the node opened. To state the \
                      values instead, spell the contract as a call: \
                      `audio_window(sample_rate = 16_000, dtype = \"f32\", \
                      window_size = 512, hop = 512)`"

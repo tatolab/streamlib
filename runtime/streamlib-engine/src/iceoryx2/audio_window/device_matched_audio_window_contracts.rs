@@ -1,18 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! What settles an input port's `match_device` declaration, and where the
-//! settled values live.
-//!
-//! The sentinel names a contract only the declaring processor can state: its
-//! five values come from the format of the device stream that processor opened
-//! in `setup()`, which varies by machine. So the values arrive after the port
-//! was declared and — because the compiler wires every link before it releases
-//! any processor into `setup()` — after that port was wired too. This module is
-//! the one place they land, read by the wiring path when a link is added later,
-//! by the port's own mailbox when the stage is installed, and by `graph`, which
-//! renders what was resolved rather than the sentinel that asked for it.
-
 use std::collections::HashMap;
 
 use parking_lot::Mutex;
@@ -21,14 +9,6 @@ use super::ResolvedAudioWindowContract;
 use crate::core::context::AudioStreamFormat;
 use crate::core::descriptors::AudioWindowContractDeclaredValues;
 
-/// The window contract a processor states for one of its own input ports from
-/// the device stream it just opened.
-///
-/// The format is passed whole rather than as three loose values: it is exactly
-/// what [`AudioPlaybackStream::stream_format`] hands back, so a caller cannot
-/// mis-map a scalar encoding on the way in.
-///
-/// [`AudioPlaybackStream::stream_format`]: crate::core::context::AudioPlaybackStream::stream_format
 #[derive(Debug, Clone, Copy)]
 pub struct AudioWindowContractMatchingADeviceStream {
     /// The rate, channel count and scalar encoding the device stream opened at
@@ -41,24 +21,12 @@ pub struct AudioWindowContractMatchingADeviceStream {
     pub hop_in_per_channel_samples: u32,
 }
 
-/// One processor's settled `match_device` contracts, keyed by the input port
-/// each was settled for.
-///
-/// Held behind an `Arc` shared by the processor's input mailboxes and its graph
-/// node, the way the per-inbound-link drop counts already are: a snapshot reads
-/// what stands rather than a copy taken at wiring time, and no reader has to
-/// lock a running processor to see it.
 #[derive(Debug, Default)]
 pub struct DeviceMatchedAudioWindowContractsByInputPort {
     settled: Mutex<HashMap<String, ResolvedAudioWindowContract>>,
 }
 
 impl DeviceMatchedAudioWindowContractsByInputPort {
-    /// Record the contract `port_name` resolved to, replacing any earlier one.
-    ///
-    /// Replacing rather than refusing a second call: a processor stopped and
-    /// started again opens its device afresh, and the format it gets is the
-    /// machine's answer that time, not the previous one.
     pub(crate) fn settle_for_input_port(
         &self,
         port_name: &str,
@@ -136,8 +104,6 @@ mod tests {
         assert_eq!(declaration.hop, 512);
     }
 
-    /// A processor stopped and started again opens its device afresh, and the
-    /// format it gets that time is the answer — never the previous run's.
     #[test]
     fn resolving_a_second_time_replaces_the_contract_rather_than_keeping_the_first() {
         let contracts = DeviceMatchedAudioWindowContractsByInputPort::default();

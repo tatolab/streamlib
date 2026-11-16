@@ -5,7 +5,7 @@
 
 Read from the lend `cargo xtask build-runtime` lays out at
 `target/tatolab-runtime/lib/tatolab/lend`, with that directory first on
-`PYTHONPATH` — the same files a processor interpreter borrows and the wheel
+`PYTHONPATH` — the same files a node interpreter borrows and the wheel
 carries — and from `tatolabd`, `tatolab` and `uv` in the unit's `bin/`
 beside it. Imported from anywhere else, the tests that read binaries fail.
 

@@ -1,18 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Changing a running node's graph over its MCP surface, end to end.
-
-The agent loop this locks: a stream is up on `tatolabd`, a processor class is
-written to a module beside `stream.py` *after* launch, and `add_node` /
-`connect` / `disconnect` / `remove_node` splice it into and back out of the
-live graph. Every step is asserted from the outside — the `graph` the node
-reports, the bags a `tap` collects, the marker the added processor logs from
-its own processor interpreter — because the failure this guards against is a
-call that answers success while nothing flows.
-
-Starting the engine initializes a GPU context, so every test that starts one needs a device.
-"""
 
 from __future__ import annotations
 
@@ -31,8 +19,6 @@ from local_api_client import LocalApiClient
 from runtime_process_under_test import ENGINE_STARTED_LOG_LINE
 from stream_runs_on_tatolabd import TatolabRunOfAProject
 
-# A processor interpreter's first frame is a cold spawn plus an import; anything
-# past this is a processor that never received traffic.
 FIRST_FRAME_TIMEOUT_SECONDS = 30.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # A disconnect takes the link, not the frame the effect was already holding;
@@ -40,9 +26,6 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 SECONDS_FOR_A_HELD_FRAME_TO_LEAVE = 1.0
 # How long a disconnected effect's write count is watched for standing still.
 SECONDS_A_STARVED_OUTPUT_IS_WATCHED = 0.5
-# How long a link handed to a running helper has to come back `wired`. The
-# helper answers between callbacks, so this is bounded by one frame of the
-# processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 
 # The stream the test launches: one test pattern source and nothing else. Everything
@@ -60,7 +43,7 @@ def main(stream_builder: StreamBuilder) -> None:
 # Written beside `stream.py` only after the stream is up, which is the shape an
 # agent produces: nothing imported it before, and the class is named to the
 # node by its import path alone.
-LIVE_ADDED_EFFECT_MODULE = "processors.live_added_effect"
+LIVE_ADDED_EFFECT_MODULE = "nodes.live_added_effect"
 LIVE_ADDED_EFFECT_CLASS = "LiveAddedEffect"
 LIVE_ADDED_EFFECT_SOURCE = '''\
 """An effect that announces its frames, written after the node started."""
@@ -211,15 +194,6 @@ def connect_live(
 def await_link_state(
     local_api: LocalApiClient, stream_id: str, link_id: str, wanted: str
 ) -> str:
-    """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
-
-    A `connect` onto a helper-placed processor returns with the link `pending`:
-    the helper opens its own port and answers, and only that answer makes the
-    link `wired`. A helper reads commands between callbacks, so how long that
-    takes is the processor's cadence, not a fixed number — hence a poll rather
-    than a sleep. A link that reaches `error` is returned as it is, so the
-    caller's assertion carries the helper's own reason.
-    """
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
@@ -298,23 +272,12 @@ def start_the_pattern_stream(
 
 
 @pytest.mark.requires_gpu
-def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
+def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The whole agent loop against one node.
-
-    Order matters and each step is checked before the next: the add starts a
-    processor interpreter that imports a module nothing had seen; the first
-    connect wires a link into a source that was already publishing; the second
-    consumer of that same source port proves the channel was sized for a late
-    subscriber; the downstream effect proves a helper's output can be wired
-    after its setup; the live-added converter proves a native built-in can
-    be added live; the disconnect stops the flow
-    the tap was seeing; the remove takes the processor and its links away.
-    """
     pattern_stream = start_the_pattern_stream(
-        make_tatolab_project, start_tatolabd, {"processors/__init__.py": ""}
+        make_tatolab_project, start_tatolabd, {"nodes/__init__.py": ""}
     )
     app_directory, tatolabd, local_api, stream_id = (
         pattern_stream.app_directory,
@@ -330,7 +293,7 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 
     # The module lands beside the entry file only now, after the stream has
     # been running for a while.
-    (app_directory / "processors" / "live_added_effect.py").write_text(LIVE_ADDED_EFFECT_SOURCE)
+    (app_directory / "nodes" / "live_added_effect.py").write_text(LIVE_ADDED_EFFECT_SOURCE)
 
     added = add_node_live(
         local_api,
@@ -372,8 +335,6 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         "carries the helper's reason"
     )
 
-    # The processor reports from its own processor interpreter, so a marker on
-    # tatolabd's standard error is a frame that crossed the late-wired link.
     tatolabd.await_marker("FIRST_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
 
     # A second consumer on the SAME source output port: the channel was
@@ -417,8 +378,6 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     tatolabd.await_marker("DOWNSTREAM_EFFECT_SAW_A_FRAME", timeout=FIRST_FRAME_TIMEOUT_SECONDS)
     assert bags_written_on(local_api, stream_id, "effect", "video_to_downstream") > 0
 
-    # A native built-in added live, by the type `graph` reports for one: its
-    # class in `tatolab.stream`, resolved apart from a project's processors.
     live_added_channels_to_records = add_node_live(
         local_api,
         stream_id,
@@ -479,13 +438,10 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
 HELPER_IMPORT_SECONDS = 8.0
 MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS = HELPER_IMPORT_SECONDS / 2
 
-SLOWLY_IMPORTING_SINK_MODULE = "processors.slowly_importing_sink"
+SLOWLY_IMPORTING_SINK_MODULE = "nodes.slowly_importing_sink"
 SLOWLY_IMPORTING_SINK_CLASS = "SlowlyImportingSink"
-# Only the running processor interpreter sleeps: `STREAMLIB_ENTRYPOINT` is set
-# there and nowhere else, so the describe `add_node` makes stays quick and the
-# wait lands on the processor's setup, where a torch import would.
 SLOWLY_IMPORTING_SINK_SOURCE = f'''\
-"""A sink whose processor interpreter takes {HELPER_IMPORT_SECONDS} s to import it."""
+"""A sink whose node interpreter takes {HELPER_IMPORT_SECONDS} s to import it."""
 
 import os
 import time
@@ -526,19 +482,12 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """The documented live recipe — add a Python processor, connect it at once.
-
-    The connect lands while the processor interpreter is still importing. It
-    returns with the link pending rather than holding the graph until the
-    import ends, and meanwhile `graph` answers and another processor is added;
-    the link reads wired once the helper is up.
-    """
     pattern_stream = start_the_pattern_stream(
         make_tatolab_project,
         start_tatolabd,
         {
-            "processors/__init__.py": "",
-            "processors/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/slowly_importing_sink.py": SLOWLY_IMPORTING_SINK_SOURCE,
         },
     )
     local_api, stream_id = pattern_stream.local_api, pattern_stream.stream_id
@@ -608,7 +557,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
         "add_node",
         {
             "stream": local_api.stream_asset_of(stream_id),
-            "type": "processors.no_such_module:Missing",
+            "type": "nodes.no_such_module:Missing",
             "mode": "live",
         },
     )

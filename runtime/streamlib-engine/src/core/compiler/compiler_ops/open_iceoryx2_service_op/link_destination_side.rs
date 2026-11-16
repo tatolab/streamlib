@@ -1,21 +1,17 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The destination side of a link: reading its destination, opening its subscriber and notifier, releasing it, and wiring the destination processor.
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphNodeWithComponents, InputLinkPortRef,
-    LinkUniqueId, ProcessorLossCounts,
+    LinkUniqueId, NodeLossCounts,
 };
-use crate::core::processors::{
-    OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
-};
+use crate::core::nodes::{NodeInstance, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope};
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelSizing, DeliveryResolution, Iceoryx2NotifyService,
     Iceoryx2Service, InboundLinkName, refuse_an_unsettled_match_device_sentinel,
@@ -24,9 +20,9 @@ use crate::iceoryx2::{
 use super::{
     OpenedSourceSideOfALink, RoomForAWindowedReaderTheSourcesGraphCannotSee,
     audio_windowing_declared_by_input_port_of, delivery_resolution_of_input_port,
-    destination_max_notifiers, get_single_processor, insert_loss_counts_on_processor_node_once,
-    notify_service_name_for, out_of_process_link_wiring_of, processor_class_import_path_of,
-    processor_to_reclaim_from, publish_loss_counts_on_processor_node,
+    destination_max_notifiers, get_single_node, insert_loss_counts_on_graph_node_once,
+    node_class_import_path_of, node_to_reclaim_from, notify_service_name_for,
+    out_of_process_link_wiring_of, publish_loss_counts_on_graph_node,
     refuse_a_second_inbound_link_into_a_windowed_port, subscriber_ring_depth_of_input_port,
 };
 
@@ -34,7 +30,7 @@ use super::{
 /// port, how that port reads, whether its ports live out of process, and the
 /// destination's notify service.
 pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
-    pub(super) dest_proc_id: ProcessorUniqueId,
+    pub(super) dest_proc_id: NodeRunId,
     pub(super) dest_port: String,
     pub(super) link_wiring_of_a_destination_out_of_process:
         Option<Arc<OutOfProcessLinkWiringEnvelope>>,
@@ -48,22 +44,13 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
         RoomForAWindowedReaderTheSourcesGraphCannotSee,
 }
 
-/// Read what wiring link `link_id` into `to_port` needs of its destination,
-/// off the destination's graph, refusing a second inbound link into a port
-/// that windows and a destination past its notifier cap. The port's delivery
-/// profile is the one `delivery_declared_by` declares: `to_port` itself, or the
-/// function node input a reader reads the link for.
-///
-/// A `match_device` sentinel is not refused here: the compiler wires every
-/// link before it releases any processor into `setup()`, which is where the
-/// only format that can settle one comes from.
 pub(crate) fn read_the_destination_of_a_link(
     dest_graph: &mut Graph,
     to_port: &InputLinkPortRef,
     delivery_declared_by: &InputLinkPortRef,
     link_id: &LinkUniqueId,
 ) -> Result<DestinationOfALinkAsItsWiringReadsIt> {
-    let dest_proc_id = to_port.processor_id().clone();
+    let dest_proc_id = to_port.node_run_id().clone();
     let dest_port = to_port.port_name().to_string();
     let link_wiring_of_a_destination_out_of_process =
         out_of_process_link_wiring_of(dest_graph, &dest_proc_id);
@@ -85,7 +72,7 @@ pub(crate) fn read_the_destination_of_a_link(
     }
     let input_port_delivery = delivery_resolution_of_input_port(
         dest_graph,
-        delivery_declared_by.processor_id(),
+        delivery_declared_by.node_run_id(),
         delivery_declared_by.port_name(),
     )?;
     let max_notifiers = destination_max_notifiers(dest_graph, &dest_proc_id)?;
@@ -135,11 +122,11 @@ pub(crate) fn open_the_destination_side_of_a_link(
                 destination.audio_windowing,
             )?
         } else {
-            let dest_processor = get_single_processor(dest_graph, &destination.dest_proc_id)?;
+            let dest_node = get_single_node(dest_graph, &destination.dest_proc_id)?;
             wire_rust_dest(
                 dest_graph,
                 &destination.dest_proc_id,
-                &dest_processor,
+                &dest_node,
                 &destination.dest_port,
                 link_id,
                 &opened_source_side.channel_service_name,
@@ -154,9 +141,7 @@ pub(crate) fn open_the_destination_side_of_a_link(
         .traversal()
         .v(&dest_proc_id)
         .first()
-        .ok_or_else(|| {
-            Error::ProcessorNotFound(format!("destination processor '{dest_proc_id}' not found"))
-        })?
+        .ok_or_else(|| Error::NodeNotFound(format!("destination node '{dest_proc_id}' not found")))?
         .upstream_stream_facts_by_inbound_link()
         .record_inbound_link(
             &dest_port,
@@ -168,20 +153,6 @@ pub(crate) fn open_the_destination_side_of_a_link(
     Ok(wire_reply_awaited_from_the_destination)
 }
 
-/// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
-///
-/// Stamping [`LinkState::Disconnected`] is not enough: the source-side notifier
-/// and dest-side subscriber (plus listener, orphaned mailbox, channel publisher)
-/// must be dropped, and the services the link held released, else a reconnect
-/// re-appends past the notify service's create-time `max_notifiers` cap
-/// (`ExceedsMaxSupportedNotifiers`).
-///
-/// An endpoint whose ports live out of process owns them itself, so its half is
-/// reclaimed through its wiring envelope — which forgets the entry a reconnect
-/// would otherwise be set up with twice and asks a running far side to drop its
-/// port — without taking that processor's lock.
-///
-/// [`LinkState::Disconnected`]: crate::core::graph::LinkState::Disconnected
 #[tracing::instrument(
     name = "compiler.close_iceoryx2_service",
     skip(graph),
@@ -193,7 +164,7 @@ pub(crate) fn open_the_destination_side_of_a_link(
 /// inbound link went away).
 pub(crate) fn release_the_destination_side_of_a_link(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) {
@@ -208,8 +179,8 @@ pub(crate) fn release_the_destination_side_of_a_link(
             dest_port,
             link_id.as_str(),
         );
-    } else if let Some(dest_processor) = processor_to_reclaim_from(graph, dest_proc_id) {
-        let dest_guard = dest_processor.lock();
+    } else if let Some(dest_node) = node_to_reclaim_from(graph, dest_proc_id) {
+        let dest_guard = dest_node.lock();
         if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
             input_inner.remove_channel_link(link_id.as_str());
             tracing::debug!(
@@ -229,8 +200,8 @@ pub(crate) fn release_the_destination_side_of_a_link(
 /// mailbox is sized from its contract.
 pub(super) fn wire_rust_dest(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
-    dest_processor: &Arc<Mutex<ProcessorInstance>>,
+    dest_proc_id: &NodeRunId,
+    dest_node: &Arc<Mutex<NodeInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
     channel_service_name: &str,
@@ -239,7 +210,7 @@ pub(super) fn wire_rust_dest(
     notify_service: &Iceoryx2NotifyService,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<()> {
-    let dest_guard = dest_processor.lock();
+    let dest_guard = dest_node.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
         return Ok(());
     };
@@ -257,10 +228,7 @@ pub(super) fn wire_rust_dest(
             Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
                 input_inner.add_windowed_port(dest_port, drain_order, contract)
             }
-            // A sentinel this processor already settled — a link wired after
-            // its `setup()` ran — windows from the settled values rather than
-            // waiting for a `setup()` that has been and gone.
-            Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
+            Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream) => {
                 match input_inner
                     .device_matched_audio_window_contracts()
                     .settled_for_input_port(dest_port)
@@ -297,7 +265,7 @@ pub(super) fn wire_rust_dest(
         input_inner.set_listener(listener);
         tracing::debug!("Created listener for destination on its notify service");
     }
-    publish_loss_counts_on_processor_node(graph, dest_proc_id, &dest_guard);
+    publish_loss_counts_on_graph_node(graph, dest_proc_id, &dest_guard);
     publish_device_matched_audio_window_contracts_on_destination_node(
         graph,
         dest_proc_id,
@@ -316,7 +284,7 @@ pub(super) fn wire_rust_dest(
 /// wiring time there is nothing to copy yet.
 fn publish_device_matched_audio_window_contracts_on_destination_node(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     input_inner: &crate::iceoryx2::InputMailboxesInner,
 ) {
     let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
@@ -330,19 +298,10 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
     ));
 }
 
-/// Record this link's dest-side wiring on a processor whose transport lives out
-/// of process, so it opens its own channel subscriber (bound to its local input
-/// port) from the envelope.
-///
-/// The envelope's `inbound_link_name` is the channel's own name: a helper
-/// knows each link into it by the channel that carries it.
-///
-/// Hands back the cell this end's answer will land in, on the same terms as
-/// [`wire_subprocess_source`](super::link_source_side::wire_subprocess_source).
 pub(super) fn wire_subprocess_dest(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,
-    dest_proc_id: &ProcessorUniqueId,
+    dest_proc_id: &NodeRunId,
     dest_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
@@ -375,13 +334,6 @@ pub(super) fn wire_subprocess_dest(
         "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
-    // The window contract rides the envelope beside `read_mode`, or the child's
-    // own stage windows nothing. The values go over resolved, so the child
-    // reads one shape and never a sentinel it could not settle — and a helper
-    // can never settle one: the format comes from a device stream a processor
-    // opens in the app process, and nothing crosses to say so. A sentinel on a
-    // helper-placed port is therefore refused here, where the destination's
-    // placement is known.
     let into_a_windowed_port = audio_windowing.is_some();
     match audio_windowing {
         None => {}
@@ -394,8 +346,8 @@ pub(super) fn wire_subprocess_dest(
                     ))
                 })?;
         }
-        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
-            let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
+        Some(AudioWindowDeclarationOfAnInputPort::MatchesItsNodesDeviceStream) => {
+            let dest_type = node_class_import_path_of(graph, dest_proc_id)?;
             return Err(refuse_an_unsettled_match_device_sentinel(
                 &dest_type, dest_port,
             ));
@@ -404,7 +356,7 @@ pub(super) fn wire_subprocess_dest(
 
     // The slot and generation ride the entry, so the far side writes this
     // link's counts where the parent reads them for this wiring and no other.
-    let loss_counts = link_wiring.helper_placed_processor_loss_counts();
+    let loss_counts = link_wiring.helper_placed_node_loss_counts();
     let assigned = loss_counts.assign_inbound_link_slot(link_id.as_str(), into_a_windowed_port)?;
     entry["loss_count_slot"] = serde_json::json!(assigned.slot);
     entry["wiring_generation"] = serde_json::json!(assigned.wiring_generation);
@@ -412,10 +364,10 @@ pub(super) fn wire_subprocess_dest(
         crate::core::PortDirection::Input,
         entry,
     )?;
-    insert_loss_counts_on_processor_node_once(
+    insert_loss_counts_on_graph_node_once(
         graph,
         dest_proc_id,
-        ProcessorLossCounts::CountedInItsHelperProcess(loss_counts),
+        NodeLossCounts::CountedInItsHelperProcess(loss_counts),
     );
     Ok(wire_reply)
 }

@@ -1,0 +1,818 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+use std::process::{Child, ExitStatus};
+use std::time::{Duration, Instant};
+
+use super::subprocess_bridge::HelperProcessShutdownCommand;
+use crate::core::child_process_lifetime::a_child_process_has_exited_without_being_reaped;
+use crate::core::runtime::ShutdownEscalationOfOneStream;
+
+pub const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
+
+/// How long `teardown()` has once the helper has been asked for it.
+pub const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
+
+pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
+
+/// How long the helper's process group has to leave on `SIGTERM` before it is
+/// killed.
+const PROCESS_GROUP_TERMINATION_GRACE: Duration = Duration::from_millis(500);
+
+/// How long the reap waits for a killed child to become collectable.
+const REAP_BUDGET: Duration = Duration::from_secs(1);
+
+/// How often a bounded wait for the child's exit re-checks.
+const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How long a cooperative rung waits between checks of whether the shutdown
+/// has been forced or the child has already gone.
+const COOPERATIVE_RUNG_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
+
+/// How one helper's shutdown ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum HelperProcessShutdownOutcome {
+    /// The child exited and was reaped, leaving no survivor.
+    Reaped(ExitStatus),
+    /// The child outlived every rung. It is named rather than waited on.
+    AbandonedAfterTheLadder,
+}
+
+impl HelperProcessShutdownOutcome {
+    /// How the helper process ended, worded for a refusal or a log.
+    pub(crate) fn how_the_helper_process_ended(&self) -> String {
+        match self {
+            Self::Reaped(exit_status) => format!("its helper process ended with {exit_status}"),
+            Self::AbandonedAfterTheLadder => {
+                "its helper process outlived every signal sent to it and was abandoned".to_string()
+            }
+        }
+    }
+
+    /// Whether the helper died of a signal no rung of the ladder sends, such as
+    /// SIGSEGV, so it ended on its own before the ladder reached it.
+    pub(crate) fn ended_on_a_signal_the_ladder_never_sends(&self) -> bool {
+        let Self::Reaped(exit_status) = self else {
+            return false;
+        };
+        std::os::unix::process::ExitStatusExt::core_dumped(exit_status)
+            || std::os::unix::process::ExitStatusExt::signal(exit_status).is_some_and(|signal| {
+                ![libc::SIGINT, libc::SIGTERM, libc::SIGKILL].contains(&signal)
+            })
+    }
+}
+
+/// What waiting one slice of a cooperative rung for a helper's reply found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LifecycleReplyAwaited {
+    Arrived,
+    SliceElapsed,
+    /// The channel the reply would arrive on has closed.
+    NoReplyCanArrive,
+}
+
+/// How a cooperative rung ended.
+#[derive(Debug, PartialEq, Eq)]
+enum CooperativeRungEnded {
+    ReplyArrived,
+    BudgetSpent,
+    NoReplyCanArrive,
+    ChildAlreadyExited,
+    ShutdownForced,
+}
+
+pub(crate) struct HelperProcessShutdownLadder {
+    node_display_name: String,
+    child: Child,
+    shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
+}
+
+impl HelperProcessShutdownLadder {
+    /// Take over `child`, skipping to terminating its group once
+    /// `shutdown_escalation_of_its_stream` is forced.
+    pub(crate) fn taking_over(
+        node_display_name: String,
+        child: Child,
+        shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
+    ) -> Self {
+        Self {
+            node_display_name,
+            child,
+            shutdown_escalation_of_its_stream,
+        }
+    }
+
+    /// Walk every rung, asking `await_lifecycle_reply` for each cooperative one.
+    ///
+    /// Both commands are already on the wire when this is called — the host
+    /// sends them together — so `await_lifecycle_reply` only answers whether
+    /// that command's reply arrived inside the slice it was handed, draining
+    /// whatever else the helper sent on the way. A closure rather than the
+    /// bridge itself, so the rungs are drivable against a stub child with no
+    /// engine behind it.
+    pub(crate) fn walk_every_rung(
+        mut self,
+        mut await_lifecycle_reply: impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
+    ) -> HelperProcessShutdownOutcome {
+        // A helper that is already gone answers nothing and needs no interrupt.
+        // Skipped rather than waited out, so a crash before shutdown does not
+        // buy six seconds and a callback warning naming a zombie.
+        if !a_child_process_has_exited_without_being_reaped(self.child.id()) {
+            self.walk_the_cooperative_rungs(&mut await_lifecycle_reply);
+        }
+        self.end_the_process_group_and_reap()
+    }
+
+    /// Take the group down with no cooperative rung, for the paths that have
+    /// none: a start the engine refused, a crash it detected, a host dropped
+    /// before teardown could run.
+    pub(crate) fn skip_to_terminating_the_process_group(mut self) -> HelperProcessShutdownOutcome {
+        self.end_the_process_group_and_reap()
+    }
+
+    fn walk_the_cooperative_rungs(
+        &mut self,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
+    ) {
+        match self.walk_one_cooperative_rung(
+            await_lifecycle_reply,
+            HelperProcessShutdownCommand::Stop,
+            CALLBACK_RETURN_BUDGET,
+        ) {
+            CooperativeRungEnded::ReplyArrived => {}
+            CooperativeRungEnded::ChildAlreadyExited => return,
+            CooperativeRungEnded::ShutdownForced => return self.say_the_shutdown_was_forced(),
+            CooperativeRungEnded::BudgetSpent => {
+                // A real signal, not `_thread.interrupt_main()`: only a signal
+                // wakes a main thread asleep inside a blocking call.
+                self.signal_the_child_itself(libc::SIGINT);
+                tracing::warn!(
+                    "[{}] its helper process was still in a callback after {}s; interrupting \
+                     it. The bag in flight is lost.",
+                    self.node_display_name,
+                    CALLBACK_RETURN_BUDGET.as_secs(),
+                );
+            }
+            CooperativeRungEnded::NoReplyCanArrive => {
+                self.signal_the_child_itself(libc::SIGINT);
+                tracing::warn!(
+                    "[{}] its helper process can no longer answer; interrupting it",
+                    self.node_display_name,
+                );
+            }
+        }
+
+        match self.walk_one_cooperative_rung(
+            await_lifecycle_reply,
+            HelperProcessShutdownCommand::Teardown,
+            TEARDOWN_BUDGET,
+        ) {
+            CooperativeRungEnded::ReplyArrived | CooperativeRungEnded::ChildAlreadyExited => {}
+            CooperativeRungEnded::ShutdownForced => self.say_the_shutdown_was_forced(),
+            CooperativeRungEnded::BudgetSpent => tracing::warn!(
+                "[{}] its helper process did not finish teardown within {}s",
+                self.node_display_name,
+                TEARDOWN_BUDGET.as_secs(),
+            ),
+            CooperativeRungEnded::NoReplyCanArrive => tracing::warn!(
+                "[{}] its helper process can no longer answer its teardown",
+                self.node_display_name,
+            ),
+        }
+    }
+
+    /// Wait up to `budget` for `command`'s reply, in slices, so a forced
+    /// shutdown or a child that has already exited ends the wait at once.
+    ///
+    /// A child that has exited can never answer, and its escalate socket can
+    /// stay open behind a descendant that inherited it, so the socket alone
+    /// would hold the rung for its whole budget.
+    fn walk_one_cooperative_rung(
+        &self,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
+        command: HelperProcessShutdownCommand,
+        budget: Duration,
+    ) -> CooperativeRungEnded {
+        let deadline = Instant::now() + budget;
+        loop {
+            if self.shutdown_escalation_of_its_stream.is_forced() {
+                return CooperativeRungEnded::ShutdownForced;
+            }
+            if a_child_process_has_exited_without_being_reaped(self.child.id()) {
+                return CooperativeRungEnded::ChildAlreadyExited;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return CooperativeRungEnded::BudgetSpent;
+            }
+            match await_lifecycle_reply(
+                command,
+                remaining.min(COOPERATIVE_RUNG_OBSERVATION_INTERVAL),
+            ) {
+                LifecycleReplyAwaited::Arrived => return CooperativeRungEnded::ReplyArrived,
+                LifecycleReplyAwaited::NoReplyCanArrive => {
+                    return CooperativeRungEnded::NoReplyCanArrive;
+                }
+                LifecycleReplyAwaited::SliceElapsed => {}
+            }
+        }
+    }
+
+    fn say_the_shutdown_was_forced(&self) {
+        tracing::warn!(
+            "[{}] shutdown was forced; terminating its helper process group without its teardown",
+            self.node_display_name,
+        );
+    }
+
+    /// Let the child leave, then terminate, kill and reap its whole group.
+    ///
+    /// Both signals go out whatever the helper itself did, because the plan
+    /// puts the group down at *every* helper exit: a helper that answered
+    /// `done` and left can still have forked a worker, and a signal skipped
+    /// because the child is already a zombie is the survivor the rung exists to
+    /// prevent. Neither reaches a descendant that left the group on purpose —
+    /// the plan's stated residual.
+    ///
+    /// The reap is last and alone, because it is the only step that collects:
+    /// a reaped leader's pid, and the group id equal to it, are free for reuse
+    /// the moment it returns.
+    fn end_the_process_group_and_reap(&mut self) -> HelperProcessShutdownOutcome {
+        if !self.shutdown_escalation_of_its_stream.is_forced() {
+            let _ =
+                wait_for_a_child_to_become_collectable_within(&self.child, CHILD_SELF_EXIT_GRACE);
+        }
+
+        // The group, never the pid: a fork-based worker or an `os.system`
+        // child survives a signal to the helper alone, and it holds the
+        // helper's sockets open behind it.
+        self.signal_the_whole_process_group(libc::SIGTERM);
+        let _ = wait_for_a_child_to_become_collectable_within(
+            &self.child,
+            PROCESS_GROUP_TERMINATION_GRACE,
+        );
+
+        match kill_the_process_group_and_reap_its_leader(
+            &mut self.child,
+            format_args!("[{}] its helper process", self.node_display_name),
+        ) {
+            Some(exit_status) => HelperProcessShutdownOutcome::Reaped(exit_status),
+            None => HelperProcessShutdownOutcome::AbandonedAfterTheLadder,
+        }
+    }
+
+    fn signal_the_child_itself(&self, signal: libc::c_int) {
+        // SAFETY: the child is held unreaped, so its pid still names it.
+        unsafe { libc::kill(self.child.id() as libc::pid_t, signal) };
+    }
+
+    /// `pre_exec` puts every helper in a group of its own whose id is its pid,
+    /// and nothing has reaped the child yet, so that pid is still this group's.
+    fn signal_the_whole_process_group(&self, signal: libc::c_int) {
+        // SAFETY: as above — the pid is still this child's, and its own.
+        unsafe { libc::killpg(self.child.id() as libc::pid_t, signal) };
+    }
+}
+
+/// Kill `child`'s whole process group and reap its leader within
+/// [`REAP_BUDGET`], logging under `subject` a leader left unreaped.
+///
+/// `child` must lead a group of its own and still be unreaped, so the group id
+/// is still its own.
+pub(crate) fn kill_the_process_group_and_reap_its_leader(
+    child: &mut Child,
+    subject: impl std::fmt::Display,
+) -> Option<ExitStatus> {
+    // SAFETY: the pid is this process's own unreaped child's, which leads its
+    // own process group.
+    unsafe { libc::killpg(child.id() as libc::pid_t, libc::SIGKILL) };
+    // Out of the registry the third interrupt kills from before the reap frees
+    // the group's id for reuse.
+    crate::core::runtime::deregister_a_helper_process_group(child.id() as i32);
+    match reap_a_child_within(child, REAP_BUDGET) {
+        ChildReapedWithinItsBudget::Reaped(exit_status) => Some(exit_status),
+        ChildReapedWithinItsBudget::StillRunningAfterTheBudget => {
+            tracing::error!(
+                "{subject} (pid={}) outlived its kill and is abandoned unreaped; it is not \
+                 killable from user space",
+                child.id(),
+            );
+            None
+        }
+        ChildReapedWithinItsBudget::CannotBeCollected(uncollectable) => {
+            tracing::error!(
+                "{subject} (pid={}) cannot be collected: {uncollectable}",
+                child.id(),
+            );
+            None
+        }
+    }
+}
+
+/// Wait up to `budget` for `child` to exit, without collecting it, and say
+/// whether it did.
+pub(crate) fn wait_for_a_child_to_become_collectable_within(
+    child: &Child,
+    budget: Duration,
+) -> bool {
+    let deadline = Instant::now() + budget;
+    while !a_child_process_has_exited_without_being_reaped(child.id()) {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+    }
+    true
+}
+
+/// How a bounded reap of a child ended.
+#[derive(Debug)]
+enum ChildReapedWithinItsBudget {
+    Reaped(ExitStatus),
+    /// Uninterruptible sleep inside a driver is the case user space cannot
+    /// end, so the child is left unreaped rather than waited on for good.
+    StillRunningAfterTheBudget,
+    CannotBeCollected(std::io::Error),
+}
+
+/// Collect `child` once it has exited, waiting no longer than `budget`.
+fn reap_a_child_within(child: &mut Child, budget: Duration) -> ChildReapedWithinItsBudget {
+    let deadline = Instant::now() + budget;
+    loop {
+        match child.try_wait() {
+            Ok(Some(exit_status)) => return ChildReapedWithinItsBudget::Reaped(exit_status),
+            Ok(None) => {}
+            Err(uncollectable) => {
+                return ChildReapedWithinItsBudget::CannotBeCollected(uncollectable);
+            }
+        }
+        if Instant::now() >= deadline {
+            return ChildReapedWithinItsBudget::StillRunningAfterTheBudget;
+        }
+        std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Lines};
+    use std::os::unix::process::CommandExt;
+    use std::process::{ChildStdout, Command, Stdio};
+
+    /// A stub child under `python -c`, in its own process group the way a real
+    /// helper is, so the group rungs have something to signal.
+    ///
+    /// The source must print one line the moment it is ready — signal handlers
+    /// installed, worker forked — and [`StubHelperChild::next_reported_line`]
+    /// reads it. Without that handshake the ladder outruns a cold interpreter
+    /// and signals a process that has not reached its own handlers yet.
+    struct StubHelperChild {
+        child: Child,
+        reported_lines: Lines<BufReader<ChildStdout>>,
+    }
+
+    impl StubHelperChild {
+        fn running(python_source: &str) -> Self {
+            let mut command = Command::new("python3");
+            command
+                .arg("-c")
+                .arg(python_source)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            // SAFETY: `setpgid` is async-signal-safe, the contract for a
+            // `pre_exec` closure running between fork and exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setpgid(0, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let mut child = command.spawn().expect("the stub helper to start");
+            let reported_lines =
+                BufReader::new(child.stdout.take().expect("the stub's stdout")).lines();
+            Self {
+                child,
+                reported_lines,
+            }
+        }
+
+        fn next_reported_line(&mut self) -> String {
+            self.reported_lines
+                .next()
+                .expect("the stub helper to report a line")
+                .expect("the stub helper's line to read")
+        }
+
+        fn into_ladder(self, node_display_name: &str) -> HelperProcessShutdownLadder {
+            self.into_ladder_of_a_stream_whose_shutdown_escalation_is(
+                node_display_name,
+                ShutdownEscalationOfOneStream::default(),
+            )
+        }
+
+        fn into_ladder_of_a_stream_whose_shutdown_escalation_is(
+            self,
+            node_display_name: &str,
+            shutdown_escalation_of_its_stream: ShutdownEscalationOfOneStream,
+        ) -> HelperProcessShutdownLadder {
+            HelperProcessShutdownLadder::taking_over(
+                node_display_name.to_string(),
+                self.child,
+                shutdown_escalation_of_its_stream,
+            )
+        }
+    }
+
+    /// A stub that installs `SIGINT` and `SIGTERM` dispositions, then reports
+    /// ready and parks. `python -c` source, so indentation is spelled with the
+    /// escape a shell-free literal can carry.
+    fn a_stub_parking_after(dispositions: &str) -> StubHelperChild {
+        StubHelperChild::running(&format!(
+            r#"
+import signal, sys, time
+{dispositions}
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+while True:
+    time.sleep(0.05)
+"#
+        ))
+    }
+
+    /// Dispositions for a stub no catchable signal can end, which is what
+    /// makes the kill rung the one that reaches it.
+    const IGNORES_EVERY_CATCHABLE_SIGNAL: &str = r#"
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+"#;
+
+    /// Neither rung is ever answered, and each budget is spent in full.
+    fn never_answers(_: HelperProcessShutdownCommand, slice: Duration) -> LifecycleReplyAwaited {
+        std::thread::sleep(slice);
+        LifecycleReplyAwaited::SliceElapsed
+    }
+
+    /// Neither rung is answered because the channel has closed, which is how a
+    /// test reaches the group rungs without waiting six seconds for them.
+    fn never_answers_without_waiting(
+        _: HelperProcessShutdownCommand,
+        _: Duration,
+    ) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::NoReplyCanArrive
+    }
+
+    /// The stop rung's channel has closed; the teardown rung waits half a
+    /// second — which is what gives an interrupted callback time to unwind —
+    /// and the helper is gone before its next slice.
+    fn never_answers_but_lets_an_interrupted_callback_unwind(
+        command: HelperProcessShutdownCommand,
+        _: Duration,
+    ) -> LifecycleReplyAwaited {
+        if command == HelperProcessShutdownCommand::Teardown {
+            std::thread::sleep(Duration::from_millis(500));
+            return LifecycleReplyAwaited::SliceElapsed;
+        }
+        LifecycleReplyAwaited::NoReplyCanArrive
+    }
+
+    fn answers_at_once(_: HelperProcessShutdownCommand, _: Duration) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::Arrived
+    }
+
+    /// The exit code a stub's own `SIGINT` handler leaves through, so a test
+    /// can tell an interrupted helper from a terminated one by its status.
+    const EXIT_CODE_OF_A_STUB_THAT_TOOK_THE_INTERRUPT: i32 = 7;
+
+    const LEAVES_THROUGH_THE_INTERRUPT: &str = r#"
+def leave_through_the_interrupt(*_):
+    sys.exit(7)
+signal.signal(signal.SIGINT, leave_through_the_interrupt)
+"#;
+
+    fn exit_code_of(outcome: &HelperProcessShutdownOutcome) -> Option<i32> {
+        match outcome {
+            HelperProcessShutdownOutcome::Reaped(exit_status) => exit_status.code(),
+            HelperProcessShutdownOutcome::AbandonedAfterTheLadder => None,
+        }
+    }
+
+    fn terminating_signal_of(outcome: &HelperProcessShutdownOutcome) -> Option<i32> {
+        use std::os::unix::process::ExitStatusExt;
+        match outcome {
+            HelperProcessShutdownOutcome::Reaped(exit_status) => exit_status.signal(),
+            HelperProcessShutdownOutcome::AbandonedAfterTheLadder => None,
+        }
+    }
+
+    #[test]
+    fn a_running_helper_is_not_reported_dead_and_the_same_helper_is_once_it_is() {
+        // The probe's negative arm, which nothing else locks: invert it and
+        // every other test here still passes while the Manual loop kills every
+        // live helper a hundred milliseconds after it starts.
+        let mut stub = a_stub_parking_after("");
+        assert_eq!(stub.next_reported_line(), "ready");
+        let process_id = stub.child.id();
+
+        assert!(
+            !a_child_process_has_exited_without_being_reaped(process_id),
+            "a helper that is still parked was reported dead"
+        );
+
+        // SAFETY: the pid is this test's own unreaped child's.
+        unsafe { libc::kill(process_id as libc::pid_t, libc::SIGKILL) };
+        assert!(
+            a_pid_becomes_collectable_within(process_id, Duration::from_secs(5)),
+            "a killed helper was never reported dead"
+        );
+        let _ = stub.child.wait();
+    }
+
+    fn a_pid_becomes_collectable_within(process_id: u32, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        while !a_child_process_has_exited_without_being_reaped(process_id) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+        }
+        true
+    }
+
+    #[test]
+    fn a_helper_still_in_a_callback_is_interrupted_with_a_real_signal() {
+        // `_thread.interrupt_main()` cannot wake a main thread inside
+        // `time.sleep`; the stub's own handler running is what says a signal
+        // that can arrived instead.
+        let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("SleepyProbe");
+        let outcome = ladder.walk_every_rung(never_answers_but_lets_an_interrupted_callback_unwind);
+
+        assert_eq!(
+            exit_code_of(&outcome),
+            Some(EXIT_CODE_OF_A_STUB_THAT_TOOK_THE_INTERRUPT),
+            "the helper left through some other door than the interrupt: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_helper_that_leaves_on_its_own_is_never_signalled_at_all() {
+        // The self-exit grace, which is what keeps a cooperative shutdown from
+        // ending in a SIGTERM through the middle of interpreter finalization —
+        // and from leaving the iceoryx2 node that finalization drops
+        // registered as a dead one.
+        //
+        // Fail-without-fix: take the grace out and the group signal lands
+        // while this stub is still on its way out, so it is reaped with a
+        // terminating signal rather than its own exit code.
+        let mut stub = StubHelperChild::running(
+            r#"
+import sys, time
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+time.sleep(0.2)
+raise SystemExit(0)
+"#,
+        );
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("LeavesOnItsOwnProbe");
+        let outcome = ladder.walk_every_rung(answers_at_once);
+
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            None,
+            "a helper on its way out was signalled before it got there: {outcome:?}"
+        );
+        assert_eq!(exit_code_of(&outcome), Some(0));
+    }
+
+    #[test]
+    fn a_helper_that_ignores_the_interrupt_and_the_termination_is_killed_and_reaped() {
+        let mut stub = a_stub_parking_after(IGNORES_EVERY_CATCHABLE_SIGNAL);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("WedgedProbe");
+        let outcome = ladder.walk_every_rung(never_answers_without_waiting);
+
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            Some(libc::SIGKILL),
+            "a helper that ignores every catchable signal must reach the kill rung: {outcome:?}"
+        );
+    }
+
+    #[test]
+    fn a_cooperative_helper_is_never_interrupted_and_its_group_still_goes() {
+        // Its SIGINT handler would exit 7, so the absence of that code is what
+        // says no interrupt was sent; the termination is what ends it instead,
+        // because the plan puts the group down at every helper exit — a helper
+        // that answered `done` can still have forked a worker.
+        let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("TidyProbe");
+        let outcome = ladder.walk_every_rung(answers_at_once);
+
+        assert_ne!(
+            exit_code_of(&outcome),
+            Some(EXIT_CODE_OF_A_STUB_THAT_TOOK_THE_INTERRUPT),
+            "a helper that answered inside its budget must never be signalled"
+        );
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            Some(libc::SIGTERM),
+            "the group still goes down after a cooperative shutdown: {outcome:?}"
+        );
+    }
+
+    /// A stub that forks a worker, reports its pid, and parks. The worker
+    /// outlives its parent deliberately — it is the survivor the group rung
+    /// exists to reach.
+    fn a_stub_that_forked_a_worker() -> (StubHelperChild, libc::pid_t) {
+        let mut stub = StubHelperChild::running(
+            r#"
+import os, sys, time
+worker = os.fork()
+if worker == 0:
+    time.sleep(120)
+    os._exit(0)
+sys.stdout.write(str(worker) + "\n")
+sys.stdout.flush()
+time.sleep(120)
+"#,
+        );
+        let worker_pid = stub
+            .next_reported_line()
+            .parse()
+            .expect("the stub to report its worker's pid");
+        (stub, worker_pid)
+    }
+
+    #[test]
+    fn a_worker_the_helper_forked_dies_with_the_helpers_group() {
+        let (stub, worker_pid) = a_stub_that_forked_a_worker();
+        let ladder = stub.into_ladder("ForkingProbe");
+
+        let _ = ladder.walk_every_rung(never_answers_without_waiting);
+
+        assert!(
+            a_pid_is_gone_within(worker_pid, Duration::from_secs(5)),
+            "the worker survived a ladder that signalled only the helper's pid"
+        );
+    }
+
+    #[test]
+    fn a_crash_path_takes_the_group_down_with_no_cooperative_rung() {
+        let (stub, worker_pid) = a_stub_that_forked_a_worker();
+        let ladder = stub.into_ladder("CrashedProbe");
+
+        let outcome = ladder.skip_to_terminating_the_process_group();
+
+        assert!(matches!(outcome, HelperProcessShutdownOutcome::Reaped(_)));
+        assert!(
+            a_pid_is_gone_within(worker_pid, Duration::from_secs(5)),
+            "a detected crash must take the helper's descendants with it"
+        );
+    }
+
+    /// A second interrupt: no interrupt for a callback, no teardown and no
+    /// window to leave — the group is terminated at once.
+    ///
+    /// Fail-without-fix: an unforced ladder waits out the one-second stop rung
+    /// and interrupts this stub, which leaves through its handler with exit 7.
+    #[test]
+    fn a_forced_shutdown_interrupts_nothing_and_terminates_the_group_at_once() {
+        let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let forced_stream = ShutdownEscalationOfOneStream::default();
+        forced_stream.raise_to_forced();
+        let ladder =
+            stub.into_ladder_of_a_stream_whose_shutdown_escalation_is("ForcedProbe", forced_stream);
+        let started = Instant::now();
+        let outcome = ladder.walk_every_rung(never_answers);
+
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            Some(libc::SIGTERM),
+            "a forced ladder must go straight to terminating the group: {outcome:?}"
+        );
+        assert!(
+            started.elapsed() < CALLBACK_RETURN_BUDGET,
+            "a forced ladder still waited {:?} on cooperative rungs",
+            started.elapsed()
+        );
+    }
+
+    /// A second interrupt landing while a helper's `teardown()` is awaited ends
+    /// that wait rather than the rest of its five seconds.
+    #[test]
+    fn a_shutdown_forced_while_teardown_is_awaited_ends_the_wait_at_once() {
+        let mut stub = a_stub_parking_after("signal.signal(signal.SIGINT, signal.SIG_IGN)");
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let shutdown_escalation_of_its_stream = ShutdownEscalationOfOneStream::default();
+        let ladder = stub.into_ladder_of_a_stream_whose_shutdown_escalation_is(
+            "TeardownForcedProbe",
+            shutdown_escalation_of_its_stream.clone(),
+        );
+        let forced_during_teardown = std::thread::spawn(move || {
+            std::thread::sleep(CALLBACK_RETURN_BUDGET + Duration::from_millis(500));
+            shutdown_escalation_of_its_stream.raise_to_forced();
+        });
+        let started = Instant::now();
+        let outcome = ladder.walk_every_rung(never_answers);
+        forced_during_teardown
+            .join()
+            .expect("the forcing thread returns");
+
+        assert_eq!(terminating_signal_of(&outcome), Some(libc::SIGTERM));
+        assert!(
+            started.elapsed() < CALLBACK_RETURN_BUDGET + Duration::from_secs(2),
+            "the teardown rung was waited out for {:?} after shutdown was forced",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_whole_ladder_is_bounded_well_inside_the_apps_own_watchdog() {
+        // Every budget spent in full, against a child that answers nothing and
+        // ignores every catchable signal — the worst case the ladder admits.
+        let mut stub = a_stub_parking_after(IGNORES_EVERY_CATCHABLE_SIGNAL);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("WorstCaseProbe");
+        let started = Instant::now();
+        let outcome = ladder.walk_every_rung(never_answers);
+        let walked_in = started.elapsed();
+
+        assert!(matches!(outcome, HelperProcessShutdownOutcome::Reaped(_)));
+        assert!(
+            walked_in < Duration::from_secs(10),
+            "the ladder took {walked_in:?}, which leaves no room under the app's watchdog"
+        );
+    }
+
+    /// Whether `pid` has stopped existing inside `budget`.
+    ///
+    /// `kill(pid, 0)` and not a wait: a forked worker is not this process's
+    /// child, so it is reaped by init rather than here.
+    fn a_pid_is_gone_within(pid: libc::pid_t, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        loop {
+            // SAFETY: signal 0 delivers nothing; it only reports reachability.
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(CHILD_EXIT_POLL_INTERVAL);
+        }
+    }
+
+    #[test]
+    fn a_helper_ending_on_a_signal_the_ladder_never_sends_ended_on_its_own() {
+        let exit_status_of_the_raw_wait_status =
+            <ExitStatus as std::os::unix::process::ExitStatusExt>::from_raw;
+        let segfaulted =
+            HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(libc::SIGSEGV));
+        let segfaulted_and_dumped_core = HelperProcessShutdownOutcome::Reaped(
+            exit_status_of_the_raw_wait_status(libc::SIGSEGV | 0x80),
+        );
+        assert!(segfaulted.ended_on_a_signal_the_ladder_never_sends());
+        assert!(segfaulted_and_dumped_core.ended_on_a_signal_the_ladder_never_sends());
+        for signal_the_ladder_sends in [libc::SIGINT, libc::SIGTERM, libc::SIGKILL] {
+            assert!(
+                !HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(
+                    signal_the_ladder_sends
+                ))
+                .ended_on_a_signal_the_ladder_never_sends()
+            );
+        }
+        assert!(
+            !HelperProcessShutdownOutcome::Reaped(exit_status_of_the_raw_wait_status(0))
+                .ended_on_a_signal_the_ladder_never_sends()
+        );
+        assert!(
+            !HelperProcessShutdownOutcome::AbandonedAfterTheLadder
+                .ended_on_a_signal_the_ladder_never_sends()
+        );
+    }
+}

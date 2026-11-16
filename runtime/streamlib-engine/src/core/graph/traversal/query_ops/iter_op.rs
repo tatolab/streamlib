@@ -2,28 +2,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 
-// =============================================================================
-// ProcessorTraversal (immutable)
-// =============================================================================
-
-impl<'a> ProcessorTraversal<'a> {
-    pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {
+impl<'a> NodeTraversal<'a> {
+    pub fn iter(self) -> impl Iterator<Item = &'a GraphNode> {
         self.into_iter()
     }
 }
 
-impl<'a> IntoIterator for ProcessorTraversal<'a> {
-    type Item = &'a ProcessorNode;
-    type IntoIter = std::vec::IntoIter<&'a ProcessorNode>;
+impl<'a> IntoIterator for NodeTraversal<'a> {
+    type Item = &'a GraphNode;
+    type IntoIter = std::vec::IntoIter<&'a GraphNode>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let ProcessorTraversal { graph, ids } = self;
+        let NodeTraversal { graph, ids } = self;
         ids.into_iter()
             .filter_map(|idx| graph.node_weight(idx))
-            .collect::<Vec<&ProcessorNode>>()
+            .collect::<Vec<&GraphNode>>()
             .into_iter()
     }
 }
@@ -51,25 +47,21 @@ impl<'a> IntoIterator for LinkTraversal<'a> {
     }
 }
 
-// =============================================================================
-// ProcessorTraversalMut (read-only access via mutable traversal)
-// =============================================================================
-
-impl<'a> ProcessorTraversalMut<'a> {
-    pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {
+impl<'a> NodeTraversalMut<'a> {
+    pub fn iter(self) -> impl Iterator<Item = &'a GraphNode> {
         self.into_iter()
     }
 }
 
-impl<'a> IntoIterator for ProcessorTraversalMut<'a> {
-    type Item = &'a ProcessorNode;
-    type IntoIter = std::vec::IntoIter<&'a ProcessorNode>;
+impl<'a> IntoIterator for NodeTraversalMut<'a> {
+    type Item = &'a GraphNode;
+    type IntoIter = std::vec::IntoIter<&'a GraphNode>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let ProcessorTraversalMut { graph, ids } = self;
+        let NodeTraversalMut { graph, ids } = self;
         ids.into_iter()
             .filter_map(|idx| graph.node_weight(idx))
-            .collect::<Vec<&ProcessorNode>>()
+            .collect::<Vec<&GraphNode>>()
             .into_iter()
     }
 }

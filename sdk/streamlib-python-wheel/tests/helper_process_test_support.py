@@ -8,7 +8,7 @@ import os
 import threading
 
 from tatolab.runtime import _engine
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime._node_interpreter_bootstrap import (
     HelperProcessLifecycle,
 )
 
@@ -59,7 +59,7 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
     }
 
 
-def drive_lifecycle_on_a_thread(bridge, processor_class):
+def drive_lifecycle_on_a_thread(bridge, node_class):
     """Run the lifecycle loop off the test's own thread.
 
     iceoryx2's ports are `!Send`, so everything the loop touches has to be
@@ -69,7 +69,7 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     def drive() -> None:
         HelperProcessLifecycle(
             bridge,
-            processor_class,
+            node_class,
             "R-helper-test",
             "P-helper-test",
             _engine.open_node_link_data_access_for_helper_process(),

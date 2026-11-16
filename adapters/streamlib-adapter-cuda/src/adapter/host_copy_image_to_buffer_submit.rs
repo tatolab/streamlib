@@ -30,39 +30,6 @@ struct HostCopySession<P: DevicePrivilege> {
 }
 
 impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
-    /// Host-pipeline producer path: submit a `vkCmdCopyImageToBuffer`
-    /// from `texture` into the surface's registered buffer, with the
-    /// timeline GPU-signaled at completion.
-    ///
-    /// Atomically takes the write lock, computes the next release
-    /// value, submits the copy with a timeline signal at that value,
-    /// and updates the adapter's release value so subsequent
-    /// `acquire_read` calls block on the GPU signal before reading.
-    ///
-    /// Use case: an in-process producer (camera → cuda copy processor)
-    /// pushes frames into a registered cuda surface so a subprocess
-    /// AI-inference customer can `acquire_read` them without a CPU
-    /// round-trip.
-    ///
-    /// `texture` is read via [`VulkanTextureLike`] so the caller doesn't
-    /// have to import `vulkanalia` — host- and consumer-flavor textures
-    /// both implement the trait. `image_layout` is both the layout the
-    /// source image is currently in AND the layout it will be returned
-    /// to after the copy — the caller's pipeline keeps full ownership
-    /// of the layout outside the copy window.
-    ///
-    /// **Concurrency contract**: the caller must guarantee no other
-    /// pipeline stage is operating on `texture` while this method runs.
-    /// Camera ring-texture producers satisfy this trivially because each
-    /// ring slot is written exactly once per frame and re-used only
-    /// after a full ring rotation.
-    ///
-    /// Errors:
-    /// - [`AdapterError::SurfaceNotFound`] — `id` not registered.
-    /// - [`AdapterError::WriteContended`] — another writer or reader
-    ///   holds the surface. Host writers serialize through this method.
-    /// - [`AdapterError::BackendRejected`] — driver refused the submit
-    ///   or the texture has no `VkImage`.
     #[cfg(target_os = "linux")]
     pub fn submit_host_copy_image_to_buffer<T>(
         &self,

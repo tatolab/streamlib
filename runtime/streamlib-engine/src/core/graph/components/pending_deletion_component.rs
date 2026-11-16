@@ -5,16 +5,6 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 
-/// Marker component indicating an entity is pending deletion (soft-delete).
-///
-/// When `remove_processor` or `disconnect` is called, this component is added
-/// to the entity immediately. The entity remains in the graph but is marked
-/// for deletion. On the next `commit()` (when runtime is started), the compiler
-/// processes the deletion: shuts down instances, unwires links, removes ECS
-/// components, and finally removes from topology.
-///
-/// External observers can check for this component to know if an entity
-/// is scheduled for removal but not yet fully deleted.
 pub struct PendingDeletionComponent;
 
 impl JsonSerializableComponent for PendingDeletionComponent {

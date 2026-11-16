@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use serde_json::Value as JsonValue;
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
@@ -27,16 +27,16 @@ use super::{
 /// islands, and a live config update to a function node.
 pub(crate) fn refuse_an_edit_an_island_cannot_take(
     graph: &Graph,
-    processors_to_add: &[ProcessorUniqueId],
-    processors_to_remove: &[ProcessorUniqueId],
+    nodes_to_add: &[NodeRunId],
+    nodes_to_remove: &[NodeRunId],
     links_to_add: &[LinkUniqueId],
     links_to_remove: &[LinkUniqueId],
-    config_updates: &[(ProcessorUniqueId, JsonValue)],
+    config_updates: &[(NodeRunId, JsonValue)],
 ) -> Result<()> {
-    let is_a_running_reader = |node_id: &ProcessorUniqueId| {
+    let is_a_running_reader = |node_id: &NodeRunId| {
         !runs_inside_the_read_of_each_node_it_feeds(graph, node_id)
-            && !processors_to_add.contains(node_id)
-            && !processors_to_remove.contains(node_id)
+            && !nodes_to_add.contains(node_id)
+            && !nodes_to_remove.contains(node_id)
     };
     for link_id in links_to_add {
         let link = link_in(graph, link_id)?;
@@ -46,10 +46,10 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
     }
     for link_id in links_to_remove {
         let link = link_in(graph, link_id)?;
-        if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
+        if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
             continue;
         }
-        let destination_id = link.to_port().processor_id();
+        let destination_id = link.to_port().node_run_id();
         let readers_it_wakes = if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
         {
             the_readers_a_function_node_feeds(graph, destination_id)
@@ -84,8 +84,8 @@ pub(crate) fn refuse_an_edit_an_island_cannot_take(
 /// reaches what it reads through other function nodes, naming the cycle: an
 /// island evaluates each node after what it reads.
 fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -> Result<()> {
-    let source_id = link.source().processor_id();
-    let destination_id = link.to_port().processor_id();
+    let source_id = link.source().node_run_id();
+    let destination_id = link.to_port().node_run_id();
     if !runs_inside_the_read_of_each_node_it_feeds(graph, source_id)
         || !runs_inside_the_read_of_each_node_it_feeds(graph, destination_id)
         || is_a_previous_value_node(graph, destination_id)
@@ -116,11 +116,11 @@ fn refuse_a_link_closing_a_cycle_of_function_nodes(graph: &Graph, link: &Link) -
         }
         for downstream_link in graph.traversal().e(()).iter() {
             if downstream_link.id == link.id
-                || downstream_link.source().processor_id() != following_id
+                || downstream_link.source().node_run_id() != following_id
             {
                 continue;
             }
-            let downstream_id = downstream_link.to_port().processor_id();
+            let downstream_id = downstream_link.to_port().node_run_id();
             if runs_inside_the_read_of_each_node_it_feeds(graph, downstream_id)
                 && !is_a_previous_value_node(graph, downstream_id)
             {
@@ -142,19 +142,19 @@ fn refuse_a_second_link_into_a_port_an_island_feeds(graph: &Graph, link: &Link) 
         .e(())
         .iter()
         .filter(|other_link| {
-            other_link.to_port().processor_id() == link.to_port().processor_id()
+            other_link.to_port().node_run_id() == link.to_port().node_run_id()
                 && other_link.to_port().port_name() == link.to_port().port_name()
         })
         .collect();
     let an_island_feeds_the_port = links_into_the_port.iter().any(|link_into| {
-        runs_inside_the_read_of_each_node_it_feeds(graph, link_into.source().processor_id())
+        runs_inside_the_read_of_each_node_it_feeds(graph, link_into.source().node_run_id())
     });
     if links_into_the_port.len() > 1 && an_island_feeds_the_port {
         return Err(Error::InvalidLink(format!(
             "`{}`'s input `{}` is fed by {} links, and one comes from a function node; an \
              island answers each read of its port, so it shares the port with no other link. \
              To fix: give each its own input port",
-            link.to_port().processor_id(),
+            link.to_port().node_run_id(),
             link.to_port().port_name(),
             links_into_the_port.len()
         )));
@@ -169,10 +169,10 @@ fn refuse_an_island_into_a_port_declaring_an_audio_window(
     graph: &Graph,
     link: &Link,
 ) -> Result<()> {
-    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id()) {
+    if !runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
         return Ok(());
     }
-    let reader_id = link.to_port().processor_id();
+    let reader_id = link.to_port().node_run_id();
     let port_name = link.to_port().port_name();
     let declares_an_audio_window = graph
         .traversal()
@@ -197,7 +197,7 @@ fn refuse_an_island_into_a_port_declaring_an_audio_window(
 
 fn is_reactive_and_left_fed_only_by_islands(
     graph: &Graph,
-    reader_id: &ProcessorUniqueId,
+    reader_id: &NodeRunId,
     links_to_remove: &[LinkUniqueId],
 ) -> bool {
     let runs_reactively = graph
@@ -213,7 +213,7 @@ fn is_reactive_and_left_fed_only_by_islands(
         .e(())
         .iter()
         .filter(|link| {
-            link.to_port().processor_id() == reader_id
+            link.to_port().node_run_id() == reader_id
                 && !links_to_remove
                     .iter()
                     .any(|removed_link_id| removed_link_id.as_str() == link.id())
@@ -227,9 +227,9 @@ fn is_reactive_and_left_fed_only_by_islands(
     runs_reactively
         && !the_island_reads_a_link_left_from_outside_any_island
         && links_left_into_the_reader.iter().any(|link| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         })
         && links_left_into_the_reader.iter().all(|link| {
-            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().processor_id())
+            runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id())
         })
 }

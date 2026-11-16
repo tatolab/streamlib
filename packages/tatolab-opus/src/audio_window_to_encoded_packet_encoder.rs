@@ -27,7 +27,7 @@ use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
 pub const OPUS_RFC6381_CODEC_STRING: &str = "opus";
 
 /// The node's class name, which every refusal and notice names itself by.
-pub const OPUS_ENCODER_PROCESSOR_NAME: &str = "OpusEncoder";
+pub const OPUS_ENCODER_NODE_NAME: &str = "OpusEncoder";
 
 /// Opus's own clock. Every packet is stamped in it whatever the source rate
 /// was, and the input port's window contract resamples to it.
@@ -71,7 +71,7 @@ impl OpusEncoderApplication {
             .map(|(_, application)| *application)
             .ok_or_else(|| {
                 OpusCodecRefusal(format!(
-                    "{OPUS_ENCODER_PROCESSOR_NAME}: `application` is {spelling:?}, which libopus \
+                    "{OPUS_ENCODER_NODE_NAME}: `application` is {spelling:?}, which libopus \
                      has no tuning for — one of `audio`, `voip`, `lowdelay`"
                 ))
             })
@@ -134,7 +134,7 @@ impl MintedOpusEncoderInstance {
             .encode_vec_float(samples, output_bytes))
         .map_err(|failure| {
             OpusCodecRefusal(format!(
-                "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused the window: {failure}"
+                "{OPUS_ENCODER_NODE_NAME}: libopus refused the window: {failure}"
             ))
         })
     }
@@ -143,13 +143,13 @@ impl MintedOpusEncoderInstance {
         let lookahead = on_either_encoder_instance!(self, |encoder| encoder.get_lookahead())
             .map_err(|failure| {
                 OpusCodecRefusal(format!(
-                    "{OPUS_ENCODER_PROCESSOR_NAME}: libopus would not report its lookahead: \
+                    "{OPUS_ENCODER_NODE_NAME}: libopus would not report its lookahead: \
                      {failure}"
                 ))
             })?;
         u32::try_from(lookahead).map_err(|_| {
             OpusCodecRefusal(format!(
-                "{OPUS_ENCODER_PROCESSOR_NAME}: libopus reported a negative lookahead of \
+                "{OPUS_ENCODER_NODE_NAME}: libopus reported a negative lookahead of \
                  {lookahead}"
             ))
         })
@@ -160,13 +160,13 @@ impl MintedOpusEncoderInstance {
     fn apply_settings(&mut self, config: &OpusEncoderConfig) -> Result<()> {
         let named = |what: &str, failure: opus::Error| {
             OpusCodecRefusal(format!(
-                "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused {what}: {failure}"
+                "{OPUS_ENCODER_NODE_NAME}: libopus refused {what}: {failure}"
             ))
         };
         if let Some(bitrate_bps) = config.bitrate_bps {
             let bitrate_bps = i32::try_from(bitrate_bps).map_err(|_| {
                 OpusCodecRefusal(format!(
-                    "{OPUS_ENCODER_PROCESSOR_NAME}: a bitrate of {bitrate_bps} bit/s is past what \
+                    "{OPUS_ENCODER_NODE_NAME}: a bitrate of {bitrate_bps} bit/s is past what \
                      libopus takes"
                 ))
             })?;
@@ -240,7 +240,7 @@ impl AudioWindowToEncodedPacketEncoder {
             .take_if(|minted| minted.minted_for_source_channels != window.channels)
         {
             self.notices.push(OpusCodecNotice::info(format!(
-                "{OPUS_ENCODER_PROCESSOR_NAME}: the source's channel count changed from {} to {} \
+                "{OPUS_ENCODER_NODE_NAME}: the source's channel count changed from {} to {} \
                  — re-minting the encoder",
                 stale.minted_for_source_channels, window.channels
             )));
@@ -257,7 +257,7 @@ impl AudioWindowToEncodedPacketEncoder {
                     Err(refusal) => {
                         self.channel_count_already_refused = Some(window.channels);
                         return Err(OpusCodecRefusal(format!(
-                            "{OPUS_ENCODER_PROCESSOR_NAME}: this window cannot be encoded, and \
+                            "{OPUS_ENCODER_NODE_NAME}: this window cannot be encoded, and \
                              windows are discarded until the source's channel count changes — \
                              {refusal}"
                         )));
@@ -311,7 +311,7 @@ fn stream_facts_for(channels: u32, pre_skip: u32) -> Result<OpusEncoderPortStrea
     let codec_configuration_hex = OpusIdentificationHeader::hex_encoded_for_encoder(
         channels, pre_skip,
     )
-    .map_err(|refusal| OpusCodecRefusal(format!("{OPUS_ENCODER_PROCESSOR_NAME}: {refusal}")))?;
+    .map_err(|refusal| OpusCodecRefusal(format!("{OPUS_ENCODER_NODE_NAME}: {refusal}")))?;
     Ok(OpusEncoderPortStreamFacts {
         channel_count: channels,
         sample_rate: OPUS_SAMPLE_RATE_HZ,
@@ -325,7 +325,7 @@ fn stream_facts_for(channels: u32, pre_skip: u32) -> Result<OpusEncoderPortStrea
 fn read_window_as_interleaved_f32(window: &AudioWindowToEncode<'_>) -> Result<Vec<f32>> {
     if window.dtype != AudioSampleDtype::F32 {
         return Err(OpusCodecRefusal(format!(
-            "{OPUS_ENCODER_PROCESSOR_NAME}: a window arrived as {:?}, but the port's \
+            "{OPUS_ENCODER_NODE_NAME}: a window arrived as {:?}, but the port's \
              `audio_window` contract declares `f32` — the stage converts, so this is a block \
              that did not come through it",
             window.dtype
@@ -333,7 +333,7 @@ fn read_window_as_interleaved_f32(window: &AudioWindowToEncode<'_>) -> Result<Ve
     }
     if window.sample_rate != OPUS_SAMPLE_RATE_HZ {
         return Err(OpusCodecRefusal(format!(
-            "{OPUS_ENCODER_PROCESSOR_NAME}: a window arrived at {} Hz, but Opus codes at \
+            "{OPUS_ENCODER_NODE_NAME}: a window arrived at {} Hz, but Opus codes at \
              {OPUS_SAMPLE_RATE_HZ} Hz and the port's `audio_window` contract resamples to it",
             window.sample_rate
         )));
@@ -342,7 +342,7 @@ fn read_window_as_interleaved_f32(window: &AudioWindowToEncode<'_>) -> Result<Ve
     let expected_bytes = expected_scalars * AudioSampleDtype::F32.bytes_per_sample();
     if window.interleaved_sample_bytes.len() != expected_bytes {
         return Err(OpusCodecRefusal(format!(
-            "{OPUS_ENCODER_PROCESSOR_NAME}: a window carries {} payload bytes, but {} samples in \
+            "{OPUS_ENCODER_NODE_NAME}: a window carries {} payload bytes, but {} samples in \
              {} channels of `f32` is {expected_bytes} — refused rather than reshaped into a \
              plausible wrong answer",
             window.interleaved_sample_bytes.len(),
@@ -367,7 +367,7 @@ fn mint_encoder_for_window(
     let application = config.application.as_libopus_application();
     let refused_by_libopus = |shape: &str, failure: opus::Error| {
         OpusCodecRefusal(format!(
-            "{OPUS_ENCODER_PROCESSOR_NAME}: libopus refused a {} channel {shape}: {failure}",
+            "{OPUS_ENCODER_NODE_NAME}: libopus refused a {} channel {shape}: {failure}",
             window.channels
         ))
     };
@@ -399,7 +399,7 @@ fn mint_encoder_for_window(
     let pre_skip = instance.lookahead_samples()?;
 
     let notice = OpusCodecNotice::info(format!(
-        "{OPUS_ENCODER_PROCESSOR_NAME}: minted the Opus encoder from the window's channel count — \
+        "{OPUS_ENCODER_NODE_NAME}: minted the Opus encoder from the window's channel count — \
          source_channels={} channel_mapping_family={} streams={streams} pre_skip={pre_skip} \
          application={:?} bitrate_bps={:?}",
         window.channels,
@@ -598,8 +598,8 @@ mod tests {
             .to_string();
         assert!(refusal.contains('9'), "names the count: {refusal}");
         assert!(
-            refusal.contains(OPUS_ENCODER_PROCESSOR_NAME),
-            "names the processor: {refusal}"
+            refusal.contains(OPUS_ENCODER_NODE_NAME),
+            "names the node: {refusal}"
         );
 
         // Latched: the alternative to discarding is the same refusal logged

@@ -39,7 +39,7 @@ fn a_streams_jsonl_file_is_created_as_its_route_opens() {
     let config = StreamlibLoggingConfig::for_runtime("test");
     let logging = OneStreamLogFileWrittenOnThisTestThread::install(config, runtime_id, tmp.path());
 
-    tracing::info!(pipeline_id = "p1", processor_id = "pr1", "hi");
+    tracing::info!(pipeline_id = "p1", node_run_id = "pr1", "hi");
 
     let path = logging.jsonl_log_path();
     logging.finish();
@@ -56,9 +56,9 @@ fn a_streams_jsonl_file_is_created_as_its_route_opens() {
             && e.stream.as_deref() == Some(STREAM_NAME_OF_A_TEST_STREAM_LOG)
             && e.source == Source::Rust
             && e.pipeline_id.as_deref() == Some("p1")
-            && e.processor_id.as_deref() == Some("pr1")
+            && e.node_run_id.as_deref() == Some("pr1")
             && e.schema_version == SCHEMA_VERSION),
-        "expected record with runtime_id + stream + pipeline_id + processor_id; got {:#?}",
+        "expected record with runtime_id + stream + pipeline_id + node_run_id; got {:#?}",
         events
     );
 }
@@ -164,7 +164,7 @@ fn origin_fields_round_trip_via_event_fields() {
 
     tracing::info!(
         pipeline_id = "pl-42",
-        processor_id = "pr-7",
+        node_run_id = "pr-7",
         rhi_op = "acquire_texture",
         custom_k = 123i64,
         "origin-round-trip"
@@ -182,7 +182,7 @@ fn origin_fields_round_trip_via_event_fields() {
     assert_eq!(ev.source, Source::Rust);
     assert_eq!(ev.level, LogLevel::Info);
     assert_eq!(ev.pipeline_id.as_deref(), Some("pl-42"));
-    assert_eq!(ev.processor_id.as_deref(), Some("pr-7"));
+    assert_eq!(ev.node_run_id.as_deref(), Some("pr-7"));
     assert_eq!(ev.rhi_op.as_deref(), Some("acquire_texture"));
     assert_eq!(
         ev.attrs.get("custom_k"),

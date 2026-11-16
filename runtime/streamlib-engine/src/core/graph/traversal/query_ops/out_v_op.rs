@@ -2,15 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// The node each of these links carries from.
-fn every_source_node_of(
-    graph: &DiGraph<ProcessorNode, Link>,
-    links: &[EdgeIndex],
-) -> Vec<NodeIndex> {
+fn every_source_node_of(graph: &DiGraph<GraphNode, Link>, links: &[EdgeIndex]) -> Vec<NodeIndex> {
     links
         .iter()
         .filter_map(|&edge| graph.edge_endpoints(edge))
@@ -20,9 +17,9 @@ fn every_source_node_of(
 
 impl<'a> LinkTraversal<'a> {
     /// Get the vertex each link carries from — its source.
-    pub fn out_v(self) -> ProcessorTraversal<'a> {
+    pub fn out_v(self) -> NodeTraversal<'a> {
         let ids = every_source_node_of(self.graph, &self.ids);
-        ProcessorTraversal {
+        NodeTraversal {
             graph: self.graph,
             ids,
         }
@@ -31,9 +28,9 @@ impl<'a> LinkTraversal<'a> {
 
 impl<'a> LinkTraversalMut<'a> {
     /// Get the vertex each link carries from — its source.
-    pub fn out_v(self) -> ProcessorTraversalMut<'a> {
+    pub fn out_v(self) -> NodeTraversalMut<'a> {
         let ids = every_source_node_of(self.graph, &self.ids);
-        ProcessorTraversalMut {
+        NodeTraversalMut {
             graph: self.graph,
             ids,
         }

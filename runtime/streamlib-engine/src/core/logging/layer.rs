@@ -89,7 +89,7 @@ where
             target: metadata.target().to_string(),
             message: visitor.message.unwrap_or_default(),
             pipeline_id: visitor.pipeline_id,
-            processor_id: visitor.processor_id,
+            node_run_id: visitor.node_run_id,
             rhi_op: visitor.rhi_op,
             intercepted: visitor.intercepted,
             channel: visitor.channel,
@@ -112,7 +112,7 @@ where
 struct Capture {
     message: Option<String>,
     pipeline_id: Option<String>,
-    processor_id: Option<String>,
+    node_run_id: Option<String>,
     rhi_op: Option<String>,
     intercepted: bool,
     channel: Option<String>,
@@ -131,8 +131,8 @@ impl Capture {
                 self.pipeline_id = Some(value);
                 true
             }
-            "processor_id" => {
-                self.processor_id = Some(value);
+            "node_run_id" => {
+                self.node_run_id = Some(value);
                 true
             }
             "rhi_op" => {

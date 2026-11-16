@@ -12,13 +12,13 @@ mod link_carried_through_the_function_node_pool_component;
 mod link_read_through_the_reader_of_its_function_node_island_component;
 mod link_state_component;
 mod link_type_info_component;
+mod node_instance_component;
+mod node_metrics;
+mod node_pause_gate_component;
+mod node_ready_barrier_component;
 mod out_of_process_link_wire_replies_component;
 mod out_of_process_link_wiring_component;
 mod pending_deletion_component;
-mod processor_instance_component;
-mod processor_metrics;
-mod processor_pause_gate_component;
-mod processor_ready_barrier_component;
 mod shader_node_fused_group_component;
 mod shutdown_channel_component;
 mod source_side_held_open_for_a_reader_outside_its_stream;
@@ -47,20 +47,16 @@ pub use link_read_through_the_reader_of_its_function_node_island_component::{
 };
 pub use link_state_component::LinkStateComponent;
 pub use link_type_info_component::LinkTypeInfoComponent;
+pub use node_instance_component::NodeInstanceComponent;
+pub use node_metrics::{LossCountsOfPortsInThisProcess, NodeLossCounts, NodeMetrics};
+pub use node_pause_gate_component::NodePauseGateComponent;
+pub use node_ready_barrier_component::{NodeReadyBarrierComponent, NodeReadyBarrierHandle};
 pub use out_of_process_link_wire_replies_component::{
     OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
 };
+pub(crate) use out_of_process_link_wiring_component::NodeInstanceWithItsOutOfProcessLinkWiring;
 pub use out_of_process_link_wiring_component::OutOfProcessLinkWiringComponent;
-pub(crate) use out_of_process_link_wiring_component::ProcessorInstanceWithItsOutOfProcessLinkWiring;
 pub use pending_deletion_component::PendingDeletionComponent;
-pub use processor_instance_component::ProcessorInstanceComponent;
-pub use processor_metrics::{
-    LossCountsOfPortsInThisProcess, ProcessorLossCounts, ProcessorMetrics,
-};
-pub use processor_pause_gate_component::ProcessorPauseGateComponent;
-pub use processor_ready_barrier_component::{
-    ProcessorReadyBarrierComponent, ProcessorReadyBarrierHandle,
-};
 pub use shader_node_fused_group_component::{
     ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland,
 };
@@ -69,8 +65,8 @@ pub(crate) use source_side_held_open_for_a_reader_outside_its_stream::{
     SourceSideHeldOpenForAReaderOutsideItsStream, SourceSideOfALinkWiredOn,
 };
 pub use state_component::{
-    HelperProcessRestartRecord, HelperProcessRestartsComponent, NodeNotReadyBecauseComponent,
-    ObservableProcessorState, ProcessRaisingBecauseComponent, ProcessorFailureReasonComponent,
+    HelperProcessRestartRecord, HelperProcessRestartsComponent, NodeFailureReasonComponent,
+    NodeNotReadyBecauseComponent, ObservableNodeState, ProcessRaisingBecauseComponent,
     StateComponent,
 };
 pub use step_progress_of_one_node_component::{

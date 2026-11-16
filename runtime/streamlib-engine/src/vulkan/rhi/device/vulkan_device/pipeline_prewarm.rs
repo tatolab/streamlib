@@ -6,39 +6,6 @@ use std::sync::Arc;
 use super::HostVulkanDevice;
 
 impl HostVulkanDevice {
-    /// Build (and immediately drop) a trivial compute pipeline at device
-    /// construction so the GPU driver's shader-compiler global init runs
-    /// single-threaded in a controlled state.
-    ///
-    /// **Provisional precaution, not a proven fix.** On NVIDIA Linux,
-    /// `libnvidia-gpucomp` does a lazy `pthread_once` init on the first
-    /// `vkCreatePipelineLayout` in a process; the working hypothesis is
-    /// that running it concurrently with other multi-plugin processor setup
-    /// can corrupt the driver's heap. Forcing it here — before any plugin
-    /// setup runs — closes that one window, mirroring how the VMA pool
-    /// pre-warm above sidesteps NVIDIA's exportable-memory cap. It does NOT
-    /// fix the broader concurrent pipeline-creation contention: only the
-    /// FIRST init is serialized, while later concurrent `vkCreate*Pipelines`
-    /// calls still race. The canonical fix is funneling every pipeline
-    /// creation through one dedicated compile thread (the concurrent-setup
-    /// race, tracked separately); this pre-warm is the cheap precaution kept
-    /// until that lands. Its causal necessity is unproven — the crash that
-    /// originally motivated it was later diagnosed as an IPC/wiring failure,
-    /// and the residual driver race is latent (not reproduced outside a
-    /// debugger). Unconditional on Linux today (only NVIDIA is suspected to
-    /// need it; vendor-id gating is a tracked consideration). Non-fatal: a
-    /// pre-warm failure only forgoes the precaution — the first real
-    /// pipeline triggers the init instead.
-    ///
-    /// **Boxed-in — treat as a removal candidate, not load-bearing code.**
-    /// To prove necessity: delete the two `prewarm_*` calls in `new()`, run
-    /// a multi-plugin NVIDIA setup (the drone-racer host) across a
-    /// dozen-plus cold starts, and watch for a `libnvidia-glcore` /
-    /// `vkCreate*Pipelines` SIGSEGV during setup. No crash ⇒ dead weight:
-    /// remove the calls and the `prewarm_compute.slang` / `prewarm_{vertex,fragment}.slang`
-    /// shaders. The single-threaded pipeline-create funnel supersedes it
-    /// outright; don't grow it (e.g. a ray-tracing probe) on speculation
-    /// before necessity is shown.
     pub(super) fn prewarm_pipeline_compiler(device: &Arc<Self>) {
         const PREWARM_SPV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/prewarm.spv"));
         // Kitchen-sink layout — NOT modeled on any kernel. The driver's

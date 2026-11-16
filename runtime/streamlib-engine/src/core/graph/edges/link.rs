@@ -11,7 +11,6 @@ use super::super::{GraphEdgeWithComponents, GraphWeight};
 use super::LinkCapacity;
 use super::{InputLinkPortRef, LinkState, OutputLinkPortRef};
 
-/// Link in the processor graph (connection between two ports) with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct Link {
     /// Unique link identifier

@@ -76,8 +76,6 @@ pub(super) struct PixelBufferCacheBySurfaceId {
 /// output pool, until it is freed.
 pub(in crate::core::context) struct PixelBufferPoolManager {
     pools: Mutex<HashMap<PixelBufferPoolKey, PixelBufferRingPool>>,
-    /// Global cache for UUID -> PixelBuffer lookups (includes buffers from all pools).
-    /// Used by consumers (e.g., display processor) to resolve UUIDs received via IPC.
     pub(super) buffer_cache: Mutex<PixelBufferCacheBySurfaceId>,
     /// The generation every lease-aware ring most recently minted per slot,
     /// shared with the [`GpuContext`](super::GpuContext) that owns this manager.

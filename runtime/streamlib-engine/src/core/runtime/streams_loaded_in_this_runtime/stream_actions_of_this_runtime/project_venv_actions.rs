@@ -38,7 +38,7 @@ impl Runner {
     /// lend.
     pub(super) fn packages_this_runtime_unit_carries(&self) -> PackagesTheRuntimeUnitCarries {
         self.engine_resources_shared_by_every_stream
-            .processor_interpreter_lend_directory
+            .node_interpreter_lend_directory
             .get()
             .map(PackagesTheRuntimeUnitCarries::beside_the_lend)
             .unwrap_or_default()

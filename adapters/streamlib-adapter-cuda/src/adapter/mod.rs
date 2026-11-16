@@ -1,37 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `CudaSurfaceAdapter<D>` — CUDA-typed `SurfaceAdapter`.
-//!
-//! Generic over the device flavor: `D = HostVulkanDevice` for host-side
-//! adapter use today (allocate OPAQUE_FD-exportable resources, register,
-//! hand fds to CUDA). The four trait methods on `VulkanRhiDevice`
-//! (`device()`, `queue()`, `queue_family_index()`, `submit_to_queue()`)
-//! are everything the adapter needs from the device; the timeline-
-//! semaphore type is picked up via `D::Privilege::TimelineSemaphore`
-//! and abstracted behind `VulkanTimelineSemaphoreLike` so wait + signal
-//! works against either flavor.
-//!
-//! The adapter:
-//! - Owns a registry of registered surfaces keyed by [`SurfaceId`].
-//! - Waits on the timeline semaphore at the start of every acquire so
-//!   prior CUDA / GPU work has drained before the host touches the
-//!   buffer.
-//! - Signals the next timeline value on guard drop so the next acquire
-//!   wakes up.
-//!
-//! Per-acquire host *work* (e.g. `vkCmdCopyImageToBuffer`) is **not
-//! present** here, on purpose: CUDA imports the OPAQUE_FD memory once at
-//! registration time and dispatches kernels in its own context. The
-//! timeline semaphore is the only sync surface that has to cross the
-//! Vulkan↔CUDA boundary per acquire.
-//!
-//! For the *host-pipeline producer* shape (in-process processor pushing
-//! frames into a registered surface so a subprocess customer can
-//! `acquire_read` them GPU-resident), see
-//! [`CudaSurfaceAdapter::submit_host_copy_image_to_buffer`]. That path
-//! is GPU-signaled and stays out of the per-acquire codepath.
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

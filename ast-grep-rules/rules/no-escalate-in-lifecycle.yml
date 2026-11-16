@@ -13,7 +13,7 @@ files:
   - examples/**/*.rs
 ignores:
   # Tests gate serialization across concurrent workers, so it escalates from start() on purpose.
-  - packages/test-fixtures/processors/concurrent_escalate_test_processor.rs
+  - packages/test-fixtures/nodes/concurrent_escalate_test_node.rs
 rule:
   any:
     - kind: call_expression

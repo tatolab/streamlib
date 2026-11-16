@@ -247,19 +247,8 @@ fn clone_balances_drop() {
     assert_eq!(Arc::strong_count(&inner_for_test), 1);
 }
 
-/// A live connect and disconnect racing a read on the same destination, the
-/// shape of a native processor reading on its own thread, or of a helper's
-/// reads detached from the GIL, while `connect` / `disconnect` re-splice it.
-///
-/// Nothing outside the mailboxes serializes the two threads here, as
-/// nothing does in either of those processors. Without a lock of the
-/// mailboxes' own, the subscriber list reallocates under an iterating
-/// receive and iceoryx2's single-consumer queue gets two callers: memory is
-/// corrupted and the test binary aborts, usually well inside the window.
-/// The two racers end together, past the window only until both floors are
-/// met, so a starved runner races longer and a dead racer fails the test.
 #[test]
-fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex() {
+fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_node_mutex() {
     const RACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
     const RACE_HARD_CAP: std::time::Duration = std::time::Duration::from_secs(30);
     const WIRE_AND_UNWIRE_CYCLES_FLOOR: u64 = 100;

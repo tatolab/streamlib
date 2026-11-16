@@ -125,16 +125,6 @@ impl Runner {
             ))
     }
 
-    /// Pause every loaded stream of the project in `project_directory` now, never waiting
-    /// behind an action on its queue, and answer the streams paused: each processor holds its
-    /// state and processes nothing, and a graph change made meanwhile compiles on
-    /// [`Self::resume_playback`], and each stream's clock holds where it stands. The project
-    /// stays paused until that resume, a `stop_playback`, a `close_project` or a
-    /// `remove_project`: a stream a `reload_project` starts meanwhile, `tatolab dev`'s re-load
-    /// on a save among them, starts paused. The pause is recorded, so a restart of the runtime
-    /// re-loads the project paused. Pausing a paused project pauses nothing more.
-    /// Refused for a directory not named by its absolute path, and for a project none of whose
-    /// streams plays and whose last action queued is not a playback start.
     pub fn pause_playback(&self, project_directory: &Path) -> Result<ProjectPausedOrResumed> {
         let project_directory = the_absolute_project_directory_resolved(project_directory)?;
         let mut directories_of_the_paused_projects = self

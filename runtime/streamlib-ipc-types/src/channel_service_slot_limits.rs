@@ -32,11 +32,4 @@ pub const RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 /// output port refuses a link past it by name.
 pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 32;
 
-/// Inbound links one destination processor may hold at once — the
-/// `max_notifiers` its destination-keyed notify service is created with.
-///
-/// Pinned for the same reason as [`MAX_DESTINATIONS_PER_CHANNEL`]: the notify
-/// service is created with the first inbound link and iceoryx2 verifies the
-/// count on every reopen, so a link connected later must fit a notifier slot
-/// that already exists.
 pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 256;

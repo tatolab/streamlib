@@ -3,7 +3,6 @@
 # no-print-in-python ignores this file: a describe has no parent log channel, so its
 # records are written to raw stderr, which the parent mirrors into its own log.
 
-"""Logging from a processor interpreter: describe-time records to stderr, the rest to its parent."""
 
 from __future__ import annotations
 
@@ -42,16 +41,10 @@ def write_a_describe_time_log_record_to_stderr(
 
 
 class ParentProcessLogSink:
-    """Sends this helper's records to the parent's unified log pipeline.
 
-    Fire-and-forget: the parent stamps the authoritative receipt time and
-    enqueues, and never replies. Attribution is a process constant — one
-    helper hosts exactly one processor.
-    """
-
-    def __init__(self, bridge: ParentProcessBridge, processor_id: str) -> None:
+    def __init__(self, bridge: ParentProcessBridge, node_run_id: str) -> None:
         self._bridge = bridge
-        self._processor_id = processor_id
+        self._node_run_id = node_run_id
         self._next_sequence_number = 0
         self._sequence_lock = threading.Lock()
 
@@ -67,7 +60,7 @@ class ParentProcessLogSink:
             # merged stream. Wall clock is what a human reads.
             source_ts=datetime.now(timezone.utc).isoformat(),
             pipeline_id=None,
-            processor_id=self._processor_id,
+            node_run_id=self._node_run_id,
         )
 
     def send_a_captured_engine_record(self, record: "dict[str, Any]") -> None:
@@ -87,9 +80,7 @@ class ParentProcessLogSink:
                 record["emitted_at_wall_clock_nanoseconds"]
             ),
             pipeline_id=record["pipeline_id"],
-            # One helper hosts one processor, so a record that names none is
-            # still this processor's.
-            processor_id=record["processor_id"] or self._processor_id,
+            node_run_id=record["node_run_id"] or self._node_run_id,
             target=record["target"],
             rhi_op=record["rhi_op"],
         )
@@ -103,15 +94,10 @@ class ParentProcessLogSink:
         attrs: "dict[str, Any]",
         source_ts: str,
         pipeline_id: "Optional[str]",
-        processor_id: "Optional[str]",
+        node_run_id: "Optional[str]",
         target: "Optional[str]" = None,
         rhi_op: "Optional[str]" = None,
     ) -> None:
-        # Numbered and sent under one lock. Two threads send a helper's
-        # records — its processor's and the engine-log forwarder's — and a
-        # number taken here but sent after the next one's frame would put the
-        # sequence out of order on the wire, where a reader takes a step
-        # backwards for records lost.
         with self._sequence_lock:
             self._next_sequence_number += 1
             record: "dict[str, Any]" = {
@@ -125,7 +111,7 @@ class ParentProcessLogSink:
                 "intercepted": False,
                 "channel": None,
                 "pipeline_id": pipeline_id,
-                "processor_id": processor_id,
+                "node_run_id": node_run_id,
                 "attrs": attrs,
             }
             # Named only where there is one to name: the two columns an engine
@@ -165,12 +151,6 @@ class CapturedEngineLogRecordForwarder:
         )
 
     def capture_and_start(self) -> None:
-        """Capture this process's engine records and start sending them on.
-
-        A process that cannot capture keeps running without them, and says so:
-        the records are a diagnostic, and a processor that works is not worth
-        failing over the logging around it.
-        """
         try:
             capture_this_helper_processes_engine_log_records()
         except Exception as capture_failure:

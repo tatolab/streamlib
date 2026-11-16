@@ -13,9 +13,9 @@ pub mod graph_interface_resolution;
 mod graph_readiness;
 pub mod graph_snapshot;
 pub mod graph_variable_resolution;
+mod node_state_ecs_component;
 mod nodes;
 mod port_family_link_checks;
-mod processor_state_ecs_component;
 mod traits;
 mod traversal;
 mod validation;
@@ -38,14 +38,14 @@ pub(crate) use data_structure::{
 };
 pub(crate) use exposed_config_field_input_ports::the_input_ports_of_the_exposed_config_fields;
 pub use graph_readiness::ObservableGraphReadiness;
+pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
     refuse_a_link_between_ports_whose_families_do_not_match,
     the_family_a_link_out_of_an_output_carries, the_outputs_a_link_carries_on,
 };
-pub use processor_state_ecs_component::{ProcessorState, ProcessorStateComponent};
-pub(crate) use streamlib_processor_schema::is_in_exposed_name_cast_form;
-pub use streamlib_processor_schema::{
+pub(crate) use streamlib_node_schema::is_in_exposed_name_cast_form;
+pub use streamlib_node_schema::{
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, cast_exposed_name_to_url_safe,
 };
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
@@ -59,28 +59,28 @@ pub use components::{
     Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent,
     LinkCarriedThroughTheFunctionNodePoolComponent,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
-    LinkTypeInfoComponent, LossCountsOfPortsInThisProcess, NodeNotReadyBecauseComponent,
-    ObservableProcessorState, OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
+    LinkTypeInfoComponent, LossCountsOfPortsInThisProcess, NodeFailureReasonComponent,
+    NodeInstanceComponent, NodeLossCounts, NodeMetrics, NodeNotReadyBecauseComponent,
+    NodePauseGateComponent, NodeReadyBarrierComponent, NodeReadyBarrierHandle, ObservableNodeState,
+    OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, PendingDeletionComponent, ProcessRaisingBecauseComponent,
-    ProcessorFailureReasonComponent, ProcessorInstanceComponent, ProcessorLossCounts,
-    ProcessorMetrics, ProcessorPauseGateComponent, ProcessorReadyBarrierComponent,
-    ProcessorReadyBarrierHandle, ReadOfALinkByTheReaderOfAFunctionNodeIsland,
-    ShaderNodeFusedGroupComponent, ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent,
-    StateComponent, StepProgressCallbackInFlight, StepProgressOfOneNode,
-    StepProgressOfOneNodeComponent, StepProgressReadingOfOneNode, StorableComponent,
-    ThreadHandleComponent, default_component_serializers, default_components,
+    ReadOfALinkByTheReaderOfAFunctionNodeIsland, ShaderNodeFusedGroupComponent,
+    ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
+    StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,
+    StepProgressReadingOfOneNode, StorableComponent, ThreadHandleComponent,
+    default_component_serializers, default_components,
 };
 pub(crate) use components::{
-    ProcessorInstanceWithItsOutOfProcessLinkWiring, SourceSideHeldOpenForAReaderOutsideItsStream,
+    NodeInstanceWithItsOutOfProcessLinkWiring, SourceSideHeldOpenForAReaderOutsideItsStream,
     SourceSideOfALinkWiredOn,
 };
 pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
-pub use nodes::{PortInfo, PortKind, ProcessorNode, ProcessorNodePorts, ProcessorUniqueId};
+pub use nodes::{GraphNode, GraphNodePorts, NodeRunId, PortInfo, PortKind};
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{
-    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut, TraversalSource,
+    LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,
     TraversalSourceMut,
 };

@@ -86,13 +86,9 @@ impl Runner {
             .stop_intercepting_the_standard_streams();
     }
 
-    /// Hand this runtime the lend directory — the directory holding the
-    /// `tatolab/runtime/` package every stream's processor interpreters
-    /// borrow. The host calls it once, before any load; a second call is
-    /// refused.
-    pub fn set_processor_interpreter_lend_directory(&self, lend_directory: PathBuf) -> Result<()> {
+    pub fn set_node_interpreter_lend_directory(&self, lend_directory: PathBuf) -> Result<()> {
         self.engine_resources_shared_by_every_stream
-            .processor_interpreter_lend_directory
+            .node_interpreter_lend_directory
             .set(lend_directory)
     }
 

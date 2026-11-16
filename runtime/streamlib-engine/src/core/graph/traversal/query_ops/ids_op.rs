@@ -1,13 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::graph::{
-    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut,
-};
-use crate::core::{LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut};
+use crate::core::{LinkUniqueId, NodeRunId};
 
-impl<'a> ProcessorTraversal<'a> {
-    pub fn ids(self) -> Vec<ProcessorUniqueId> {
+impl<'a> NodeTraversal<'a> {
+    pub fn ids(self) -> Vec<NodeRunId> {
         self.ids
             .iter()
             .filter_map(|&node_index| {
@@ -32,8 +30,8 @@ impl<'a> LinkTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
-    pub fn ids(self) -> Vec<ProcessorUniqueId> {
+impl<'a> NodeTraversalMut<'a> {
+    pub fn ids(self) -> Vec<NodeRunId> {
         self.ids
             .iter()
             .filter_map(|&node_index| {

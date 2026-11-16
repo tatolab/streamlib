@@ -1,15 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Drift-free periodic timer for Python processors.
-//!
-//! The first deadline is now + interval and every repeat is absolute on the
-//! engine's `MediaClock`, so latency in one tick never accumulates into the
-//! next. Linux arms a `timerfd` with `TFD_TIMER_ABSTIME` and waits through an
-//! epoll fd; macOS arms a one-shot kqueue `EVFILT_TIMER` at each next deadline
-//! in `mach_absolute_time` ticks. Either wait honors a timeout, which is what
-//! bounds teardown latency for a loop polling shutdown between ticks.
-
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]

@@ -7,19 +7,19 @@
 //! delivery profiles and link counters never see one; it is read from configs
 //! and checked against the graph's nodes and their types.
 
-use streamlib_processor_schema::{
+use streamlib_node_schema::{
     ConfigKeyHoldingANodeReference, config_keys_holding_a_node_reference,
     node_name_a_config_value_references,
 };
 
 use std::collections::HashMap;
 
-use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::{
-    Graph, ProcessorUniqueId, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
+    Graph, NodeRunId, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
 };
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
 
 /// The config keys of `node_type` that hold a node reference, from the config
@@ -27,7 +27,7 @@ use crate::core::{Error, Result};
 /// schema.
 pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
     node_types: &NodeTypesOneStreamResolves,
-    node_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
 ) -> Vec<ConfigKeyHoldingANodeReference> {
     node_types
         .descriptor(node_type)
@@ -125,7 +125,7 @@ pub(crate) fn refuse_a_second_referrer_of_a_node_that_takes_one<'edge>(
 /// node the graph holds under that name.
 pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     reference: &ConfigNodeReferenceEdgeOfOneNode,
-    referenced_node_type: &ProcessorClassImportPath,
+    referenced_node_type: &NodeClassImportPath,
 ) -> Result<()> {
     let Some(required_type) = &reference.referenced_node_type_import_path else {
         return Ok(());
@@ -144,37 +144,31 @@ pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     )))
 }
 
-/// Refuse a config `processor_id` takes live, as it is added or updated, whose
-/// node references name a node the live graph does not hold, one of the wrong
-/// type, or one another node already names under a key taking one referrer.
 pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
     graph: &Graph,
     node_types: &NodeTypesOneStreamResolves,
-    processor_id: &ProcessorUniqueId,
+    node_run_id: &NodeRunId,
     config_to_apply: &serde_json::Value,
 ) -> Result<()> {
-    let Some(updated_node) = graph.traversal().v(processor_id).first() else {
+    let Some(updated_node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
     };
     let references = config_node_reference_edges_of_one_node(
         &updated_node.display_name,
         config_to_apply,
-        config_keys_of_a_node_type_holding_a_node_reference(
-            node_types,
-            &updated_node.processor_type,
-        ),
+        config_keys_of_a_node_type_holding_a_node_reference(node_types, &updated_node.node_type),
     )?;
     if references.is_empty() {
         return Ok(());
     }
-    let type_of_each_live_node_by_cast: HashMap<String, ProcessorClassImportPath> = graph
+    let type_of_each_live_node_by_cast: HashMap<String, NodeClassImportPath> = graph
         .traversal()
         .v(())
         .iter()
         .filter_map(|node| {
             cast_exposed_name_to_url_safe(&node.display_name)
                 .ok()
-                .map(|cast| (cast.into_owned(), node.processor_type.clone()))
+                .map(|cast| (cast.into_owned(), node.node_type.clone()))
         })
         .collect();
     for reference in &references {
@@ -206,7 +200,7 @@ pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
     {
         let mut references_of_every_other_live_node = Vec::new();
         for live_node in graph.traversal().v(()).iter() {
-            if &live_node.id == processor_id {
+            if &live_node.id == node_run_id {
                 continue;
             }
             let Some(live_config) = &live_node.config else {
@@ -217,7 +211,7 @@ pub(crate) fn refuse_a_live_config_naming_a_node_the_graph_does_not_hold(
                 live_config,
                 config_keys_of_a_node_type_holding_a_node_reference(
                     node_types,
-                    &live_node.processor_type,
+                    &live_node.node_type,
                 ),
             )?);
         }

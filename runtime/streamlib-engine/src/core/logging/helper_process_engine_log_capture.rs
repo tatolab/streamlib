@@ -61,7 +61,7 @@ pub struct EngineLogRecordForTheParentProcess {
     pub target: String,
     pub message: String,
     pub pipeline_id: Option<String>,
-    pub processor_id: Option<String>,
+    pub node_run_id: Option<String>,
     pub rhi_op: Option<String>,
     pub attrs: std::collections::BTreeMap<String, serde_json::Value>,
     pub emitted_at_wall_clock_nanoseconds: u64,
@@ -165,7 +165,7 @@ impl From<LogRecord> for EngineLogRecordForTheParentProcess {
             target: record.target,
             message: record.message,
             pipeline_id: record.pipeline_id,
-            processor_id: record.processor_id,
+            node_run_id: record.node_run_id,
             rhi_op: record.rhi_op,
             attrs: record.attrs,
             emitted_at_wall_clock_nanoseconds: record.host_ts,
@@ -215,7 +215,7 @@ mod tests {
             target: "iceoryx2".to_string(),
             message: message.to_string(),
             pipeline_id: None,
-            processor_id: None,
+            node_run_id: None,
             rhi_op: None,
             intercepted: false,
             channel: None,
@@ -289,9 +289,6 @@ mod tests {
     #[test]
     fn a_record_arriving_after_a_run_of_busy_drains_still_ends_the_wait() {
         let (ring, layer) = HelperProcessEngineLogRecordRing::with_capacity(8);
-        // A `Dispatch` rather than a thread-local default: the record that has
-        // to end the wait is made on another thread, as every record a helper
-        // captures from its own processor's threads is.
         let dispatch = Dispatch::new(Registry::default().with(layer));
 
         for _ in 0..(DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN * 2) {

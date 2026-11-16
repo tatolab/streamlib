@@ -1,24 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Criterion benches for the unified logging pathway (#447).
-//!
-//! Three benches:
-//! - `hot_path_latency` — `tracing::info!` with 4 structured fields
-//!   against a live pathway; criterion reports p50 / p99.
-//! - `processor_overhead_60fps` — 60 Hz × 10 logs/frame, pathway vs
-//!   a no-op subscriber baseline. Criterion reports both arms so the
-//!   relative overhead is visible.
-//! - `burst_drops_surface` — 10k logs/ms burst for 1 s. Custom harness
-//!   (not a criterion loop): asserts the synthetic `dropped=N` record
-//!   surfaces in the produced JSONL, prints hot-path throughput and
-//!   worker heap high-water.
-//!
-//! Run: `cargo bench -p streamlib --bench logging`. `hot_path_latency`
-//! and `processor_overhead_60fps` run under criterion's default
-//! statistical harness; `burst_drops_surface` runs once at the end as
-//! a throughput assertion and prints its numbers to stdout.
-
 // Benches report per-iteration percentiles and drop counters to
 // stderr as a bench deliverable — criterion's default reporter only
 // surfaces mean bounds, and this data needs to reach the operator
@@ -96,7 +78,7 @@ fn bench_hot_path_latency(c: &mut Criterion) {
         b.iter(|| {
             tracing::info!(
                 pipeline_id = black_box("pl-bench"),
-                processor_id = black_box("pr-bench"),
+                node_run_id = black_box("pr-bench"),
                 rhi_op = black_box("acquire_texture"),
                 tick = black_box(42u64),
                 "hot-path"
@@ -115,7 +97,7 @@ fn bench_hot_path_latency(c: &mut Criterion) {
                     let t0 = Instant::now();
                     tracing::info!(
                         pipeline_id = "pl-bench",
-                        processor_id = "pr-bench",
+                        node_run_id = "pr-bench",
                         rhi_op = "acquire_texture",
                         tick = 42u64,
                         "hot-path-pctile"
@@ -141,9 +123,9 @@ fn bench_hot_path_latency(c: &mut Criterion) {
 /// 60 Hz frame loop, 10 logs/frame, measured against a no-op subscriber
 /// baseline. Two criterion arms so the user can read the overhead
 /// directly off the report.
-fn bench_processor_overhead_60fps(c: &mut Criterion) {
+fn bench_node_overhead_60fps(c: &mut Criterion) {
     let tmp = TempDir::new().expect("tempdir");
-    let mut group = c.benchmark_group("processor_overhead_60fps");
+    let mut group = c.benchmark_group("node_overhead_60fps");
     group.sample_size(20);
 
     // Baseline: NoSubscriber — every `tracing::info!` short-circuits
@@ -156,7 +138,7 @@ fn bench_processor_overhead_60fps(c: &mut Criterion) {
                 for i in 0..10u32 {
                     tracing::info!(
                         pipeline_id = black_box("pl-60fps"),
-                        processor_id = black_box("pr-60fps"),
+                        node_run_id = black_box("pr-60fps"),
                         rhi_op = black_box("tick"),
                         i,
                         "frame-log"
@@ -174,7 +156,7 @@ fn bench_processor_overhead_60fps(c: &mut Criterion) {
                 for i in 0..10u32 {
                     tracing::info!(
                         pipeline_id = black_box("pl-60fps"),
-                        processor_id = black_box("pr-60fps"),
+                        node_run_id = black_box("pr-60fps"),
                         rhi_op = black_box("tick"),
                         i,
                         "frame-log"
@@ -229,7 +211,7 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                 while emitted < TOTAL_EVENTS && Instant::now() < deadline {
                     tracing::info!(
                         pipeline_id = "pl-burst",
-                        processor_id = "pr-burst",
+                        node_run_id = "pr-burst",
                         rhi_op = "burst",
                         i = emitted,
                         "burst-event"
@@ -292,7 +274,7 @@ fn read_jsonl(path: &std::path::Path) -> Vec<RuntimeLogEvent> {
 criterion_group!(
     benches,
     bench_hot_path_latency,
-    bench_processor_overhead_60fps,
+    bench_node_overhead_60fps,
     bench_burst_drops_surface
 );
 criterion_main!(benches);

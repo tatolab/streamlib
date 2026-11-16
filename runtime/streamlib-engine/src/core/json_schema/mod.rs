@@ -13,13 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::context::StreamClockSpec;
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
-/// The processor-identity wire type. Defined in the engine-free
-/// `streamlib-processor-schema` crate so the engine and the engine-free
-/// `streamlib-error` share one definition; re-exported here so the
-/// `streamlib::sdk::json_schema` facade the API server consumes resolves it.
-/// The `utoipa` feature the engine enables gives it the `utoipa::ToSchema`
-/// derive the aggregate response types below require.
-pub use streamlib_processor_schema::ProcessorClassImportPath;
+pub use streamlib_node_schema::NodeClassImportPath;
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
@@ -46,7 +40,7 @@ pub struct GraphResponse {
     #[serde(default, skip_serializing_if = "StreamClockSpec::is_real")]
     pub clock: StreamClockSpec,
     /// All nodes in the graph.
-    pub nodes: Vec<ProcessorNodeOutput>,
+    pub nodes: Vec<GraphNodeOutput>,
     /// All links between nodes' ports.
     pub links: Vec<LinkOutput>,
     /// Every reference edge: a node's config key naming another node. A live
@@ -68,7 +62,7 @@ pub struct GraphResponse {
     /// it carries renders as the link it was given, naming the pool's ports under
     /// `carried_through_the_function_node_pool`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function_node_pool: Option<ProcessorNodeOutput>,
+    pub function_node_pool: Option<GraphNodeOutput>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -102,12 +96,12 @@ pub struct MachineWideGraphResponse {
 
 /// A node in the graph.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ProcessorNodeOutput {
+pub struct GraphNodeOutput {
     /// The node's UUID: a spec key, kept across every run and restart of its stream.
     pub id: String,
     /// The import path of the class this node is — a plain string.
     #[serde(rename = "type")]
-    pub processor_type: ProcessorClassImportPath,
+    pub node_type: NodeClassImportPath,
     /// How the node's code runs. Absent on a node whose type nothing
     /// registers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -118,14 +112,14 @@ pub struct ProcessorNodeOutput {
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
     /// what a link end, an exposure and a port address name it by.
     pub name: String,
-    /// Processor configuration as JSON.
+    /// Node configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     /// Checksum of config for change detection.
     #[serde(default)]
     pub config_checksum: u64,
     /// Input and output ports.
-    pub ports: ProcessorNodePortsOutput,
+    pub ports: GraphNodePortsOutput,
     /// The values set on the node's unlinked inputs, by input name.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub pins: serde_json::Map<String, serde_json::Value>,
@@ -139,7 +133,6 @@ pub struct ProcessorNodeOutput {
     /// declare no default; the node holds without evaluating until each has a value.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_waiting_for_a_value: Vec<String>,
-    /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
     /// What a fragment holds: its graph generator's stored output, each node rendered as this
     /// node is. A spec key, present on a fragment alone.
@@ -153,7 +146,7 @@ pub struct ProcessorNodeOutput {
 pub struct GraphFragmentOutput {
     /// Every node of the fragment, a fragment it holds rendered as a container in turn.
     #[schema(no_recursion)]
-    pub nodes: Vec<ProcessorNodeOutput>,
+    pub nodes: Vec<GraphNodeOutput>,
     /// Every link between those nodes' ports.
     pub links: Vec<LinkOutput>,
     /// Every labelled group of the fragment's nodes, made by its graph generator.
@@ -161,9 +154,9 @@ pub struct GraphFragmentOutput {
     pub groups: Vec<LabelledNodeGroup>,
 }
 
-/// Container for processor input and output ports.
+/// Container for node input and output ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ProcessorNodePortsOutput {
+pub struct GraphNodePortsOutput {
     /// Input ports that receive data.
     pub inputs: Vec<PortInfoOutput>,
     /// Output ports that send data.
@@ -223,7 +216,7 @@ pub enum PortKindOutput {
     Control,
 }
 
-/// A link (connection) between two processor ports.
+/// A link (connection) between two node ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkOutput {
     /// Unique identifier for this link.
@@ -262,15 +255,13 @@ pub struct LinkPortRefOutput {
 }
 
 impl LinkPortRefOutput {
-    /// The port `port_name` on the processor `processor_id`, its node named by
-    /// its name.
     fn of_a_port(
-        processor_id: &crate::core::graph::ProcessorUniqueId,
+        node_run_id: &crate::core::graph::NodeRunId,
         port_name: &str,
-        node_names: &NodeNamesByProcessorId,
+        node_names: &NodeNamesByNodeRunId,
     ) -> Self {
         Self {
-            node: node_names.name_of(processor_id),
+            node: node_names.name_of(node_run_id),
             port: port_name.to_string(),
         }
     }
@@ -288,16 +279,16 @@ pub struct ConfigNodeReferenceEdgeOutput {
     pub referenced_node: String,
 }
 
-/// Every node's name by its processor id, for rendering the ends a graph
+/// Every node's name by its node id, for rendering the ends a graph
 /// holds by id under the name a reader knows them by.
-pub(crate) struct NodeNamesByProcessorId(
-    std::collections::HashMap<crate::core::graph::ProcessorUniqueId, String>,
+pub(crate) struct NodeNamesByNodeRunId(
+    std::collections::HashMap<crate::core::graph::NodeRunId, String>,
 );
 
-impl NodeNamesByProcessorId {
+impl NodeNamesByNodeRunId {
     /// Index every node `nodes` yields.
     pub(crate) fn of<'node>(
-        nodes: impl Iterator<Item = &'node crate::core::graph::ProcessorNode>,
+        nodes: impl Iterator<Item = &'node crate::core::graph::GraphNode>,
     ) -> Self {
         Self(
             nodes
@@ -312,13 +303,11 @@ impl NodeNamesByProcessorId {
         Self(std::collections::HashMap::new())
     }
 
-    /// The name of the node `processor_id` names — the id itself for one this
-    /// index does not hold, which only an end whose node is mid-removal is.
-    fn name_of(&self, processor_id: &crate::core::graph::ProcessorUniqueId) -> String {
+    fn name_of(&self, node_run_id: &crate::core::graph::NodeRunId) -> String {
         self.0
-            .get(processor_id)
+            .get(node_run_id)
             .cloned()
-            .unwrap_or_else(|| processor_id.to_string())
+            .unwrap_or_else(|| node_run_id.to_string())
     }
 }
 
@@ -349,7 +338,7 @@ pub enum LinkStateOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct RegistryResponse {
     /// Every node type this process can add, with its descriptor.
-    pub nodes: Vec<ProcessorDescriptorOutput>,
+    pub nodes: Vec<NodeDescriptorOutput>,
     /// The five port families, each with its description.
     pub families: Vec<PortFamilyDescriptorOutput>,
 }
@@ -384,7 +373,7 @@ impl PortFamilyDescriptorOutput {
 #[serde(deny_unknown_fields)]
 pub struct MachineWideRegistryResponse {
     /// The node types compiled into this runtime, which any stream can add.
-    pub nodes: Vec<ProcessorDescriptorOutput>,
+    pub nodes: Vec<NodeDescriptorOutput>,
     /// The five port families, each with its description.
     pub families: Vec<PortFamilyDescriptorOutput>,
     /// Each loaded stream's types described in its own interpreter.
@@ -399,7 +388,7 @@ pub struct NodeTypesDescribedInOneStreamOutput {
     pub stream: String,
     /// The types described in its interpreter that a graph or a live add
     /// named, which only this stream adds.
-    pub nodes: Vec<ProcessorDescriptorOutput>,
+    pub nodes: Vec<NodeDescriptorOutput>,
     /// The types installed modules declare in the stream's environment, under
     /// its `tatolab.nodes` entry points, which only this stream adds.
     pub installed: Vec<NodeTypeAnInstalledModuleDeclaresOutput>,
@@ -416,7 +405,7 @@ pub struct NodeTypeAnInstalledModuleDeclaresOutput {
     /// The entry point's name in `tatolab.nodes`.
     pub entry_point: String,
     /// The node type, as the stream's interpreter described it.
-    pub node: ProcessorDescriptorOutput,
+    pub node: NodeDescriptorOutput,
 }
 
 /// How a node type's code runs: a shader on the GPU, a function evaluated
@@ -462,22 +451,22 @@ fn node_kind_rendered_as_kind_and_language(
     }
 }
 
-/// Runtime environment for a processor.
+/// Runtime environment for a node.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ProcessorRuntimeOutput {
+pub enum NodeRuntimeOutput {
     #[default]
     Rust,
     Python,
 }
 
-/// Descriptor for a processor type.
+/// Descriptor for a node type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct ProcessorDescriptorOutput {
+pub struct NodeDescriptorOutput {
     /// The import path of the class this node type is — the `type` a graph
     /// node carries and `add_node` takes.
     #[serde(rename = "type")]
-    pub processor_class_import_path: ProcessorClassImportPath,
+    pub node_class_import_path: NodeClassImportPath,
     /// How this node type's code runs.
     pub kind: NodeKindOutput,
     /// The language a function node is written in; absent on every other kind.
@@ -493,12 +482,12 @@ pub struct ProcessorDescriptorOutput {
     pub repository: String,
     /// Runtime environment.
     #[serde(default)]
-    pub runtime: ProcessorRuntimeOutput,
+    pub runtime: NodeRuntimeOutput,
     /// Entrypoint for non-Rust runtimes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
     /// The config type's JSON Schema, as JSON Schema draft 2020-12 — what an
-    /// agent reads to learn which keys this processor's config takes.
+    /// agent reads to learn which keys this node's config takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
     /// Whether the node paces itself on real time, as a live device does: in a
@@ -513,7 +502,7 @@ pub struct ProcessorDescriptorOutput {
     pub examples: CodeExamplesOutput,
 }
 
-/// Descriptor for a processor port.
+/// Descriptor for a node port.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortDescriptorOutput {
     /// Port name.
@@ -541,7 +530,7 @@ pub struct PortDescriptorOutput {
     pub family: crate::core::descriptors::PortFamilyDeclaration,
 }
 
-/// Code examples for a processor in different languages.
+/// Code examples for a node in different languages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct CodeExamplesOutput {
     /// Rust code example.
@@ -556,8 +545,8 @@ pub struct CodeExamplesOutput {
 // Conversion from Runtime Types
 // =============================================================================
 
-impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
-    fn from(node: &crate::core::graph::ProcessorNode) -> Self {
+impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
+    fn from(node: &crate::core::graph::GraphNode) -> Self {
         let (kind, language) = match node.node_kind() {
             Some(node_kind) => {
                 let (kind, language) = node_kind_rendered_as_kind_and_language(node_kind);
@@ -567,7 +556,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
         };
         Self {
             id: node.node_uuid.to_string(),
-            processor_type: node.processor_type.clone(),
+            node_type: node.node_type.clone(),
             kind,
             language,
             name: node.display_name.clone(),
@@ -577,28 +566,16 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
             exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            ports: ProcessorNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
+            ports: GraphNodePortsOutput::rendered_for_a_node_over_its_settled_contracts(node),
             components: node.serialize_components(),
             fragment: None,
         }
     }
 }
 
-impl ProcessorNodePortsOutput {
-    /// This node's ports, with any `match_device` contract its own device
-    /// stream has settled rendered as the five values it settled to, and each
-    /// output port's stream facts as it carries them now.
-    ///
-    /// A port declaring the sentinel renders it until its processor's `setup()`
-    /// opens a device, and the resolved values from then on: machine-dependent
-    /// because the device format is, which is truer than a static lie.
-    ///
-    /// Takes the node rather than its ports, and is the only way they are
-    /// rendered: the settled values live beside the ports rather than in them,
-    /// so a renderer handed the ports alone could only ever produce the
-    /// sentinel — and would look like the right call to reach for.
+impl GraphNodePortsOutput {
     fn rendered_for_a_node_over_its_settled_contracts(
-        node: &crate::core::graph::ProcessorNode,
+        node: &crate::core::graph::GraphNode,
     ) -> Self {
         let settled = node
             .get::<crate::core::graph::DeviceMatchedAudioWindowContractsComponent>()
@@ -687,7 +664,7 @@ impl LinkOutput {
     /// Render `link` with each end on this runtime named by its node's name.
     pub(crate) fn of_a_link(
         link: &crate::core::graph::Link,
-        node_names: &NodeNamesByProcessorId,
+        node_names: &NodeNamesByNodeRunId,
     ) -> Self {
         let rendered = RenderedLinkState::of(link);
         let mut components = link.serialize_components();
@@ -701,12 +678,12 @@ impl LinkOutput {
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::of_a_port(
-                link.source.processor_id(),
+                link.source.node_run_id(),
                 link.source.port_name(),
                 node_names,
             ),
             target: LinkPortRefOutput::of_a_port(
-                link.target.processor_id(),
+                link.target.node_run_id(),
                 link.target.port_name(),
                 node_names,
             ),
@@ -722,7 +699,7 @@ impl LinkOutput {
     /// in the error either of its links is in, else in the state of the link out of the pool.
     pub(crate) fn of_a_link_carried_through_the_function_node_pool(
         carried: &LinkCarriedThroughTheFunctionNodePool<'_>,
-        node_names: &NodeNamesByProcessorId,
+        node_names: &NodeNamesByNodeRunId,
     ) -> Self {
         let into_the_pool = Self::of_a_link(carried.into_the_function_node_pool, node_names);
         let out_of_the_pool = Self::of_a_link(carried.out_of_the_function_node_pool, node_names);
@@ -826,17 +803,17 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
     }
 }
 
-impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
-    fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
+impl From<&crate::core::NodeDescriptor> for NodeDescriptorOutput {
+    fn from(desc: &crate::core::NodeDescriptor) -> Self {
         let (kind, language) = node_kind_rendered_as_kind_and_language(desc.node_kind);
         Self {
-            processor_class_import_path: desc.processor_class_import_path.clone(),
+            node_class_import_path: desc.node_class_import_path.clone(),
             kind,
             language,
             description: desc.description.clone(),
             category: desc.category.clone(),
             repository: desc.repository.clone(),
-            runtime: ProcessorRuntimeOutput::from(&desc.runtime),
+            runtime: NodeRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
             config_schema: desc.config_schema.clone(),
             paced_by_real_time: desc.paced_by_real_time,
@@ -851,11 +828,11 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
     }
 }
 
-impl From<&crate::core::ProcessorRuntime> for ProcessorRuntimeOutput {
-    fn from(runtime: &crate::core::ProcessorRuntime) -> Self {
+impl From<&crate::core::NodeRuntime> for NodeRuntimeOutput {
+    fn from(runtime: &crate::core::NodeRuntime) -> Self {
         match runtime {
-            crate::core::ProcessorRuntime::Rust => ProcessorRuntimeOutput::Rust,
-            crate::core::ProcessorRuntime::Python => ProcessorRuntimeOutput::Python,
+            crate::core::NodeRuntime::Rust => NodeRuntimeOutput::Rust,
+            crate::core::NodeRuntime::Python => NodeRuntimeOutput::Python,
         }
     }
 }

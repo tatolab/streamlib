@@ -1,33 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Channel names — the pub/sub rendezvous identifier a source output port
-//! publishes to and every downstream input port subscribes from.
-//!
-//! A channel is keyed on the **source output port** (`{source_processor_id}/{source_output_port}`),
-//! not on the link: one source output port maps to exactly one channel, so a
-//! single publisher fans out one zero-copy loan to N compile-time-known
-//! subscribers regardless of how many destinations it feeds. A `connect()` link
-//! is the degenerate 1:1 case of that keying.
-//!
-//! The name is an iceoryx2 service name, and never leaves this host: a port is
-//! addressed `<machine>/<stream>/<node>/<port>`, and a channel name carries a
-//! cuid2 processor id no caller could be expected to spell. It is `/`-separated
-//! into chunks, each one address chunk as `core::runtime::address_chunk` states
-//! the rule; every character that rule keeps is one an iceoryx2 `ServiceName`
-//! carries, since it imposes nothing beyond non-empty / length / no `iox2://`
-//! prefix.
-//!
-//! The `/` between the processor-id chunk and the port chunk makes the mapping
-//! injective: two distinct `(processor, port)` pairs can never collide onto one
-//! channel name.
-//!
-//! The wire carries a channel name through a fixed-width `PortKey`
-//! ([`MAX_CHANNEL_NAME_BYTES`] bytes). An over-length explicit name is a hard
-//! error; a generated name hash-legalizes its machine-generated chunk (the
-//! processor id) in place to stay in bound, never prefix-truncating across a
-//! `/` (which would collide two channels).
-
 use crate::core::error::{Error, Result};
 use crate::core::runtime::address_chunk::{
     first_reason_this_is_not_one_address_chunk, what_one_address_chunk_may_be,
@@ -123,42 +96,18 @@ pub fn validate_channel_name(s: &str) -> Result<()> {
     validate_channel_chunks(s)
 }
 
-/// Deterministically derive the channel name a source output port publishes to:
-/// `{source_processor_id}/{source_output_port}`.
-///
-/// Channel identity keys on the **source** only — the same source output port
-/// yields the same channel regardless of how many destinations `connect()` to
-/// it, which is what lets one publisher fan out a single zero-copy loan to N
-/// subscribers. Two `connect()` links from one output share this one channel.
-///
-/// The processor id is engine-generated (`ProcessorUniqueId` is `P{cuid2}` — an
-/// uppercase-leading `P` over a lowercase base-36 body), so it is normalized to
-/// lowercase before the `/`. The output port name is NOT normalized here —
-/// `connect` casts it first — so one not already cast (uppercase, whitespace, a
-/// stray `/`) is refused as [`Error::ChannelNameChunkIsNotOneAddressChunk`]
-/// rather than becoming a silently-invalid wire name. A cast name rides through
-/// whole (`video_out` → `…/video_out`, `v1.2` → `…/v1.2`).
-///
-/// If the joined form overflows [`MAX_CHANNEL_NAME_BYTES`], the machine-generated
-/// processor-id chunk is shortened and a stable hash of its full form is
-/// appended (`{prefix}-{hash}`) — a pure function of the inputs that stays
-/// unique. The author-supplied port chunk is never shortened; if the port chunk
-/// alone leaves no room for even a hashed processor chunk, the port name is
-/// [`Error::ChannelNameTooLong`].
-pub fn source_channel_name(source_processor: &str, source_output: &str) -> Result<ChannelName> {
-    let processor = source_processor.to_ascii_lowercase();
-    let name_before_any_shortening = format!("{processor}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
+pub fn source_channel_name(source_node: &str, source_output: &str) -> Result<ChannelName> {
+    let node = source_node.to_ascii_lowercase();
+    let name_before_any_shortening = format!("{node}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
     validate_channel_chunk(&name_before_any_shortening, source_output)?;
 
     let sep_len = CHANNEL_CHUNK_SEPARATOR.len_utf8();
     if name_before_any_shortening.len() <= MAX_CHANNEL_NAME_BYTES {
-        validate_channel_chunk(&name_before_any_shortening, &processor)?;
+        validate_channel_chunk(&name_before_any_shortening, &node)?;
         return Ok(ChannelName(name_before_any_shortening));
     }
 
-    // Overflow: hash-legalize ONLY the machine-generated processor chunk, never
-    // across the `/`. The author-supplied port chunk rides through whole.
-    let processor_budget = MAX_CHANNEL_NAME_BYTES
+    let node_budget = MAX_CHANNEL_NAME_BYTES
         .checked_sub(sep_len + source_output.len())
         .filter(|budget| *budget > CHANNEL_NAME_HASH_SUFFIX_HEX_LEN)
         .ok_or_else(|| Error::ChannelNameTooLong {
@@ -167,9 +116,9 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
             max: MAX_CHANNEL_NAME_BYTES - sep_len - (CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1),
         })?;
 
-    let processor_chunk = hash_legalize_chunk(&processor, processor_budget);
-    let name = format!("{processor_chunk}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
-    validate_channel_chunk(&name, &processor_chunk)?;
+    let node_chunk = hash_legalize_chunk(&node, node_budget);
+    let name = format!("{node_chunk}{CHANNEL_CHUNK_SEPARATOR}{source_output}");
+    validate_channel_chunk(&name, &node_chunk)?;
     Ok(ChannelName(name))
 }
 
@@ -349,13 +298,6 @@ mod tests {
 
     #[test]
     fn channel_identity_keys_on_source_only() {
-        // The load-bearing D1 property: channel identity is a pure function of
-        // the SOURCE output port. The derivation takes no destination argument,
-        // so every link out of one source output port — regardless of which
-        // destination processor / input port it feeds — resolves to the ONE
-        // channel a single publisher fans out over (N subscribers, one loan).
-        // Same source port ⇒ same channel; the channel moves only when the
-        // source port does.
         let a = source_channel_name("cam", "frame").unwrap();
         let same_source = source_channel_name("cam", "frame").unwrap();
         let other_port = source_channel_name("cam", "thumbnail").unwrap();
@@ -370,15 +312,12 @@ mod tests {
         );
         assert_ne!(
             a, other_proc,
-            "a different source processor is a different channel"
+            "a different source node is a different channel"
         );
     }
 
     #[test]
     fn distinct_source_ports_stay_distinct() {
-        // Injectivity across the `/`: distinct (processor, port) pairs must
-        // never collide. Directly exercises the non-injective single-`-` fold
-        // defect the `/`-separator fixes — `cam-x` + `out` vs `cam` + `x-out`.
         let a = source_channel_name("camx", "out").unwrap();
         let b = source_channel_name("cam", "xout").unwrap();
         assert_ne!(a, b);
@@ -400,13 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn source_channel_name_lowercases_uppercase_leading_processor_id() {
-        // Real `ProcessorUniqueId`s are `P{cuid2}` — uppercase-leading `P` over
-        // a lowercase base-36 body. The derivation lowercases the processor-id
-        // chunk so a valid source with a default id yields a grammar-legal
-        // channel name instead of erroring. Mental-revert guard: drop the
-        // `to_ascii_lowercase` normalization and this errors with
-        // ChannelNameChunkIsNotOneAddressChunk.
+    fn source_channel_name_lowercases_uppercase_leading_node_run_id() {
         let name = source_channel_name("Pabc123def", "video_out").unwrap();
         assert_eq!(name.as_str(), "pabc123def/video_out");
         validate_channel_name(name.as_str()).unwrap();
@@ -451,13 +384,8 @@ mod tests {
     }
 
     #[test]
-    fn source_channel_name_over_bound_hashes_processor_chunk_not_port() {
-        // When the joined form overflows the wire bound, only the
-        // machine-generated processor chunk is shortened+hashed; the
-        // author-supplied port chunk rides through whole, and the result stays
-        // in bound, grammar-legal, and deterministic. Never a prefix truncation
-        // across the `/`.
-        let long_proc = "p".to_string() + &"processorname".repeat(6); // 79 bytes
+    fn source_channel_name_over_bound_hashes_node_chunk_not_port() {
+        let long_proc = "p".to_string() + &"nodename".repeat(6); // 79 bytes
         let a = source_channel_name(&long_proc, "output_port").unwrap();
         assert!(a.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
         validate_channel_name(a.as_str()).unwrap();
@@ -469,13 +397,11 @@ mod tests {
         );
         // Deterministic on the hashed path.
         assert_eq!(a, source_channel_name(&long_proc, "output_port").unwrap());
-        // Two long processor ids sharing a prefix must NOT collapse onto one
-        // channel — the hash suffix disambiguates.
-        let long_proc2 = "p".to_string() + &"processornamex".repeat(6);
+        let long_proc2 = "p".to_string() + &"nodenamex".repeat(6);
         let b = source_channel_name(&long_proc2, "output_port").unwrap();
         assert_ne!(
             a, b,
-            "hash suffix must disambiguate prefix-colliding processor ids"
+            "hash suffix must disambiguate prefix-colliding node ids"
         );
     }
 
@@ -488,7 +414,7 @@ mod tests {
     /// was a proxy for.
     #[test]
     fn generated_source_channel_name_fits_the_wire() {
-        let long = "verylongprocessorname".repeat(4);
+        let long = "verylongnodename".repeat(4);
         let channel = source_channel_name(&long, "outputport")
             .expect("a grammar-legal source output port must produce a channel name");
         PortKey::new(channel.as_str())

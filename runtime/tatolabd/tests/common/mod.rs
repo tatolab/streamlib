@@ -21,9 +21,9 @@ use rmcp::model::{CallToolRequestParams, ProtocolVersion};
 use rmcp::service::{ClientLifecycleMode, ClientServiceExt};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{StreamableHttpClientTransport, UnixSocketHttpClient};
-use streamlib::sdk::processor_interpreter::{
+use streamlib::sdk::node_interpreter::{
     BINARY_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT_ROOT, lend_directory_in_the_runtime_unit,
-    processor_interpreter_bootstrap_path,
+    node_interpreter_bootstrap_path,
 };
 use streamlib::sdk::runtime::{
     STREAM_RECORD_SCHEMA_VERSION, StreamLocation, StreamRecord, StreamRecordAsRead,
@@ -51,7 +51,7 @@ impl TemporaryRuntimeUnit {
     /// `bin/tatolabd` beside the lend, holding the bootstrap.
     pub(crate) fn with_its_lend() -> Self {
         let runtime_unit = Self::without_a_lend();
-        let bootstrap = processor_interpreter_bootstrap_path(&lend_directory_in_the_runtime_unit(
+        let bootstrap = node_interpreter_bootstrap_path(&lend_directory_in_the_runtime_unit(
             runtime_unit.runtime_unit_root(),
         ));
         std::fs::create_dir_all(bootstrap.parent().expect("the bootstrap has a directory"))
@@ -465,8 +465,6 @@ pub(crate) fn a_stream_record(
     }
 }
 
-/// An interpreter path that exists and is executable, for a stream whose
-/// native-only graph never starts a processor interpreter.
 pub(crate) fn an_executable_standing_in_for_the_interpreter() -> PathBuf {
     PathBuf::from("/bin/sh")
 }

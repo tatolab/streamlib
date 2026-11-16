@@ -282,7 +282,7 @@ impl Runner {
     ) -> Result<()> {
         let lend_directory = self
             .engine_resources_shared_by_every_stream
-            .processor_interpreter_lend_directory
+            .node_interpreter_lend_directory
             .get();
         if let Err(load_refusal) =
             stream.load_graph_snapshot_into_this_stream(graph, lend_directory)

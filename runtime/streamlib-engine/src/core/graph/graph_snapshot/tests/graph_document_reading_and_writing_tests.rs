@@ -27,7 +27,7 @@ fn a_graph_document_parses_with_its_live_keys_ignored() {
 
     assert_eq!(graph.stream.as_deref(), Some("main"));
     assert_eq!(graph.nodes[0].name, "camera");
-    assert_eq!(graph.nodes[0].processor_type.as_str(), A_CAMERA_CLASS);
+    assert_eq!(graph.nodes[0].node_type.as_str(), A_CAMERA_CLASS);
     assert_eq!(graph.nodes[0].config, serde_json::json!({"fps": 30}));
     assert_eq!(
         graph.links[0].source,
@@ -48,7 +48,7 @@ fn a_graph_serializes_exactly_the_spec_keys() {
         nodes: vec![GraphSnapshotNode {
             id: None,
             name: "camera".into(),
-            processor_type: ProcessorClassImportPath::new(A_CAMERA_CLASS).unwrap(),
+            node_type: NodeClassImportPath::new(A_CAMERA_CLASS).unwrap(),
             config: serde_json::json!({}),
             pins: serde_json::Map::new(),
             exposed_config_fields: Vec::new(),
@@ -182,7 +182,7 @@ fn a_node_id_that_is_no_uuid_reads_as_no_uuid() {
 
 #[test]
 fn the_retired_alias_shape_does_not_parse() {
-    let aliases = r#"{"processors": [{"alias": "camera", "type": "a:B", "config": {}}],
+    let aliases = r#"{"nodes": [{"alias": "camera", "type": "a:B", "config": {}}],
                           "connections": [{"from": "camera.video", "to": "display.video"}]}"#;
 
     assert!(GraphSnapshot::from_json_str(aliases).is_err());
@@ -254,10 +254,10 @@ fn an_unregistered_type_is_refused_as_unknown() {
     .unwrap();
 
     match graph.validate(&NodeTypesOneStreamResolves::new()) {
-        Err(Error::UnknownProcessorType { ident }) => {
+        Err(Error::UnknownNodeType { ident }) => {
             assert_eq!(ident.as_str(), "my_app.nodes:NotARegisteredNode");
         }
-        other => panic!("expected UnknownProcessorType, got {other:?}"),
+        other => panic!("expected UnknownNodeType, got {other:?}"),
     }
 }
 
@@ -286,10 +286,10 @@ fn a_built_in_type_this_runtime_lacks_is_refused_naming_it_and_this_runtimes_ver
 
 #[test]
 fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
-    let moved_out = ProcessorClassImportPath::of_built_in_node("GraphSnapshotTestMovedOut");
-    PROCESSOR_REGISTRY.register_built_in_node_type_moved_to_a_module(
+    let moved_out = NodeClassImportPath::of_built_in_node("GraphSnapshotTestMovedOut");
+    NODE_REGISTRY.register_built_in_node_type_moved_to_a_module(
         moved_out.clone(),
-        ProcessorClassImportPath::new("tatolab.snapshottest:GraphSnapshotTestMovedOut").unwrap(),
+        NodeClassImportPath::new("tatolab.snapshottest:GraphSnapshotTestMovedOut").unwrap(),
         "tatolab-snapshottest",
     );
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
@@ -320,7 +320,7 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
 fn a_setting_the_nodes_type_does_not_take_is_refused_naming_the_node_its_type_and_the_setting() {
     crate::core::test_support::ensure_test_mocks_registered();
     let source_type =
-        crate::core::test_support::MockSourceTakingOneSetting::processor_class_import_path();
+        crate::core::test_support::MockSourceTakingOneSetting::node_class_import_path();
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "Front", "type": source_type.as_str(),
                    "config": {"frame_widht": 640}}]
@@ -346,7 +346,7 @@ fn a_setting_the_nodes_type_does_not_take_is_refused_naming_the_node_its_type_an
 fn a_setting_the_nodes_type_takes_passes() {
     crate::core::test_support::ensure_test_mocks_registered();
     let source_type =
-        crate::core::test_support::MockSourceTakingOneSetting::processor_class_import_path();
+        crate::core::test_support::MockSourceTakingOneSetting::node_class_import_path();
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "Front", "type": source_type.as_str(),
                    "config": {"frame_width": 640}},
@@ -460,7 +460,7 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
 
     for (object_schema, keys) in [
         (&render_schema, &GRAPH_DOCUMENT_KEYS),
-        (&definitions["ProcessorNodeOutput"], &GRAPH_NODE_KEYS),
+        (&definitions["GraphNodeOutput"], &GRAPH_NODE_KEYS),
         (&definitions["LinkOutput"], &GRAPH_LINK_KEYS),
         (&definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
     ] {
@@ -489,11 +489,10 @@ fn a_type_described_in_the_stream_validates_against_that_streams_ports() {
     let described_class = "graph_snapshot_tests.nodes:DescribedInTheStream";
     let node_types = NodeTypesOneStreamResolves::new();
     node_types
-        .register_a_type_described_in_this_streams_processor_interpreter(
-            crate::core::descriptors::ProcessorDescriptor::new(
-                crate::core::descriptors::ProcessorClassShortName::new("DescribedInTheStream")
-                    .unwrap(),
-                ProcessorClassImportPath::new(described_class).unwrap(),
+        .register_a_type_described_in_this_streams_node_interpreter(
+            crate::core::descriptors::NodeDescriptor::new(
+                crate::core::descriptors::NodeClassShortName::new("DescribedInTheStream").unwrap(),
+                NodeClassImportPath::new(described_class).unwrap(),
                 "graph snapshot test",
             )
             .with_output(crate::core::descriptors::PortDescriptor::new(
@@ -504,7 +503,7 @@ fn a_type_described_in_the_stream_validates_against_that_streams_ports() {
                     crate::core::descriptors::PortFamily::Image,
                 ),
             )),
-            crate::core::processors::HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
                 Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
             ),
         )
@@ -520,7 +519,7 @@ fn a_type_described_in_the_stream_validates_against_that_streams_ports() {
     assert!(
         matches!(
             graph.validate(&NodeTypesOneStreamResolves::new()),
-            Err(Error::UnknownProcessorType { .. })
+            Err(Error::UnknownNodeType { .. })
         ),
         "a stream that described nothing resolved another stream's type"
     );

@@ -28,7 +28,7 @@ def test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     if observation.get("tier_present"):
         pytest.skip("this device has the ray-tracing tier; test_ray_tracing_kernel covers it")
 

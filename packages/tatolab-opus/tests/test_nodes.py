@@ -19,8 +19,8 @@ from helper_process_link_wiring import wire_one_link
 from parent_stream_facts_stand_in import ParentHoldingStreamFacts
 from tatolab.opus import OpusDecoder, OpusEncoder
 from tatolab.runtime import _engine
-from tatolab.runtime._processor_hosting import construct_processor_instance
-from tatolab.runtime._processor_interpreter_bootstrap import describe_one_processor_class
+from tatolab.runtime._node_hosting import construct_node_instance
+from tatolab.runtime._node_interpreter_bootstrap import describe_one_node_class
 from tatolab.stream import (
     Channels,
     ChannelsBlock,
@@ -59,7 +59,7 @@ def test_each_node_is_named_by_its_own_import_path_in_the_module():
 
 
 def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_channel_count():
-    [audio] = describe_one_processor_class("tatolab.opus:OpusEncoder")["input_ports"]
+    [audio] = describe_one_node_class("tatolab.opus:OpusEncoder")["input_ports"]
 
     assert audio["name"] == "audio"
     assert audio["delivery_profile"] == "ordered"
@@ -74,7 +74,7 @@ def test_the_encoders_input_declares_a_window_contract_that_follows_its_sources_
 
 
 def test_the_decoder_takes_opus_packets_and_publishes_f32_channels_at_opus_rate():
-    described = describe_one_processor_class("tatolab.opus:OpusDecoder")
+    described = describe_one_node_class("tatolab.opus:OpusDecoder")
     [encoded_audio] = described["input_ports"]
     [audio] = described["output_ports"]
 
@@ -88,7 +88,7 @@ def test_the_decoder_takes_opus_packets_and_publishes_f32_channels_at_opus_rate(
 
 
 def test_the_encoder_publishes_opus_packets():
-    [encoded_audio] = describe_one_processor_class("tatolab.opus:OpusEncoder")["output_ports"]
+    [encoded_audio] = describe_one_node_class("tatolab.opus:OpusEncoder")["output_ports"]
 
     assert encoded_audio["family"] == {"family": "packets", "codec": "opus"}
 
@@ -104,16 +104,16 @@ def test_the_encoder_publishes_opus_packets():
 )
 def test_an_encoder_config_libopus_cannot_take_is_refused_by_name(config, refusal):
     with pytest.raises(ValueError, match=refusal):
-        construct_processor_instance(OpusEncoder, config, None)
+        construct_node_instance(OpusEncoder, config, None)
 
 
 def test_an_empty_encoder_config_is_legal():
-    assert isinstance(construct_processor_instance(OpusEncoder, {}, None), OpusEncoder)
+    assert isinstance(construct_node_instance(OpusEncoder, {}, None), OpusEncoder)
 
 
 def test_an_encoder_setting_the_class_does_not_take_is_refused():
     with pytest.raises(TypeError, match="channels"):
-        construct_processor_instance(OpusEncoder, {"channels": 2}, None)
+        construct_node_instance(OpusEncoder, {"channels": 2}, None)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -210,12 +210,12 @@ class OpusRoundTripOnWiredLinks:
             decoder_links, "audio", sink_links, "audio", f"{unique}/decoder", f"{unique}_s/notify"
         )
 
-        def context(links: Any, processor_id: str) -> Any:
+        def context(links: Any, node_run_id: str) -> Any:
             return _engine.open_runtime_context_full_access_for_helper_process(
                 {},
                 links,
                 "runtime-under-test",
-                processor_id,
+                node_run_id,
                 self.parent.escalate_request_to_parent,
             )
 
@@ -223,10 +223,10 @@ class OpusRoundTripOnWiredLinks:
         self.encoder_context = context(encoder_links, "encoder-under-test")
         self.decoder_context = context(decoder_links, "decoder-under-test")
         self.sink_context = context(sink_links, "sink-under-test")
-        self.encoder = construct_processor_instance(
+        self.encoder = construct_node_instance(
             OpusEncoder, {"bitrate_bps": 128_000}, encoder_links
         )
-        self.decoder = construct_processor_instance(OpusDecoder, {}, decoder_links)
+        self.decoder = construct_node_instance(OpusDecoder, {}, decoder_links)
 
     def send(self, window: PlanarWindowToSend) -> None:
         self.source_context.outputs.write_channels_block(
@@ -316,7 +316,7 @@ def test_a_window_whose_channel_count_opus_cannot_place_is_refused_by_name_and_t
 def test_an_empty_message_on_the_decoders_link_is_refused_by_name(
     opus_round_trip: OpusRoundTripOnWiredLinks,
 ):
-    decoder = construct_processor_instance(OpusDecoder, {}, None)
+    decoder = construct_node_instance(OpusDecoder, {}, None)
     with pytest.raises(ValueError, match="no Opus packet"):
         decoder._decoder.decode_one_arriving_message(b"", 0, True, 0, None)
     with pytest.raises(ValueError, match="names codec `mp4a.40.2`"):

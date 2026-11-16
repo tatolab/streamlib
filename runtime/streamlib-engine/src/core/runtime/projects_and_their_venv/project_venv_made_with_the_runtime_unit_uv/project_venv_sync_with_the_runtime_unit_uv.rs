@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
+use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, run_a_child_process_to_its_exit_within,
     run_a_child_process_to_its_exit_within_handing_on_its_standard_error_lines,
 };

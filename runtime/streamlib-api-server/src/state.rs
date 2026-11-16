@@ -43,7 +43,7 @@ pub(crate) struct ErrorResponse {
     ),
     tags(
         (name = "graph", description = "Graph inspection"),
-        (name = "registry", description = "Processor and schema registry"),
+        (name = "registry", description = "Node and schema registry"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )
 )]

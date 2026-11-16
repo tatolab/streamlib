@@ -12,7 +12,7 @@ use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
 
 use crate::core::compiler::Compiler;
-use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
+use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::LoadedStreamAHelperProcessBelongsTo;
 use crate::core::context::{
     CaptureDeviceAccessPrompting, LoadedStreamARuntimeContextBelongsTo, RuntimeContext,
 };
@@ -20,9 +20,9 @@ use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::pubsub::{EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics};
-use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::ProcessorInterpreterLaunchRecordOfOneStream;
+use crate::core::runtime::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
 use crate::core::runtime::runtime::EngineResourcesSharedByEveryStream;
 use crate::core::runtime::streams_loaded_in_this_runtime::graph_change_listener::GraphChangeListener;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
@@ -94,7 +94,6 @@ pub struct LoadedStreamInThisRuntime {
     /// context of this stream is handed.
     this_streams_identity_and_handles: Arc<LoadedStreamARuntimeContextBelongsTo>,
     engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
-    /// Compiles this stream's graph changes into running processors.
     pub(crate) compiler: Arc<Compiler>,
     /// This stream's runtime context, made at its start and cleared at its stop.
     pub(crate) runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
@@ -102,8 +101,7 @@ pub struct LoadedStreamInThisRuntime {
     /// Subscribed to this stream's topic only; held so the subscription lives
     /// as long as the stream.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
-    pub(crate) processor_interpreter_launch_record:
-        Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
+    pub(crate) node_interpreter_launch_record: Arc<NodeInterpreterLaunchRecordOfOneStream>,
     node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     /// The fragment, variable and interface nodes, and what they resolved to, of the
     /// graph this stream runs, so `graph` renders them as drawn.
@@ -199,7 +197,6 @@ impl LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HowALoadedStreamEnded {
-    /// Its teardown finished and every processor was removed.
     Stopped,
     /// Its teardown finished, reporting the failure it met.
     StoppedReportingAFailure(String),
@@ -293,18 +290,16 @@ impl LoadedStreamInThisRuntime {
                     &engine_resources_shared_by_every_stream.project_stores_open_in_this_runtime,
                 ),
             }),
-            processor_interpreter_launch_record: Arc::new(
-                ProcessorInterpreterLaunchRecordOfOneStream::new(
-                    loaded_stream_identity.clone(),
-                    Arc::from(project_directory.as_path()),
-                    stream_environment,
-                    Arc::clone(&node_types_this_stream_resolves),
-                    LoadedStreamAHelperProcessBelongsTo {
-                        stream_tag,
-                        shutdown_escalation: shutdown_escalation.clone(),
-                    },
-                ),
-            ),
+            node_interpreter_launch_record: Arc::new(NodeInterpreterLaunchRecordOfOneStream::new(
+                loaded_stream_identity.clone(),
+                Arc::from(project_directory.as_path()),
+                stream_environment,
+                Arc::clone(&node_types_this_stream_resolves),
+                LoadedStreamAHelperProcessBelongsTo {
+                    stream_tag,
+                    shutdown_escalation: shutdown_escalation.clone(),
+                },
+            )),
             node_types_this_stream_resolves,
             graph_only_nodes_as_drawn: Mutex::new(GraphOnlyNodesAsDrawn::default()),
             is_held_stopped: AtomicBool::new(false),
@@ -375,7 +370,6 @@ impl LoadedStreamInThisRuntime {
         function_node_states
     }
 
-    /// The handles every runtime context of this stream's processors holds.
     pub(crate) fn the_handles_a_runtime_context_of_this_stream_belongs_to(
         &self,
     ) -> Arc<LoadedStreamARuntimeContextBelongsTo> {
@@ -386,10 +380,8 @@ impl LoadedStreamInThisRuntime {
         &self.this_streams_identity_and_handles.project_directory
     }
 
-    /// Where the stream's processor interpreters start, if it was given one.
     pub fn stream_environment(&self) -> Option<&StreamEnvironment> {
-        self.processor_interpreter_launch_record
-            .stream_environment()
+        self.node_interpreter_launch_record.stream_environment()
     }
 
     /// The stream's process-unique tag.
@@ -474,8 +466,6 @@ impl LoadedStreamInThisRuntime {
             .scope(|graph, _tx| graph.traversal().v(()).iter().count())
     }
 
-    /// Export this stream's graph as JSON: topology, processor states,
-    /// metrics and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
         let machine_name = self
             .engine_resources_shared_by_every_stream
@@ -500,7 +490,7 @@ impl LoadedStreamInThisRuntime {
                                 node.node_uuid,
                                 crate::core::compiler::compiler_ops::function_node_island::the_state_fields_of_a_function_node(
                                     graph,
-                                    &node.processor_type,
+                                    &node.node_type,
                                 ),
                             )
                         })
@@ -536,7 +526,7 @@ impl LoadedStreamInThisRuntime {
     /// state fields the node declares.
     fn render_the_state_of_each_stateful_function_node_into(
         &self,
-        nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
+        nodes: &mut [crate::core::json_schema::GraphNodeOutput],
         stateful_function_nodes_by_node_uuid: &HashMap<uuid::Uuid, Vec<String>>,
     ) {
         let function_node_states = &self.this_streams_identity_and_handles.function_node_states;
@@ -566,7 +556,7 @@ impl LoadedStreamInThisRuntime {
     /// types mark; a config holding a malformed one renders none for that key.
     fn reference_edges_the_configs_of(
         &self,
-        nodes: &[crate::core::json_schema::ProcessorNodeOutput],
+        nodes: &[crate::core::json_schema::GraphNodeOutput],
     ) -> Vec<ConfigNodeReferenceEdgeOutput> {
         nodes
             .iter()
@@ -576,7 +566,7 @@ impl LoadedStreamInThisRuntime {
                 };
                 crate::core::graph::config_keys_of_a_node_type_holding_a_node_reference(
                     &self.node_types_this_stream_resolves,
-                    &node.processor_type,
+                    &node.node_type,
                 )
                 .into_iter()
                 .filter_map(|key| {
@@ -619,22 +609,22 @@ pub(in crate::core::runtime) fn the_current_value_of_each_graph_input(
     ) -> Result<crate::core::context::StoreScopedToThisNode>,
 ) -> HashMap<String, serde_json::Value> {
     use crate::core::graph::GraphNodeWithComponents;
-    use crate::core::processors::NodeWhoseOutputsAClientWritesProcessor;
+    use crate::core::nodes::NodeWhoseOutputsAClientWrites;
     graph
         .traversal()
         .v(())
         .iter()
         .filter(|node| {
-            node.processor_type.as_str()
+            node.node_type.as_str()
                 == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
         })
         .filter_map(|node| {
-            let current_value = match node.get::<crate::core::graph::ProcessorInstanceComponent>() {
-                Some(processor_instance) => processor_instance
+            let current_value = match node.get::<crate::core::graph::NodeInstanceComponent>() {
+                Some(node_instance) => node_instance
                     .0
                     .lock()
                     .as_any_mut()
-                    .downcast_mut::<NodeWhoseOutputsAClientWritesProcessor>()?
+                    .downcast_mut::<NodeWhoseOutputsAClientWrites>()?
                     .current_value_of_the_output(
                         crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME,
                     )?
@@ -649,7 +639,7 @@ pub(in crate::core::runtime) fn the_current_value_of_each_graph_input(
                             )
                         })
                         .ok();
-                    NodeWhoseOutputsAClientWritesProcessor::the_value_a_stopped_top_level_graph_input_carries(
+                    NodeWhoseOutputsAClientWrites::the_value_a_stopped_top_level_graph_input_carries(
                         node, store,
                     )
                     .ok()??
@@ -663,7 +653,7 @@ pub(in crate::core::runtime) fn the_current_value_of_each_graph_input(
 /// Render each `GraphInput`'s current value under its `graph_interface` component, as
 /// `current_value`.
 fn render_the_current_value_of_each_graph_input_into(
-    nodes: &mut [crate::core::json_schema::ProcessorNodeOutput],
+    nodes: &mut [crate::core::json_schema::GraphNodeOutput],
     mut current_value_of_each_graph_input: HashMap<String, serde_json::Value>,
 ) {
     for node in nodes {

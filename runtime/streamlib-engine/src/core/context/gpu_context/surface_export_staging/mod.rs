@@ -1,64 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Per-surface staging for handing engine frames to a consumer one hop
-//! away — the "one GPU blit into an exportable staging buffer" the plan
-//! decides.
-//!
-//! Why a blit at all: pool allocations are DMA-BUF-flavoured wherever
-//! the device exports DMA-BUF, external device APIs import OPAQUE_FD,
-//! and on NVIDIA one allocation cannot export both — `vkGetPhysicalDeviceExternalBufferProperties` reports
-//! the two handle types in disjoint `compatibleHandleTypes` sets, so a
-//! dual-flavour allocation is spec-invalid (VUID-VkExportMemoryAllocateInfo-
-//! handleTypes-00656). The staging buffer is the bridge: OPAQUE_FD,
-//! allocated once per surface, refilled by a GPU copy each time a
-//! consumer asks.
-//!
-//! One machine, three residencies ([`SurfaceExportStagingResidency`]).
-//! Everything below — the per-surface lifetime, the source resolve, the
-//! frame-identity guards, the timeline, the reused recorder, the
-//! surface-share publication — is the same whether the consumer reads
-//! the staging with the GPU, with the CPU, or through a display's import.
-//! The only axis that differs is what the memory is and where it lives,
-//! and it is never inferred: the caller names it, because CPU residency
-//! is the compatibility path a consumer opts into deliberately, not one
-//! it can fall into.
-//!
-//! What the blit reads is the surface's own pooled backing whenever it
-//! has one — a producer's registered texture is a frames-in-flight
-//! transient it keeps overwriting, and a published surface id names an
-//! immutable frame.
-//! The source is still resolved **per refill**, never cached: a rotating
-//! producer re-registers under the same surface id, so a handle resolved
-//! at creation can name an allocation that has since rotated out. The
-//! staging itself is per-surface-id and spans those re-registrations —
-//! which is why it lives in a [`GpuContext`]-owned map beside
-//! `texture_cache` rather than on the `TextureRegistration` that
-//! rotates out from under it.
-//!
-//! Ordering: the refill orders against the producer through queue
-//! submission order — every producer in this engine submits on the one
-//! `GpuContext` queue, and the refill's ALL_COMMANDS barrier makes prior
-//! submissions' writes visible. A multi-queue engine would need the
-//! refill to wait on the producer's timeline instead.
-//!
-//! One staging per (surface, residency), shared by every holder of that
-//! slot — so two consumers reading one surface at one residency map the
-//! same allocation, and nothing here arbitrates their overlap. The
-//! recorder lock serialises two *copies*; it does not keep two consumers
-//! from reading a buffer a third is refilling.
-//!
-//! Nothing here assumes the consumer lives in this process. A processor
-//! reaching this from its own helper process gets the same staging and
-//! the same timeline: [`GpuContext::share_surface_export_staging`]
-//! publishes both to the surface-share service once, and the child
-//! triggers refills through the escalate ops that wrap the methods
-//! below. Every copy is retired on the host before it returns. Where the
-//! device exports a timeline semaphore, the child also waits on the
-//! exported timeline; where it exports none (the software device), the
-//! timeline stays in this process and that host retirement is the whole
-//! ordering contract, as on macOS.
-
 use std::collections::HashMap;
 use std::sync::Arc;
 

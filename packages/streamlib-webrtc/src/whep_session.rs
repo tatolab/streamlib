@@ -28,9 +28,6 @@ use webrtc::track::track_remote::TrackRemote;
 
 const PROTOCOL: &str = "WHEP";
 
-/// How many assembled items may wait for the processor thread to collect them.
-/// Bounded and dropped rather than blocked: a stalled reader must not stall the
-/// network loop.
 const RECEIVED_MEDIA_QUEUE_DEPTH: usize = 256;
 
 /// One media frame's worth of media, assembled and ready to be written.

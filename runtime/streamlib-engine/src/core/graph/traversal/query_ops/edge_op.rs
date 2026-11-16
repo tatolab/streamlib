@@ -37,13 +37,13 @@ use petgraph::graph::{DiGraph, EdgeIndex};
 use petgraph::visit::EdgeRef;
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, LinkUniqueId, ProcessorNode, TraversalSource,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, LinkUniqueId, TraversalSource,
     TraversalSourceMut,
 };
 
 /// The edge of the link with this id, or every edge when no id is given.
 fn every_link_edge_the_filter_selects(
-    graph: &DiGraph<ProcessorNode, Link>,
+    graph: &DiGraph<GraphNode, Link>,
     link_id_filter: Option<LinkUniqueId>,
 ) -> Vec<EdgeIndex> {
     match link_id_filter {

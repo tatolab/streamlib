@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::core::context::StreamClockSpec;
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
-use super::nodes::ProcessorNode;
+use super::nodes::GraphNode;
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -17,9 +17,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
-use crate::core::json_schema::{
-    GraphResponse, LinkOutput, NodeNamesByProcessorId, ProcessorNodeOutput,
-};
+use crate::core::json_schema::{GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId};
 
 /// Graph state.
 #[derive(Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -37,8 +35,7 @@ pub enum GraphState {
 /// - `graph.query()` for read operations
 /// - `graph.query()` for mutations
 pub struct Graph {
-    /// The petgraph DiGraph storing processors as nodes and links as edges.
-    digraph: DiGraph<ProcessorNode, Link>,
+    digraph: DiGraph<GraphNode, Link>,
 
     /// The id of the stream this graph was loaded as, until then `None`.
     loaded_stream_id: Option<String>,
@@ -110,7 +107,7 @@ impl Graph {
 
     /// The petgraph digraph itself, for a test of what reads it whole.
     #[cfg(test)]
-    pub(crate) fn petgraph_digraph_for_a_test(&self) -> &DiGraph<ProcessorNode, Link> {
+    pub(crate) fn petgraph_digraph_for_a_test(&self) -> &DiGraph<GraphNode, Link> {
         &self.digraph
     }
 
@@ -217,7 +214,7 @@ impl std::fmt::Display for Graph {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Graph({} processors, {} links)",
+            "Graph({} nodes, {} links)",
             self.digraph.node_count(),
             self.digraph.edge_count()
         )
@@ -230,13 +227,12 @@ impl Graph {
     /// renders under `function_node_pool` rather than as a node, and each link
     /// it carries renders once, as the link it was given.
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
-        let node_names = NodeNamesByProcessorId::of(self.digraph.node_weights());
-        let render_a_node = |node: &ProcessorNode| ProcessorNodeOutput {
+        let node_names = NodeNamesByNodeRunId::of(self.digraph.node_weights());
+        let render_a_node = |node: &GraphNode| GraphNodeOutput {
             inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
-            ..ProcessorNodeOutput::from(node)
+            ..GraphNodeOutput::from(node)
         };
-        let is_the_pool =
-            |node: &&ProcessorNode| is_the_function_node_pool_type(&node.processor_type);
+        let is_the_pool = |node: &&GraphNode| is_the_function_node_pool_type(&node.node_type);
         GraphResponse {
             asset: self
                 .stream_asset
@@ -266,7 +262,7 @@ impl Graph {
     /// Every link, in the order the graph holds them, each pair of links that
     /// carries one link through the function node pool rendered once as that
     /// link, where the link into the pool stands.
-    fn links_rendered_as_given(&self, node_names: &NodeNamesByProcessorId) -> Vec<LinkOutput> {
+    fn links_rendered_as_given(&self, node_names: &NodeNamesByNodeRunId) -> Vec<LinkOutput> {
         let carried_links = the_links_carried_through_the_function_node_pool_of(self);
         let carried_link_wired_as = |link: &Link| {
             carried_links.iter().find(|carried| {
@@ -296,13 +292,13 @@ pub(crate) fn node_named_or_refused<'graph>(
     graph: &'graph Graph,
     stream_id: &str,
     node_name: &str,
-) -> crate::core::Result<&'graph crate::core::graph::ProcessorNode> {
+) -> crate::core::Result<&'graph crate::core::graph::GraphNode> {
     graph
         .traversal()
         .v_with_node_name(node_name)
         .first()
         .ok_or_else(|| {
-            crate::core::Error::ProcessorNotFound(format!(
+            crate::core::Error::NodeNotFound(format!(
                 "no node in the stream `{stream_id}` is named {node_name:?}. The stream \
                  `{stream_id}` holds: {}",
                 node_names_listed_for_a_refusal(

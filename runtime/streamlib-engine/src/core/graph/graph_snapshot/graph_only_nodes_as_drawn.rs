@@ -12,7 +12,7 @@ use crate::core::graph::graph_variable_resolution::{
 };
 use crate::core::graph::{cast_exposed_name_to_url_safe, node_names_listed_for_a_refusal};
 use crate::core::json_schema::{GraphResponse, LabelledNodeGroup, LinkPortRefOutput};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, PortDirection, Result};
 
 use super::{

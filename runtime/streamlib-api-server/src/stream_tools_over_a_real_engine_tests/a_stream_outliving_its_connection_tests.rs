@@ -56,14 +56,14 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
     fn node_catalog_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>> {
+    ) -> Result<Vec<NodeDescriptor>> {
         self.engine
             .node_catalog_of_the_stream_a_call_names(stream_id)
     }
     fn node_types_described_in_the_interpreter_of_the_stream_a_call_names(
         &self,
         stream_id: &str,
-    ) -> Result<Vec<ProcessorDescriptor>> {
+    ) -> Result<Vec<NodeDescriptor>> {
         self.engine
             .node_types_described_in_the_interpreter_of_the_stream_a_call_names(stream_id)
     }
@@ -72,8 +72,8 @@ impl OperationsOnTheStreamsLoadedInThisRuntime
         stream_id: &str,
     ) -> Result<
         Vec<(
-            ProcessorDescriptor,
-            streamlib::sdk::processors::InstalledModuleOfANodeType,
+            NodeDescriptor,
+            streamlib::sdk::nodes::InstalledModuleOfANodeType,
         )>,
     > {
         self.engine

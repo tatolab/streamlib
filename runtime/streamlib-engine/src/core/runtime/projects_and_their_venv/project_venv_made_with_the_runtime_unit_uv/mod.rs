@@ -30,7 +30,7 @@ use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
-use crate::core::compiler::compiler_ops::processor_interpreter_spawn_host::{
+use crate::core::compiler::compiler_ops::node_interpreter_spawn_host::{
     HowABoundedChildProcessRunEnded, remove_every_python_variable_named_in,
     run_a_child_process_to_its_exit_within,
 };

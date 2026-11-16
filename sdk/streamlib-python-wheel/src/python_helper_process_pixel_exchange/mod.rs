@@ -1,28 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The helper child's half of the pixel exchange.
-//!
-//! A Python processor's pixels live in the engine's pools, one process away.
-//! Acquiring goes through two channels that already exist: the escalate
-//! socket carries the request (the parent allocates, checks the buffer into
-//! its surface-share service, and answers with the minted surface id), and
-//! the surface-share socket carries the memory itself — the checkout's
-//! `recvmsg` lands the memory fds in this process's fd table via
-//! SCM_RIGHTS, and the consumer-side Vulkan import maps them. The escalate
-//! socket never carries fds.
-//!
-//! Pool allocations are DMA-BUF-flavoured where the device exports
-//! DMA-BUF and OPAQUE_FD where it does not — the software device — and a
-//! pixel buffer of either flavour imports and maps here. External device
-//! APIs import OPAQUE_FD, and one allocation cannot export both on NVIDIA. So
-//! the device side goes through the parent's per-surface staging buffer:
-//! `open_device_export_staging` has the parent publish that staging and
-//! its refill timeline, the checkout delivers both fds, CUDA imports the
-//! memory, and each refill is an escalate round trip whose answer is the
-//! timeline value to wait for. The host's own wait after a refill orders
-//! nothing for this process; the timeline does.
-
 use pyo3::prelude::*;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -122,10 +100,8 @@ pub(crate) enum GpuSurfaceGeometry {
     TensorStorageBuffer(streamlib::sdk::rhi::TensorStorageBufferLayout),
 }
 
-/// Which processor output pool a texture or tensor storage buffer acquire
-/// hands its slot out of.
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
+pub(crate) struct NodeOutputPoolRequest<'pool_key> {
     pub(crate) pool_key: &'pool_key str,
     pub(crate) rotation_depth: u32,
 }

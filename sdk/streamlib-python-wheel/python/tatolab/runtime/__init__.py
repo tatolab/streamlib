@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What the runtime lends a processor interpreter.
+"""What the runtime lends a node interpreter.
 
 `_engine` is the native extension behind every runtime-backed name
-`tatolab.stream` declares, and `_processor_interpreter_bootstrap` is the
-script the runtime starts each processor interpreter with.
+`tatolab.stream` declares, and `_node_interpreter_bootstrap` is the
+script the runtime starts each node interpreter with.
 """
 
 import os

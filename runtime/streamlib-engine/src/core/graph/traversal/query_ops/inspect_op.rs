@@ -2,15 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 
-impl<'a> ProcessorTraversal<'a> {
-    /// Calls the provided closure for each processor node in the traversal.
-    ///
-    /// This is useful for side effects (logging, events, etc.) while continuing
-    /// the traversal chain. Similar to [`Iterator::inspect`].
-    pub fn inspect<F: FnMut(&ProcessorNode)>(self, mut f: F) -> Self {
+impl<'a> NodeTraversal<'a> {
+    pub fn inspect<F: FnMut(&GraphNode)>(self, mut f: F) -> Self {
         for &idx in &self.ids {
             if let Some(node) = self.graph.node_weight(idx) {
                 f(node);
@@ -20,12 +16,8 @@ impl<'a> ProcessorTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
-    /// Calls the provided closure for each processor node in the traversal.
-    ///
-    /// This is useful for side effects (logging, events, etc.) while continuing
-    /// the traversal chain. Similar to [`Iterator::inspect`].
-    pub fn inspect<F: FnMut(&ProcessorNode)>(self, mut f: F) -> Self {
+impl<'a> NodeTraversalMut<'a> {
+    pub fn inspect<F: FnMut(&GraphNode)>(self, mut f: F) -> Self {
         for &idx in &self.ids {
             if let Some(node) = self.graph.node_weight(idx) {
                 f(node);

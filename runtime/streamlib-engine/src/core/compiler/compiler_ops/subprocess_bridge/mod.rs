@@ -1,41 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Length-prefixed JSON escalate-IPC bridge shared by the Python and Deno
-//! subprocess host processors.
-//!
-//! Frames travel over a dedicated [`UnixStream`] pair created by
-//! [`EscalateTransport::attach`] before spawn — not over the subprocess's
-//! stdin/stdout. The parent keeps one half of the socketpair and the
-//! child inherits the other via `STREAMLIB_ESCALATE_FD`, freeing fd1/fd2
-//! to be captured as intercepted log pipes by the host.
-//!
-//! Three roles travel over the same socket:
-//! 1. Lifecycle RPC (`setup`, `run`, `stop`, `teardown`, `on_pause`,
-//!    `on_resume`, …) — initiated by the host, the subprocess replies with
-//!    `rpc: "ready" | "stopped" | "ok" | "done" | "error"`.
-//! 2. Escalate-on-behalf (`rpc: "escalate_request"`) — initiated by the
-//!    subprocess, the host replies with `rpc: "escalate_response"`.
-//! 3. Link wiring after setup (`wire_link`, `unwire_link`) — sent by
-//!    [`SubprocessBridgeLinkDelivery`]; the subprocess answers a `wire_link`
-//!    with [`OUT_OF_PROCESS_LINK_WIRED_RPC`] or
-//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`], naming the link it is about, and
-//!    leaves an `unwire_link` unanswered.
-//!
-//! A dedicated reader thread (`br-…`) owns the parent-side read half and only
-//! demultiplexes: a log record is handed to the log pipeline, a link's wire
-//! answer lands on that link's own cell, a lifecycle reply is forwarded to the
-//! main thread over an mpsc channel, and an escalate request that waits on an
-//! answer is queued for the helper's one escalate worker (`br-esc-…`), which
-//! dispatches through [`subprocess_escalate::process_bridge_message`](super::subprocess_escalate::process_bridge_message) in
-//! arrival order. Nothing the reader does waits on GPU work, so one slow
-//! escalate never delays the helper's log records or its lifecycle replies,
-//! and the helper's writes never back up behind it. The third role has its own
-//! tags for the same reason the lifecycle queue is kept clean: an answer routed
-//! there would be read as the reply to whatever command the host sends next.
-//! Every frame the parent writes goes through one writer lock, so no two
-//! threads interleave halves of a length-prefixed frame.
-
 mod subprocess_bridge_link_delivery;
 mod subprocess_bridge_reader_and_escalate_workers;
 
@@ -55,19 +20,17 @@ use std::time::Duration;
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::{Error, Result};
 use crate::core::logging::carrying_this_threads_project_log_route_entry_and_reading_a_helper_pipe;
-use crate::core::processors::{
-    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome,
-};
+use crate::core::nodes::{LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome};
 
 use super::subprocess_escalate::handle_lifecycle::{
     EscalateHandleRegistry, release_everything_a_torn_down_helper_held,
 };
 use super::subprocess_escalate::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatTheNodeOfAHelperPlacedProcessorReaches,
-    process_bridge_message, shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, WhatAHelperPlacedNodeReaches, process_bridge_message,
+    shared_native_service_lease::SharedNativeServiceLeasesOfOneHelper,
 };
 use subprocess_bridge_reader_and_escalate_workers::{
-    SubprocessBridgeThreads, processor_id_shortened_for_a_thread_name,
+    SubprocessBridgeThreads, node_run_id_shortened_for_a_thread_name,
     refuse_every_link_this_subprocess_still_owed, spawn_the_native_escalate_worker,
     spawn_the_reader_and_the_escalate_worker,
 };
@@ -181,17 +144,9 @@ impl EscalateTransport {
 /// The lifecycle command that runs a helper's `setup()`.
 pub(crate) const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
-/// A shutdown command the parent sends a helper, paired with the reply tag the
-/// helper answers it with.
-///
-/// The pairing lives beside [`SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS`] and
-/// the protocol this module's doc enumerates, so the two halves of one exchange
-/// cannot drift apart between the spawn host and the processor interpreter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HelperProcessShutdownCommand {
-    /// Leave the execution loop and run the processor's `stop()`.
     Stop,
-    /// Run the processor's `teardown()` and leave.
     Teardown,
 }
 
@@ -302,11 +257,11 @@ fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSub
 
 /// What a link wired into a helper process that has failed is refused with.
 pub(crate) fn refusal_of_a_link_into_a_helper_process_that_failed(
-    processor_display_name: &str,
-    processor_id: &str,
+    node_display_name: &str,
+    node_run_id: &str,
 ) -> String {
     format!(
-        "processor '{processor_display_name}' ({processor_id}) has failed, so no link can be \
+        "node '{node_display_name}' ({node_run_id}) has failed, so no link can be \
          wired into it"
     )
 }
@@ -319,7 +274,7 @@ pub(crate) fn refusal_of_a_link_into_a_helper_process_that_failed(
 /// The writer's lock keeps two threads from interleaving halves of a
 /// length-prefixed frame.
 struct ParentSideOfOneSubprocessBridgeSharedByItsThreads {
-    processor_id: String,
+    node_run_id: String,
     framed_socket_writer: parking_lot::Mutex<BufWriter<UnixStream>>,
     /// Shut down outside the writer's lock, so teardown never waits behind a
     /// write the subprocess is not reading.
@@ -329,14 +284,14 @@ struct ParentSideOfOneSubprocessBridgeSharedByItsThreads {
 }
 
 impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
-    fn over(parent_end: UnixStream, processor_id: String) -> Result<Self> {
+    fn over(parent_end: UnixStream, node_run_id: String) -> Result<Self> {
         let socket_for_shutting_down = parent_end.try_clone().map_err(|e| {
             Error::Runtime(format!(
                 "failed to clone escalate socketpair for shutdown: {e}"
             ))
         })?;
         Ok(Self {
-            processor_id,
+            node_run_id,
             framed_socket_writer: parking_lot::Mutex::new(BufWriter::new(parent_end)),
             socket_for_shutting_down,
             the_subprocess_was_given_up_on: AtomicBool::new(false),
@@ -356,7 +311,7 @@ impl ParentSideOfOneSubprocessBridgeSharedByItsThreads {
             .store(true, Ordering::SeqCst);
         refuse_every_link_this_subprocess_still_owed(
             &self.links_awaiting_their_wire_reply,
-            &self.processor_id,
+            &self.node_run_id,
             how_the_subprocess_was_noticed_gone,
         );
     }
@@ -405,14 +360,14 @@ impl SubprocessBridge {
     pub fn for_a_helper_whose_node_carries_no_catalog_entries(
         stream: UnixStream,
         sandbox: GpuContextLimitedAccess,
-        processor_id: String,
+        node_run_id: String,
     ) -> Result<Self> {
         Self::new(
             stream,
             None,
             sandbox,
-            processor_id,
-            WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            node_run_id,
+            WhatAHelperPlacedNodeReaches::default(),
         )
     }
 
@@ -424,8 +379,8 @@ impl SubprocessBridge {
         stream: UnixStream,
         native_escalate_stream: Option<UnixStream>,
         sandbox: GpuContextLimitedAccess,
-        processor_id: String,
-        what_the_node_reaches: WhatTheNodeOfAHelperPlacedProcessorReaches,
+        node_run_id: String,
+        what_the_node_reaches: WhatAHelperPlacedNodeReaches,
     ) -> Result<Self> {
         let shared_native_service_leases =
             Arc::clone(&what_the_node_reaches.shared_native_service_leases);
@@ -436,7 +391,7 @@ impl SubprocessBridge {
         })?;
         let parent_side = Arc::new(ParentSideOfOneSubprocessBridgeSharedByItsThreads::over(
             stream,
-            processor_id,
+            node_run_id,
         )?);
         let registry = EscalateHandleRegistry::for_a_helper_whose_output_links_keep(Arc::clone(
             &what_the_node_reaches.output_frames_kept_by_its_output_links,
@@ -500,7 +455,7 @@ impl SubprocessBridge {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Err(Error::Runtime(format!(
                 "[{}] bridge marked dead, cannot send",
-                self.parent_side.processor_id
+                self.parent_side.node_run_id
             )));
         }
         self.parent_side
@@ -513,7 +468,7 @@ impl SubprocessBridge {
             self.mark_dead();
             Error::Runtime(format!(
                 "[{}] subprocess escalate socket closed before reply",
-                self.parent_side.processor_id
+                self.parent_side.node_run_id
             ))
         })
     }
@@ -540,10 +495,10 @@ impl SubprocessBridge {
     /// its wiring envelope to hand links over through.
     pub fn link_delivery_to_this_subprocess(
         &self,
-        processor_display_name: &str,
+        node_display_name: &str,
     ) -> SubprocessBridgeLinkDelivery {
         SubprocessBridgeLinkDelivery {
-            processor_display_name: processor_display_name.to_string(),
+            node_display_name: node_display_name.to_string(),
             parent_side: Arc::clone(&self.parent_side),
         }
     }
@@ -594,16 +549,16 @@ pub(crate) fn spawn_fd_line_reader<R>(
     reader: R,
     thread_prefix: &str,
     channel: &'static str,
-    processor_id: &str,
+    node_run_id: &str,
 ) -> Option<JoinHandle<()>>
 where
     R: Read + Send + 'static,
 {
-    let proc_id = processor_id.to_string();
+    let proc_id = node_run_id.to_string();
     let name = format!(
         "{}-{}",
         thread_prefix,
-        processor_id_shortened_for_a_thread_name(processor_id)
+        node_run_id_shortened_for_a_thread_name(node_run_id)
     );
     let (source, target): (&'static str, &'static str) = if thread_prefix.starts_with("py") {
         ("python", "streamlib::polyglot::python")
@@ -638,7 +593,7 @@ fn emit_intercepted_line(
     target: &'static str,
     channel: &'static str,
     source: &'static str,
-    processor_id: &str,
+    node_run_id: &str,
     text: &str,
 ) {
     // `tracing` macros require a literal target, so dispatch on the two
@@ -649,7 +604,7 @@ fn emit_intercepted_line(
             intercepted = true,
             channel = channel,
             source = source,
-            processor_id = %processor_id,
+            node_run_id = %node_run_id,
             "{}",
             text
         ),
@@ -658,7 +613,7 @@ fn emit_intercepted_line(
             intercepted = true,
             channel = channel,
             source = source,
-            processor_id = %processor_id,
+            node_run_id = %node_run_id,
             "{}",
             text
         ),

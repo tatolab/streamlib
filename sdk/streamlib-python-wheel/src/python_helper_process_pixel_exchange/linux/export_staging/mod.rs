@@ -191,7 +191,7 @@ impl HelperProcessGpuExchangeClient {
         surface_id: &str,
     ) -> PyResult<Arc<HelperDeviceExport>> {
         if let Some(software_device_name) = python.detach(|| self.software_import_device_name())? {
-            return Err(crate::python_processor_context::gpu_operation_error(
+            return Err(crate::python_node_context::gpu_operation_error(
                 device_tensor_refused_on_a_software_device(surface_id, &software_device_name),
             ));
         }
@@ -410,29 +410,25 @@ impl HelperProcessGpuExchangeClient {
             (None, None) => return Ok(()),
             (Some(copy_done), Some(signalled)) => (copy_done, signalled),
             (None, Some(signalled)) => {
-                return Err(crate::python_processor_context::gpu_operation_error(
-                    format!(
-                        "{escalate_op} of surface {surface_id:?} answered timeline value \
+                return Err(crate::python_node_context::gpu_operation_error(format!(
+                    "{escalate_op} of surface {surface_id:?} answered timeline value \
                          {signalled}, but its staging was checked out with no timeline to wait \
                          on"
-                    ),
-                ));
+                )));
             }
             (Some(_), None) => {
-                return Err(crate::python_processor_context::gpu_operation_error(
-                    format!(
-                        "{escalate_op} of surface {surface_id:?} answered no timeline value, but \
+                return Err(crate::python_node_context::gpu_operation_error(format!(
+                    "{escalate_op} of surface {surface_id:?} answered no timeline value, but \
                          its staging was checked out with a timeline the copy should have \
                          signalled"
-                    ),
-                ));
+                )));
             }
         };
         python.detach(|| {
             copy_done
                 .wait(signalled, DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS)
                 .map_err(|wait_failure| {
-                    crate::python_processor_context::gpu_operation_error(format!(
+                    crate::python_node_context::gpu_operation_error(format!(
                         "waiting for {escalate_op} of surface {surface_id:?} to reach timeline \
                          value {signalled} failed: {wait_failure}"
                     ))
@@ -456,7 +452,7 @@ impl HelperProcessGpuExchangeClient {
             described.exporting_device_uuid,
         )
         .map(Arc::new)
-        .map_err(crate::python_processor_context::gpu_operation_error)?;
+        .map_err(crate::python_node_context::gpu_operation_error)?;
 
         Ok(HelperDeviceExport {
             cuda_import,
@@ -497,18 +493,16 @@ impl HelperProcessGpuExchangeClient {
             stated_memory_type_index,
         )
         .map_err(|import_failure| {
-            crate::python_processor_context::gpu_operation_error(format!(
+            crate::python_node_context::gpu_operation_error(format!(
                 "this helper could not map the readback staging {staging_share_id:?} at memory \
                  type index {stated_memory_type_index}: {import_failure}"
             ))
         })?;
         if consumer_buffer.mapped_ptr().is_null() {
-            return Err(crate::python_processor_context::gpu_operation_error(
-                format!(
-                    "the readback staging {staging_share_id:?} imported without a host mapping; \
+            return Err(crate::python_node_context::gpu_operation_error(format!(
+                "the readback staging {staging_share_id:?} imported without a host mapping; \
                      the CPU doors read the mapping, so there is nothing to hand out"
-                ),
-            ));
+            )));
         }
 
         Ok(HelperCpuReadbackExport {
@@ -549,7 +543,7 @@ impl HelperProcessGpuExchangeClient {
             exporting_device_uuid: parse_device_uuid(&exporting_device_uuid)?,
             width: response_field(&response, "width")?.extract()?,
             height: response_field(&response, "height")?.extract()?,
-            format: crate::python_processor_context::parse_pixel_format_name(&format_name)?,
+            format: crate::python_node_context::parse_pixel_format_name(&format_name)?,
             bytes_per_row: decimal_string_field(&response, "bytes_per_row")?,
             writable: response_field(&response, "writable")?.extract()?,
         };
@@ -587,13 +581,11 @@ impl HelperProcessGpuExchangeClient {
             .and_then(|value| value.as_str())
             .unwrap_or("dma_buf");
         if handle_type != "opaque_fd" {
-            return Err(crate::python_processor_context::gpu_operation_error(
-                format!(
-                    "the {staging_kind} staging {staging_share_id:?} is registered as \
+            return Err(crate::python_node_context::gpu_operation_error(format!(
+                "the {staging_kind} staging {staging_share_id:?} is registered as \
                  {handle_type:?}; an export staging imports OPAQUE_FD, and importing one \
                  flavour through the other hands the driver a handle of the wrong type"
-                ),
-            ));
+            )));
         }
         let stated_memory_type_index = memory_type_index_stated_by_an_opaque_fd_registration(
             format_args!("the {staging_kind} staging {staging_share_id:?}"),
@@ -615,18 +607,16 @@ impl HelperProcessGpuExchangeClient {
             (Some(staging_fd), None, None, false) => (staging_fd, None),
             (Some(staging_fd), Some(copy_done_fd), None, true) => (staging_fd, Some(copy_done_fd)),
             _ => {
-                return Err(crate::python_processor_context::gpu_operation_error(
-                    format!(
-                        "check_out of the {staging_kind} staging {staging_share_id:?} returned \
+                return Err(crate::python_node_context::gpu_operation_error(format!(
+                    "check_out of the {staging_kind} staging {staging_share_id:?} returned \
                          {received_fd_count} fds; its registration states the staging's \
                          memory{}",
-                        if copy_timeline_crosses {
-                            " and its copy timeline"
-                        } else {
-                            " alone"
-                        },
-                    ),
-                ));
+                    if copy_timeline_crosses {
+                        " and its copy timeline"
+                    } else {
+                        " alone"
+                    },
+                )));
             }
         };
         let copy_done = copy_done_fd
@@ -655,7 +645,7 @@ impl HelperProcessGpuExchangeClient {
             copy_done_fd.as_raw_fd(),
         )
         .map_err(|import_failure| {
-            crate::python_processor_context::gpu_operation_error(format!(
+            crate::python_node_context::gpu_operation_error(format!(
                 "this helper could not import the copy timeline of {staging_share_id:?}: \
                  {import_failure}"
             ))

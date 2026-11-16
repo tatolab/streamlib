@@ -1,12 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor that writes a tensor storage buffer through torch, and
-processors that resolve it downstream and read it through torch.
-
-Each reports over the `MARKER:PROBE_RESULT` lines on `tatolabd`'s stderr the
-other GPU probes use, tagged with `probe` because a scenario runs two of them.
-"""
 
 import dataclasses
 import json
@@ -20,7 +14,6 @@ from tatolab.stream import Input, Output, Records, clock, log, node
 
 MODEL_INPUT_TENSOR_SHAPE = [1, 3, 640, 640]
 ODD_TENSOR_SHAPE = [3, 7, 11]
-# Processor configs carry scalars, so a scenario names its tensor.
 TENSORS_BY_NAME = {
     "model_input": (MODEL_INPUT_TENSOR_SHAPE, "float32"),
     "odd": (ODD_TENSOR_SHAPE, "float16"),

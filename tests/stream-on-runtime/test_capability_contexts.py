@@ -9,7 +9,7 @@ Full-access hooks (`setup`/`teardown`/`start`/`stop`) get
 survives the hook that produced it, which is what the manual-source pattern is
 built on.
 
-Every probe runs in its own processor interpreter and reports one
+Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
 `tatolabd` and asserts on that line. Nothing in an observation is a live
 object — types travel as their names, because the observation crosses a
@@ -65,7 +65,7 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 
@@ -99,7 +99,7 @@ def test_process_receives_the_limited_context_without_gpu_full_access(
 # ---------------------------------------------------------------------------
 
 
-def test_ctx_config_is_the_dict_the_processor_was_added_with(start_tatolabd_running_stream):
+def test_ctx_config_is_the_dict_the_node_was_added_with(start_tatolabd_running_stream):
     observation = run_probe(start_tatolabd_running_stream, "configured_probe")
     assert observation["config"] == {"gain": 2.5, "label": "left"}
     # The helper built the config class out of that mapping and handed the
@@ -237,7 +237,7 @@ def test_a_worker_thread_constructs_privileged_resources_like_the_native_camera(
     start_tatolabd_running_stream,
 ):
     """The camera's shape, from Python: stash the capabilities in setup, build
-    privileged resources from a thread the processor owns.
+    privileged resources from a thread the node owns.
 
     `camera_linux.rs` is the reference — its capture thread holds only
     `GpuContextLimitedAccess` and reaches for privileged construction once at

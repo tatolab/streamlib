@@ -1,30 +1,30 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::ProcessorUniqueId;
+use crate::core::NodeRunId;
 
 use super::super::{InputLinkPortRef, OutputLinkPortRef};
 
 /// Marker trait for output ports.
 pub trait OutputPortMarker {
     const PORT_NAME: &'static str;
-    type Processor;
+    type Node;
 }
 
 /// Marker trait for input ports.
 pub trait InputPortMarker {
     const PORT_NAME: &'static str;
-    type Processor;
+    type Node;
 }
 
 /// Create an [`OutputLinkPortRef`] using compile-time validated marker types.
-pub fn output<M: OutputPortMarker>(processor_id: &ProcessorUniqueId) -> OutputLinkPortRef {
-    OutputLinkPortRef::new(processor_id.clone(), M::PORT_NAME)
+pub fn output<M: OutputPortMarker>(node_run_id: &NodeRunId) -> OutputLinkPortRef {
+    OutputLinkPortRef::new(node_run_id.clone(), M::PORT_NAME)
 }
 
 /// Create an [`InputLinkPortRef`] using compile-time validated marker types.
-pub fn input<M: InputPortMarker>(processor_id: &ProcessorUniqueId) -> InputLinkPortRef {
-    InputLinkPortRef::new(processor_id.clone(), M::PORT_NAME)
+pub fn input<M: InputPortMarker>(node_run_id: &NodeRunId) -> InputLinkPortRef {
+    InputLinkPortRef::new(node_run_id.clone(), M::PORT_NAME)
 }
 
 /// Wrapper trait for port markers.

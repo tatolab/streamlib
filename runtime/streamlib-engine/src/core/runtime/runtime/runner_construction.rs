@@ -14,7 +14,7 @@ use streamlib_runtime_client_contract::streamlib_runtime_directory::StreamlibRun
 use crate::core::context::GpuContext;
 use crate::core::runtime::MachineName;
 use crate::core::runtime::RuntimeUniqueId;
-use crate::core::runtime::processor_interpreters::processor_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
+use crate::core::runtime::node_interpreters::node_interpreter_launch_record::RuntimeUnitPathTheHostHandsTheEngineOnce;
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::StreamActionsOfTheEngine;
 use crate::core::{Error, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -43,15 +43,6 @@ impl Runner {
             pretty_log_mirror_stream,
             runtime_own_log_directory,
         } = construction_options;
-        // Cap per-thread timer slack at 1 ns on the calling thread before
-        // spawning any worker. Linux defaults to 50 µs grouping for
-        // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
-        // threads inherit the creator's slack at clone time, so setting it
-        // here propagates to the tokio worker pool, the logging drain
-        // worker, the iceoryx2 node, and every processor thread spawned
-        // later. SCHED_FIFO/RR threads (rtkit-promoted reactive processors)
-        // bypass slack entirely per kernel design — this only affects
-        // SCHED_OTHER waits. Cannot fail for self per `prctl(2)`.
         #[cfg(target_os = "linux")]
         unsafe {
             libc::prctl(libc::PR_SET_TIMERSLACK, 1u64, 0u64, 0u64, 0u64);
@@ -154,7 +145,7 @@ impl Runner {
                 streams_out_of_the_table_until_their_end_is_recorded: Mutex::new(Vec::new()),
                 gpu_context_created_by_the_first_stream_start: Mutex::new(None),
                 setup_hooks: Mutex::new(SetupHooksOfTheEngine::WaitingForTheGpuContext(Vec::new())),
-                processor_interpreter_lend_directory:
+                node_interpreter_lend_directory:
                     RuntimeUnitPathTheHostHandsTheEngineOnce::naming("the lend directory"),
                 runtime_unit_uv_executable: RuntimeUnitPathTheHostHandsTheEngineOnce::naming(
                     "the runtime unit's uv",
@@ -199,11 +190,6 @@ impl Runner {
         Ok(runner)
     }
 
-    /// Register a one-shot hook to run with the engine's GPU context when the
-    /// first stream to start creates it, before any processor's `setup()`
-    /// runs. Hooks fire FIFO, every one even after one fails; the first
-    /// failure aborts that stream's `start()`. Refused once the hooks have
-    /// run.
     pub fn install_setup_hook<F>(&self, hook: F) -> Result<()>
     where
         F: FnOnce(&GpuContext) -> Result<()> + Send + 'static,

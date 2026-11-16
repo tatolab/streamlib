@@ -138,9 +138,9 @@ fn one_streams_shutdown_ends_it_and_leaves_the_other_loaded() {
 #[serial]
 fn one_streams_graph_change_reaches_only_its_own_compiler_and_topic() {
     use crate::core::compiler::PendingOperation;
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::nodes::NodeSpec;
     use crate::core::pubsub::{Event, RuntimeEvent};
-    use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
+    use crate::core::test_support::{MockOutputOnlyNode, ensure_test_mocks_registered};
 
     ensure_test_mocks_registered();
     let project_directory = a_project_directory_this_test_owns();
@@ -151,9 +151,9 @@ fn one_streams_graph_change_reaches_only_its_own_compiler_and_topic() {
     let (recorded_by_the_untouched, _untouched_listener) =
         record_every_event_on_the_topic_of(&untouched);
 
-    let processor_id = changed
-        .add_processor(ProcessorSpec::new(
-            MockOutputOnlyProcessor::processor_class_import_path(),
+    let node_run_id = changed
+        .add_node(NodeSpec::new(
+            MockOutputOnlyNode::node_class_import_path(),
             serde_json::Value::Null,
         ))
         .expect("the mock is added");
@@ -163,7 +163,7 @@ fn one_streams_graph_change_reaches_only_its_own_compiler_and_topic() {
             .compiler
             .logged_pending_operations()
             .iter()
-            .any(|op| matches!(op, PendingOperation::AddProcessor(id) if *id == processor_id)),
+            .any(|op| matches!(op, PendingOperation::AddNode(id) if *id == node_run_id)),
         "the change is logged on its own stream's compiler"
     );
     assert!(
@@ -731,10 +731,10 @@ static THE_HELD_CALLBACK_MAY_RETURN: AtomicBool = AtomicBool::new(false);
 
 /// A source whose first callback does not return until the test lets it,
 /// or for a minute.
-#[crate::processor(execution = continuous(interval_ms = 5))]
+#[crate::node(execution = continuous(interval_ms = 5))]
 pub(crate) struct CallbackHeldUntilTheTestLetsGo;
 
-impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Processor {
+impl crate::core::ContinuousNode for CallbackHeldUntilTheTestLetsGo::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
@@ -750,9 +750,6 @@ impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Proces
     }
 }
 
-/// An unload of a stream whose native processor holds its callback returns
-/// well inside the graceful join budget once the machine's shutdown is
-/// forced, the thread abandoned rather than waited out.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
@@ -760,23 +757,21 @@ impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Proces
 #[test]
 #[serial]
 fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waiting_on() {
-    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 
-    /// The engine-chosen join budget of a native processor thread under a
-    /// graceful shutdown.
-    const NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET: Duration = Duration::from_secs(5);
+    const NATIVE_NODE_THREAD_GRACEFUL_JOIN_BUDGET: Duration = Duration::from_secs(5);
 
     let _machine_level_cleared =
         crate::core::runtime::TheMachinesShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
     THE_HELD_CALLBACK_HAS_BEGUN.store(false, Ordering::SeqCst);
     THE_HELD_CALLBACK_MAY_RETURN.store(false, Ordering::SeqCst);
-    PROCESSOR_REGISTRY.register::<CallbackHeldUntilTheTestLetsGo::Processor>();
+    NODE_REGISTRY.register::<CallbackHeldUntilTheTestLetsGo::Node>();
     let project_directory = a_project_directory_this_test_owns();
     let runner = Runner::new().expect("Runner::new");
     let holding = an_empty_stream_loaded_into(&runner, project_directory.path(), "holding");
     holding
-        .add_processor(ProcessorSpec::new(
-            CallbackHeldUntilTheTestLetsGo::processor_class_import_path(),
+        .add_node(NodeSpec::new(
+            CallbackHeldUntilTheTestLetsGo::node_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("the holding source is added");
@@ -805,9 +800,7 @@ fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waitin
     crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
     crate::core::runtime::escalate_the_machines_shutdown_for_a_delivered_signal("unit test");
     let unload_outcome = the_unload_has_returned.recv_timeout(A_STREAM_ENDS_WITHIN);
-    let abandoned_threads = holding
-        .processor_threads_abandoned_and_still_running()
-        .len();
+    let abandoned_threads = holding.node_threads_abandoned_and_still_running().len();
     THE_HELD_CALLBACK_MAY_RETURN.store(true, Ordering::SeqCst);
 
     let (_ended_reporting, unloaded_in) =
@@ -817,9 +810,9 @@ fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waitin
         RuntimeShutdownEscalation::Forced
     );
     assert!(
-        unloaded_in < NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET / 2,
+        unloaded_in < NATIVE_NODE_THREAD_GRACEFUL_JOIN_BUDGET / 2,
         "the unload took {unloaded_in:?}; a forced shutdown abandons a held native callback \
-         well inside the {NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET:?} graceful budget"
+         well inside the {NATIVE_NODE_THREAD_GRACEFUL_JOIN_BUDGET:?} graceful budget"
     );
     assert_eq!(
         abandoned_threads, 1,
@@ -871,7 +864,7 @@ fn a_watched_load_the_machines_shutdown_reaches_while_it_builds_is_abandoned() {
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{
             "name": "source",
-            "type": TickCountingInTheFirstStream::processor_class_import_path().as_str()
+            "type": TickCountingInTheFirstStream::node_class_import_path().as_str()
         }]
     }))
     .expect("the test graph reads");

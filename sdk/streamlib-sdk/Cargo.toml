@@ -8,7 +8,7 @@ edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
-description = "streamlib — public authoring API surface (StreamRuntime, ProcessorSpec, port markers, processor traits, error types, descriptors). Engine internals live in a private streamlib-engine dep."
+description = "streamlib — public authoring API surface (StreamRuntime, NodeSpec, port markers, node traits, error types, descriptors). Engine internals live in a private streamlib-engine dep."
 keywords = ["video", "streaming", "gpu", "real-time", "ai"]
 categories = ["multimedia::video", "multimedia", "api-bindings"]
 

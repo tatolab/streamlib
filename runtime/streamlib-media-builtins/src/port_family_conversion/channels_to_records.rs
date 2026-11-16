@@ -10,7 +10,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     DataChannelPayloadDescriptor, RECORDS_MESSAGE_MAXIMUM_ENCODED_BYTES,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::schemars::JsonSchema;
 
 use super::conversion_node_config_defaults::one_channel_named_value;
@@ -21,7 +21,7 @@ const CHANNELS_INPUT_PORT: &str = "channels";
 const RECORDS_OUTPUT_PORT: &str = "records";
 
 /// Configuration for [`ChannelsToRecords`].
-#[streamlib::sdk::processor_config]
+#[streamlib::sdk::node_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
@@ -39,7 +39,7 @@ impl Default for ChannelsToRecordsConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     config = crate::port_family_conversion::channels_to_records::ChannelsToRecordsConfig,
@@ -66,7 +66,7 @@ impl Default for ChannelsToRecordsConfig {
 )]
 pub struct ChannelsToRecords;
 
-impl ReactiveProcessor for ChannelsToRecords::Processor {
+impl ReactiveNode for ChannelsToRecords::Node {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         refuse_channel_names_naming_none_or_one_twice(
             "ChannelsToRecords",

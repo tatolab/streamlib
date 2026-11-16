@@ -1,10 +1,10 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A helper-placed Python processor telling two producers apart on one port.
+"""A helper-placed Python node telling two producers apart on one port.
 
 Fan-in is legal — any number of links may enter one input port — and a read
-that names the link a bag arrived on is how a processor tells which producer
+that names the link a bag arrived on is how a node tells which producer
 sent what. This drives that read over real links, from a real child
 interpreter: two Python feeders into the one port, and a reporter on its output.
 
@@ -44,7 +44,7 @@ def first_attribution_of_each_value(
     return first_attributions
 
 
-def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port(
+def test_a_helper_placed_node_tells_two_producers_apart_on_one_port(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The read a many-track sink is built on, over real links.
@@ -70,7 +70,7 @@ def test_a_helper_placed_processor_tells_two_producers_apart_on_one_port(
     for value, arrived_on in attributed.items():
         assert arrived_on.endswith("/bags_to_downstream"), (
             f"{value!r} must be named by its producer's source channel — "
-            f"'{{source processor id}}/{{source output port}}' — got {arrived_on!r}"
+            f"'{{source node id}}/{{source output port}}' — got {arrived_on!r}"
         )
 
 

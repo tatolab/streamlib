@@ -18,7 +18,7 @@ fn register_with_invalid_vertex_hex_returns_err() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(make_register_req(
             "req-bad-v",
             "xyz123",
@@ -49,7 +49,7 @@ fn register_with_invalid_fragment_hex_returns_err() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RegisterGraphicsKernel(make_register_req("req-bad-f", "deadbeef", "qq")),
     )
     .expect("must produce a response");
@@ -78,7 +78,7 @@ fn run_with_invalid_push_constants_hex_returns_err() {
     let response = handle_escalate_op(
         &sandbox,
         &registry,
-        &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+        &WhatAHelperPlacedNodeReaches::default(),
         EscalateRequest::RunGraphicsDraw(req),
     )
     .expect("must produce a response");
@@ -116,7 +116,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(with_vertex_buffer),
         )
         .expect("must produce a response"),
@@ -136,7 +136,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(indexed),
         )
         .expect("must produce a response"),
@@ -154,7 +154,7 @@ fn a_draw_naming_a_resource_no_escalate_op_mints_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(indexed_without_a_buffer),
         )
         .expect("must produce a response"),
@@ -181,7 +181,7 @@ fn a_draw_naming_a_depth_target_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(req),
         )
         .expect("must produce a response"),
@@ -209,7 +209,7 @@ fn a_draw_naming_other_than_one_colour_target_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(req),
         )
         .expect("must produce a response"),
@@ -231,7 +231,7 @@ fn drawing_with_an_unregistered_kernel_id_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(make_run_req(
                 "req-bad-id",
                 "never-registered",
@@ -266,7 +266,7 @@ fn a_binding_declared_for_a_stage_no_graphics_pipeline_has_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterGraphicsKernel(req),
         )
         .expect("must produce a response"),
@@ -425,7 +425,7 @@ fn a_wrong_declaration_is_refused_even_when_the_kernel_is_cached() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RegisterGraphicsKernel(req),
         )
         .expect("must produce a response"),
@@ -475,7 +475,7 @@ fn a_draw_binding_its_own_colour_target_is_refused() {
         handle_escalate_op(
             &sandbox,
             &registry,
-            &WhatTheNodeOfAHelperPlacedProcessorReaches::default(),
+            &WhatAHelperPlacedNodeReaches::default(),
             EscalateRequest::RunGraphicsDraw(run),
         )
         .expect("must produce a response"),

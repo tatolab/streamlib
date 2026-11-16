@@ -40,13 +40,13 @@ pub(crate) use foreign_dma_buf::{
 pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{HelperAcquiredTexture, HelperCheckedOutTextureSurface};
 
-use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
+use crate::python_node_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
 
 /// A u64 the wire carries as a decimal string, because JSON has no 64-bit
 /// integer. Host-side counterpart: `EscalateResponseOk::staging_byte_size`.
 fn decimal_string_field(response: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
     optional_decimal_string_field(response, field)?.ok_or_else(|| {
-        crate::python_processor_context::gpu_operation_error(format!(
+        crate::python_node_context::gpu_operation_error(format!(
             "the parent's response carried no {field}"
         ))
     })
@@ -68,7 +68,7 @@ fn optional_decimal_string_field(
     };
     let as_written: String = as_written.extract()?;
     as_written.parse().map(Some).map_err(|_| {
-        crate::python_processor_context::gpu_operation_error(format!(
+        crate::python_node_context::gpu_operation_error(format!(
             "the parent's {field} was {as_written:?}, which is not a decimal u64"
         ))
     })
@@ -87,7 +87,7 @@ fn registration_states_a_timeline_fd(registration: &serde_json::Value, flag: &st
 /// The exporting device's UUID, as 32 hex characters.
 fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
     streamlib_consumer_rhi::vulkan_device_uuid_from_hex(as_hex).ok_or_else(|| {
-        crate::python_processor_context::gpu_operation_error(format!(
+        crate::python_node_context::gpu_operation_error(format!(
             "the parent reported the exporting device UUID as {as_hex:?}, which is not 32 hex \
              characters; importing onto the wrong GPU reads the wrong memory rather than failing"
         ))
@@ -111,7 +111,7 @@ fn memory_type_index_stated_by_an_opaque_fd_registration(
         .and_then(serde_json::Value::as_u64)
         .and_then(|index| u32::try_from(index).ok())
         .ok_or_else(|| {
-            crate::python_processor_context::gpu_operation_error(format!(
+            crate::python_node_context::gpu_operation_error(format!(
                 "{registered_subject} was registered without a usable vk_memory_type_index; an \
                  OPAQUE_FD import must bind the memory type index the exporter allocated from, \
                  and guessing one binds the wrong memory instead of failing"
@@ -616,7 +616,7 @@ impl HelperProcessGpuExchangeClient {
             memory: checked_out_memory,
         } = CheckedOutPixelBuffer::from_check_out(surface_id, response, plane_fds)
             .map_err(PyRuntimeError::new_err)?;
-        let format = crate::python_processor_context::parse_pixel_format_name(&format_wire_name)?;
+        let format = crate::python_node_context::parse_pixel_format_name(&format_wire_name)?;
         let plane0_size = plane_sizes.first().copied().unwrap_or(0);
 
         let vulkan_device = self.consumer_vulkan_device()?;

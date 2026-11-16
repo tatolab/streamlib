@@ -1,16 +1,16 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The window contract reaching a Python consumer in its processor interpreter.
+"""The window contract reaching a Python consumer in its node interpreter.
 
 The declaration surface is #2032's; this is the stage delivering on it in the
-placement every Python processor actually runs in. The contract crosses the
-wiring envelope from `tatolabd` beside `read_mode`, and the processor
+placement every Python node actually runs in. The contract crosses the
+wiring envelope from `tatolabd` beside `read_mode`, and the node
 interpreter's own `InputMailboxesInner` — the same Rust `tatolabd`'s mailboxes
 run — resamples, mixes down and frames before `process()` ever sees a bag.
 
 Every test starts the engine, which initializes a GPU context, so they carry
-`requires_gpu` like every other graph test here. How a processor interpreter
+`requires_gpu` like every other graph test here. How a node interpreter
 reads the envelope itself, with no engine, is the wheel suite's
 `test_audio_window_stage.py`.
 """
@@ -136,7 +136,7 @@ def test_a_helper_placed_consumer_reads_exact_windows_at_the_rate_it_declared(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A device capturing at its own rate reaches a 16 kHz mono 512/512 port as
-    exactly-512-sample windows 32 ms apart, in a processor interpreter.
+    exactly-512-sample windows 32 ms apart, in a node interpreter.
 
     The rate the machine's device settles on is whatever it settles on; what the
     contract promises is that the consumer never sees it.
@@ -187,7 +187,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """A contract stating everything but its count carries the source's stereo
-    through to a processor interpreter, over a real link.
+    through to a node interpreter, over a real link.
 
     Its sibling in the same graph declares mono off the same source, so one run
     shows both that following follows and that declaring still converts.
@@ -225,7 +225,7 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     assert_windows_are_contiguous_once_the_run_has_settled(declared_mono)
 
 
-GAPPED_AUDIO_PROCESSORS_SOURCE = '''\
+GAPPED_AUDIO_NODES_SOURCE = '''\
 """A mono source whose every block starts a second after the last one ended."""
 
 import numpy
@@ -282,7 +282,7 @@ class WindowedMonoConsumer:
 GAPPED_AUDIO_STREAM_SOURCE = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
+from nodes.gapped_audio import GappedMonoSource, WindowedMonoConsumer
 
 
 @graph_generator
@@ -339,7 +339,7 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
 ):
-    """A Python windowed consumer flushes in its own processor interpreter, and
+    """A Python windowed consumer flushes in its own node interpreter, and
     its node renders the samples each flush discarded on the one link feeding
     the port, beside a bag count the flushes never enter.
 
@@ -348,8 +348,8 @@ def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_
     """
     app_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/gapped_audio.py": GAPPED_AUDIO_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/gapped_audio.py": GAPPED_AUDIO_NODES_SOURCE,
             "stream.py": GAPPED_AUDIO_STREAM_SOURCE,
         }
     )

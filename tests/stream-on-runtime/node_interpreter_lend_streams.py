@@ -1,0 +1,18 @@
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""The `@graph_generator` functions `test_node_interpreter_lend.py` runs from the suite project."""
+
+from node_interpreter_lend_probes import (
+    CountsBagsFromUpstreamSink,
+    ReportsItsInterpreterSource,
+)
+from tatolab.stream import StreamBuilder, graph_generator
+
+
+@graph_generator
+def interpreter_reporting_source_into_counting_sink(stream_builder: StreamBuilder) -> None:
+    """A source announcing its interpreter into a sink counting what it received."""
+    source = stream_builder.add(ReportsItsInterpreterSource)
+    sink = stream_builder.add(CountsBagsFromUpstreamSink)
+    stream_builder.connect(source.output("bags_to_downstream"), sink.input("bags_from_upstream"))

@@ -16,7 +16,7 @@ stall counts themselves are asserted engine-side, where they are observable —
 `cargo test -p streamlib-engine
 a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n`.
 
-Every probe runs in its own processor interpreter and reports one
+Every probe runs in its own node interpreter and reports one
 `MARKER:PROBE_RESULT` JSON line; each test starts the probe's stream on
 `tatolabd` and asserts on that line.
 """
@@ -48,7 +48,7 @@ def run_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 

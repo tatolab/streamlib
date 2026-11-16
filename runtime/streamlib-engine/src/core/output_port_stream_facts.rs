@@ -26,9 +26,6 @@ struct StreamFactsOfOneOutputPort {
     current_facts: Option<PortStreamFacts>,
 }
 
-/// The current stream facts of each of one node's output ports, shared by the
-/// node, the processor's writer or its helper's bridge, and every downstream
-/// node an inbound link reaches it from.
 #[derive(Debug, Default)]
 pub(crate) struct StreamFactsOfOutputPorts {
     facts_by_output_port: RwLock<HashMap<String, StreamFactsOfOneOutputPort>>,

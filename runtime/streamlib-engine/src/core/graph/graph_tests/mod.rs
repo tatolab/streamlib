@@ -1,11 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Graph data structure tests using only the traversal API.
-//!
-//! Tests verify Graph operates as a standalone data structure.
-//! Engine-shared mock processors live in [`crate::core::test_support`].
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -13,9 +8,9 @@ use serde_json::{Value as JsonValue, json};
 
 use crate::core::JsonSerializableComponent;
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::processors::ProcessorState;
+use crate::core::nodes::NodeState;
 use crate::core::test_support::{
-    MockInputOnlyProcessor, MockOutputOnlyProcessor, MockProcessor, ensure_test_mocks_registered,
+    MockInputOnlyNode, MockNode, MockOutputOnlyNode, ensure_test_mocks_registered,
 };
 
 mod component_ops;
@@ -27,10 +22,6 @@ mod node_names;
 mod query_ops;
 mod real_world_scenarios;
 
-/// Construct a fresh `Graph` with the engine-internal test mock
-/// processors registered in `PROCESSOR_REGISTRY`. Tests use this in
-/// place of `test_graph()` so `add_v` can resolve mock port info and
-/// `add_e` can validate port presence on those nodes.
 fn test_graph() -> Graph {
     ensure_test_mocks_registered();
     Graph::new()
@@ -42,11 +33,11 @@ fn test_graph() -> Graph {
 
 /// Mock state component.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MockState(ProcessorState);
+struct MockState(NodeState);
 
 impl Default for MockState {
     fn default() -> Self {
-        Self(ProcessorState::Idle)
+        Self(NodeState::Idle)
     }
 }
 
@@ -60,16 +51,15 @@ impl JsonSerializableComponent for MockState {
     }
 }
 
-/// Mock processor instance component.
-struct MockProcessorInstance;
+struct MockNodeInstance;
 
-impl JsonSerializableComponent for MockProcessorInstance {
+impl JsonSerializableComponent for MockNodeInstance {
     fn json_key(&self) -> &'static str {
-        "mock_processor_instance"
+        "mock_node_instance"
     }
 
     fn to_json(&self) -> JsonValue {
-        json!({ "type": "MockProcessorInstance" })
+        json!({ "type": "MockNodeInstance" })
     }
 }
 

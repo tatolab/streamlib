@@ -12,10 +12,10 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
 };
 use streamlib::sdk::error::Error;
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use streamlib::sdk::nodes::{NODE_REGISTRY, NodeSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
@@ -32,20 +32,16 @@ fn an_empty_stream_loaded_into(
         .expect("an empty stream loads")
 }
 
-/// Register a descriptor-only processor type — enough for `add_processor`'s
-/// port-info lookup, with no instance to construct. Idempotent: a second
-/// register under `serial_test` returns an already-registered error we ignore.
-fn register_test_type(short: &str) -> ProcessorClassImportPath {
+fn register_test_type(short: &str) -> NodeClassImportPath {
     register_test_type_named(short, short)
 }
 
 /// Register under an import path whose trailing segment is `path_tail` while
 /// the descriptor's short name is `short_name`.
-fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClassImportPath {
-    let import_path =
-        ProcessorClassImportPath::new(format!("{}::{path_tail}", module_path!())).unwrap();
-    let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short_name).unwrap(),
+fn register_test_type_named(path_tail: &str, short_name: &str) -> NodeClassImportPath {
+    let import_path = NodeClassImportPath::new(format!("{}::{path_tail}", module_path!())).unwrap();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new(short_name).unwrap(),
         import_path.clone(),
         "node name test",
     )
@@ -65,7 +61,7 @@ fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClass
             streamlib::sdk::descriptors::PortFamily::Image,
         ),
     ));
-    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    let _ = NODE_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }
 
@@ -96,10 +92,10 @@ fn the_graph_json_carries_distinct_names_for_two_defaulted_nodes_of_one_type() {
 
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
+        .add_node(NodeSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
     stream
-        .add_processor(ProcessorSpec::new(camera, serde_json::json!({})))
+        .add_node(NodeSpec::new(camera, serde_json::json!({})))
         .unwrap();
 
     assert_eq!(
@@ -119,8 +115,8 @@ fn the_read_back_name_is_the_cast_of_the_typed_one() {
 
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     let name = stream
-        .add_processor_reporting_its_name(
-            ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front Camera"),
+        .add_node_reporting_its_name(
+            NodeSpec::new(camera, serde_json::json!({})).with_display_name("Front Camera"),
         )
         .unwrap()
         .name;
@@ -139,13 +135,12 @@ fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
 
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(
-            ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("FrontCam"),
+        .add_node(
+            NodeSpec::new(camera.clone(), serde_json::json!({})).with_display_name("FrontCam"),
         )
         .unwrap();
-    let refusal = stream.add_processor(
-        ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("frontcam"),
-    );
+    let refusal =
+        stream.add_node(NodeSpec::new(camera, serde_json::json!({})).with_display_name("frontcam"));
 
     match refusal {
         Err(Error::NodeNameTaken { name, cast }) => {
@@ -161,7 +156,7 @@ fn a_typed_duplicate_is_refused_by_name_and_adds_nothing() {
 /// from the name, so the two nodes stay one type.
 #[test]
 #[serial]
-fn the_suffix_never_reaches_the_processor_type() {
+fn the_suffix_never_reaches_the_node_type() {
     let camera = register_test_type("TypeUntouchedCamera");
 
     let project_directory = tempfile::tempdir().expect("a project directory");
@@ -169,10 +164,10 @@ fn the_suffix_never_reaches_the_processor_type() {
 
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
+        .add_node(NodeSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
     stream
-        .add_processor(ProcessorSpec::new(camera.clone(), serde_json::json!({})))
+        .add_node(NodeSpec::new(camera.clone(), serde_json::json!({})))
         .unwrap();
 
     let graph = stream.to_json().expect("graph json");
@@ -199,7 +194,7 @@ fn the_default_name_comes_from_the_descriptor_not_the_import_path() {
 
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
     stream
-        .add_processor(ProcessorSpec::new(widgetron.clone(), serde_json::json!({})))
+        .add_node(NodeSpec::new(widgetron.clone(), serde_json::json!({})))
         .expect("the fixture type is registered");
 
     assert_eq!(

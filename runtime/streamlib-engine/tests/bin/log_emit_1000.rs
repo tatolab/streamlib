@@ -71,7 +71,6 @@ fn main() {
         },
     };
     let guard = init_for_tests(config).expect("install logging pathway");
-    // The burst lands in a stream's log, as a processor's records do.
     let route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
         &jsonl_path,
         "RstraceEmit",
@@ -89,7 +88,7 @@ fn main() {
     for i in 0u32..1000 {
         tracing::info!(
             pipeline_id = "strace-test",
-            processor_id = "emitter",
+            node_run_id = "emitter",
             rhi_op = "tick",
             i,
             "strace-no-syscalls"

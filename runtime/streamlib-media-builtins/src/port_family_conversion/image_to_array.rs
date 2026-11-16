@@ -10,7 +10,7 @@ use streamlib::sdk::iceoryx2::{
     ArrayFrameAttributeResidency, ArrayFrameAttributeRow, ArrayFrameDescriptorBody,
     DataChannelPayloadDescriptor, DataChannelPayloadDescriptorKind, ImageFrameDescriptorBody,
 };
-use streamlib::sdk::processors::ReactiveProcessor;
+use streamlib::sdk::nodes::ReactiveNode;
 use streamlib::sdk::rhi::TextureFormat;
 
 use super::port_family_messages_read_by_a_conversion::refuse_unless_the_descriptor_is;
@@ -21,7 +21,7 @@ const ARRAY_OUTPUT_PORT: &str = "array";
 /// The one attribute each Array frame `ImageToArray` writes holds.
 pub const IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME: &str = "image";
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     built_in_node,
     execution = reactive,
     input(
@@ -55,7 +55,7 @@ pub const IMAGE_TO_ARRAY_IMAGE_ATTRIBUTE_NAME: &str = "image";
 )]
 pub struct ImageToArray;
 
-impl ReactiveProcessor for ImageToArray::Processor {
+impl ReactiveNode for ImageToArray::Node {
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         while let Some(message) = self.inputs.read_raw(IMAGE_INPUT_PORT)? {
             match array_frame_of_the_image_frame(message.payload_descriptor) {

@@ -19,12 +19,11 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{prompt, prompt_router};
 use serde::Deserialize;
 use serde_json::json;
-use streamlib::sdk::descriptors::{ProcessorClassImportPath, ProcessorDescriptor};
+use streamlib::sdk::descriptors::{NodeClassImportPath, NodeDescriptor};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::cast_exposed_name_to_url_safe;
 use streamlib::sdk::json_schema::{
-    GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
-    ProcessorNodeOutput,
+    GraphNodeOutput, GraphResponse, NodeDescriptorOutput, PortDescriptorOutput, PortInfoOutput,
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use streamlib_control_contract::CALL_OPERATION_TOOL_NAME;
@@ -34,7 +33,7 @@ use crate::mcp::LocalApiMcpServerHandler;
 
 /// The node type the `tatolab-virtualcamera` distribution declares, which the
 /// virtual camera recipe looks up in the catalog.
-pub const VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH: &str =
+pub const VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH: &str =
     "tatolab.virtualcamera:VirtualCameraSink";
 
 const STREAM_ARGUMENT_DESCRIPTION: &str = "The loaded stream the recipe is rendered against, by the stream id `list_streams` and `graph` report; each `graph` step names it so, and each graph edit by its stream asset.";
@@ -160,7 +159,7 @@ impl LocalApiMcpServerHandler {
         &self,
         stream_id: &str,
         description: &str,
-        recipe_for: impl FnOnce(&GraphResponse, &[ProcessorDescriptor]) -> Result<GraphRecipe, McpError>,
+        recipe_for: impl FnOnce(&GraphResponse, &[NodeDescriptor]) -> Result<GraphRecipe, McpError>,
     ) -> Result<GetPromptResult, McpError> {
         let operations_on_the_loaded_streams = &self.operations_on_the_loaded_streams;
         let stream_operations =
@@ -304,7 +303,7 @@ fn graph_recipe_step_calling_tool(
 fn node_with_uuid_or_name<'graph>(
     graph: &'graph GraphResponse,
     node: &str,
-) -> Result<&'graph ProcessorNodeOutput, McpError> {
+) -> Result<&'graph GraphNodeOutput, McpError> {
     let cast = cast_exposed_name_to_url_safe(node)
         .map_err(|names_nothing| McpError::invalid_params(names_nothing.to_string(), None))?;
     graph
@@ -326,7 +325,7 @@ fn node_with_uuid_or_name<'graph>(
 fn node_named<'graph>(
     graph: &'graph GraphResponse,
     node_name: &str,
-) -> Result<&'graph ProcessorNodeOutput, McpError> {
+) -> Result<&'graph GraphNodeOutput, McpError> {
     graph
         .nodes
         .iter()
@@ -340,7 +339,7 @@ fn node_named<'graph>(
 }
 
 fn input_port_of<'graph>(
-    node: &'graph ProcessorNodeOutput,
+    node: &'graph GraphNodeOutput,
     port_name: &str,
 ) -> Option<&'graph PortInfoOutput> {
     node.ports.inputs.iter().find(|port| port.name == port_name)
@@ -352,7 +351,7 @@ fn node_with_output_port_named<'graph>(
     graph: &'graph GraphResponse,
     from_node: &str,
     from_port: &str,
-) -> Result<&'graph ProcessorNodeOutput, McpError> {
+) -> Result<&'graph GraphNodeOutput, McpError> {
     let node = node_with_uuid_or_name(graph, from_node)?;
     if !node.ports.outputs.iter().any(|port| port.name == from_port) {
         let output_port_names: Vec<&str> = node
@@ -373,7 +372,7 @@ fn node_with_output_port_named<'graph>(
 }
 
 /// A registered type's input, when it has exactly one for a recipe to wire.
-fn sole_input_port(entry: &ProcessorDescriptorOutput) -> Option<&PortDescriptorOutput> {
+fn sole_input_port(entry: &NodeDescriptorOutput) -> Option<&PortDescriptorOutput> {
     match entry.inputs.as_slice() {
         [sole_input] => Some(sole_input),
         _ => None,
@@ -383,17 +382,17 @@ fn sole_input_port(entry: &ProcessorDescriptorOutput) -> Option<&PortDescriptorO
 /// The stream's catalog entry for one import path, or `None` when the stream
 /// resolves nothing under it — a string that is not an import path included.
 fn catalog_entry_for(
-    node_catalog: &[ProcessorDescriptor],
-    processor_type: &str,
-) -> Option<ProcessorDescriptorOutput> {
-    let processor_class_import_path = ProcessorClassImportPath::new(processor_type).ok()?;
+    node_catalog: &[NodeDescriptor],
+    node_type: &str,
+) -> Option<NodeDescriptorOutput> {
+    let node_class_import_path = NodeClassImportPath::new(node_type).ok()?;
     node_catalog
         .iter()
-        .find(|descriptor| descriptor.processor_class_import_path == processor_class_import_path)
-        .map(ProcessorDescriptorOutput::from)
+        .find(|descriptor| descriptor.node_class_import_path == node_class_import_path)
+        .map(NodeDescriptorOutput::from)
 }
 
-fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> Result<String, McpError> {
+fn catalog_entry_json_block(entry: &NodeDescriptorOutput) -> Result<String, McpError> {
     let text = serde_json::to_string_pretty(entry).map_err(|e| {
         McpError::internal_error(format!("catalog entry rendering failed: {e}"), None)
     })?;
@@ -404,7 +403,7 @@ fn catalog_entry_json_block(entry: &ProcessorDescriptorOutput) -> Result<String,
 /// nothing yet.
 fn catalog_introduction_for(
     node_type: &str,
-    entry: Option<&ProcessorDescriptorOutput>,
+    entry: Option<&NodeDescriptorOutput>,
 ) -> Result<String, McpError> {
     match entry {
         Some(entry) => Ok(format!(
@@ -439,7 +438,7 @@ fn find_the_added_node_step(port_directions: &str) -> GraphRecipeStep {
 
 fn insert_node_between_linked_nodes_recipe(
     graph: &GraphResponse,
-    node_catalog: &[ProcessorDescriptor],
+    node_catalog: &[NodeDescriptor],
     arguments: &InsertNodeBetweenLinkedNodesPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let link_id = arguments.link_id.as_str();
@@ -542,7 +541,7 @@ fn insert_node_between_linked_nodes_recipe(
 
 fn fan_output_to_another_consumer_recipe(
     graph: &GraphResponse,
-    node_catalog: &[ProcessorDescriptor],
+    node_catalog: &[NodeDescriptor],
     arguments: &FanOutputToAnotherConsumerPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
@@ -586,7 +585,7 @@ fn fan_output_to_another_consumer_recipe(
 
 fn show_channel_on_virtual_camera_recipe(
     graph: &GraphResponse,
-    node_catalog: &[ProcessorDescriptor],
+    node_catalog: &[NodeDescriptor],
     arguments: &ShowChannelOnVirtualCameraPromptArguments,
 ) -> Result<GraphRecipe, McpError> {
     let source = node_with_output_port_named(graph, &arguments.from_node, &arguments.from_port)?;
@@ -594,12 +593,12 @@ fn show_channel_on_virtual_camera_recipe(
     let camera_name = arguments.camera_name.as_deref();
     let virtual_camera_sink = catalog_entry_for(
         node_catalog,
-        VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+        VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH,
     )
     .ok_or_else(|| {
         McpError::invalid_params(
             format!(
-                "this node's catalog has no `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`: \
+                "this node's catalog has no `{VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH}`: \
                  the virtual camera is the Linux module `tatolab-virtualcamera`, installed in \
                  the stream's environment"
             ),
@@ -609,7 +608,7 @@ fn show_channel_on_virtual_camera_recipe(
     let video_input = sole_input_port(&virtual_camera_sink).ok_or_else(|| {
         McpError::internal_error(
             format!(
-                "`{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}` is registered with {} input \
+                "`{VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH}` is registered with {} input \
              ports rather than one",
                 virtual_camera_sink.inputs.len()
             ),
@@ -635,7 +634,7 @@ fn show_channel_on_virtual_camera_recipe(
             graph_recipe_step_calling_tool(
                 "add_node",
                 format!(
-                    "`type`: `{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}`; \
+                    "`type`: `{VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH}`; \
                      {config_instruction}. Keep the `node` UUID its `added_nodes` answers."
                 ),
             ),

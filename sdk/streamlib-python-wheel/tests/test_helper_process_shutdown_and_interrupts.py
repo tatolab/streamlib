@@ -19,9 +19,9 @@ from helper_process_test_support import (
     drive_lifecycle_on_a_thread,
     engine_shaped_link_wiring,
 )
-from tatolab.runtime._processor_interpreter_bootstrap import (
+from tatolab.runtime._node_interpreter_bootstrap import (
     ParentProcessBridge,
-    load_processor_class,
+    load_node_class,
 )
 
 pytestmark = pytest.mark.usefixtures(
@@ -31,7 +31,7 @@ pytestmark = pytest.mark.usefixtures(
 
 
 def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_parent):
-    """Unwiring a reactive processor's LAST inbound link closes the very fd its
+    """Unwiring a reactive node's LAST inbound link closes the very fd its
     loop is polling — the listener owns it, and dropping the last subscriber
     drops the listener.
 
@@ -39,14 +39,14 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     every later wait reports it invalid at once, so the loop spins where it
     should park.
 
-    A processor left with no inputs has nothing to wake it but the parent,
+    A node left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.
     """
 
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
     link_id = "L-reactive-unwire"
@@ -111,7 +111,7 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:InterruptedInProcessProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInProcessProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -148,7 +148,7 @@ def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -172,7 +172,7 @@ def test_a_parent_gone_after_an_interrupted_setup_still_leaves_its_teardown_run(
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
@@ -191,12 +191,12 @@ def test_a_parent_gone_after_a_setup_that_raised_leaves_no_teardown_run(
     parent goes away before sending anything else.
 
     Fail-without-fix: the end of the channel ran `stop()` and `teardown()` on a
-    processor that never set up.
+    node that never set up.
     """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
-        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesInSetupProbe")
+        bridge, load_node_class(f"{PROBE_MODULE}:RaisesInSetupProbe")
     )
 
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})

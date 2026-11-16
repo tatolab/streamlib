@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per tensor scenario: a Python tensor producer and its consumer,
-each in a processor interpreter of its own, the surface id crossing between
+each in a node interpreter of its own, the surface id crossing between
 them."""
 
 from typing import Any
@@ -81,7 +81,7 @@ def a_held_tensor_is_never_rewritten(stream_builder: StreamBuilder) -> None:
 
 @graph_generator
 def a_kernel_binds_a_tensor_by_surface_id(stream_builder: StreamBuilder) -> None:
-    """One processor interpreter, no link: the probe acquires its tensors and reports from
+    """One node interpreter, no link: the probe acquires its tensors and reports from
     `setup`."""
     stream_builder.add(TensorStorageBufferKernelBindingProbe)
 

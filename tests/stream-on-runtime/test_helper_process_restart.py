@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A Python processor whose helper process dies on its own, read from `graph`.
+"""A Python node whose helper process dies on its own, read from `graph`.
 
 The engine starts a new helper — a new instance of the class in a new process —
 in place of one that died, after a backoff, as the same node. A helper that
@@ -28,8 +28,8 @@ pytestmark = pytest.mark.requires_gpu
 #: and a cold spawn and import for each start, with room for a loaded rig.
 CRASH_LOOP_TIMEOUT_SECONDS = 60.0
 
-CRASHING_PROCESSORS_SOURCE = '''\
-"""A processor whose helper process exits a moment after every start, beside one that keeps running."""
+CRASHING_NODES_SOURCE = '''\
+"""A node whose helper process exits a moment after every start, beside one that keeps running."""
 
 import json
 import os
@@ -75,7 +75,7 @@ class KeepsRunning:
 CRASHING_STREAM_SOURCE = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 
-from processors.crashing import ExitsSoonAfterEveryStart, KeepsRunning
+from nodes.crashing import ExitsSoonAfterEveryStart, KeepsRunning
 
 
 @graph_generator
@@ -105,8 +105,8 @@ def test_a_helper_dying_soon_after_every_start_is_restarted_four_times_then_left
     """
     project_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/crashing.py": CRASHING_PROCESSORS_SOURCE,
+            "nodes/__init__.py": "",
+            "nodes/crashing.py": CRASHING_NODES_SOURCE,
             "stream.py": CRASHING_STREAM_SOURCE,
         }
     )

@@ -70,7 +70,7 @@ pub(super) fn set_up_the_camera_gpu_resources(
     full: &GpuContextFullAccess,
     device_fd: RawFd,
     camera_name: &str,
-    processor_id_of_the_capturing_node: &str,
+    node_run_id_of_the_capturing_node: &str,
     src_pixel_format: PixelFormat,
     width: u32,
     height: u32,
@@ -85,7 +85,7 @@ pub(super) fn set_up_the_camera_gpu_resources(
         src_pixel_format,
         width,
         height,
-        processor_id_of_the_capturing_node,
+        node_run_id_of_the_capturing_node,
     )?;
 
     // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).

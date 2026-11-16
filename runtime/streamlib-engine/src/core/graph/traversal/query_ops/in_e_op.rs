@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::core::graph::{
-    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
+    GraphNode, Link, LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut,
 };
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::{Direction, visit::EdgeRef};
 
 /// Every link carrying into `node_ids` — the digraph's incoming edges.
 fn every_link_carrying_into(
-    graph: &DiGraph<ProcessorNode, Link>,
+    graph: &DiGraph<GraphNode, Link>,
     node_ids: &[NodeIndex],
 ) -> Vec<EdgeIndex> {
     node_ids
@@ -19,7 +19,7 @@ fn every_link_carrying_into(
         .collect()
 }
 
-impl<'a> ProcessorTraversal<'a> {
+impl<'a> NodeTraversal<'a> {
     /// Get the incoming edges
     pub fn in_e(self) -> LinkTraversal<'a> {
         let ids = every_link_carrying_into(self.graph, &self.ids);
@@ -30,7 +30,7 @@ impl<'a> ProcessorTraversal<'a> {
     }
 }
 
-impl<'a> ProcessorTraversalMut<'a> {
+impl<'a> NodeTraversalMut<'a> {
     /// Get the incoming edges
     pub fn in_e(self) -> LinkTraversalMut<'a> {
         let ids = every_link_carrying_into(self.graph, &self.ids);

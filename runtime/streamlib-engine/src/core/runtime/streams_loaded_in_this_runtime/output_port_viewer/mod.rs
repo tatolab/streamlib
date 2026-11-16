@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib_processor_schema::PortFamily;
+use streamlib_node_schema::PortFamily;
 use streamlib_runtime_client_contract::local_api_wire_contract::OutputPortViewerReads;
 
 use crate::core::compiler::compiler_ops::{
@@ -19,10 +19,10 @@ use crate::core::compiler::compiler_ops::{
 };
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::{
-    Graph, OutputLinkPortRef, ProcessorNode, names_listed_for_a_refusal,
+    Graph, GraphNode, OutputLinkPortRef, names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,
 };
-use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 
@@ -200,8 +200,6 @@ impl LoadedStreamInThisRuntime {
         let port_name = port_name.to_string();
         let why_a_node_that_has_not_failed_does_not_run =
             self.why_a_node_of_this_stream_that_has_not_failed_does_not_run();
-        // A stream's graph lock is held across a compile, which may take a
-        // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 let (node_name, viewer_reads, source_side) =
@@ -299,14 +297,14 @@ fn the_running_node_with_its_output_port<'graph>(
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<&'graph ProcessorNode> {
+) -> Result<&'graph GraphNode> {
     let Some(node) = graph
         .traversal()
         .v(())
         .iter()
         .find(|node| node.node_uuid.to_string() == node_id)
     else {
-        return Err(Error::ProcessorNotFound(format!(
+        return Err(Error::NodeNotFound(format!(
             "no node in the stream `{stream_id}` has the id `{node_id}`. The stream \
              `{stream_id}` holds: {}",
             names_listed_for_a_refusal(
@@ -329,7 +327,7 @@ fn the_running_node_with_its_output_port<'graph>(
             ),
         });
     }
-    if !node.runs_its_processor() {
+    if !node.runs_its_node() {
         return Err(the_refusal_of_a_reach_for_a_node_not_running(
             node,
             why_a_node_that_has_not_failed_does_not_run,
@@ -347,7 +345,7 @@ fn the_running_node_with_its_output_port<'graph>(
 /// port carrying Channels, the latest for any other family or one not settled.
 fn what_a_viewer_of_the_port_reads(
     graph: &crate::core::graph::Graph,
-    node_id: &crate::core::ProcessorUniqueId,
+    node_id: &crate::core::NodeRunId,
     port_name: &str,
 ) -> OutputPortViewerReads {
     match crate::core::graph::the_family_a_link_out_of_an_output_carries(graph, node_id, port_name)

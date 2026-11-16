@@ -5,32 +5,31 @@
 
 use std::collections::HashSet;
 
-use crate::core::graph::{Link, ProcessorNode, ProcessorUniqueId};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::graph::{GraphNode, Link, NodeRunId};
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
 /// Entry point for graph queries.
 pub struct TraversalSource<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<GraphNode, Link>,
 }
 
 impl<'a> TraversalSource<'a> {
     /// Create a new query builder for the given graph.
-    pub(in crate::core::graph) fn new(graph: &'a DiGraph<ProcessorNode, Link>) -> Self {
+    pub(in crate::core::graph) fn new(graph: &'a DiGraph<GraphNode, Link>) -> Self {
         Self { graph }
     }
 }
 
-/// Read-only query over processor nodes.
-pub struct ProcessorTraversal<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
+pub struct NodeTraversal<'a> {
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<GraphNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,
 }
 
 /// Read-only query over links.
 pub struct LinkTraversal<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) graph: &'a DiGraph<GraphNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<EdgeIndex>,
 }
 
@@ -40,7 +39,7 @@ pub struct LinkTraversal<'a> {
 
 /// Entry point for mutable graph traversals.
 pub struct TraversalSourceMut<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<GraphNode, Link>,
     pub(in crate::core::graph::traversal) node_types_this_stream_resolves:
         &'a NodeTypesOneStreamResolves,
     pub(in crate::core::graph::traversal) node_names_the_graph_only_nodes_hold: &'a HashSet<String>,
@@ -49,7 +48,7 @@ pub struct TraversalSourceMut<'a> {
 impl<'a> TraversalSourceMut<'a> {
     /// Create a new mutable traversal source for the given graph.
     pub(in crate::core::graph) fn new(
-        graph: &'a mut DiGraph<ProcessorNode, Link>,
+        graph: &'a mut DiGraph<GraphNode, Link>,
         node_types_this_stream_resolves: &'a NodeTypesOneStreamResolves,
         node_names_the_graph_only_nodes_hold: &'a HashSet<String>,
     ) -> Self {
@@ -70,24 +69,22 @@ impl<'a> TraversalSourceMut<'a> {
     }
 }
 
-/// The node `processor_id` names, if the digraph holds one.
 pub(in crate::core::graph::traversal) fn node_index_of(
-    graph: &DiGraph<ProcessorNode, Link>,
-    processor_id: &ProcessorUniqueId,
+    graph: &DiGraph<GraphNode, Link>,
+    node_run_id: &NodeRunId,
 ) -> Option<NodeIndex> {
     graph
         .node_indices()
-        .find(|&node_idx| &graph[node_idx].id == processor_id)
+        .find(|&node_idx| &graph[node_idx].id == node_run_id)
 }
 
-/// Mutable query over processor nodes.
-pub struct ProcessorTraversalMut<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+pub struct NodeTraversalMut<'a> {
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<GraphNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,
 }
 
 /// Mutable query over links.
 pub struct LinkTraversalMut<'a> {
-    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
+    pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<GraphNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<EdgeIndex>,
 }

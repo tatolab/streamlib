@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The public handle a processor holds onto its output writer.
-
 use std::ffi::c_void;
 use std::sync::Arc;
 
@@ -19,20 +17,7 @@ use crate::iceoryx2::{DataChannelPayloadDescriptor, MessageGroupBoundary};
 // OutputWriter
 // =============================================================================
 
-/// Public output writer handle. The macro emits
-/// `pub outputs: OutputWriter` on every processor struct that
-/// declares output ports.
-///
-/// The sole field is an opaque pointer to the host's
-/// [`OutputWriterInner`]. `Clone` bumps the `Arc<OutputWriterInner>`
-/// strong count; `Drop` decrements it.
-///
-/// A port is named in any spelling that casts to the name it registered
-/// under, so `"videoOut"` reaches the port registered as `videoout`.
 pub struct OutputWriter {
-    /// Opaque handle: `Arc::into_raw(Arc<OutputWriterInner>)`. Null
-    /// on a freshly-constructed processor before
-    /// `set_iceoryx2_resources` fires.
     pub(crate) handle: *const c_void,
 }
 
@@ -42,14 +27,6 @@ unsafe impl Send for OutputWriter {}
 unsafe impl Sync for OutputWriter {}
 
 impl OutputWriter {
-    /// Build a handle from an `Arc<OutputWriterInner>`. The strong
-    /// reference is consumed; the handle owns it for its lifetime and
-    /// releases on Drop.
-    ///
-    /// Engine-only — used by the processor wiring path
-    /// (`ProcessorInstanceFactory::install_iceoryx2_resources`) and
-    /// by the macro-emitted `from_config` initializer when no
-    /// outputs are declared (an empty inner is used).
     pub fn from_inner_arc(inner: Arc<OutputWriterInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
         Self { handle }
@@ -65,23 +42,15 @@ impl OutputWriter {
         Some(unsafe { &*(self.handle as *const OutputWriterInner) })
     }
 
-    /// The host's inner writer, refused naming `port` before the host has
-    /// wired this processor instance.
     fn wired_inner_for_port(&self, port: &str) -> Result<&OutputWriterInner> {
         self.host_inner().ok_or_else(|| {
             Error::Link(format!(
                 "OutputWriter not wired (port='{port}'): host has not yet installed iceoryx2 \
-                 resources on this processor instance"
+                 resources on this node instance"
             ))
         })
     }
 
-    /// Build an empty pre-wiring handle with a null handle pointer. The
-    /// engine patches in a real inner via
-    /// `GeneratedProcessor::set_iceoryx2_resources` before any
-    /// downstream connection wiring runs. Safe to hold before wiring —
-    /// `has_port` / `is_configured` answer without a wired inner — but every
-    /// write returns [`Error::Link`] until it fires.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
@@ -112,8 +81,6 @@ impl OutputWriter {
         }
     }
 
-    /// Stream time now, the stamp a write that names none carries; the machine
-    /// clock before the host has wired this processor instance.
     pub fn stream_time_now_ns(&self) -> i64 {
         self.host_inner().map_or_else(
             || MediaClock::now().as_nanos() as i64,

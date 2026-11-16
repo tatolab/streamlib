@@ -33,10 +33,6 @@ pub(crate) fn refuse_an_argument_to_function_node(attribute: TokenStream2) -> sy
     ))
 }
 
-/// What the `#[meta(...)]` attributes under `#[function_node]` declare; the
-/// twin of `streamlib-macros`' `grammar::DeclaredNodeMeta`, which reads the
-/// same grammar under `#[processor]`. The function's doc comment is never its
-/// description.
 #[derive(Default)]
 pub(crate) struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group

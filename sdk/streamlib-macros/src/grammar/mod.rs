@@ -1,42 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Grammar for the `#[processor(...)]` attribute — the single source of truth
-//! for a processor's execution mode and ports.
-//!
-//! Nothing here reads any file. Everything the macro needs to emit the
-//! processor module is declared in the attribute tokens:
-//!
-//! ```ignore
-//! #[processor(
-//!     execution = manual,               // reactive | manual | continuous | continuous(interval_ms = 10)
-//!     scheduling = high,                // realtime | high | normal (default: normal)
-//!     unsafe_send,                      // flag — emit `unsafe impl Send`
-//!     built_in_node,                    // flag — type is `tatolab.stream:<struct name>`
-//!     paced_by_real_time,               // flag — paces itself on real time, as a live device does
-//!     config = crate::CameraConfig,     // typed Config alias; must derive `JsonSchema`
-//!     input("video_in", delivery_profile = "newest", family = Image),
-//!     output("video", family = Image),
-//! )]
-//! #[meta(category = "Sources/Cameras", description = "Captures a camera.")]
-//! ```
-//!
-//! What describes the node type, its `category` and `description`, is the
-//! `#[meta(...)]` helper attribute written under `#[processor(...)]`. A
-//! category is the group an editor files the node type under, or a path into a
-//! group inside one; a node type that declares none has none.
-//!
-//! A port declares a name, its family, a description, and — on an input — a
-//! delivery profile, plus the family's keys, an optional `audio_window`
-//! contract on an audio input.
-//!
-//! The attribute declares no identity. A processor is named by the import path
-//! of its type, captured by the macro at the expansion site — or, for a
-//! declaration flagged `built_in_node`, by its class in `tatolab.stream`.
-
-use streamlib_processor_schema::{
-    AudioWindowContract, PortFamilyDeclaration, ProcessorPortSchema, ProcessorScheduling,
-    ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, ThreadPriority,
+use streamlib_node_schema::{
+    AudioWindowContract, NodePortSchema, NodeScheduling, NodeSchema, NodeSchemaExecution,
+    PortFamilyDeclaration, RuntimeConfig, RuntimeOptions, ThreadPriority,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -148,9 +115,6 @@ const NODE_META_ATTRIBUTE_NAME: &str = "meta";
 /// What a category path's levels are separated by, as `Effects/Stylize`.
 const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
 
-/// What the `#[meta(...)]` attributes under `#[processor]` declare; the twin of
-/// `tatolab-module-sdk-macros`' `DeclaredNodeMeta`, which reads the same
-/// grammar under `#[function_node]`.
 #[derive(Default)]
 pub(crate) struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group
@@ -280,21 +244,19 @@ pub(crate) struct ParsedPort {
     pub family: PortFamilyDeclaration,
 }
 
-/// The fully-parsed `#[processor(...)]` attribute.
-pub(crate) struct ParsedProcessorAttr {
+pub(crate) struct ParsedNodeAttr {
     /// The author's type name — what an instance's display name defaults to.
-    pub processor_class_short_name: String,
+    pub node_class_short_name: String,
     /// The description the node's `#[meta(...)]` declares.
     pub description: Option<DeclaredDescription>,
     /// The category the node's `#[meta(...)]` declares, exactly as written.
     pub category: Option<String>,
-    pub execution: ProcessorSchemaExecution,
+    pub execution: NodeSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
     pub unsafe_send: bool,
     /// Whether this is one of the runtime's built-in nodes, typed
     /// `tatolab.stream:<struct name>` rather than by its module path.
     pub built_in_node: bool,
-    /// Whether the processor paces itself on real time, as a live device does.
     pub paced_by_real_time: bool,
     pub config_type: Option<Path>,
     pub config_field_name: String,
@@ -302,21 +264,9 @@ pub(crate) struct ParsedProcessorAttr {
     pub outputs: Vec<ParsedPort>,
 }
 
-impl ParsedProcessorAttr {
-    /// Project the parsed attribute into the manifest-shaped [`ProcessorSchema`].
-    ///
-    /// This is the single projection both readers of the attribute share: the
-    /// proc-macro emits its descriptor from this, and the source-scan extractor
-    /// builds each manifest entry from it — so an added `ParsedProcessorAttr` or
-    /// `ProcessorSchema` field can never silently diverge the two. `name` is the
-    /// author's type name, and the runtime language defaults to Rust (the
-    /// only language a source scan of a Rust crate can produce). `config` stays
-    /// `None`: the attribute binds a config *type*, not a resolved manifest
-    /// schema; the consuming layer projects the config-schema id to a
-    /// release-core catalog entry. A description declared as a `const` has no
-    /// value until rustc evaluates it, so it projects as `None`.
-    pub(crate) fn to_processor_schema(&self) -> ProcessorSchema {
-        let to_port = |p: &ParsedPort| ProcessorPortSchema {
+impl ParsedNodeAttr {
+    pub(crate) fn to_node_schema(&self) -> NodeSchema {
+        let to_port = |p: &ParsedPort| NodePortSchema {
             name: p.cast_name.clone(),
             description: p
                 .description
@@ -328,8 +278,8 @@ impl ParsedProcessorAttr {
             family: p.family.clone(),
         };
 
-        ProcessorSchema {
-            name: self.processor_class_short_name.clone(),
+        NodeSchema {
+            name: self.node_class_short_name.clone(),
             description: self
                 .description
                 .as_ref()
@@ -344,9 +294,7 @@ impl ParsedProcessorAttr {
             },
             entrypoint: None,
             execution: self.execution.clone(),
-            scheduling: self
-                .scheduling
-                .map(|priority| ProcessorScheduling { priority }),
+            scheduling: self.scheduling.map(|priority| NodeScheduling { priority }),
             paced_by_real_time: self.paced_by_real_time,
             config: None,
             state: Vec::new(),
@@ -356,23 +304,11 @@ impl ParsedProcessorAttr {
     }
 }
 
-/// Parse the `#[processor(...)]` attribute tokens into a [`ParsedProcessorAttr`].
-///
-/// This is the single, shared grammar entrypoint: the proc-macro calls it with
-/// the attribute tokens it receives at expansion (converting its
-/// `proc_macro::TokenStream` via `.into()`), and the source-scan
-/// The attribute macro calls it with the tokens a `syn`-parsed
-/// `#[processor(...)]` attribute carries. There is deliberately no second
-/// parser — code is the
-/// source of truth, so both readers of that truth share one grammar.
-///
-/// `struct_ident` supplies the class short name the display-name default reads,
-/// and `node_meta` what the `#[meta(...)]` under the attribute declares.
 pub(crate) fn parse2(
     attr: proc_macro2::TokenStream,
     node_meta: DeclaredNodeMeta,
     struct_ident: &Ident,
-) -> syn::Result<ParsedProcessorAttr> {
+) -> syn::Result<ParsedNodeAttr> {
     let struct_name = struct_ident.to_string();
     let parser = move |input: ParseStream<'_>| parse_body(input, node_meta, &struct_name);
     parser.parse2(attr)
@@ -382,8 +318,8 @@ fn parse_body(
     input: ParseStream<'_>,
     node_meta: DeclaredNodeMeta,
     struct_name: &str,
-) -> syn::Result<ParsedProcessorAttr> {
-    let mut execution: Option<ProcessorSchemaExecution> = None;
+) -> syn::Result<ParsedNodeAttr> {
+    let mut execution: Option<NodeSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
     let mut unsafe_send = false;
     let mut built_in_node = false;
@@ -407,7 +343,7 @@ fn parse_body(
                     key.span(),
                     format!(
                         "`{meta_key}` describes the node type, so it is declared in the \
-                         `#[meta(...)]` under `#[processor(...)]`, \
+                         `#[meta(...)]` under `#[node(...)]`, \
                          `#[meta({meta_key} = \"…\")]`, never here"
                     ),
                 ));
@@ -452,7 +388,7 @@ fn parse_body(
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
-                        "unknown `#[processor(...)]` key `{other}` — expected one of {}",
+                        "unknown `#[node(...)]` key `{other}` — expected one of {}",
                         rendered_attribute_keys()
                     ),
                 ));
@@ -476,8 +412,8 @@ fn parse_body(
 
     let config_field_name = config_field_name.unwrap_or_else(|| "config".to_string());
 
-    Ok(ParsedProcessorAttr {
-        processor_class_short_name: struct_name.to_string(),
+    Ok(ParsedNodeAttr {
+        node_class_short_name: struct_name.to_string(),
         description: node_meta.description,
         category: node_meta.category,
         execution,
@@ -524,11 +460,11 @@ fn refuse_ports_that_cast_alike<'port>(
 }
 
 /// Parse an `execution = ...` right-hand side.
-fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecution> {
+fn parse_execution(input: ParseStream<'_>) -> syn::Result<NodeSchemaExecution> {
     let mode: Ident = input.parse()?;
     match mode.to_string().as_str() {
-        "reactive" => Ok(ProcessorSchemaExecution::Reactive),
-        "manual" => Ok(ProcessorSchemaExecution::Manual),
+        "reactive" => Ok(NodeSchemaExecution::Reactive),
+        "manual" => Ok(NodeSchemaExecution::Manual),
         "continuous" => {
             let mut interval_ms = 0u32;
             if input.peek(syn::token::Paren) {
@@ -549,7 +485,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
                     interval_ms = lit.base10_parse()?;
                 }
             }
-            Ok(ProcessorSchemaExecution::Continuous { interval_ms })
+            Ok(NodeSchemaExecution::Continuous { interval_ms })
         }
         other => Err(syn::Error::new(
             mode.span(),
@@ -562,7 +498,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 
 /// Every key the attribute takes — the one list both error messages render, so
 /// adding or retiring a key cannot leave one of them lying.
-const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
+const NODE_ATTRIBUTE_KEYS: &[&str] = &[
     "execution",
     "scheduling",
     "unsafe_send",
@@ -574,9 +510,8 @@ const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
     "output",
 ];
 
-/// [`PROCESSOR_ATTRIBUTE_KEYS`] as a quoted, comma-joined list.
 fn rendered_attribute_keys() -> String {
-    PROCESSOR_ATTRIBUTE_KEYS
+    NODE_ATTRIBUTE_KEYS
         .iter()
         .map(|key| format!("`{key}`"))
         .collect::<Vec<_>>()
@@ -586,8 +521,8 @@ fn rendered_attribute_keys() -> String {
 /// The refusal every authored-identity spelling lands on.
 fn class_path_rule() -> String {
     format!(
-        "`#[processor(...)]` declares no identity. A processor is named by the import path of \
-         the type it is — `my_app::filters::BlurProcessor` — captured by the macro at the \
+        "`#[node(...)]` declares no identity. A node is named by the import path of \
+         the type it is — `my_app::filters::BlurNode` — captured by the macro at the \
          expansion site and never authored. Remove it; {} are the keys the attribute takes.",
         rendered_attribute_keys()
     )

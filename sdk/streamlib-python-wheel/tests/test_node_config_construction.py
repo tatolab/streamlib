@@ -1,0 +1,276 @@
+# Copyright (c) 2025 Tatolab LLC
+# SPDX-License-Identifier: GPL-3.0-only
+
+"""The hosting module constructs a node's config class, and reconfigures it.
+
+What a helper process does on the compile thread: build the class `@node.process`
+read off `__init__` from the config mapping `stream_builder.add` recorded on
+the graph node, and hand `configure` the same kind of object later. None of it
+boots an engine. How the class is declared and documented is the stream
+suite's (`sdk/tatolab-stream/tests/test_node_config_class.py`).
+"""
+
+import dataclasses
+from typing import Annotated, Any, Literal, Optional, TypedDict
+
+import pydantic
+import pytest
+
+from tatolab.stream import Description, NodeReference, node
+from tatolab.runtime._node_hosting import (
+    apply_configuration,
+    construct_node_instance,
+)
+
+# ---------------------------------------------------------------------------
+# The config classes the cases below are declared against
+# ---------------------------------------------------------------------------
+
+
+class BlurConfigTypedDict(TypedDict, total=False):
+    """Admits anything at run time — the loosest dial an author can pick."""
+
+    width: int
+    label: Annotated[str, Description("What to call this blur.")]
+
+
+@dataclasses.dataclass
+class BlurConfigDataclass:
+    """Refuses an unknown key but not a mistyped value."""
+
+    width: int = 1
+    label: str = "unlabelled"
+    tags: "list[str]" = dataclasses.field(default_factory=list)
+    quality: Literal["fast", "good"] = "fast"
+    fallback: Optional[str] = None
+    derived: int = dataclasses.field(init=False, default=7)
+
+
+class BlurConfigModel(pydantic.BaseModel):
+    """Validates values — the strictest dial, and it carries its own schema."""
+
+    width: int = 1
+    label: str = "unlabelled"
+
+
+# ---------------------------------------------------------------------------
+# Hosting: constructing the class from the mapping, and reconfiguring
+# ---------------------------------------------------------------------------
+
+
+@node.process(execution="manual")
+class DataclassConfigured:
+    def __init__(self, config: BlurConfigDataclass) -> None:
+        self.config = config
+
+    def configure(self, config: BlurConfigDataclass) -> None:
+        self.config = config
+
+
+@node.process(execution="manual")
+class TypedDictConfigured:
+    def __init__(self, config: BlurConfigTypedDict) -> None:
+        self.config = config
+
+
+@node.process(execution="manual")
+class ModelConfigured:
+    def __init__(self, config: BlurConfigModel) -> None:
+        self.config = config
+
+
+@node.process(execution="manual")
+class Unconfigured:
+    def __init__(self) -> None:
+        self.seen = 0
+
+
+def test_a_dataclass_config_reaches_the_node_as_an_object():
+    built = construct_node_instance(
+        DataclassConfigured, {"width": 4, "label": "left"}, None
+    )
+
+    assert built.config == BlurConfigDataclass(width=4, label="left")
+
+
+def test_a_typed_dict_config_reaches_the_node_as_the_mapping_itself():
+    built = construct_node_instance(TypedDictConfigured, {"width": 4}, None)
+
+    assert built.config == {"width": 4}
+
+
+def test_a_model_config_reaches_the_node_validated():
+    built = construct_node_instance(ModelConfigured, {"width": "4"}, None)
+
+    assert built.config.width == 4, "the model coerced it; the wheel added no opinion"
+
+
+def test_whatever_the_config_class_raises_is_what_the_author_sees():
+    """Construction is the only check the wheel performs: how strict it is is
+    the author's choice of config class, the same dial `read(port, into=T)` is."""
+    with pytest.raises(TypeError, match="bogus"):
+        construct_node_instance(DataclassConfigured, {"bogus": 1}, None)
+
+    with pytest.raises(pydantic.ValidationError):
+        construct_node_instance(ModelConfigured, {"width": "wide"}, None)
+
+
+def test_a_node_declaring_no_config_refuses_a_non_empty_one_by_name():
+    with pytest.raises(TypeError, match="`width` has nowhere to go"):
+        construct_node_instance(Unconfigured, {"width": 1}, None)
+
+
+def test_a_node_declaring_no_config_takes_an_empty_one():
+    assert construct_node_instance(Unconfigured, {}, None).seen == 0
+    assert construct_node_instance(Unconfigured, None, None).seen == 0
+
+
+def test_reconfiguration_hands_configure_the_same_kind_of_object():
+    built = construct_node_instance(DataclassConfigured, {"width": 4}, None)
+
+    apply_configuration(built, {"width": 9, "label": "right"})
+
+    assert built.config == BlurConfigDataclass(width=9, label="right")
+
+
+def test_a_node_without_configure_is_refused_by_the_hook_it_needs():
+    built = construct_node_instance(TypedDictConfigured, {"width": 4}, None)
+
+    with pytest.raises(TypeError, match=r"configure\(self, config\)"):
+        apply_configuration(built, {"width": 9})
+
+
+def test_a_configuration_that_is_not_a_mapping_is_refused_before_construction():
+    with pytest.raises(TypeError, match="must be a dict"):
+        construct_node_instance(DataclassConfigured, ["width", 4], None)
+
+
+# ---------------------------------------------------------------------------
+# The migrated fixtures, guarded where CI can see them
+# ---------------------------------------------------------------------------
+
+# Decoration is where a bad migration raises, so importing the fixture here is
+# what puts the migration in front of CI at all.
+MIGRATED_FIXTURES = [
+    ("helper_process_probes", "PassThroughProbe", "PassThroughProbeConfig"),
+]
+
+
+@pytest.mark.parametrize(
+    ("module_name", "node_name", "config_name"),
+    MIGRATED_FIXTURES,
+    ids=[node_name for _, node_name, _ in MIGRATED_FIXTURES],
+)
+def test_a_migrated_fixture_declares_the_config_class_beside_it(
+    module_name, node_name, config_name
+):
+    module = __import__(module_name)
+    node_class = getattr(module, node_name)
+
+    assert node_class.__tatolab_node_config_class__ is getattr(
+        module, config_name
+    )
+
+
+# ---------------------------------------------------------------------------
+# The rest of the construction contract
+# ---------------------------------------------------------------------------
+
+
+def test_the_helper_constructs_the_node_by_the_config_keyword():
+    """Positionally would work for every class in this suite and break the
+    moment an author writes a keyword-only `config`."""
+    constructed_with: "dict[str, Any]" = {}
+
+    @node.process(execution="manual")
+    class KeywordOnlyConfigured:
+        def __init__(self, *, config: BlurConfigDataclass) -> None:
+            constructed_with["config"] = config
+
+    construct_node_instance(KeywordOnlyConfigured, {"width": 2}, None)
+
+    assert constructed_with["config"] == BlurConfigDataclass(width=2)
+
+
+def test_reconfiguring_a_node_that_declares_no_config_refuses_the_keys():
+    @node.process(execution="manual")
+    class UnconfiguredButReconfigurable:
+        def __init__(self) -> None:
+            self.configured_with: Any = "never"
+
+        def configure(self, config: None) -> None:
+            self.configured_with = config
+
+    built = construct_node_instance(UnconfiguredButReconfigurable, {}, None)
+
+    with pytest.raises(TypeError, match="`width` has nowhere to go"):
+        apply_configuration(built, {"width": 1})
+
+    # An empty update is not a mistake, so it reaches the hook with the nothing
+    # the class declared.
+    apply_configuration(built, {})
+    assert built.configured_with is None
+
+
+def test_a_config_class_of_a_kind_the_deriver_cannot_read_is_accepted_and_open():
+    """A plain annotated class constructs fine and describes nothing.
+
+    Pinned rather than left to drift, because it is the one shape where the
+    catalog goes quiet on a class that works: an agent reading this entry learns
+    that configuration is a mapping and nothing about its keys. Whether such a
+    class should instead be refused at decoration, or read off its `__init__`,
+    is an open question for the owner — the plan says "any class constructible
+    from the config's keys with annotated fields" while the change enumerates
+    three kinds.
+    """
+
+    class PlainlyAnnotatedConfig:
+        def __init__(self, width: int = 3, label: str = "x") -> None:
+            self.width = width
+            self.label = label
+
+    @node.process(execution="manual")
+    class PlainlyConfigured:
+        def __init__(self, config: PlainlyAnnotatedConfig) -> None:
+            self.config = config
+
+    assert PlainlyConfigured.__tatolab_node_config_schema__ == {"type": "object"}
+    built = construct_node_instance(PlainlyConfigured, {"width": 9}, None)
+    assert built.config.width == 9, "it constructs; only the description is missing"
+
+
+@dataclasses.dataclass
+class TrackConfigNamingItsGateway:
+    """Holds a reference to another node, and a plain mapping beside it."""
+
+    gateway: "Optional[NodeReference]" = None
+    fallback_gateway: "Optional[NodeReference]" = None
+    metadata: "dict[str, str]" = dataclasses.field(default_factory=dict)
+
+
+@node.process(execution="manual")
+class TrackConfigured:
+    def __init__(self, config: TrackConfigNamingItsGateway) -> None:
+        self.config = config
+
+    def configure(self, config: TrackConfigNamingItsGateway) -> None:
+        self.config = config
+
+
+def test_a_node_reference_field_reaches_the_node_as_a_node_reference():
+    built = construct_node_instance(
+        TrackConfigured,
+        {"gateway": {"node": "cloudflare"}, "metadata": {"node": "kept as written"}},
+        None,
+    )
+
+    assert built.config.gateway == NodeReference("cloudflare")
+    assert built.config.fallback_gateway is None
+    assert built.config.metadata == {"node": "kept as written"}
+
+    apply_configuration(
+        built,
+        {"gateway": {"node": "cloudflare"}, "fallback_gateway": {"node": "backup"}},
+    )
+
+    assert built.config.fallback_gateway == NodeReference("backup")

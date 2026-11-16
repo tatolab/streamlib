@@ -1,18 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A macOS helper process's bond to its parent's life.
-//!
-//! Linux binds a helper to its parent with `PR_SET_PDEATHSIG` in the spawn
-//! host's `pre_exec`; Darwin has no such signal, so the helper watches for
-//! itself. Two signals, either one enough: kqueue `EVFILT_PROC` with
-//! `NOTE_EXIT` on the parent's pid, and the dead-name notification on the
-//! engine's surface-share Mach service. Whichever fires first ends the channel
-//! to the parent, so the helper runs the `stop` and `teardown()` the engine can
-//! no longer ask for, and walks the engine's own ladder budgets down to killing
-//! its process group — nothing it waits on needs the GIL, so a processor that
-//! never returns cannot hold it past the bound.
-
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd, RawFd};
 use std::sync::OnceLock;
@@ -22,7 +10,7 @@ use std::time::{Duration, Instant};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-use streamlib::sdk::processor_interpreter::{
+use streamlib::sdk::node_interpreter::{
     CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,
 };
 
@@ -41,12 +29,6 @@ static THE_PARENT_WENT_AWAY: AtomicBool = AtomicBool::new(false);
 /// which spares the callback interrupt.
 static CALLBACKS_RETURNED_AFTER_THE_PARENT_WENT_AWAY: AtomicBool = AtomicBool::new(false);
 
-/// Arm both watches on this helper's parent, before any processor code runs.
-///
-/// `parent_channel_fd` is the escalate socket, shut down when a watch fires so
-/// the helper reads the end of its channel. Refuses a second call, and refuses
-/// when the pid watch cannot be armed — a helper that cannot watch its parent
-/// could outlive it.
 #[pyfunction]
 pub(crate) fn watch_for_this_helper_processes_parent_going_away(
     parent_channel_fd: RawFd,
@@ -124,9 +106,6 @@ fn watch_the_parent_process_until_it_exits(
                 );
             }
             Err(ProcessExitWatchLost::DescriptorNoLongerOurs) => {
-                // A processor that closed every descriptor it could reach took
-                // this one; the number may already name something else, so it
-                // is let go without being closed.
                 let _ = armed_watch.into_raw_fd();
                 match arm_a_watch_for_the_exit_of_the_parent(parent_process_id) {
                     Ok(ProcessExitWatchArmingOutcome::Armed(rearmed_watch)) => {
@@ -212,7 +191,7 @@ fn tear_this_helper_down_because_its_parent_went_away(reason: &'static str) {
     tracing::warn!("{reason}; this helper tears itself down");
     let the_parent_went_away_at = Instant::now();
     if let Some(parent_channel_fd) = PARENT_CHANNEL_FD_THE_WATCH_ENDS.get() {
-        // SAFETY: a scalar syscall on the channel the processor interpreter
+        // SAFETY: a scalar syscall on the channel the node interpreter
         // bootstrap handed over. Shut down rather than closed: the bridge's
         // reader still owns the fd, and shutting it down is what wakes that
         // reader with the end of the channel even while something else still
@@ -263,7 +242,7 @@ fn walk_the_self_teardown_ladder_from(the_parent_went_away_at: Instant) -> ! {
 fn kill_this_helpers_whole_process_group() -> ! {
     // SAFETY: scalar syscalls. The spawn host made this helper the leader of a
     // group whose id is its pid; the pid itself is signalled too, for a
-    // processor that moved the helper out of that group.
+    // node that moved the helper out of that group.
     unsafe {
         let this_helper = libc::getpid();
         libc::killpg(this_helper, libc::SIGKILL);

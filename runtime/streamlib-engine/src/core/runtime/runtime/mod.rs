@@ -132,7 +132,6 @@ pub struct OptionsForLoadingOneStream {
     pub stream_location: StreamLocation,
     /// The label the stream is shown under; the stream id when none is given.
     pub display_name: Option<String>,
-    /// Where the stream's processor interpreters start; none starts when none is given.
     pub stream_environment: Option<StreamEnvironment>,
     /// Whether the stream's capture devices may ask the user for access nobody
     /// has answered yet.
@@ -143,8 +142,6 @@ pub struct OptionsForLoadingOneStream {
 }
 
 impl OptionsForLoadingOneStream {
-    /// The stream of `stream_location`, loaded under the id `stream_id` the runtime records
-    /// it by, starting no processor interpreter.
     pub fn at_stream_location(
         stream_id: impl Into<String>,
         stream_location: StreamLocation,
@@ -167,7 +164,6 @@ impl OptionsForLoadingOneStream {
         }
     }
 
-    /// These options, starting the stream's processor interpreters in `stream_environment`.
     pub fn in_stream_environment(self, stream_environment: StreamEnvironment) -> Self {
         Self {
             stream_environment: Some(stream_environment),
@@ -294,7 +290,7 @@ fn walk_a_stream_being_loaded_to_the_machines_shutdown_level(stream: &LoadedStre
     if machines_level >= RuntimeShutdownEscalation::Forced {
         stream.this_streams_shutdown_escalation().raise_to_forced();
     }
-    stream.interrupt_every_processor_interpreter_describe();
+    stream.interrupt_every_node_interpreter_describe();
 }
 
 /// Ask `stream` for its shutdown and block until it has ended. Once its

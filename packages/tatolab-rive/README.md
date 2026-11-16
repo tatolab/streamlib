@@ -4,19 +4,6 @@ A Rive animation as a stream source, built the way a third party builds one: a
 standalone maturin wheel that depends on `tatolab-stream`, `pyo3`,
 `tatolab-module-sdk` and the consumer RHI, and on no engine crate.
 
-- `RiveSource` plays a `.riv` file's state machine in its own processor
-  interpreter. On `start()` it lends its `video` output and `data` input to
-  this wheel's Rust. A thread there creates a Vulkan device on the runtime's
-  GPU through the consumer RHI's external-renderer device, builds
-  rive-runtime's Vulkan renderer on it, and per frame draws the artboard into a
-  texture from the node's output pool and publishes an Image frame in its slot.
-  No frame is copied, and Python never runs at frame cadence.
-- Config: `riv_path`, `artboard` and `state_machine` (the file's defaults when
-  absent), `width`, `height` and `frame_rate` (1920, 1080 and 60).
-- `data` takes Records, maps from view-model property path to value, applied to
-  the artboard's default view-model instance. A path the instance lacks is
-  logged once and skipped.
-
 Linux only for now.
 
 ## Build it

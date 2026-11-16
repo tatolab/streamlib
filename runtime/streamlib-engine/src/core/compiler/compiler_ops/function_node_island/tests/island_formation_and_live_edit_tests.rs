@@ -13,7 +13,7 @@ fn each_link_is_wired_by_the_kinds_of_its_two_ends() {
     let reader = a_helper_reader_before_its_setup(&mut graph);
     let source = add_a_node(
         &mut graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     let call = link(&mut graph, (&lfo, "result"), (&remap, "x"));
@@ -61,7 +61,7 @@ fn the_island_lists_each_node_after_what_it_reads_once_with_its_config() {
         .map(|node| node["node"].as_str().unwrap())
         .collect();
     assert_eq!(nodes_in_order.len(), 4, "{nodes_in_order:?}");
-    let position = |node_id: &ProcessorUniqueId| {
+    let position = |node_id: &NodeRunId| {
         nodes_in_order
             .iter()
             .position(|listed| *listed == node_id.as_str())
@@ -140,7 +140,7 @@ fn each_island_node_renders_how_its_readers_helper_ran_it() {
         &Iceoryx2Node::for_this_test_process(),
     )
     .unwrap();
-    let ran_compiled = |graph: &Graph, node_id: &ProcessorUniqueId| {
+    let ran_compiled = |graph: &Graph, node_id: &NodeRunId| {
         graph
             .traversal()
             .v(node_id)
@@ -182,7 +182,7 @@ fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
 
     note_where_each_function_node_runs(&mut graph);
 
-    let host = |node_id: &ProcessorUniqueId| {
+    let host = |node_id: &NodeRunId| {
         graph
             .traversal()
             .v(node_id)
@@ -192,7 +192,7 @@ fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
             .get("host")
             .cloned()
     };
-    let name_of = |node_id: &ProcessorUniqueId| {
+    let name_of = |node_id: &NodeRunId| {
         graph
             .traversal()
             .v(node_id)
@@ -239,7 +239,7 @@ fn a_reactive_reader_fed_only_by_islands_is_refused_naming_continuous_execution(
 fn a_helper_reader_past_its_setup(
     graph: &mut Graph,
     delivery: &crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery,
-) -> ProcessorUniqueId {
+) -> NodeRunId {
     let reader = a_helper_reader_before_its_setup(graph);
     the_link_wiring_of(graph, &reader)
         .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
@@ -247,10 +247,7 @@ fn a_helper_reader_past_its_setup(
     reader
 }
 
-fn the_link_wiring_of(
-    graph: &Graph,
-    node_id: &ProcessorUniqueId,
-) -> Arc<OutOfProcessLinkWiringEnvelope> {
+fn the_link_wiring_of(graph: &Graph, node_id: &NodeRunId) -> Arc<OutOfProcessLinkWiringEnvelope> {
     Arc::clone(
         &graph
             .traversal()
@@ -531,7 +528,7 @@ fn an_island_closing_a_loop_through_previous_value_evaluates_it_before_what_it_r
     let island = the_island_feeding_a_link(&graph, &into_the_reader).unwrap();
 
     let order = the_node_ids_of_an_island(&island);
-    let position_of = |node_id: &ProcessorUniqueId| {
+    let position_of = |node_id: &NodeRunId| {
         order
             .iter()
             .position(|each| each == node_id.as_str())
@@ -618,9 +615,7 @@ fn an_island_into_a_port_declaring_an_audio_window_is_refused_by_name() {
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let windowed_consumer = add_a_node(
         &mut graph,
-        crate::core::test_support::MockWindowedAudioConsumerProcessor::processor_class_import_path(
-        )
-        .as_str(),
+        crate::core::test_support::MockWindowedAudioConsumerNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     let into_the_window = link(&mut graph, (&lfo, "result"), (&windowed_consumer, "audio"));
@@ -642,7 +637,7 @@ fn removing_the_last_source_of_a_reactive_reader_an_island_feeds_is_refused() {
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let source = add_a_node(
         &mut graph,
-        crate::core::test_support::MockOutputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockOutputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     let reader = a_helper_reader_before_its_setup_driven_in(&mut graph, ProcessExecution::Reactive);
@@ -659,7 +654,7 @@ fn an_island_into_a_node_in_the_app_process_is_refused_by_name() {
     let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
     let native_reader = add_a_node(
         &mut graph,
-        crate::core::test_support::MockInputOnlyProcessor::processor_class_import_path().as_str(),
+        crate::core::test_support::MockInputOnlyNode::node_class_import_path().as_str(),
         JsonValue::Null,
     );
     let into_the_reader = link(&mut graph, (&lfo, "result"), (&native_reader, "in1"));

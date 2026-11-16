@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The native half of `tatolab-h265` — the module `tatolab.h265.processors`
-//! imports as `tatolab.h265._native`.
-//!
-//! The engine never calls anything here. `H265Encoder` and `H265Decoder` lend
-//! their ports to a thread of this wheel's Rust through the module host table;
-//! the thread reads, codes on a Vulkan device it owns and writes with no
-//! Python attached.
 
 use std::time::Duration;
 

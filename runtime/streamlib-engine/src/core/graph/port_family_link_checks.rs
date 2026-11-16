@@ -6,8 +6,8 @@
 //! output resolves from its node's config.
 
 use super::{
-    Graph, GraphEdgeWithComponents, InputLinkPortRef, OutputLinkPortRef, PendingDeletionComponent,
-    ProcessorNode, ProcessorUniqueId,
+    Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
+    PendingDeletionComponent,
 };
 use crate::core::descriptors::{
     PortFamilyDeclaration, PortFamilyLinkEndpoint, refusal_of_a_link_between_port_families,
@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use crate::core::{Error, Result};
 
 fn output_port_family<'node>(
-    node: &'node ProcessorNode,
+    node: &'node GraphNode,
     port_name: &str,
 ) -> Option<&'node PortFamilyDeclaration> {
     node.ports
@@ -28,7 +28,7 @@ fn output_port_family<'node>(
 }
 
 fn input_port_family<'node>(
-    node: &'node ProcessorNode,
+    node: &'node GraphNode,
     port_name: &str,
 ) -> Option<&'node PortFamilyDeclaration> {
     node.ports
@@ -45,16 +45,16 @@ fn input_port_family<'node>(
 /// themselves, so its family is not settled.
 pub(crate) fn the_outputs_a_link_carries_on<'graph>(
     graph: &'graph Graph,
-    node: &'graph ProcessorNode,
+    node: &'graph GraphNode,
     port_name: &'graph str,
 ) -> Vec<(
-    &'graph ProcessorNode,
+    &'graph GraphNode,
     &'graph str,
     &'graph PortFamilyDeclaration,
 )> {
     let mut carried_on = Vec::new();
     let mut outputs_to_follow = vec![(node, port_name)];
-    let mut outputs_followed: HashSet<(&ProcessorUniqueId, &str)> = HashSet::new();
+    let mut outputs_followed: HashSet<(&NodeRunId, &str)> = HashSet::new();
     while let Some((node, port_name)) = outputs_to_follow.pop() {
         if !outputs_followed.insert((&node.id, port_name)) {
             continue;
@@ -67,14 +67,14 @@ pub(crate) fn the_outputs_a_link_carries_on<'graph>(
             continue;
         };
         let links_into_the_followed_input = graph.traversal().e(()).iter().filter(|link| {
-            link.to_port().processor_id() == &node.id
+            link.to_port().node_run_id() == &node.id
                 && link.to_port().port_name() == followed_input_port
                 && !link.has::<PendingDeletionComponent>()
         });
         for link_into_the_followed_input in links_into_the_followed_input {
             if let Some(upstream_node) = graph
                 .traversal()
-                .v(link_into_the_followed_input.source().processor_id())
+                .v(link_into_the_followed_input.source().node_run_id())
                 .first()
             {
                 outputs_to_follow.push((
@@ -92,7 +92,7 @@ pub(crate) fn the_outputs_a_link_carries_on<'graph>(
 /// output it follows upstream; `None` while that is not settled.
 pub(crate) fn the_family_a_link_out_of_an_output_carries(
     graph: &Graph,
-    node_id: &ProcessorUniqueId,
+    node_id: &NodeRunId,
     port_name: &str,
 ) -> Option<PortFamilyDeclaration> {
     let node = graph.traversal().v(node_id).first()?;
@@ -107,17 +107,17 @@ pub(crate) fn the_family_a_link_out_of_an_output_carries(
 /// an input in turn, with the following output it leaves through.
 fn the_inputs_an_input_is_carried_on_to<'graph>(
     graph: &'graph Graph,
-    node: &'graph ProcessorNode,
+    node: &'graph GraphNode,
     input_port_name: &'graph str,
 ) -> Vec<(
-    &'graph ProcessorNode,
+    &'graph GraphNode,
     &'graph str,
-    &'graph ProcessorNode,
+    &'graph GraphNode,
     &'graph str,
 )> {
     let mut inputs_carried_on_to = Vec::new();
     let mut inputs_to_follow = vec![(node, input_port_name)];
-    let mut inputs_followed: HashSet<(&ProcessorUniqueId, &str)> = HashSet::new();
+    let mut inputs_followed: HashSet<(&NodeRunId, &str)> = HashSet::new();
     while let Some((following_node, following_input_port)) = inputs_to_follow.pop() {
         if !inputs_followed.insert((&following_node.id, following_input_port)) {
             continue;
@@ -138,7 +138,7 @@ fn the_inputs_an_input_is_carried_on_to<'graph>(
             for link_out in links_out_of_the_following_output {
                 let Some(downstream_node) = graph
                     .traversal()
-                    .v(link_out.to_port().processor_id())
+                    .v(link_out.to_port().node_run_id())
                     .first()
                 else {
                     continue;
@@ -160,8 +160,8 @@ fn the_inputs_an_input_is_carried_on_to<'graph>(
 /// The refusal of a link from `output` to the input `to_port_name` of
 /// `to_node`, by their families, or `None` when they match.
 fn refusal_of_a_link_from_an_output(
-    (from_node, from_port_name, output_declaration): (&ProcessorNode, &str, &PortFamilyDeclaration),
-    to_node: &ProcessorNode,
+    (from_node, from_port_name, output_declaration): (&GraphNode, &str, &PortFamilyDeclaration),
+    to_node: &GraphNode,
     to_port_name: &str,
     input_declaration: &PortFamilyDeclaration,
 ) -> Option<String> {
@@ -193,8 +193,8 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     to: &InputLinkPortRef,
 ) -> Result<()> {
     let (Some(from_node), Some(to_node)) = (
-        graph.traversal().v(from.processor_id()).first(),
-        graph.traversal().v(to.processor_id()).first(),
+        graph.traversal().v(from.node_run_id()).first(),
+        graph.traversal().v(to.node_run_id()).first(),
     ) else {
         return Ok(());
     };
@@ -239,25 +239,22 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     Ok(())
 }
 
-/// Refuse a config update for `processor_id` under which a link wired out of
-/// it would be refused — an output whose names, family or codec resolve from
-/// `config_to_apply` no longer meeting the input it feeds — naming the link.
 pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
-    processor_id: &ProcessorUniqueId,
+    node_run_id: &NodeRunId,
     config_to_apply: &serde_json::Value,
 ) -> Result<()> {
-    let Some(from_node) = graph.traversal().v(processor_id).first() else {
+    let Some(from_node) = graph.traversal().v(node_run_id).first() else {
         return Ok(());
     };
     let outbound_links = graph
         .traversal()
-        .v(processor_id)
+        .v(node_run_id)
         .out_e()
         .iter()
         .filter(|link| !link.has::<PendingDeletionComponent>());
     for link in outbound_links {
-        let Some(to_node) = graph.traversal().v(link.to_port().processor_id()).first() else {
+        let Some(to_node) = graph.traversal().v(link.to_port().node_run_id()).first() else {
             continue;
         };
         let (Some(output_declaration), Some(input_declaration)) = (

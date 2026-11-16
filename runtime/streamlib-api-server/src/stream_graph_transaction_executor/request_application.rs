@@ -364,7 +364,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         let edit = reached.the_operation_on_the_document(edit_as_drawn)?;
         if let Some((node_type, node_name, config)) =
-            the_processor_node_an_edit_adds_or_configures(&edit, &reached.document)
+            the_graph_node_an_edit_adds_or_configures(&edit, &reached.document)
         {
             self.async_runtime
                 .block_on(

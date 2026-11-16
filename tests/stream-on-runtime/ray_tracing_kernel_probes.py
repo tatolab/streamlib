@@ -6,10 +6,10 @@
 A probe builds its own scene — a bottom-level structure over triangle
 geometry, a top-level one placing it — and its own kernel in `setup()` where
 the capability is Full, then traces into a storage image it acquired. Every
-probe runs in a processor interpreter of its own and reports one `MARKER:PROBE_RESULT`
+probe runs in a node interpreter of its own and reports one `MARKER:PROBE_RESULT`
 JSON line.
 
-What is worth breaking a build over is that a Python processor can trace at
+What is worth breaking a build over is that a Python node can trace at
 all — no application-supplied bridge, no acceleration-structure id string, the
 handle a build returned being the whole way to name it — and that every way of
 getting the bindings wrong is refused by name, the stage ones before a kernel
@@ -187,7 +187,7 @@ class _RayTracingKernelProbeBase:
     reports from `setup`.
 
     Nothing upstream is needed: the probe acquires its own storage image, which
-    is the point — a trace's output is an engine-owned texture the processor
+    is the point — a trace's output is an engine-owned texture the node
     names, not something handed to it.
     """
 
@@ -248,7 +248,7 @@ class _RayTracingKernelProbeBase:
 @node.meta(description="Builds a BLAS and a TLAS and traces them into a storage image")
 @node.process(execution="manual")
 class TracedTriangleProbe(_RayTracingKernelProbeBase):
-    """The demo: a Python processor builds a scene and traces it.
+    """The demo: a Python node builds a scene and traces it.
 
     No bridge is installed anywhere, and no acceleration-structure id string
     reaches Python — the handle each build returned is the whole way to name
@@ -419,7 +419,7 @@ class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
 @node.meta(description="An acceleration structure is named by its handle, or not at all")
 @node.process(execution="manual")
 class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
-    """Nothing publishes an acceleration structure for another processor to
+    """Nothing publishes an acceleration structure for another node to
     resolve, so a surface id is not a spelling for one — and the structure a
     trace binds is the top-level one, which is what holds the instances."""
 

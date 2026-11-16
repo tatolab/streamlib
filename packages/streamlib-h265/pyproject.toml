@@ -27,7 +27,7 @@ classifiers = [
     "Topic :: Multimedia :: Video",
 ]
 # The stream package and nothing of the engine: the nodes here run in a
-# processor interpreter, which borrows `tatolab.runtime` from the runtime that
+# node interpreter, which borrows `tatolab.runtime` from the runtime that
 # starts it. A minimum, never an exact pin, as a third party's package
 # depends on it.
 dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version
@@ -35,8 +35,8 @@ dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version
 # The node catalog lists these in every stream whose environment installs this
 # distribution, before a graph names one.
 [project.entry-points."tatolab.nodes"]
-H265Decoder = "tatolab.h265.processors:H265Decoder"
-H265Encoder = "tatolab.h265.processors:H265Encoder"
+H265Decoder = "tatolab.h265.nodes:H265Decoder"
+H265Encoder = "tatolab.h265.nodes:H265Encoder"
 
 [project.urls]
 Homepage = "https://tatolab.com"

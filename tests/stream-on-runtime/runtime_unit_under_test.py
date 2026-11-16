@@ -14,10 +14,10 @@ the machine runtime lock, the state directory and the runtime directory under
 
 Every `@graph_generator` function of the suite is run as a one-stream project whose
 `.venv` and modules link to the suite directory's, so the suite's `.venv` is the
-interpreter that compiles each stream and that every processor interpreter
+interpreter that compiles each stream and that every node interpreter
 starts from: a venv holding
 `tatolab-stream`, the fixture streams' own dependencies and the test tooling,
-and no `tatolab.runtime` — a processor interpreter borrows that from the lend.
+and no `tatolab.runtime` — a node interpreter borrows that from the lend.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ DEFAULT_RUNTIME_UNIT_DIRECTORY = REPOSITORY_ROOT / "target" / "tatolab-runtime"
 
 LEND_DIRECTORY_RELATIVE_TO_THE_RUNTIME_UNIT = Path("lib/tatolab/lend")
 
-PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND = Path(
-    "tatolab/runtime/_processor_interpreter_bootstrap.py"
+NODE_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND = Path(
+    "tatolab/runtime/_node_interpreter_bootstrap.py"
 )
 
 #: The file `cargo xtask build-runtime --machine-directories-under-a-test-root`
@@ -130,7 +130,7 @@ def locate_the_runtime_unit() -> "RuntimeUnitUnderTest | str":
     required_files = (
         runtime_unit.tatolabd_executable,
         runtime_unit.tatolab_executable,
-        runtime_unit.lend_directory / PROCESSOR_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
+        runtime_unit.lend_directory / NODE_INTERPRETER_BOOTSTRAP_RELATIVE_TO_THE_LEND,
     )
     missing_files = [str(required) for required in required_files if not required.is_file()]
     if missing_files:

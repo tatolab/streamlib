@@ -14,8 +14,8 @@ fn node_names_in_the_graph(graph: &Graph) -> Vec<String> {
         .collect()
 }
 
-fn add_a_mock_processor_named(graph: &mut Graph, name: Option<&str>) -> crate::core::Result<()> {
-    let spec = MockProcessor::Processor::node(Default::default());
+fn add_a_mock_node_named(graph: &mut Graph, name: Option<&str>) -> crate::core::Result<()> {
+    let spec = MockNode::Node::node(Default::default());
     let spec = match name {
         Some(name) => spec.with_display_name(name),
         None => spec,
@@ -31,17 +31,12 @@ fn a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix
     let mut graph = test_graph();
 
     for _ in 0..4 {
-        add_a_mock_processor_named(&mut graph, None).expect("a defaulted name is never refused");
+        add_a_mock_node_named(&mut graph, None).expect("a defaulted name is never refused");
     }
 
     assert_eq!(
         node_names_in_the_graph(&graph),
-        vec![
-            "mockprocessor",
-            "mockprocessor-2",
-            "mockprocessor-3",
-            "mockprocessor-4"
-        ]
+        vec!["mocknode", "mocknode-2", "mocknode-3", "mocknode-4"]
     );
 }
 
@@ -52,8 +47,8 @@ fn a_defaulted_name_is_the_cast_short_name_and_a_duplicate_takes_the_next_suffix
 fn a_typed_name_is_cast_and_a_typed_duplicate_is_refused_naming_both() {
     let mut graph = test_graph();
 
-    add_a_mock_processor_named(&mut graph, Some("Front Camera")).expect("a free name");
-    let refusal = add_a_mock_processor_named(&mut graph, Some("front-CAMERA"));
+    add_a_mock_node_named(&mut graph, Some("Front Camera")).expect("a free name");
+    let refusal = add_a_mock_node_named(&mut graph, Some("front-CAMERA"));
 
     match refusal {
         Err(Error::NodeNameTaken { name, cast }) => {
@@ -70,7 +65,7 @@ fn a_typed_name_is_cast_and_a_typed_duplicate_is_refused_naming_both() {
 fn a_typed_name_that_casts_to_nothing_is_refused() {
     let mut graph = test_graph();
 
-    let refusal = add_a_mock_processor_named(&mut graph, Some("✨"));
+    let refusal = add_a_mock_node_named(&mut graph, Some("✨"));
 
     assert!(
         matches!(refusal, Err(Error::ExposedNameCastsToNothing(_))),
@@ -85,13 +80,13 @@ fn a_typed_name_that_casts_to_nothing_is_refused() {
 fn a_taken_suffix_is_skipped_rather_than_duplicated() {
     let mut graph = test_graph();
 
-    add_a_mock_processor_named(&mut graph, Some("mockprocessor-2")).expect("a free name");
-    add_a_mock_processor_named(&mut graph, None).expect("defaulted");
-    add_a_mock_processor_named(&mut graph, None).expect("defaulted");
+    add_a_mock_node_named(&mut graph, Some("mocknode-2")).expect("a free name");
+    add_a_mock_node_named(&mut graph, None).expect("defaulted");
+    add_a_mock_node_named(&mut graph, None).expect("defaulted");
 
     assert_eq!(
         node_names_in_the_graph(&graph),
-        vec!["mockprocessor-2", "mockprocessor", "mockprocessor-3"]
+        vec!["mocknode-2", "mocknode", "mocknode-3"]
     );
 }
 
@@ -101,7 +96,7 @@ fn a_taken_suffix_is_skipped_rather_than_duplicated() {
 #[test]
 fn a_suffix_on_a_name_at_the_bound_cuts_the_name_to_fit() {
     let mut graph = test_graph();
-    let a_long_import_path = crate::core::descriptors::ProcessorClassImportPath::new(format!(
+    let a_long_import_path = crate::core::descriptors::NodeClassImportPath::new(format!(
         "{}:Node",
         "m".repeat(crate::core::graph::EXPOSED_NAME_MAXIMUM_LENGTH)
     ))
@@ -110,7 +105,7 @@ fn a_suffix_on_a_name_at_the_bound_cuts_the_name_to_fit() {
     for _ in 0..2 {
         graph
             .traversal_mut()
-            .add_v(crate::core::processors::ProcessorSpec::new(
+            .add_v(crate::core::nodes::NodeSpec::new(
                 a_long_import_path.clone(),
                 serde_json::json!({}),
             ))
@@ -136,34 +131,31 @@ fn a_suffix_on_a_name_at_the_bound_cuts_the_name_to_fit() {
 fn distinct_names_are_left_alone() {
     let mut graph = test_graph();
 
-    add_a_mock_processor_named(&mut graph, None).expect("defaulted");
+    add_a_mock_node_named(&mut graph, None).expect("defaulted");
     graph
         .traversal_mut()
-        .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()))
+        .add_v(MockOutputOnlyNode::Node::node(Default::default()))
         .expect("the node is named");
 
     assert_eq!(
         node_names_in_the_graph(&graph),
-        vec!["mockprocessor", "mockoutputonlyprocessor"]
+        vec!["mocknode", "mockoutputonlynode"]
     );
 }
 
 /// Identity never derives from the name: the suffix reaches the name and
 /// nothing else on the node.
 #[test]
-fn the_suffix_never_leaks_into_the_processor_type_or_id() {
+fn the_suffix_never_leaks_into_the_node_type_or_id() {
     let mut graph = test_graph();
 
-    add_a_mock_processor_named(&mut graph, None).expect("defaulted");
-    add_a_mock_processor_named(&mut graph, None).expect("defaulted");
+    add_a_mock_node_named(&mut graph, None).expect("defaulted");
+    add_a_mock_node_named(&mut graph, None).expect("defaulted");
 
     for node in graph.traversal().v(()).iter() {
-        assert_eq!(
-            node.processor_type,
-            MockProcessor::Processor::processor_class_import_path()
-        );
+        assert_eq!(node.node_type, MockNode::Node::node_class_import_path());
         assert!(
-            !node.id.to_string().contains("mockprocessor"),
+            !node.id.to_string().contains("mocknode"),
             "the minted id must not carry the name, got {}",
             node.id
         );

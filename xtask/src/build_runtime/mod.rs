@@ -1,26 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `cargo xtask build-runtime`: the runtime unit's one build.
-//!
-//! Builds the maturin project as a wheel, then lays the wheel's contents out as
-//! the lend — the directory holding `tatolab/runtime/` that a processor
-//! interpreter puts first on `PYTHONPATH`. The wheel is kept beside the lend
-//! because CI hands that same file to the jobs that install the engine. Then
-//! builds `tatolabd` and `tatolab` and places them in `bin/` with the pinned
-//! uv, beside `lib/`, the install prefix's own shape, in which `tatolabd` finds
-//! the lend and uv from its own directory. A wheel of `tatolab-stream` and of each core
-//! first-party module goes beside the lend in `lib/tatolab/imports/`, and the third-party
-//! wheels they require and one CPython build in `lib/tatolab/carried-wheels/` and
-//! `lib/tatolab/python-downloads/`. The Core Nodes project goes beside the lend in
-//! `lib/tatolab/core-projects/tatolab-core-nodes/`, and every converted example as a sample
-//! project in `lib/tatolab/samples/<name>/`.
-//!
-//! The unit's layout below its root is `streamlib-consumer-rhi`'s
-//! `runtime_unit_layout`, included by path because xtask does not link the
-//! engine; only where the root sits in the workspace, and the `wheel/` CI
-//! hands on, are xtask's own.
-
 use crate::check_no_tatolab_namespace_package_init::ensure_lend_directory_keeps_tatolab_a_namespace;
 use crate::stage_browser_host::stage_the_browser_host;
 use crate::stage_core_projects::stage_the_core_nodes_project;

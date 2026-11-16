@@ -7,7 +7,7 @@
 use crate::core::descriptors::{NodeKind, PortFamily};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, OutOfProcessLinkWiringComponent, ProcessorNode,
+    Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
 };
 use serde_json::Value as JsonValue;
 
@@ -55,7 +55,7 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
 
 /// The value each Channels input of `node` reads while unlinked, by port: the
 /// pin value set on it, else its declared default, as a number.
-fn the_pin_values_its_input_ports_read(node: &ProcessorNode) -> serde_json::Map<String, JsonValue> {
+fn the_pin_values_its_input_ports_read(node: &GraphNode) -> serde_json::Map<String, JsonValue> {
     node.ports
         .inputs
         .iter()
@@ -81,7 +81,7 @@ fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
 /// evaluate them with; none for a node of any other kind.
 pub(crate) fn the_inputs_a_function_node_has_no_value_for(
     graph: &Graph,
-    node: &ProcessorNode,
+    node: &GraphNode,
 ) -> Vec<String> {
     if !node
         .node_kind()
@@ -93,7 +93,7 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .traversal()
         .e(())
         .iter()
-        .filter(|link| link.to_port().processor_id() == &node.id)
+        .filter(|link| link.to_port().node_run_id() == &node.id)
         .map(|link| link.to_port().port_name().to_string())
         .collect();
     node.ports
@@ -139,7 +139,7 @@ pub(crate) fn refuse_a_function_node_input_with_no_value_as_the_stream_starts(
 /// unless it is a number or a bool on a Channels input, which is all such a
 /// node's read carries.
 pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
-    node: &ProcessorNode,
+    node: &GraphNode,
     input: &str,
     pin_value: &JsonValue,
 ) -> Result<()> {
@@ -175,26 +175,26 @@ mod tests {
 
     use super::*;
     use crate::core::descriptors::{
-        PortDescriptor, PortFamilyDeclaration, ProcessorClassImportPath, ProcessorClassShortName,
-        ProcessorDescriptor,
+        NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+        PortFamilyDeclaration,
     };
     use crate::core::execution::ProcessExecution;
     use crate::core::graph::GraphNodeWithComponents;
-    use crate::core::processors::{
-        HowANodeOfADescribedTypeRuns, NodeTypesOneStreamResolves, OutOfProcessLinkWiringEnvelope,
-        ProcessorSpec,
+    use crate::core::nodes::{
+        HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves,
+        OutOfProcessLinkWiringEnvelope,
     };
     use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
-    use crate::core::{ProcessorUniqueId, descriptors::PortFamily};
+    use crate::core::{NodeRunId, descriptors::PortFamily};
 
     const LEVEL_METER_NODE_TYPE: &str = "test_nodes:LevelMeter";
 
     /// A graph resolving a process node type reading `level`, which declares
     /// a default of 0.5, `gain`, which declares none, and `frames`, Records.
     fn a_graph_resolving_a_process_node_type_with_channels_inputs() -> Graph {
-        let import_path = ProcessorClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap();
-        let descriptor = ProcessorDescriptor::new(
-            ProcessorClassShortName::new("LevelMeter").unwrap(),
+        let import_path = NodeClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap();
+        let descriptor = NodeDescriptor::new(
+            NodeClassShortName::new("LevelMeter").unwrap(),
             import_path,
             "a process node type for a test",
         )
@@ -221,11 +221,11 @@ mod tests {
         ));
         let node_types = NodeTypesOneStreamResolves::new();
         node_types
-            .register_a_type_described_in_this_streams_processor_interpreter(
+            .register_a_type_described_in_this_streams_node_interpreter(
                 descriptor,
-                HowANodeOfADescribedTypeRuns::AsAProcessorItsConstructorBuilds(Box::new(|node| {
+                HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|node| {
                     Err(Error::Configuration(format!(
-                        "`{}` builds no processor in this test",
+                        "`{}` builds no node in this test",
                         node.id
                     )))
                 })),
@@ -235,11 +235,11 @@ mod tests {
         Graph::new_resolving_node_types_through(Arc::new(node_types))
     }
 
-    fn a_level_meter_in_a_helper(graph: &mut Graph) -> ProcessorUniqueId {
+    fn a_level_meter_in_a_helper(graph: &mut Graph) -> NodeRunId {
         let level_meter = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(
-                ProcessorClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap(),
+            .add_v(NodeSpec::new(
+                NodeClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap(),
                 JsonValue::Null,
             ))
             .unwrap()
@@ -262,7 +262,7 @@ mod tests {
 
     fn the_link_wiring_of(
         graph: &Graph,
-        node_id: &ProcessorUniqueId,
+        node_id: &NodeRunId,
     ) -> Arc<OutOfProcessLinkWiringEnvelope> {
         Arc::clone(
             &graph
@@ -276,7 +276,7 @@ mod tests {
         )
     }
 
-    fn set_a_pin(graph: &mut Graph, node_id: &ProcessorUniqueId, input: &str, pin: JsonValue) {
+    fn set_a_pin(graph: &mut Graph, node_id: &NodeRunId, input: &str, pin: JsonValue) {
         graph
             .traversal_mut()
             .v(node_id)
@@ -383,8 +383,7 @@ mod tests {
     /// A graph holding `remap`, whose `x` declares no default, and `mix`,
     /// whose `b` declares a default of 0.5, with `remap` reading `mix`'s
     /// `result` and `mix`'s `a` linked to nothing.
-    fn a_graph_of_two_function_nodes_with_inputs_left_unlinked()
-    -> (Graph, ProcessorUniqueId, ProcessorUniqueId) {
+    fn a_graph_of_two_function_nodes_with_inputs_left_unlinked() -> (Graph, NodeRunId, NodeRunId) {
         use crate::core::compiler::compiler_ops::function_node_island::tests::{
             a_function_node_type, a_graph_resolving_these_function_node_types, add_a_node, link,
         };
@@ -412,7 +411,7 @@ mod tests {
     fn a_function_node_input_with_no_link_pin_or_default_is_named_and_refused_as_the_stream_starts()
     {
         let (mut graph, remap, mix) = a_graph_of_two_function_nodes_with_inputs_left_unlinked();
-        let waiting = |graph: &Graph, node_id: &ProcessorUniqueId| {
+        let waiting = |graph: &Graph, node_id: &NodeRunId| {
             the_inputs_a_function_node_has_no_value_for(
                 graph,
                 graph.traversal().v(node_id).first().unwrap(),

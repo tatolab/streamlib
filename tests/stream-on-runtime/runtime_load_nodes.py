@@ -4,7 +4,7 @@
 """The `@node.process` classes `test_stream_graph_load_on_tatolabd.py` names in a graph by type alone.
 
 Nothing in the test process imports this module: `tatolabd` describes it in a
-processor interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
+node interpreter, so a graph naming `runtime_load_nodes:LoadedFrameRelay`
 proves a node type registers from its description alone.
 """
 

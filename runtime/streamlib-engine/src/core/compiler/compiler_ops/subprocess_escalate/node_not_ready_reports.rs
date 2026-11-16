@@ -7,7 +7,7 @@
 
 use parking_lot::Mutex;
 
-use super::port_stream_facts::WhatTheNodeOfAHelperPlacedProcessorReaches;
+use super::port_stream_facts::WhatAHelperPlacedNodeReaches;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestSetNotReadyBecause;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseOk;
@@ -32,7 +32,7 @@ impl NodeNotReadyReports {
 
 /// Record why the node is not ready, or that it is ready again.
 pub(super) fn handle_set_not_ready_because(
-    what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+    what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
     rid: String,
     request: EscalateRequestSetNotReadyBecause,
 ) -> EscalateResponse {
@@ -50,7 +50,7 @@ mod tests {
     use super::*;
 
     fn set_not_ready_because(
-        what_the_node_reaches: &WhatTheNodeOfAHelperPlacedProcessorReaches,
+        what_the_node_reaches: &WhatAHelperPlacedNodeReaches,
         request_id: &str,
         not_ready_because: Option<&str>,
     ) {
@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn a_not_ready_report_is_held_until_the_helper_reports_the_node_ready() {
-        let what_the_node_reaches = WhatTheNodeOfAHelperPlacedProcessorReaches::default();
+        let what_the_node_reaches = WhatAHelperPlacedNodeReaches::default();
         assert_eq!(
             what_the_node_reaches
                 .node_not_ready_reports

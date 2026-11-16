@@ -17,7 +17,7 @@ fn a_torn_down_native_nodes_unheld_slots_are_freed_and_its_held_ones_handed_back
     let live_service = crate::core::test_support::LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let check_out_leases = live_service.check_out_leases();
     let mut native_node =
-        gpu.create_processor_output_pixel_buffer_pool_for_a_native_node("a-torn-down-node");
+        gpu.create_node_output_pixel_buffer_pool_for_a_native_node("a-torn-down-node");
     let mut frames_the_node_published = Vec::new();
     let mut buffer_held_in_this_process = None;
     for _ in 0..SLOTS_ONE_NATIVE_NODE_BORROWS_WITH_NOTHING_HELD {

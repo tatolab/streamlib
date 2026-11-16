@@ -191,7 +191,7 @@ fn a_conversion_reaches_the_parent_by_surface_id_and_its_source_is_released_once
         serde_json::json!(["storage_binding", "texture_binding"])
     );
     assert_eq!(
-        requests[0]["processor_output_pool"],
+        requests[0]["node_output_pool"],
         serde_json::json!({"pool_key": "camera", "rotation_depth": 3})
     );
     assert_eq!(

@@ -35,7 +35,7 @@ pub(crate) mod one_off_acquisition_shapes_for_tests {
 
 use std::collections::HashMap;
 
-use crate::core::context::texture_pools_and_rings::processor_output_surface_pool::PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+use crate::core::context::texture_pools_and_rings::node_output_surface_pool::NODE_OUTPUT_SURFACE_POOL_CAPACITY;
 use crate::core::context::texture_pools_and_rings::texture_pool::TexturePoolDescriptor;
 use crate::core::rhi::{
     PixelFormat, TensorStorageBufferLayout, TextureFormat, TextureUsages, texture_usages_to_wire,
@@ -44,7 +44,7 @@ use crate::core::{Error, Result};
 
 /// The most one-off acquisitions of one shape a node may hold at once.
 pub(crate) const ONE_OFF_ACQUISITIONS_ONE_NODE_MAY_HOLD_OF_ONE_SHAPE: usize =
-    PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY;
+    NODE_OUTPUT_SURFACE_POOL_CAPACITY;
 
 /// The shape a node's one-off acquisition is counted under.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

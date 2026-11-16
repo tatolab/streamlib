@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Deserializer, Serialize};
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::Result;
-use streamlib::sdk::processors::{ManualProcessor, PROCESSOR_REGISTRY};
+use streamlib::sdk::nodes::{ManualNode, NODE_REGISTRY};
 use streamlib::sdk::schemars::JsonSchema;
 
 /// How the node crashes the runtime.
@@ -75,13 +75,13 @@ impl<'de> Deserialize<'de> for CrashOnDemandTestNodeConfig {
     }
 }
 
-#[streamlib::sdk::processor(
+#[streamlib::sdk::node(
     execution = manual,
     config = crate::crash_on_demand_test_node::CrashOnDemandTestNodeConfig,
 )]
 pub(crate) struct CrashOnDemandTestNode;
 
-impl ManualProcessor for CrashOnDemandTestNode::Processor {
+impl ManualNode for CrashOnDemandTestNode::Node {
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -89,7 +89,7 @@ impl ManualProcessor for CrashOnDemandTestNode::Processor {
 
 /// Register the node on the process-wide registry.
 pub(crate) fn register_the_crash_on_demand_test_node() {
-    PROCESSOR_REGISTRY.register::<CrashOnDemandTestNode::Processor>();
+    NODE_REGISTRY.register::<CrashOnDemandTestNode::Node>();
 }
 
 #[cfg(test)]
@@ -99,7 +99,7 @@ mod tests {
     #[test]
     fn a_test_graph_names_the_node_by_its_class_import_path() {
         assert_eq!(
-            CrashOnDemandTestNode::processor_class_import_path().as_str(),
+            CrashOnDemandTestNode::node_class_import_path().as_str(),
             "tatolabd::crash_on_demand_test_node::CrashOnDemandTestNode"
         );
     }

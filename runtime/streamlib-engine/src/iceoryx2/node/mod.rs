@@ -211,10 +211,6 @@ pub(crate) const fn channel_subscriber_max_borrowed_samples(
     channel_service_creation_depth + MAX_INPUT_PORT_BORROW_QUOTA + 1
 }
 
-/// Thread-safe wrapper for iceoryx2 Node.
-///
-/// The Node is created once per runtime and shared across all processors.
-/// Services, Publishers, and Subscribers are created through this Node.
 #[derive(Clone)]
 pub struct Iceoryx2Node {
     inner: Arc<Mutex<Node<ipc_threadsafe::Service>>>,
@@ -270,35 +266,6 @@ impl Iceoryx2Node {
         Ok(Iceoryx2NotifyService { inner: service })
     }
 
-    /// Open or create a channel-centric publish-subscribe service for payload
-    /// cache lines under [`DataChannelSampleUserHeader`].
-    ///
-    /// Every opener comes through here or [`Self::open_existing_channel_service`],
-    /// which share one builder: iceoryx2 refuses an opener presenting any other
-    /// user header.
-    ///
-    /// The service name is the source-port channel
-    /// (`{source_processor}/{source_output_port}`). The service carries exactly
-    /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
-    /// `max_subscribers` slots: the fixed destination cap plus the reserved
-    /// slot ([`crate::iceoryx2::RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
-    /// Every opener (the engine and every helper) must request the SAME
-    /// `max_subscribers` — iceoryx2 verifies it on `open`.
-    ///
-    /// `channel_service_creation_depth` is the deepest ring any subscriber on
-    /// this service may take. A create fixes it for the service's life; a reopen
-    /// asks only that the live service is at least that deep, so every opener
-    /// passes the creation depth and never a port's own ring depth.
-    ///
-    /// Safe overflow is on for every channel service: a full subscriber
-    /// buffer auto-evicts its oldest sample so the publisher's `send()`
-    /// never blocks.
-    ///
-    /// A shallower live service refuses the depth this asks for. That is a real
-    /// refusal while a live holder is genuinely shallower, and a transient one
-    /// while the only holder is a process that has just died: iceoryx2 reclaims
-    /// a service's dead holders on open, once it can tell they are dead. This
-    /// therefore reopens up to [`DEAD_HOLDER_RECLAIM_ATTEMPTS`] times.
     pub fn open_or_create_service(
         &self,
         service_name: &str,

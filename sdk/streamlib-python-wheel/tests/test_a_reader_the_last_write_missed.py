@@ -36,7 +36,7 @@ def test_a_reader_subscribing_after_a_write_is_told_apart_until_a_write_reaches_
         1024, 1 << 20, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     outputs = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, source, "runtime-under-test", "processor-under-test"
+        {}, source, "runtime-under-test", "node-under-test"
     ).outputs
     outputs.write(OUTPUT_PORT, b"before any reader")
     assert not outputs.has_a_reader_the_last_write_missed(OUTPUT_PORT)
@@ -48,7 +48,7 @@ def test_a_reader_subscribing_after_a_write_is_told_apart_until_a_write_reaches_
         "read_next_in_order", 8, 2, 2, 1, f"L-{unique}",
     )  # fmt: skip
     inputs = _engine.open_runtime_context_full_access_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test-downstream"
+        {}, destination, "runtime-under-test", "node-under-test-downstream"
     ).inputs
     assert outputs.has_a_reader_the_last_write_missed(OUTPUT_PORT)
     assert inputs.read(INPUT_PORT) is None, "the channel keeps no history for a late reader"
@@ -64,7 +64,7 @@ def test_an_undeclared_output_port_is_refused_by_name():
         {},
         _engine.open_node_link_data_access_for_helper_process(),
         "runtime-under-test",
-        "processor-under-test",
+        "node-under-test",
     ).outputs
     with pytest.raises(Exception, match="nowhere"):
         outputs.has_a_reader_the_last_write_missed("nowhere")

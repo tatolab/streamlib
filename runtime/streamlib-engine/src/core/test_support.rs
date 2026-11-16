@@ -1,38 +1,27 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Engine-internal test fixtures shared across `#[cfg(test)]` modules.
-//!
-//! The TestMock processor types live here so engine tests can drive
-//! graph + compiler code without depending on any external package's
-//! processors. The `#[processor]` macro never auto-registers; tests
-//! register the mocks explicitly via [`ensure_test_mocks_registered`].
-//!
-//! [`CapturedTracingWarnings`] is the one warning-capture layer every module
-//! asserts a log line against.
-
 use std::fmt::Write;
 use std::sync::{Arc, Mutex, Once};
 
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 
-use crate::core::processors::PROCESSOR_REGISTRY;
+use crate::core::nodes::NODE_REGISTRY;
 
 #[path = "../../tests/support/rig_only_capability_skip.rs"]
 pub(crate) mod rig_only_capability_skip;
 
-/// Mock processor with two input ports + two output ports.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     input("in1", delivery_profile = "newest", family = Records),
     input("in2", delivery_profile = "newest", family = Records),
     output("out1", family = Records),
     output("out2", family = Records),
 )]
-pub(crate) struct MockProcessor;
+pub(crate) struct MockNode;
 
-impl crate::core::ManualProcessor for MockProcessor::Processor {
+impl crate::core::ManualNode for MockNode::Node {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -53,15 +42,14 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
     }
 }
 
-/// Mock processor with only output ports.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     output("out1", family = Records),
     output("out2", family = Records),
 )]
-pub(crate) struct MockOutputOnlyProcessor;
+pub(crate) struct MockOutputOnlyNode;
 
-impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
+impl crate::core::ManualNode for MockOutputOnlyNode::Node {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -83,10 +71,10 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Mock source with one Channels output, written to by a test.
-#[crate::processor(execution = manual, output("audio", family = Channels))]
-pub(crate) struct MockChannelsSourceProcessor;
+#[crate::node(execution = manual, output("audio", family = Channels))]
+pub(crate) struct MockChannelsSourceNode;
 
-impl crate::core::ManualProcessor for MockChannelsSourceProcessor::Processor {
+impl crate::core::ManualNode for MockChannelsSourceNode::Node {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -107,15 +95,14 @@ impl crate::core::ManualProcessor for MockChannelsSourceProcessor::Processor {
     }
 }
 
-/// Mock processor with only input ports.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     input("in1", delivery_profile = "newest", family = Records),
     input("in2", delivery_profile = "newest", family = Records),
 )]
-pub(crate) struct MockInputOnlyProcessor;
+pub(crate) struct MockInputOnlyNode;
 
-impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
+impl crate::core::ManualNode for MockInputOnlyNode::Node {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -136,15 +123,13 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     }
 }
 
-/// Mock processor whose one input port reads `ordered`, beside the `newest`
-/// ports every other input mock declares.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     input("in1", delivery_profile = "ordered", family = Records),
 )]
-pub(crate) struct MockOrderedInputOnlyProcessor;
+pub(crate) struct MockOrderedInputOnlyNode;
 
-impl crate::core::ManualProcessor for MockOrderedInputOnlyProcessor::Processor {
+impl crate::core::ManualNode for MockOrderedInputOnlyNode::Node {
     fn setup(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -165,17 +150,14 @@ impl crate::core::ManualProcessor for MockOrderedInputOnlyProcessor::Processor {
     }
 }
 
-/// Mock processor with only input ports, waking on upstream writes rather
-/// than driving itself — the one execution mode that consumes the link
-/// notifications its listener receives.
-#[crate::processor(
+#[crate::node(
     execution = reactive,
     input("in1", delivery_profile = "newest", family = Records),
     input("in2", delivery_profile = "newest", family = Records),
 )]
-pub(crate) struct MockReactiveInputOnlyProcessor;
+pub(crate) struct MockReactiveInputOnlyNode;
 
-impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processor {
+impl crate::core::ReactiveNode for MockReactiveInputOnlyNode::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
@@ -186,7 +168,7 @@ impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processo
 
 /// Mock consumer whose audio input port declares a window contract — the
 /// destination shape the read-side windowing stage exists for.
-#[crate::processor(
+#[crate::node(
     execution = reactive,
     input(
         "audio",
@@ -201,9 +183,9 @@ impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processo
         family = Channels,
     ),
 )]
-pub(crate) struct MockWindowedAudioConsumerProcessor;
+pub(crate) struct MockWindowedAudioConsumerNode;
 
-impl crate::core::ReactiveProcessor for MockWindowedAudioConsumerProcessor::Processor {
+impl crate::core::ReactiveNode for MockWindowedAudioConsumerNode::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
@@ -213,13 +195,13 @@ impl crate::core::ReactiveProcessor for MockWindowedAudioConsumerProcessor::Proc
 }
 
 /// Mock consumer whose input port declares a borrow quota past the default.
-#[crate::processor(
+#[crate::node(
     execution = reactive,
     input("frames", delivery_profile = "ordered", borrow_quota = 5, family = Image),
 )]
-pub(crate) struct MockBorrowingConsumerProcessor;
+pub(crate) struct MockBorrowingConsumerNode;
 
-impl crate::core::ReactiveProcessor for MockBorrowingConsumerProcessor::Processor {
+impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
@@ -231,13 +213,13 @@ impl crate::core::ReactiveProcessor for MockBorrowingConsumerProcessor::Processo
 /// Mock consumer whose audio input port declares the `match_device` sentinel.
 /// Nothing resolves it on this rung, which is what makes it a wiring error
 /// rather than a default.
-#[crate::processor(
+#[crate::node(
     execution = reactive,
     input("audio", delivery_profile = "ordered", audio_window = match_device, family = Channels),
 )]
-pub(crate) struct MockDeviceMatchedAudioConsumerProcessor;
+pub(crate) struct MockDeviceMatchedAudioConsumerNode;
 
-impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor::Processor {
+impl crate::core::ReactiveNode for MockDeviceMatchedAudioConsumerNode::Node {
     fn process(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
@@ -248,13 +230,13 @@ impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor:
 
 /// Mock source declaring its one output port in camelCase, `outOne`, which
 /// registers under its cast `outone`.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     output("outOne", family = Records),
 )]
-pub(crate) struct MockProcessorWithACamelCaseOutputPort;
+pub(crate) struct MockNodeWithACamelCaseOutputPort;
 
-impl crate::core::ManualProcessor for MockProcessorWithACamelCaseOutputPort::Processor {
+impl crate::core::ManualNode for MockNodeWithACamelCaseOutputPort::Node {
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -274,14 +256,14 @@ pub(crate) struct MockSourceTakingOneSettingConfig {
 }
 
 /// Mock source whose config takes `frame_width` and refuses every other key.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     config = crate::core::test_support::MockSourceTakingOneSettingConfig,
     output("video", family = Image),
 )]
 pub(crate) struct MockSourceTakingOneSetting;
 
-impl crate::core::ManualProcessor for MockSourceTakingOneSetting::Processor {
+impl crate::core::ManualNode for MockSourceTakingOneSetting::Node {
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -301,14 +283,14 @@ pub(crate) struct MockSourceReadingAnImageAssetConfig {
 }
 
 /// Mock source whose config names an image asset `{"asset": "<uuid>"}`.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     config = crate::core::test_support::MockSourceReadingAnImageAssetConfig,
     output("video", family = Image),
 )]
 pub(crate) struct MockSourceReadingAnImageAsset;
 
-impl crate::core::ManualProcessor for MockSourceReadingAnImageAsset::Processor {
+impl crate::core::ManualNode for MockSourceReadingAnImageAsset::Node {
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -319,7 +301,7 @@ impl crate::core::ManualProcessor for MockSourceReadingAnImageAsset::Processor {
 
 /// Mock source whose `setup()` refuses, as a capture device does, when its
 /// stream may not ask the user for an access nobody has answered.
-#[crate::processor(
+#[crate::node(
     execution = manual,
     output("out1", family = Records),
 )]
@@ -329,7 +311,7 @@ pub(crate) struct MockSourceRefusingAnAccessNobodyAskedFor;
 pub(crate) const MOCK_REFUSAL_OF_AN_ACCESS_NOBODY_ASKED_FOR: &str =
     "mock camera access has not been asked for yet: restart this stream to be asked";
 
-impl crate::core::ManualProcessor for MockSourceRefusingAnAccessNobodyAskedFor::Processor {
+impl crate::core::ManualNode for MockSourceRefusingAnAccessNobodyAskedFor::Node {
     fn setup(
         &mut self,
         ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
@@ -358,51 +340,42 @@ impl crate::core::ManualProcessor for MockSourceRefusingAnAccessNobodyAskedFor::
     }
 }
 
-/// Register all engine-internal test mock processors with the global
-/// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
-/// fixture that builds a graph against `lookup_registered_ident` or
-/// drives the compiler against a `ProcessorSpec`.
 pub(crate) fn ensure_test_mocks_registered() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
-        PROCESSOR_REGISTRY.register::<MockProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockOutputOnlyProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockChannelsSourceProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockWindowedAudioConsumerProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockDeviceMatchedAudioConsumerProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockBorrowingConsumerProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
-        PROCESSOR_REGISTRY.register::<MockProcessorWithACamelCaseOutputPort::Processor>();
-        PROCESSOR_REGISTRY.register::<MockSourceTakingOneSetting::Processor>();
-        PROCESSOR_REGISTRY.register::<MockSourceReadingAnImageAsset::Processor>();
-        PROCESSOR_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Processor>();
+        NODE_REGISTRY.register::<MockNode::Node>();
+        NODE_REGISTRY.register::<MockOutputOnlyNode::Node>();
+        NODE_REGISTRY.register::<MockChannelsSourceNode::Node>();
+        NODE_REGISTRY.register::<MockWindowedAudioConsumerNode::Node>();
+        NODE_REGISTRY.register::<MockDeviceMatchedAudioConsumerNode::Node>();
+        NODE_REGISTRY.register::<MockBorrowingConsumerNode::Node>();
+        NODE_REGISTRY.register::<MockInputOnlyNode::Node>();
+        NODE_REGISTRY.register::<MockOrderedInputOnlyNode::Node>();
+        NODE_REGISTRY.register::<MockReactiveInputOnlyNode::Node>();
+        NODE_REGISTRY.register::<MockNodeWithACamelCaseOutputPort::Node>();
+        NODE_REGISTRY.register::<MockSourceTakingOneSetting::Node>();
+        NODE_REGISTRY.register::<MockSourceReadingAnImageAsset::Node>();
+        NODE_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Node>();
     });
 }
 
-/// Add a [`MockOutputOnlyProcessor`] node to `graph`; its processor id.
 pub(crate) fn add_mock_output_only(graph: &mut crate::core::graph::Graph) -> String {
-    add_a_mock_node(
-        graph,
-        MockOutputOnlyProcessor::processor_class_import_path(),
-    )
+    add_a_mock_node(graph, MockOutputOnlyNode::node_class_import_path())
 }
 
-/// Add a [`MockInputOnlyProcessor`] node to `graph`; its processor id.
 pub(crate) fn add_mock_input_only(graph: &mut crate::core::graph::Graph) -> String {
-    add_a_mock_node(graph, MockInputOnlyProcessor::processor_class_import_path())
+    add_a_mock_node(graph, MockInputOnlyNode::node_class_import_path())
 }
 
 fn add_a_mock_node(
     graph: &mut crate::core::graph::Graph,
-    processor_class_import_path: crate::core::descriptors::ProcessorClassImportPath,
+    node_class_import_path: crate::core::descriptors::NodeClassImportPath,
 ) -> String {
     ensure_test_mocks_registered();
     graph
         .traversal_mut()
-        .add_v(crate::core::processors::ProcessorSpec::new(
-            processor_class_import_path,
+        .add_v(crate::core::nodes::NodeSpec::new(
+            node_class_import_path,
             serde_json::Value::Null,
         ))
         .expect("the node is named")
@@ -493,7 +466,7 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     /// test plays a far side that has not answered yet, opened its port, or
     /// refused.
     pub(crate) wire_answers_owed:
-        Arc<parking_lot::Mutex<Vec<Arc<crate::core::processors::OutOfProcessLinkWireReply>>>>,
+        Arc<parking_lot::Mutex<Vec<Arc<crate::core::nodes::OutOfProcessLinkWireReply>>>>,
     /// Every port the far side was told to drop.
     pub(crate) reclaimed_links: Arc<parking_lot::Mutex<Vec<ReclaimedLink>>>,
     /// Every function node island handed over, as the far side received it.
@@ -507,14 +480,14 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
 }
 
-impl crate::core::processors::OutOfProcessFarSideLinkDelivery
+impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
     for RecordingOutOfProcessFarSideLinkDelivery
 {
     fn hand_over_a_link_wired_after_setup(
         &self,
         port_direction: crate::core::PortDirection,
         link_wiring: &serde_json::Value,
-        answer_cell: Arc<crate::core::processors::OutOfProcessLinkWireReply>,
+        answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
     ) -> crate::core::Result<()> {
         self.late_wired_links
             .lock()
@@ -540,7 +513,7 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
     fn hand_over_a_function_node_island_wired_after_setup(
         &self,
         function_node_island: &serde_json::Value,
-        answer_cell: Arc<crate::core::processors::OutOfProcessLinkWireReply>,
+        answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
     ) -> crate::core::Result<()> {
         self.late_fed_function_node_islands
             .lock()
@@ -581,7 +554,7 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
     fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str) {
         for answer_cell in self.wire_answers_owed.lock().iter() {
             answer_cell.note_the_far_sides_answer(
-                crate::core::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                crate::core::nodes::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
                     reason: reason.to_string(),
                 },
             );

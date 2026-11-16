@@ -32,9 +32,9 @@ pub mod graph;
 pub mod json_schema;
 pub mod machine_global_unique_name;
 pub mod media_clock;
+pub mod nodes;
 pub(crate) mod output_port_stream_facts;
 pub mod prelude;
-pub mod processors;
 pub mod pubsub;
 pub mod rhi;
 pub mod runtime;
@@ -58,13 +58,12 @@ pub use context::{
     GpuPoolClaimTable, GpuPoolClaimTableRow, GpuPoolClaimTableRowLease, GpuPoolClaimTables,
     GpuPoolClaimTablesOfOnePool, GpuPoolClaimantColumn, GpuPoolClaimantProcessId,
     GpuPoolFrameRecycled, GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest, IsolationTier,
-    NativeNodeOutputPixelBufferFrame, OneOffAcquisitionCountedForItsNode,
-    OutputTextureRegisteredUntilDropped, PoolSlotId, PooledTextureHandle,
-    ProcessorOutputPixelBufferPoolOfOneNativeNode, ProjectStoresOpenInThisRuntime,
-    RequestedAudioStreamFormat, RuntimeContext, RuntimeContextFullAccess,
-    RuntimeContextLimitedAccess, SharedAudioClock, SharedAudioDeviceBackend,
-    SharedVideoDeviceBackend, SilentNullAudioDeviceBackend, SoftwareAudioClock,
-    StoreScopedToThisNode, StreamClock, StreamClockReading, StreamClockSpec,
+    NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
+    OneOffAcquisitionCountedForItsNode, OutputTextureRegisteredUntilDropped, PoolSlotId,
+    PooledTextureHandle, ProjectStoresOpenInThisRuntime, RequestedAudioStreamFormat,
+    RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess, SharedAudioClock,
+    SharedAudioDeviceBackend, SharedVideoDeviceBackend, SilentNullAudioDeviceBackend,
+    SoftwareAudioClock, StoreScopedToThisNode, StreamClock, StreamClockReading, StreamClockSpec,
     SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry,
     SurfaceClaimedAgainstProducerReuse, SurfaceStore, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
     TextureCrossProcessImportability, TexturePool, TexturePoolDescriptor, TexturePoolKey,
@@ -90,12 +89,12 @@ pub use descriptors::{
     DescriptionLintFinding, DescriptionLintProblem, FunctionNodeLanguage,
     IMAGE_TEXTURE_FORMAT_WIRE_NAMES, ImageOutputPortFrameRate, ImageStreamContentLightLevel,
     ImageStreamFacts, ImageStreamFrameRate, ImageStreamMasteringDisplayColourVolume,
-    NODE_REFERENCE_SCHEMA_KEYWORD, NodeKind, NodeReferenceInConfig, NodeReferenceToNodeType,
-    NodeTypeANodeReferenceNames, NodeValueLifetime, OutputPortDeclaredNames, PacketsStreamFacts,
-    PortDescriptor, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    PortFamilyLinkEndpoint, PortStreamFacts, ProcessorClassImportPath, ProcessorClassShortName,
-    ProcessorConfigFilledFromItsDefault, ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy,
-    ProcessorConfigKeyDescription, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    NODE_REFERENCE_SCHEMA_KEYWORD, NodeClassImportPath, NodeClassShortName,
+    NodeConfigFilledFromItsDefault, NodeConfigJsonSchema, NodeConfigKeyDescribedBy,
+    NodeConfigKeyDescription, NodeDescriptor, NodeKind, NodeReferenceInConfig,
+    NodeReferenceToNodeType, NodeRuntime, NodeScheduling, NodeTypeANodeReferenceNames,
+    NodeValueLifetime, OutputPortDeclaredNames, PacketsStreamFacts, PortDescriptor, PortFamily,
+    PortFamilyDeclaration, PortFamilyDeclarationDirection, PortFamilyLinkEndpoint, PortStreamFacts,
     lint_the_descriptions_of_a_node_type, output_port_codec_resolved_against_config,
     output_port_family_resolved_against_config, output_port_frame_rate_resolved_against_config,
     output_port_names_resolved_against_config, refusal_of_a_link_between_port_families,
@@ -108,8 +107,8 @@ pub use error::{
     WhyANodeOfAStreamIsNotRunning,
 };
 pub use execution::{
-    ExecutionConfig, ProcessExecution, ThreadPriority, processor_scheduling_loop,
-    run_processor_loop, thread_runner,
+    ExecutionConfig, ProcessExecution, ThreadPriority, node_scheduling_loop, run_node_loop,
+    thread_runner,
 };
 pub use graph::graph_snapshot::{
     GraphFragment, GraphOnlyNodesAsDrawn, GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode,
@@ -120,21 +119,20 @@ pub use graph::{
     Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
     EXPOSED_NAME_MAXIMUM_LENGTH, ExposedNameCastsToNothingError, FunctionNodeHostComponent,
     FunctionNodePromotedToItsOwnProcessComponent, FunctionNodePromotionOutOfItsReadersIslands,
-    FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNodeWithComponents,
-    GraphState, GraphWeight, HelperProcessRestartRecord, HelperProcessRestartsComponent,
-    HowItsHelpersRanAFunctionNode, Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef,
-    InputPortMarker, JsonSerializableComponent, Link, LinkCapacity,
-    LinkCarriedThroughTheFunctionNodePoolComponent, LinkDirection,
-    LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState, LinkStateComponent,
-    LinkTraversal, LinkTraversalMut, LinkTypeInfoComponent, LinkUniqueId,
-    LossCountsOfPortsInThisProcess, NodeNotReadyBecauseComponent, ObservableGraphReadiness,
-    ObservableProcessorState, OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
+    FunctionNodeRanCompiledComponent, Graph, GraphEdgeWithComponents, GraphNode, GraphNodePorts,
+    GraphNodeWithComponents, GraphState, GraphWeight, HelperProcessRestartRecord,
+    HelperProcessRestartsComponent, HowItsHelpersRanAFunctionNode,
+    Iceoryx2ServicesHeldOpenForLinkComponent, InputLinkPortRef, InputPortMarker,
+    JsonSerializableComponent, Link, LinkCapacity, LinkCarriedThroughTheFunctionNodePoolComponent,
+    LinkDirection, LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkState,
+    LinkStateComponent, LinkTraversal, LinkTraversalMut, LinkTypeInfoComponent, LinkUniqueId,
+    LossCountsOfPortsInThisProcess, NodeFailureReasonComponent, NodeInstanceComponent,
+    NodeLossCounts, NodeMetrics, NodeNotReadyBecauseComponent, NodePauseGateComponent,
+    NodeReadyBarrierComponent, NodeReadyBarrierHandle, NodeRunId, NodeState, NodeStateComponent,
+    NodeTraversal, NodeTraversalMut, ObservableGraphReadiness, ObservableNodeState,
+    OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortMarker, PendingDeletionComponent,
     PortInfo, PortKind, PortMarker, ProcessRaisingBecauseComponent,
-    ProcessorFailureReasonComponent, ProcessorInstanceComponent, ProcessorLossCounts,
-    ProcessorMetrics, ProcessorNode, ProcessorNodePorts, ProcessorPauseGateComponent,
-    ProcessorReadyBarrierComponent, ProcessorReadyBarrierHandle, ProcessorState,
-    ProcessorStateComponent, ProcessorTraversal, ProcessorTraversalMut, ProcessorUniqueId,
     ReadOfALinkByTheReaderOfAFunctionNodeIsland, ShaderNodeFusedGroupComponent,
     ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
     StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,
@@ -143,13 +141,12 @@ pub use graph::{
     default_components, graph_fragment_flattening, graph_interface_resolution, graph_snapshot,
     graph_variable_resolution, input, output, validate_graph,
 };
-pub use processors::{
-    __generated_private, Config, ConfigValidationError, ContinuousProcessor, DynGeneratedProcessor,
-    DynamicProcessorConstructorFn, EmptyConfig, GeneratedProcessor, InstalledModuleOfANodeType,
-    ManualProcessor, NodeTypesOneStreamResolves, OutOfProcessFarSideLinkDelivery,
-    OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
-    PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory, ProcessorSpec,
-    ReactiveProcessor, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
+pub use nodes::{
+    __generated_private, Config, ConfigValidationError, ContinuousNode, DynGeneratedNode,
+    DynamicNodeConstructorFn, EmptyConfig, GeneratedNode, InstalledModuleOfANodeType, ManualNode,
+    NODE_REGISTRY, NodeInstance, NodeInstanceFactory, NodeSpec, NodeTypesOneStreamResolves,
+    OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
+    OutOfProcessLinkWiringEnvelope, ReactiveNode, VIEW_NODE_ARRAY_OUTPUT_ATTRIBUTE_NAME, traits,
 };
 pub use rhi::NativeTextureHandle;
 #[cfg(test)]
@@ -158,16 +155,17 @@ pub(crate) use runtime::TheMachinesShutdownEscalationClearedOnDrop;
 pub use runtime::a_project_on_disk_for_a_test;
 pub use runtime::{
     ArmedEngineTeardownWatchdog, BoxFuture, CrashOfThePreviousRuntimeRun, CreateProjectRequest,
-    CreatedProjectFirstCommit, DescriptionOfTheAbandonedProcessorThreads,
+    CreatedProjectFirstCommit, DescriptionOfTheAbandonedNodeThreads,
     EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED, EveryStreamEndedDuringTheWait,
     FINISHED_STREAM_ACTIONS_HELD_PER_PROJECT, FunctionNodeState,
     FunctionNodeStatesCarriedForEveryStream, FunctionNodeStatesCarriedForOneStream,
     HowALoadedStreamEnded, HowThePreviousRuntimeRunEnded, ImportedProjectPythonSources,
-    LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag, MachineName, NodeInTheGraph,
-    OpenDescriptorSoftLimitRaise, OperationsOnTheStreamsLoadedInThisRuntime,
-    OptionsForLoadingOneStream, OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
+    LoadedStreamHolding, LoadedStreamInThisRuntime, LoadedStreamTag, MachineName,
+    NodeDisplayNameAndId, NodeInTheGraph, OpenDescriptorSoftLimitRaise,
+    OperationsOnTheStreamsLoadedInThisRuntime, OptionsForLoadingOneStream,
+    OutputPortViewerChannelHandOff, OutputPortViewerHeldOpen,
     PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE, PendingStreamActionKind,
-    PendingStreamActionOnTheRecord, ProcessorDisplayNameAndId, ProjectCreationQueued,
+    PendingStreamActionOnTheRecord, ProjectCreationQueued,
     ProjectHistoryRecordingFirstPartyPackageMoves, ProjectOpenOrReloadRequest,
     ProjectPausedOrResumed, ProjectVenvSyncPackage, ProjectVenvSyncPackageKind,
     ProjectVenvSyncPackageState, ProjectVenvSyncPhase, ProjectVenvSyncProgress,
@@ -196,36 +194,26 @@ pub use utils::{checksum, compute_json_checksum};
 // external consumers. Each line below is a deliberate boundary
 // crossing — items not listed here stay engine-internal.
 
-/// The framed-IPC transport a processor interpreter is driven over.
-///
-/// Public for the wheel's processor-interpreter side, which checks the engine
-/// build it imported against its parent's, and for the engine's own
-/// integration tests, which drive a bridge across real processes.
 pub mod helper_process_transport {
     pub use super::compiler::compiler_ops::subprocess_bridge::{
         ENGINE_BUILD_ID, SubprocessBridge, SubprocessBridgeLinkDelivery,
     };
 }
 
-/// What a processor interpreter's own side shares with the engine that starts
-/// it: where its bootstrap sits in a lend, where a runtime unit or the macOS
-/// app bundle lays out the lend and the Vulkan driver it carries, the
-/// variables it is named by, the shutdown ladder's budgets, and the reader of
-/// a described node type.
-pub mod processor_interpreter {
-    pub use super::compiler::compiler_ops::processor_interpreter_shutdown_ladder::{
+pub mod node_interpreter {
+    pub use super::compiler::compiler_ops::node_interpreter_shutdown_ladder::{
         CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,
     };
-    pub use super::compiler::compiler_ops::processor_interpreter_spawn_host::{
-        PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
-        PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
-        PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
-        PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
-        PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
-        SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, processor_interpreter_bootstrap_path,
+    pub use super::compiler::compiler_ops::node_interpreter_spawn_host::{
+        NODE_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY,
+        NODE_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE,
+        NODE_INTERPRETER_NODE_RUN_ID_ENVIRONMENT_VARIABLE,
+        NODE_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE,
+        NODE_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE,
+        SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE, node_interpreter_bootstrap_path,
     };
-    pub use super::compiler::compiler_ops::python_processor_declaration::{
-        AudioWindowFieldRefusal, HowAPythonNodeOfTheTypeRuns, PythonProcessorDeclaration,
+    pub use super::compiler::compiler_ops::python_node_declaration::{
+        AudioWindowFieldRefusal, HowAPythonNodeOfTheTypeRuns, PythonNodeDeclaration,
         read_a_channel_count_or_the_source_spelling,
     };
     pub use streamlib_consumer_rhi::runtime_unit_layout::{

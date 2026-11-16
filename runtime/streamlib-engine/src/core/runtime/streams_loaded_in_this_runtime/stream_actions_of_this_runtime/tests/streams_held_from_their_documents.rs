@@ -40,7 +40,7 @@ fn a_replace_whose_node_code_does_not_describe_a_type_holds_the_stream_failed_fr
     assert!(
         held.node_types_this_stream_resolves()
             .placeholder_of_the_node_type_not_described(
-                &ProcessorClassImportPath::new("tatolab.absent:AbsentNodeType").unwrap()
+                &NodeClassImportPath::new("tatolab.absent:AbsentNodeType").unwrap()
             )
             .is_some()
     );
@@ -188,12 +188,12 @@ fn the_graph_of_a_source_linked_into_a_sink(
         "nodes": [{
             "id": "7d3f1c1e-0a8b-4f3e-9a51-6c2b8f0e4a11",
             "name": "source",
-            "type": MockOutputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+            "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
             "config": {},
         }, {
             "id": "1b9e6a52-3c4d-4e8f-8b07-2d5a9c1f7e33",
             "name": "sink",
-            "type": crate::core::test_support::MockInputOnlyProcessor::Processor::processor_class_import_path().as_str(),
+            "type": crate::core::test_support::MockInputOnlyNode::Node::node_class_import_path().as_str(),
             "config": {},
         }],
         "links": links,
@@ -328,24 +328,24 @@ fn a_play_whose_start_is_refused_keeps_the_stream_held_stopped_and_records_it_fa
     a_project_opened_on(&runner, &project);
     let held = runner.loaded_stream_of_the_id(&camera).unwrap();
     held.node_types_this_stream_resolves()
-        .register_a_type_described_in_this_streams_processor_interpreter(
+        .register_a_type_described_in_this_streams_node_interpreter(
             crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type(
                 "test_ops:remap",
                 &["x"],
                 &["result"],
             ),
-            crate::core::processors::HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
-                processor_once_promoted_to_its_own_process: Box::new(|node| {
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                node_once_promoted_to_its_own_process: Box::new(|node| {
                     Err(Error::Configuration(format!(
-                        "`{}` builds no processor in this test",
+                        "`{}` builds no node in this test",
                         node.id
                     )))
                 }),
             },
         )
         .unwrap();
-    held.add_processor(crate::core::processors::ProcessorSpec::new(
-        ProcessorClassImportPath::new("test_ops:remap").unwrap(),
+    held.add_node(crate::core::nodes::NodeSpec::new(
+        NodeClassImportPath::new("test_ops:remap").unwrap(),
         serde_json::Value::Null,
     ))
     .unwrap();

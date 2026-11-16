@@ -11,7 +11,7 @@ from rust_function_node_fixture import ScaleAndOffset
 from helper_placement_function_nodes import Clamp, Gate, Lfo, Remap
 from tatolab.stream import ChannelsToRecords, SteppedStreamClock, StreamBuilder, graph_generator
 
-from helper_placement_processors import (
+from helper_placement_nodes import (
     STEPPED_LFO_STEP_MS,
     STEPPED_LFO_STEPS_REPORTED,
     CountsEachTickAsALevelSource,
@@ -84,7 +84,7 @@ def two_labelled_sources_each_into_its_own_sink(stream_builder: StreamBuilder) -
 
 @graph_generator
 def dies_abruptly_beside_a_survivor_pair(stream_builder: StreamBuilder) -> None:
-    """A processor that takes its own process down, beside a source-sink pair."""
+    """A node that takes its own process down, beside a source-sink pair."""
     stream_builder.add(DiesAbruptlyProbe)
     _labelled_source_into_sink(stream_builder, "survivor")
 
@@ -115,19 +115,19 @@ def native_channels_to_records_into_python_records_sink(stream_builder: StreamBu
 
 @graph_generator
 def one_probe_sleeping_through_its_own_shutdown(stream_builder: StreamBuilder) -> None:
-    """A processor parked in `process()` when shutdown arrives."""
+    """A node parked in `process()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnShutdownProbe)
 
 
 @graph_generator
 def one_probe_forking_a_worker_that_outlives_it(stream_builder: StreamBuilder) -> None:
-    """A processor that forks a worker meant to outlive its helper."""
+    """A node that forks a worker meant to outlive its helper."""
     stream_builder.add(ForksAWorkerThatOutlivesItProbe)
 
 
 @graph_generator
 def one_probe_sleeping_through_its_own_setup(stream_builder: StreamBuilder) -> None:
-    """A processor still inside `setup()` when shutdown arrives."""
+    """A node still inside `setup()` when shutdown arrives."""
     stream_builder.add(SleepsThroughItsOwnSetupProbe)
 
 

@@ -60,13 +60,13 @@ def test_node_name_defaults_to_the_type_name(
 
 
 @pytest.mark.requires_gpu
-def test_the_microphone_publishes_blocks_a_python_processor_reads_as_numpy(
+def test_the_microphone_publishes_blocks_a_python_node_reads_as_numpy(
     start_tatolabd_running_stream: "Callable[..., TatolabdUnderTest]",
 ):
     """The whole audio path, end to end: the module's node class → its native
     half capturing through the probed backend in its helper process → an
-    Channels block read as a numpy view by a Python processor in its own
-    processor interpreter.
+    Channels block read as a numpy view by a Python node in its own
+    node interpreter.
 
     `stream_builder.add` with no `config` records `{}`, so this is also the
     added-without-config proof: every field of the node's config class has a
@@ -172,7 +172,7 @@ def test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup(
 ):
     """A machine with no audio is a supported environment; a wrong device id is
     a wiring error. Landing on a different device would be worse than failing,
-    so the source refuses and the processor never reaches Running."""
+    so the source refuses and the node never reaches Running."""
     tatolabd = start_tatolabd_running_stream(microphone_source_naming_an_unopenable_device)
     stream_id = tatolabd.await_the_latest_stream_loaded()
     node_states = tatolabd.local_api_client().await_every_node_past_setup(

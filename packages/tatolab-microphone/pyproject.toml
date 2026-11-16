@@ -19,7 +19,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Multimedia :: Sound/Audio :: Capture/Recording",
 ]
-# The stream package and nothing of the engine: the node runs in a processor
+# The stream package and nothing of the engine: the node runs in a node
 # interpreter, which borrows `tatolab.runtime` from the runtime that starts it.
 dependencies = ["tatolab-stream>=0.68.82"]  # x-release-version
 

@@ -32,7 +32,7 @@
 # `.venv` links to, because the runtime runs a project's Python nodes in its
 # `.venv`, and in which the fixture builds each stream's graph. It holds
 # `tatolab-stream` from this checkout, editable, and numpy, which the fixture
-# nodes import; never the runtime, which a processor interpreter borrows from
+# nodes import; never the runtime, which a node interpreter borrows from
 # the lend. It is made with uv the first time a driver needs it; delete the
 # directory to have it made again. To use a venv prepared elsewhere instead,
 # name it with STREAMLIB_FIXTURE_VENV: it is checked the same way and
@@ -308,7 +308,7 @@ FIXTURE_RUNTIME_EXIT_STATUS=""
 # FIXTURE_RUNTIME_PID, its output — the engine's log mirror, every stream's
 # records among it — in <log file>, and returns once its local API answers.
 # Every setting a fixture node reads from the environment while it runs goes
-# here: the runtime starts its processor interpreters with its own environment,
+# here: the runtime starts its node interpreters with its own environment,
 # never `tatolab open --play`'s. A setting its graph generator reads goes to
 # `write_a_one_stream_fixture_project` instead.
 #
@@ -522,7 +522,7 @@ name_of_the_stream_a_rig_serves_once_it_runs() {
 # <graph function> of <module file> builds, run in <venv directory>'s Python
 # and in the caller's environment, so a setting the generator reads from the
 # environment must be in it at this call; every module beside <module file>
-# linked in, so a node type the graph names resolves in its processor
+# linked in, so a node type the graph names resolves in its node
 # interpreter; a `pyproject.toml`; and `.venv` linked to <venv directory>, the
 # venv the runtime runs the project's Python nodes in. Written owner-only: a
 # generator may put a credential from the environment into a node's config.

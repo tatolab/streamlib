@@ -5,7 +5,7 @@
 #   STREAMLIB_CHECKOUT=/path/to/streamlib ./setup.sh
 #
 # This example is a deferred no-op (see README.md and src/main.rs), so it loads
-# no processor packages — setup only links the SDK so `cargo run` builds against
+# no node packages — setup only links the SDK so `cargo run` builds against
 # the local checkout. Reverse it with: streamlib unlink --engine
 set -euo pipefail
 cd "$(dirname "$0")"

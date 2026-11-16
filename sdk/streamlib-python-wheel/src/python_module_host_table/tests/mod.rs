@@ -11,11 +11,11 @@ use streamlib::sdk::iceoryx2::Iceoryx2Node;
 use tatolab_module_sdk::ModuleHost;
 
 use super::*;
-use crate::python_processor_context::{
+use crate::python_node_context::{
     PythonRuntimeContextFullAccess, note_stop_request_from_parent_on_runtime_context,
     open_runtime_context_full_access_for_helper_process,
 };
-use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
+use crate::python_node_link_data_access::PythonNodeLinkDataAccess;
 
 mod audio_and_virtual_camera_stream_tests;
 mod lent_port_tests;
@@ -23,8 +23,8 @@ mod lent_port_tests;
 const SOURCE_OUTPUT_PORT: &str = "frames_to_downstream";
 const DESTINATION_INPUT_PORT: &str = "frames_from_upstream";
 
-fn helper_plane() -> PythonProcessorLinkDataAccess {
-    PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(
+fn helper_plane() -> PythonNodeLinkDataAccess {
+    PythonNodeLinkDataAccess::over_helper_process_iceoryx2_node(
         Iceoryx2Node::for_this_test_process(),
     )
 }
@@ -33,7 +33,7 @@ fn helper_plane() -> PythonProcessorLinkDataAccess {
 fn one_wired_link(
     python: Python<'_>,
     label: &str,
-) -> (PythonProcessorLinkDataAccess, PythonProcessorLinkDataAccess) {
+) -> (PythonNodeLinkDataAccess, PythonNodeLinkDataAccess) {
     let run = std::process::id();
     let channel = format!("modulehost{run}_{label}/{SOURCE_OUTPUT_PORT}");
     let notify = format!("modulehost{run}_{label}_dest/notify");
@@ -81,7 +81,7 @@ fn one_wired_link(
 /// A context over `plane` whose parent records each escalate op it is sent.
 fn full_access_context_recording_escalates<'py>(
     python: Python<'py>,
-    plane: PythonProcessorLinkDataAccess,
+    plane: PythonNodeLinkDataAccess,
     node_id: &str,
 ) -> (
     Bound<'py, PythonRuntimeContextFullAccess>,

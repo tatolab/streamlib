@@ -1,17 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Logging and timekeeping for a processor interpreter.
-//!
-//! A processor's records travel to the runtime process: its helper forwards
-//! them over the escalate `Log` op, and the runtime stamps and enqueues them
-//! into the engine's unified JSONL pipeline.
-//!
-//! The engine's own records made inside a helper take that same route: the
-//! helper installs the capture below, and its forwarding thread drains what
-//! the engine wrote into the ring and sends each record on as the runtime's
-//! `source: "rust"`.
-
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -32,14 +21,6 @@ static THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN: OnceLock<
     HelperProcessEngineLogRecordRing,
 > = OnceLock::new();
 
-/// Start capturing this helper process's engine `tracing` records, iceoryx2's
-/// own included, for [`drain_the_engine_log_records_this_helper_captured`] to
-/// hand the parent.
-///
-/// Called by the processor interpreter bootstrap once its channel to the
-/// parent is up and before it opens anything, and by nothing else. Refuses a
-/// second call: the records of a process that already installed a subscriber
-/// are already going somewhere.
 #[pyfunction]
 pub(crate) fn capture_this_helper_processes_engine_log_records(python: Python<'_>) -> PyResult<()> {
     let ring = python
@@ -52,12 +33,6 @@ pub(crate) fn capture_this_helper_processes_engine_log_records(python: Python<'_
         })
 }
 
-/// Take every engine record captured so far, waiting up to `wait_seconds` for
-/// the first one, and say how many the ring dropped since the last drain.
-///
-/// Answers `(records, dropped_record_count)`, each record a mapping of the
-/// JSONL columns it fills. The wait happens with the GIL released, so the
-/// forwarding thread parks here instead of holding up the processor's own.
 #[pyfunction]
 pub(crate) fn drain_the_engine_log_records_this_helper_captured(
     python: Python<'_>,
@@ -101,7 +76,7 @@ fn engine_log_record_as_python_mapping<'py>(
     mapping.set_item("target", record.target)?;
     mapping.set_item("message", record.message)?;
     mapping.set_item("pipeline_id", record.pipeline_id)?;
-    mapping.set_item("processor_id", record.processor_id)?;
+    mapping.set_item("node_run_id", record.node_run_id)?;
     mapping.set_item("rhi_op", record.rhi_op)?;
     mapping.set_item("attrs", attrs)?;
     mapping.set_item(

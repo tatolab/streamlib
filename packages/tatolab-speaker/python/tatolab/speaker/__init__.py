@@ -3,7 +3,7 @@
 
 """The speaker node: `from tatolab.speaker import SpeakerSink`.
 
-The node runs in its own helper process like any Python processor. Its native
+The node runs in its own helper process like any Python node. Its native
 half opens the playback stream through the engine's audio device backend, which
 the module host table exports, so PipeWire, ALSA and CoreAudio are the
 engine's own arms and no second audio device path exists. A native thread reads

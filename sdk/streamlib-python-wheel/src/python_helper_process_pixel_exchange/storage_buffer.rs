@@ -13,24 +13,21 @@ use streamlib::sdk::rhi::TensorStorageBufferLayout;
 
 use super::{
     HelperCheckedOutStorageBuffer, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
-    ProcessorOutputPoolRequest, escalate_round_trip_to_parent, response_field,
+    NodeOutputPoolRequest, escalate_round_trip_to_parent, response_field,
 };
 
 impl HelperProcessGpuExchangeClient {
-    /// Ask the parent for a tensor storage buffer — a one-off this helper owes
-    /// a release, or the next tensor of a processor output pool — then check
-    /// it out.
     pub(crate) fn acquire_storage_buffer(
         self: &Arc<Self>,
         python: Python<'_>,
         tensor_layout: &TensorStorageBufferLayout,
-        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+        node_output_pool: Option<NodeOutputPoolRequest<'_>>,
     ) -> PyResult<HelperCheckedOutStorageBuffer> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_storage_buffer")?;
         op.set_item("shape", tensor_layout.shape())?;
         op.set_item("dtype", tensor_layout.element_type().wire_name())?;
-        ProcessorOutputPoolRequest::write_onto_escalate_op(processor_output_pool, python, &op)?;
+        NodeOutputPoolRequest::write_onto_escalate_op(node_output_pool, python, &op)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
@@ -38,7 +35,7 @@ impl HelperProcessGpuExchangeClient {
         // Bound before the checkout, so a failed checkout or a malformed
         // answer still pays the release instead of stranding the allocation.
         let release_to_parent =
-            self.release_debt_unless_pooled(python, processor_output_pool, &surface_id);
+            self.release_debt_unless_pooled(python, node_output_pool, &surface_id);
         let checked_out = python.detach(|| self.check_out_and_import(&surface_id))?;
         let HelperCheckedOutSurface::StorageBuffer(mut checked_out_storage_buffer) = checked_out
         else {

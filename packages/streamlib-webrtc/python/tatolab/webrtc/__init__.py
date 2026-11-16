@@ -5,14 +5,14 @@
 
 An extension wheel: the Rust is inside this package and the two `@node.process`
 classes below are the binding. Nothing here links the engine — the wheel depends
-on `tatolab-stream`, and each processor runs in its own processor interpreter
-like any other Python processor. The transport stack comes up in that
+on `tatolab-stream`, and each node runs in its own node interpreter
+like any other Python node. The transport stack comes up in that
 interpreter the first time a session needs it.
 """
 
-from .processors import WhepPlayer as WhepPlayer
-from .processors import WhepPlayerConfig as WhepPlayerConfig
-from .processors import WhipPublisher as WhipPublisher
-from .processors import WhipPublisherConfig as WhipPublisherConfig
+from .nodes import WhepPlayer as WhepPlayer
+from .nodes import WhepPlayerConfig as WhepPlayerConfig
+from .nodes import WhipPublisher as WhipPublisher
+from .nodes import WhipPublisherConfig as WhipPublisherConfig
 
 __all__ = ["WhepPlayer", "WhepPlayerConfig", "WhipPublisher", "WhipPublisherConfig"]

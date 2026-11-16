@@ -130,13 +130,6 @@ pub fn decide_channel_egress_admission(
     ChannelEgressAdmission::Admitted { grew_to }
 }
 
-/// Emit the channel-egress admission tracing for one
-/// [`decide_channel_egress_admission`] decision, so the refusal /
-/// segment-growth / quarter-of-ceiling diagnostics stay lock-step with it.
-/// `trust_tier` labels each line; a `log_prefix` of
-/// `Some((runtime_tag, processor_id))` scopes the message with a `[tag:id] `
-/// prefix. The caller still maps [`ChannelEgressAdmission::RefusedOverCeiling`]
-/// to its own typed error.
 pub fn emit_channel_egress_admission_tracing(
     log_prefix: Option<(&str, &str)>,
     trust_tier: ChannelTrustTier,
@@ -146,7 +139,7 @@ pub fn emit_channel_egress_admission_tracing(
     admission: &ChannelEgressAdmission,
 ) {
     let prefix = match log_prefix {
-        Some((runtime_tag, processor_id)) => format!("[{}:{}] ", runtime_tag, processor_id),
+        Some((runtime_tag, node_run_id)) => format!("[{}:{}] ", runtime_tag, node_run_id),
         None => String::new(),
     };
 

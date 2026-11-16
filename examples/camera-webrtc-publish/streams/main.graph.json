@@ -53,7 +53,7 @@
       "config": {},
       "id": "44bdb0c6-251d-4fd5-83a3-968fe94a7eb8",
       "name": "h264encoder",
-      "type": "tatolab.h264.processors:H264Encoder"
+      "type": "tatolab.h264.nodes:H264Encoder"
     },
     {
       "config": {},

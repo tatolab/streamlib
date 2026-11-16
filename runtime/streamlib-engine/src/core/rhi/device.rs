@@ -14,14 +14,6 @@ use super::texture::{Texture, TextureDescriptor};
 /// MoltenVK and NVIDIA's Linux driver.
 static PROCESS_GPU_DEVICE: std::sync::Mutex<Option<GpuDevice>> = std::sync::Mutex::new(None);
 
-/// Platform-agnostic GPU device wrapper.
-///
-/// This type wraps the platform-specific device implementation and provides
-/// a unified interface for GPU operations. Engine code reaches the native
-/// device through the [`crate::host_rhi::HostGpuDeviceExt`] extension trait.
-///
-/// Includes a shared command queue created at device initialization.
-/// All processors should use this shared queue via [`command_queue`](GpuDevice::command_queue).
 #[derive(Clone)]
 pub struct GpuDevice {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -158,10 +150,6 @@ impl GpuDevice {
         Ok(Texture::from_vulkan(vulkan_texture))
     }
 
-    /// Get the shared command queue.
-    ///
-    /// All processors should use this shared queue rather than creating their own.
-    /// The queue is created once at device initialization and reused.
     pub fn command_queue(&self) -> &RhiCommandQueue {
         &self.command_queue
     }

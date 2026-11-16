@@ -1,18 +1,18 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::{LinkTraversalMut, graph::ProcessorTraversalMut};
+use crate::core::{LinkTraversalMut, graph::NodeTraversalMut};
 
-impl<'a> ProcessorTraversalMut<'a> {
-    pub fn drop(self) -> ProcessorTraversalMut<'a> {
-        let ProcessorTraversalMut { graph, ids } = self;
+impl<'a> NodeTraversalMut<'a> {
+    pub fn drop(self) -> NodeTraversalMut<'a> {
+        let NodeTraversalMut { graph, ids } = self;
 
         let new_ids = ids
             .into_iter()
             .filter(|&id| graph.remove_node(id).is_none())
             .collect();
 
-        ProcessorTraversalMut {
+        NodeTraversalMut {
             graph,
             ids: new_ids,
         }

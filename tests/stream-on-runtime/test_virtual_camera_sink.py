@@ -489,7 +489,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
     assert not video_nodes_named(camera_name), (
-        f"the camera outlived its processor:\n{tatolabd.recent_stderr()}"
+        f"the camera outlived its node:\n{tatolabd.recent_stderr()}"
     )
     assert not video_nodes_named(second_name)
 

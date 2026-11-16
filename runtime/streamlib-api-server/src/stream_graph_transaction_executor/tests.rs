@@ -118,7 +118,7 @@ fn a_function_node_linked_into_itself_closes_a_loop() {
 
 #[test]
 fn a_loop_through_a_node_that_is_no_function_node_is_linked_as_asked() {
-    let (document, add, scale) = add_linked_into_scale("nodes.scale:ScaleProcessor");
+    let (document, add, scale) = add_linked_into_scale("nodes.scale:ScaleNode");
     assert!(
         !the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
             &document,

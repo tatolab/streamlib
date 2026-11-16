@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-only
 
 """One stream per `ModelInputTensorKernel` scenario: a test-pattern frame fed to
-one probe, which runs in a processor interpreter of its own.
+one probe, which runs in a node interpreter of its own.
 
 The matrix probe runs one fit per stream — each kernel keeps one landing
 texture of the frame's extent, and the engine's texture pool holds 16 of one

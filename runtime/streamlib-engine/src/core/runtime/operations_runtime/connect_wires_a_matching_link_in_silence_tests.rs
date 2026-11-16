@@ -15,13 +15,13 @@ use super::{
     mark_the_node_and_each_of_its_links_pending_deletion, the_node_this_stream_names,
 };
 use crate::core::compiler::{Compiler, PendingOperation};
-use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
+use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassShortName, NodeDescriptor, PortDescriptor};
 use crate::core::graph::{
-    GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, OutputLinkPortRef,
-    PendingDeletionComponent, ProcessorUniqueId,
+    GraphEdgeWithComponents, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    PendingDeletionComponent,
 };
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::{Event, LoadedStreamIdentity, PUBSUB, RuntimeEvent};
 use crate::core::test_support::CapturedTracingWarnings;
 use crate::core::{Error, Result};
@@ -47,23 +47,23 @@ fn a_fixture_graph_change(compiler: Arc<Compiler>) -> LiveGraphChangeOnOneStream
 const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
 const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
 
-fn class_short_name(ty: &str) -> ProcessorClassShortName {
-    ProcessorClassShortName::new(ty).unwrap()
+fn class_short_name(ty: &str) -> NodeClassShortName {
+    NodeClassShortName::new(ty).unwrap()
 }
 
-fn producer_class_path() -> ProcessorClassImportPath {
-    ProcessorClassImportPath::new(format!("{}::{PRODUCER_TYPE}", module_path!())).unwrap()
+fn producer_class_path() -> NodeClassImportPath {
+    NodeClassImportPath::new(format!("{}::{PRODUCER_TYPE}", module_path!())).unwrap()
 }
 
-fn consumer_class_path() -> ProcessorClassImportPath {
-    ProcessorClassImportPath::new(format!("{}::{CONSUMER_TYPE}", module_path!())).unwrap()
+fn consumer_class_path() -> NodeClassImportPath {
+    NodeClassImportPath::new(format!("{}::{CONSUMER_TYPE}", module_path!())).unwrap()
 }
 
 /// Register the producer and consumer descriptors this module wires.
 fn register_producer_and_consumer_descriptors() {
     static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
     REGISTERED_ONCE_PER_PROCESS.call_once(|| {
-        let mut producer = ProcessorDescriptor::new(
+        let mut producer = NodeDescriptor::new(
             class_short_name(PRODUCER_TYPE),
             producer_class_path(),
             "producer",
@@ -76,11 +76,11 @@ fn register_producer_and_consumer_descriptors() {
                 crate::core::descriptors::PortFamily::Image,
             ),
         ));
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(producer)
             .expect("register producer descriptor");
 
-        let mut consumer = ProcessorDescriptor::new(
+        let mut consumer = NodeDescriptor::new(
             class_short_name(CONSUMER_TYPE),
             consumer_class_path(),
             "consumer",
@@ -96,7 +96,7 @@ fn register_producer_and_consumer_descriptors() {
             )
             .with_delivery_profile("newest"),
         );
-        PROCESSOR_REGISTRY
+        NODE_REGISTRY
             .register_descriptor_only(consumer)
             .expect("register consumer descriptor");
     });
@@ -107,10 +107,10 @@ fn register_producer_and_consumer_descriptors() {
 fn compiler_holding_a_producer_and_consumer_node()
 -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
     let compiler = Arc::new(Compiler::new());
-    let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) = compiler.scope(|graph, _tx| {
+    let (from_id, to_id): (NodeRunId, NodeRunId) = compiler.scope(|graph, _tx| {
         let from = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(producer_class_path(), Value::Null))
+            .add_v(NodeSpec::new(producer_class_path(), Value::Null))
             .expect("the node is named")
             .first()
             .expect("producer node must be created")
@@ -118,7 +118,7 @@ fn compiler_holding_a_producer_and_consumer_node()
             .clone();
         let to = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(consumer_class_path(), Value::Null))
+            .add_v(NodeSpec::new(consumer_class_path(), Value::Null))
             .expect("the node is named")
             .first()
             .expect("consumer node must be created")
@@ -151,16 +151,11 @@ fn connect_wires_a_producer_to_a_consumer_without_warning() {
     );
 }
 
-/// Removing a processor removes each of its links as a link, ahead of the
-/// node, so the compile reclaims both endpoints' ports through the link
-/// path. Revert lock: log only `RemoveProcessor` and the node's removal
-/// cascades its edges out of the graph with the peer's publisher,
-/// subscriber and notifier still held against their channels.
 #[test]
-fn removing_a_processor_logs_every_incident_link_ahead_of_the_node() {
+fn removing_a_node_logs_every_incident_link_ahead_of_the_node() {
     register_producer_and_consumer_descriptors();
     let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
-    let consumer_id = to.processor_id().clone();
+    let consumer_id = to.node_run_id().clone();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("current-thread runtime");
@@ -185,7 +180,7 @@ fn removing_a_processor_logs_every_incident_link_ahead_of_the_node() {
         .expect("the link's own removal is logged");
     let node_removal = logged
         .iter()
-        .position(|op| matches!(op, PendingOperation::RemoveProcessor(id) if *id == consumer_id))
+        .position(|op| matches!(op, PendingOperation::RemoveNode(id) if *id == consumer_id))
         .expect("the node's removal is logged");
     assert!(
         link_removal < node_removal,
@@ -223,14 +218,11 @@ fn connect_on_this_thread(
 }
 
 /// The display name the graph gave one of the fixture's nodes.
-fn the_display_name_the_graph_gave(
-    compiler: &Arc<Compiler>,
-    processor_id: &ProcessorUniqueId,
-) -> String {
+fn the_display_name_the_graph_gave(compiler: &Arc<Compiler>, node_run_id: &NodeRunId) -> String {
     compiler.scope(|graph, _tx| {
         graph
             .traversal()
-            .v(processor_id)
+            .v(node_run_id)
             .first()
             .expect("the node is in the graph")
             .display_name
@@ -255,14 +247,14 @@ fn disconnect_on_this_thread(compiler: &Arc<Compiler>, link_id: LinkUniqueId) ->
 fn a_node_name_this_runtime_does_not_hold_is_refused_listing_what_it_holds() {
     register_producer_and_consumer_descriptors();
     let (compiler, from, _to) = compiler_holding_a_producer_and_consumer_node();
-    let displayed = the_display_name_the_graph_gave(&compiler, from.processor_id());
+    let displayed = the_display_name_the_graph_gave(&compiler, from.node_run_id());
 
-    let refusal = the_node_this_stream_names(&compiler, "main", "NoSuchProcessor")
+    let refusal = the_node_this_stream_names(&compiler, "main", "NoSuchNode")
         .expect_err("a node name this runtime does not hold is refused")
         .to_string();
 
     assert!(
-        refusal.contains("no node in the stream `main` is named \"NoSuchProcessor\""),
+        refusal.contains("no node in the stream `main` is named \"NoSuchNode\""),
         "{refusal}"
     );
     assert!(refusal.contains(&displayed), "{refusal}");
@@ -352,14 +344,14 @@ fn a_destination_this_runtime_cannot_take_is_refused_with_a_typed_error() {
             from.clone(),
             InputLinkPortRef::new("Pnobody", "in")
         ),
-        Err(Error::ProcessorNotFound(_))
+        Err(Error::NodeNotFound(_))
     ));
     assert!(matches!(
         connect_on_this_thread(
             &compiler,
             from,
-            InputLinkPortRef::new(to.processor_id().clone(), "no_such_port")
+            InputLinkPortRef::new(to.node_run_id().clone(), "no_such_port")
         ),
-        Err(Error::ProcessorPortNotFound { .. })
+        Err(Error::NodePortNotFound { .. })
     ));
 }

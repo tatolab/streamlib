@@ -10,7 +10,7 @@
 # is Apple-only (ScreenCaptureKit); there is no Linux screen-capture backend
 # yet, and the pipeline still uses the deprecated compile-time typed-struct API.
 # The real pipeline lives in git history; see `src/main.rs` for the deferral
-# note and the path back. It loads no processor packages today, so `./setup.sh`
+# note and the path back. It loads no node packages today, so `./setup.sh`
 # only links the SDK.
 [package]
 name = "screen-recorder"

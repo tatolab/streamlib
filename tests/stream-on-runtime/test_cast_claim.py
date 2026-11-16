@@ -6,7 +6,7 @@
 `[surface-id-lifetime-contract]` says the claim on a frame's pixels is taken
 when an Image read builds its `ImageFrame` and released when that object drops,
 after which the frame's id rides pool depth like any other. Both halves are
-load-bearing: the first is what lets a processor outlive the producer's ring,
+load-bearing: the first is what lets a node outlive the producer's ring,
 and the second is what keeps a dropped frame from pinning a slot.
 
 Proving it needs all the real parts at once — a producer whose pool actually
@@ -113,7 +113,7 @@ def run_claim_probe(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     return observation
 
 

@@ -8,16 +8,6 @@ Linux screen-capture backend yet — and the original pipeline still used the
 deprecated compile-time typed-struct API. The real pipeline lives in git
 history; `src/main.rs` carries the deferral note and the path back.
 
-## The model this example will teach once restored
-
-App code never loads modules. The whole pipeline is `add_processor` + `connect`
-+ `start`, referencing each processor with the **version-free**
-`processor_type_ref!("org", "package", "Type")` macro — no `add_module` and
-no version anywhere in `src/main.rs`. Each referenced processor's
-package lives in this app's **`streamlib_modules/`** folder (the streamlib
-equivalent of `node_modules/`), populated by `./setup.sh`, and the runtime
-lazily loads it on first reference.
-
 ## Local dev
 
 ```bash

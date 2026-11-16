@@ -1,23 +1,12 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The single per-port delivery knob on the authoring surface.
-//!
-//! A [`DeliveryProfile`] is the one word an author writes at a port declaration
-//! site (`#[processor]` attribute / `@node.process` decorator). It names a read
-//! policy — which bag the consumer gets next — and resolves to the
-//! consumer-side drain order ([`ReadMode`]) and the ring depth. Every input
-//! port declares one and nothing is inferred — an input port without a profile
-//! is a wiring error.
-
-use streamlib_processor_schema::ProcessorClassImportPath;
-use streamlib_processor_schema::{
-    DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,
-};
+use streamlib_node_schema::NodeClassImportPath;
+use streamlib_node_schema::{DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES};
 
 use super::read_mode::ReadMode;
 use crate::core::error::{Error, Result};
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 /// The legal `delivery_profile` values as a quoted, comma-joined list.
 fn render_delivery_profile_values() -> String {
@@ -105,23 +94,12 @@ impl DeliveryProfile {
     }
 }
 
-/// Resolve the [`DeliveryProfile`] a destination input port declares.
-///
-/// This is the single delivery-resolution primitive, and it reads exactly one
-/// thing: the port's own declaration. Nothing is inferred, so a registered
-/// input port carrying no declaration is a wiring error, not a silent
-/// substitution.
-///
-/// Falls back to [`DeliveryProfile::Newest`] when the destination processor
-/// type isn't registered or the named port doesn't exist (defensive; a Wired
-/// link always resolves both — the wiring path itself reports the missing
-/// processor).
 pub(crate) fn delivery_profile_for_input_port(
     node_types: &NodeTypesOneStreamResolves,
-    processor_type: &ProcessorClassImportPath,
+    node_type: &NodeClassImportPath,
     port_name: &str,
 ) -> Result<DeliveryProfile> {
-    let Some((inputs, _outputs)) = node_types.port_info(processor_type) else {
+    let Some((inputs, _outputs)) = node_types.port_info(node_type) else {
         return Ok(DeliveryProfile::Newest);
     };
     let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
@@ -130,7 +108,7 @@ pub(crate) fn delivery_profile_for_input_port(
 
     let Some(declared) = port.delivery_profile.as_deref() else {
         return Err(Error::Configuration(format!(
-            "input port '{port_name}' on '{processor_type}' declares no delivery_profile. \
+            "input port '{port_name}' on '{node_type}' declares no delivery_profile. \
              Every input port must declare one — {}. There is no default: channel policy \
              is declared port-locally at the consuming input port",
             render_delivery_profile_values()
@@ -138,7 +116,7 @@ pub(crate) fn delivery_profile_for_input_port(
     };
     DeliveryProfile::from_manifest_str(declared).map_err(|err| {
         Error::Configuration(format!(
-            "input port '{port_name}' on '{processor_type}' declared {err}"
+            "input port '{port_name}' on '{node_type}' declared {err}"
         ))
     })
 }
@@ -199,22 +177,20 @@ mod tests {
 
         use super::super::{DeliveryProfile, delivery_profile_for_input_port};
         use crate::core::descriptors::{
-            PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+            NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
         };
         use crate::core::error::Error;
-        use crate::core::processors::{NodeTypesOneStreamResolves, PROCESSOR_REGISTRY};
+        use crate::core::nodes::{NODE_REGISTRY, NodeTypesOneStreamResolves};
 
-        fn class_path(type_name: &str) -> ProcessorClassImportPath {
-            ProcessorClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
+        fn class_path(type_name: &str) -> NodeClassImportPath {
+            NodeClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
         }
 
-        /// Registers a processor carrying one input port, optionally declaring a
-        /// delivery profile, and returns the processor's class import path.
-        fn register_processor_with_one_input_port(
+        fn register_node_with_one_input_port(
             type_name: &str,
             port_name: &str,
             declared_profile: Option<&str>,
-        ) -> ProcessorClassImportPath {
+        ) -> NodeClassImportPath {
             let import_path = class_path(type_name);
             let mut port = PortDescriptor::new(
                 port_name,
@@ -227,24 +203,20 @@ mod tests {
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }
-            let mut descriptor = ProcessorDescriptor::new(
-                ProcessorClassShortName::new(type_name).unwrap(),
+            let mut descriptor = NodeDescriptor::new(
+                NodeClassShortName::new(type_name).unwrap(),
                 import_path.clone(),
                 type_name,
             );
             descriptor.inputs.push(port);
-            PROCESSOR_REGISTRY
+            NODE_REGISTRY
                 .register_descriptor_only(descriptor)
                 .expect("descriptor registration");
             import_path
         }
 
-        /// The default-fallback path: an unregistered processor type yields
-        /// the realtime default, the shallowest ring there is. Mentally
-        /// reverting this to the deeper profile would hand a defensively
-        /// handled case a backlog nothing asked for.
         #[test]
-        fn unregistered_processor_falls_back_to_newest() {
+        fn unregistered_node_falls_back_to_newest() {
             let unknown = class_path("NothingRegisteredUnderThisPath");
             assert_eq!(
                 delivery_profile_for_input_port(
@@ -260,7 +232,7 @@ mod tests {
         #[test]
         fn declared_profile_is_the_whole_answer() {
             let ident =
-                register_processor_with_one_input_port("OrderedSink", "video_in", Some("ordered"));
+                register_node_with_one_input_port("OrderedSink", "video_in", Some("ordered"));
             assert_eq!(
                 delivery_profile_for_input_port(
                     &NodeTypesOneStreamResolves::new(),
@@ -277,7 +249,7 @@ mod tests {
         /// any resolution here other than an error is a regression.
         #[test]
         fn missing_declaration_is_a_wiring_error_naming_the_port() {
-            let ident = register_processor_with_one_input_port("SampleSink", "audio_in", None);
+            let ident = register_node_with_one_input_port("SampleSink", "audio_in", None);
             let err = delivery_profile_for_input_port(
                 &NodeTypesOneStreamResolves::new(),
                 &ident,
@@ -297,7 +269,7 @@ mod tests {
         /// error listing the legal values, never a silent default.
         #[test]
         fn unknown_declared_value_is_rejected_with_the_legal_values() {
-            let ident = register_processor_with_one_input_port(
+            let ident = register_node_with_one_input_port(
                 "TypoSink",
                 "video_in",
                 Some("skip_to_latest"), // retired knob, not a profile

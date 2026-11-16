@@ -29,7 +29,7 @@ from tatolab.stream import _node_context_protocols as _stream_protocols
 __all__ = [
     "MODULE_HOST_TABLE_ABI_MAJOR",
     "MODULE_HOST_TABLE_ABI_MINOR",
-    "FunctionNodeEvaluatedAsItsHelpersProcessor",
+    "FunctionNodeEvaluatedAsAStandaloneNode",
     "capture_this_helper_processes_engine_log_records",
     "drain_the_engine_log_records_this_helper_captured",
     "engine_build_id_compiled_into_this_extension",
@@ -56,8 +56,8 @@ MODULE_HOST_TABLE_ABI_MINOR: int
 """The module host table minor this runtime serves; a module's native code built for a newer one is refused."""
 
 @final
-class FunctionNodeEvaluatedAsItsHelpersProcessor:
-    """The function node a helper runs as its own processor, once it is promoted out of its readers' islands."""
+class FunctionNodeEvaluatedAsAStandaloneNode:
+    """A function node a helper runs as a standalone node, once it is promoted out of its readers' islands."""
 
     def __new__(
         cls,
@@ -73,7 +73,7 @@ class FunctionNodeEvaluatedAsItsHelpersProcessor:
         outputs_that_may_hand_out_nothing: list[int] = ...,
         inputs_carrying_an_unread_message: list[int] = ...,
         outputs_carrying_an_unread_message: list[int] = ...,
-    ) -> FunctionNodeEvaluatedAsItsHelpersProcessor:
+    ) -> FunctionNodeEvaluatedAsAStandaloneNode:
         """`called_through` is a compiled evaluate entry's address, or the object that runs the body as Python.
 
         Of a compiled node's `input_count` inputs, the last set the config values these indices name.
@@ -205,7 +205,7 @@ def note_stop_request_from_parent_on_runtime_context(
 
 def run_the_scheduling_loop_of_this_helper(
     *,
-    processor_interpreter: Any,
+    node_interpreter: Any,
     link_data_access: _stream_protocols.NodeLinkDataAccess,
     lifecycle_command_arrival_fd: int,
     execution_mode: str,
@@ -214,9 +214,9 @@ def run_the_scheduling_loop_of_this_helper(
     stream_clock_may_step: bool,
     paused: bool,
 ) -> None:
-    """Run the hosted processor on the engine's scheduling loop for
+    """Run the hosted node on the engine's scheduling loop for
     `execution_mode`, `"reactive"` or `"continuous"`, until a lifecycle command
-    stops it, raising what any callback into `processor_interpreter` raised."""
+    stops it, raising what any callback into `node_interpreter` raised."""
 
 def engine_build_id_compiled_into_this_extension() -> str:
     """The build id of the engine compiled into this extension:
@@ -233,7 +233,7 @@ def capture_this_helper_processes_engine_log_records() -> None:
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.
 
-    Called by the processor interpreter bootstrap once its channel to the
+    Called by the node interpreter bootstrap once its channel to the
     parent is up and before it opens anything, and by nothing else. Raises on a
     second call and on a process that already has a `tracing` subscriber.
     """
@@ -245,7 +245,7 @@ def drain_the_engine_log_records_this_helper_captured(
     the last drain, waiting up to `wait_seconds` for the first record.
 
     Each record carries `level`, `target`, `message`, `pipeline_id`,
-    `processor_id`, `rhi_op`, `attrs` and
+    `node_run_id`, `rhi_op`, `attrs` and
     `emitted_at_wall_clock_nanoseconds`. The wait releases the GIL.
     """
 
@@ -263,8 +263,8 @@ if sys.platform == "darwin":
         `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
         the helper reads the end of its channel and runs `stop` and
         `teardown()`; whatever is still alive about six and a half seconds
-        later has its process group killed. Called by the processor
-        interpreter bootstrap before any processor code runs, and by nothing
+        later has its process group killed. Called by the node
+        interpreter bootstrap before any node code runs, and by nothing
         else. Raises on a second call and when the pid watch cannot be armed.
         """
 

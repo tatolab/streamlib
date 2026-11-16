@@ -154,10 +154,6 @@ pub(crate) struct RhiCommandRecorderInner {
 }
 
 impl RhiCommandRecorderInner {
-    /// Build a recorder against the device's default queue.
-    ///
-    /// `label` flows into `tracing` spans on every public method —
-    /// pick something processor-scoped (e.g. `"camera"`, `"display"`).
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(label))]
     pub(crate) fn new(vulkan_device: &Arc<HostVulkanDevice>, label: &str) -> Result<Self> {
         let queue = vulkan_device.queue();

@@ -1,11 +1,11 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A model's input tensor is prepared on the GPU from a processor interpreter
+"""A model's input tensor is prepared on the GPU from a node interpreter
 beneath `tatolabd`, and matches a torch reference of the same parameters for every fit, layout and
 dtype.
 
-Every probe runs in a processor interpreter fed by the `TestPatternSource` module,
+Every probe runs in a node interpreter fed by the `TestPatternSource` module,
 and reports one `MARKER:PROBE_RESULT` JSON line; each test starts the
 scenario's stream on `tatolabd` and asserts on that line. A rig whose torch
 sees no device to read the tensor on skips.
@@ -40,7 +40,7 @@ def run_scenario(
     tatolabd.await_clean_exit()
     assert isinstance(observation, dict), f"no parseable probe result:\n{tatolabd.stderr_text}"
     if "failure" in observation:
-        pytest.fail(f"the probe raised in its processor interpreter:\n{observation['failure']}")
+        pytest.fail(f"the probe raised in its node interpreter:\n{observation['failure']}")
     if "torch_device_unavailable" in observation:
         pytest.skip(observation["torch_device_unavailable"])
     return observation

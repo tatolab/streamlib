@@ -28,15 +28,6 @@ pub(crate) struct RhiCommandQueueInner {
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12CommandQueue>,
 }
 
-/// Platform-agnostic command queue wrapper.
-///
-/// Layout-stable: `#[repr(C)] (handle, vtable)`. The command queue is
-/// created once per device and shared across all processors. Use
-/// [`create_command_buffer`](RhiCommandQueue::create_command_buffer)
-/// to create single-use command buffers for GPU operations.
-///
-/// On Vulkan, this wraps VkQueue.
-/// On DX12, this wraps ID3D12CommandQueue.
 #[repr(C)]
 pub struct RhiCommandQueue {
     /// Opaque handle to the host's `Arc<RhiCommandQueueInner>`.

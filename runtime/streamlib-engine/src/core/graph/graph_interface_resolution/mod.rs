@@ -23,13 +23,13 @@ use crate::core::graph::graph_snapshot::{
     the_ports_of_a_graph_document_node,
 };
 use crate::core::json_schema::{
-    GraphResponse, LinkOutput, LinkPortRefOutput, PortInfoOutput, PortKindOutput,
-    ProcessorNodeOutput, ProcessorNodePortsOutput,
+    GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
+    PortInfoOutput, PortKindOutput,
 };
-use crate::core::processors::NodeTypesOneStreamResolves;
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, PortDirection, Result};
-use streamlib_processor_schema::output_port_family_resolved_against_config;
+use streamlib_node_schema::output_port_family_resolved_against_config;
 
 pub use streamlib_project_repository::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
@@ -151,7 +151,7 @@ impl GraphInterfaceNodeAsDrawn {
     }
 
     /// The interface node as `graph` renders it, its one port of the family it declares.
-    pub fn rendered_as_a_node(&self) -> ProcessorNodeOutput {
+    pub fn rendered_as_a_node(&self) -> GraphNodeOutput {
         let declared = &self.declared_port;
         let value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
         let (inputs, outputs) = match declared.direction {
@@ -163,13 +163,13 @@ impl GraphInterfaceNodeAsDrawn {
             GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
             declared.as_component(),
         );
-        ProcessorNodeOutput {
+        GraphNodeOutput {
             id: self
                 .node
                 .id
                 .map(|node_uuid| node_uuid.to_string())
                 .unwrap_or_default(),
-            processor_type: self.node.processor_type.clone(),
+            node_type: self.node.node_type.clone(),
             kind: None,
             language: None,
             name: cast_or_as_written(&self.node.name),
@@ -179,7 +179,7 @@ impl GraphInterfaceNodeAsDrawn {
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            ports: ProcessorNodePortsOutput { inputs, outputs },
+            ports: GraphNodePortsOutput { inputs, outputs },
             components,
             fragment: None,
         }
@@ -230,7 +230,7 @@ impl GraphSnapshot {
         if !self
             .nodes
             .iter()
-            .any(|node| is_a_graph_interface_node_type(node.processor_type.as_str()))
+            .any(|node| is_a_graph_interface_node_type(node.node_type.as_str()))
         {
             return Ok(GraphSnapshotWithInterfaceResolved {
                 graph_the_runtime_runs: self.clone(),
@@ -251,7 +251,7 @@ impl GraphSnapshot {
                     cast,
                 });
             }
-            let direction = match node.processor_type.as_str() {
+            let direction = match node.node_type.as_str() {
                 GRAPH_INPUT_NODE_TYPE => GraphInterfacePortDirection::Input,
                 GRAPH_OUTPUT_NODE_TYPE => GraphInterfacePortDirection::Output,
                 _ => continue,
@@ -472,10 +472,10 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
             .nodes
             .iter()
             .find(|node| cast_of(&node.name).is_ok_and(|cast| cast == node_cast))?;
-        if is_a_graph_interface_node_type(node.processor_type.as_str()) {
+        if is_a_graph_interface_node_type(node.node_type.as_str()) {
             let (_, declared_family) =
                 port_and_family_an_interface_nodes_config_declares(node).ok()?;
-            if declared_family.is_some() || node.processor_type.as_str() != GRAPH_INPUT_NODE_TYPE {
+            if declared_family.is_some() || node.node_type.as_str() != GRAPH_INPUT_NODE_TYPE {
                 return declared_family;
             }
             port_to_read = graph
@@ -809,7 +809,7 @@ fn the_input_without_what_only_the_graphs_producer_can_meet(
 }
 
 fn interface_node_kind(node: &GraphSnapshotNode) -> &'static str {
-    if node.processor_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {
+    if node.node_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {
         "GraphOutput"
     } else {
         "GraphInput"
@@ -928,9 +928,8 @@ fn refuse_a_default_or_range_its_family_does_not_take(
     the_value_lifetime_a_graph_input_config_declares(Some(&node.config))
         .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
     if let Some(default) = node.config.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
-        && let Err(why) = crate::core::processors::the_message_a_value_written_onto_an_output_is(
-            family, default, 0,
-        )
+        && let Err(why) =
+            crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, default, 0)
     {
         return Err(Error::GraphError(format!(
             "`GraphInput` node `{}` declares its `{GRAPH_INPUT_DEFAULT_CONFIG_KEY}` as \

@@ -13,37 +13,27 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::sdk::descriptors::ProcessorClassImportPath;
+use crate::sdk::descriptors::NodeClassImportPath;
 use crate::sdk::error::{Error, Result};
-use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
-use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
+use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::sdk::nodes::{Config, GeneratedNode, NodeSpec};
 use crate::sdk::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLocation,
 };
 
-/// A `(processor, port)` endpoint for [`App::connect`]. The processor is
-/// referenced by the [`AddedProcessor`] an `add`/`add_local` call returned;
-/// the port is the source-declared port name.
-pub type AppPortEndpoint<'a> = (&'a AddedProcessor, &'a str);
+pub type AppPortEndpoint<'a> = (&'a AddedNode, &'a str);
 
-/// A processor [`App::add`] or [`App::add_local`] put in the graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AddedProcessor {
-    processor_id: ProcessorUniqueId,
+pub struct AddedNode {
+    node_run_id: NodeRunId,
     display_name: String,
 }
 
-impl AddedProcessor {
-    /// The engine's id for this processor — what `tatolab graph` shows.
-    pub fn processor_id(&self) -> &ProcessorUniqueId {
-        &self.processor_id
+impl AddedNode {
+    pub fn node_run_id(&self) -> &NodeRunId {
+        &self.node_run_id
     }
 
-    /// The display name the graph assigned this processor.
-    ///
-    /// The requested one only when nothing else in the graph already answered
-    /// to it: the graph appends a counter to a duplicate, so a caller that
-    /// asked for a name cannot assume it got that name.
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
@@ -52,13 +42,6 @@ impl AddedProcessor {
 /// The stream id of the one stream an [`App`] loads; its display name too.
 pub const THE_STREAM_ID_AN_APP_LOADS: &str = "main";
 
-/// Thin authoring sugar over a [`Runner`] and one stream loaded in it:
-/// construct, add processors, connect ports, run.
-///
-/// `App` is not a parallel runtime — it holds one `Runner` and the stream it
-/// loaded, and forwards to them. Errors surface as the underlying engine
-/// [`Error`] variants unchanged. For any capability the sugar omits, drop to
-/// [`App::runner`] or [`App::stream`].
 pub struct App {
     runner: Arc<Runner>,
     stream: Arc<LoadedStreamInThisRuntime>,
@@ -77,56 +60,38 @@ impl App {
         Ok(Self { runner, stream })
     }
 
-    /// Add a processor by the import path of its class, configured from
-    /// `config`. `config` is any [`Serialize`] value (a generated config `Bag`,
-    /// a plain struct, or a [`serde_json::Value`]); it is encoded to JSON and
-    /// handed to the runtime unchanged. A `display_name` of `None` takes the
-    /// class's short name.
     pub fn add(
         &self,
-        processor_class_import_path: ProcessorClassImportPath,
+        node_class_import_path: NodeClassImportPath,
         config: impl Serialize,
         display_name: Option<&str>,
-    ) -> Result<AddedProcessor> {
+    ) -> Result<AddedNode> {
         let config = to_config_value(config)?;
-        self.add_spec(
-            ProcessorSpec::new(processor_class_import_path, config),
-            display_name,
-        )
+        self.add_spec(NodeSpec::new(node_class_import_path, config), display_name)
     }
 
-    /// Register a `#[processor]`-annotated host type `P` on the processor
-    /// registry (no package on disk) and immediately instantiate it,
-    /// returning the connectable [`AddedProcessor`]. `config` is validated
-    /// against `P::Config` at registration and used as the instance config.
     pub fn add_local<P>(
         &self,
         config: impl Serialize,
         display_name: Option<&str>,
-    ) -> Result<AddedProcessor>
+    ) -> Result<AddedNode>
     where
-        P: GeneratedProcessor + 'static,
+        P: GeneratedNode + 'static,
         P::Config: Config,
     {
         let config = to_config_value(config)?;
-        let processor_class_import_path = self.stream.add_local::<P>(config.clone())?;
-        self.add_spec(
-            ProcessorSpec::new(processor_class_import_path, config),
-            display_name,
-        )
+        let node_class_import_path = self.stream.add_local::<P>(config.clone())?;
+        self.add_spec(NodeSpec::new(node_class_import_path, config), display_name)
     }
 
-    /// Connect an output endpoint to an input endpoint — `((&from, "out"),
-    /// (&to, "in"))`. A nonexistent port surfaces the runtime's
-    /// [`Error::ProcessorPortNotFound`] unchanged.
     pub fn connect(
         &self,
         from: AppPortEndpoint<'_>,
         to: AppPortEndpoint<'_>,
     ) -> Result<LinkUniqueId> {
         self.stream.connect(
-            OutputLinkPortRef::new(from.0.processor_id(), from.1),
-            InputLinkPortRef::new(to.0.processor_id(), to.1),
+            OutputLinkPortRef::new(from.0.node_run_id(), from.1),
+            InputLinkPortRef::new(to.0.node_run_id(), to.1),
         )
     }
 
@@ -156,13 +121,13 @@ impl App {
     /// Add `spec` under an optional requested display name.
     fn add_spec(
         &self,
-        mut spec: ProcessorSpec,
+        mut spec: NodeSpec,
         requested_display_name: Option<&str>,
-    ) -> Result<AddedProcessor> {
+    ) -> Result<AddedNode> {
         spec.display_name = requested_display_name.map(str::to_string);
-        let added = self.stream.add_processor_reporting_its_name(spec)?;
-        Ok(AddedProcessor {
-            processor_id: added.processor_id,
+        let added = self.stream.add_node_reporting_its_name(spec)?;
+        Ok(AddedNode {
+            node_run_id: added.node_run_id,
             display_name: added.name,
         })
     }
@@ -172,5 +137,5 @@ impl App {
 /// serialization failure to [`Error::Configuration`].
 fn to_config_value(config: impl Serialize) -> Result<serde_json::Value> {
     serde_json::to_value(config)
-        .map_err(|e| Error::Configuration(format!("processor config is not serializable: {e}")))
+        .map_err(|e| Error::Configuration(format!("node config is not serializable: {e}")))
 }

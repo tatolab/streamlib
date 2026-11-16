@@ -1,21 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A scripted client follows a node's own prompt to a spliced live graph.
-
-The client is the official MCP Python SDK's, driven by a script, not a model. What it brings is the names of the two
-resources and the one prompt it picks from the node's listings, and the import
-path of the effect it wants inserted, which no graph has named yet. Everything
-else comes from the server: the resource URIs and the prompt's argument names
-from `resources/list` and `prompts/list`, the stream and the link from the
-graph resource, and the tool order, names and ports from the recipe text, whose
-numbered steps it dispatches as written, each naming the stream the recipe was
-rendered against. The graph it
-leaves is then checked through `graph`, and the frames through the processor it
-inserted.
-
-Starting the engine initializes a GPU context, so the whole module needs a device.
-"""
 
 from __future__ import annotations
 
@@ -45,9 +30,6 @@ FIRST_MARKED_FRAME_TIMEOUT_SECONDS = 30.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 
 Answered = TypeVar("Answered")
-# How long a link handed to a running helper has to come back `wired`. The
-# helper answers between callbacks, so this is bounded by one frame of the
-# processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 # How long a node added to a running graph has to reach `Running`. Its helper
 # is spawned, imports the class and starts it, so this is bounded by an
@@ -57,7 +39,7 @@ ADDED_NODE_RUNNING_TIMEOUT_SECONDS = 15.0
 STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from tatolab.stream import StreamBuilder, graph_generator
 from tatolab.testpattern import TestPatternSource
-from processors.marked_frame_sink import MarkedFrameSink
+from nodes.marked_frame_sink import MarkedFrameSink
 
 
 @graph_generator
@@ -136,13 +118,6 @@ EXPLICIT_ARGUMENT = re.compile(r"`([a-z_]+)`: `([^`]+)`")
 def await_link_state(
     client: "ScriptedMcpClient", stream_id: str, link_id: str, wanted: str
 ) -> str:
-    """Poll the stream's `graph` until one link reaches `wanted`, and report what it reached.
-
-    A `connect` onto a helper-placed processor returns with the link `pending`:
-    the helper opens its own port and answers, and only that answer makes the
-    link `wired`. A link that reaches `error` is returned as it is, so the
-    caller's assertion carries the helper's own reason.
-    """
     deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
     link = None
     while time.monotonic() < deadline:
@@ -239,7 +214,7 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
         ("newest", "ordered"),
     ],
 )
-def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_link(
+def test_a_client_following_the_insert_prompt_splices_a_node_into_a_live_link(
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
     sink_input_delivery_profile: str,
@@ -247,11 +222,11 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 ):
     app_directory = make_tatolab_project(
         {
-            "processors/__init__.py": "",
-            "processors/frame_marking_effect.py": FRAME_MARKING_EFFECT_SOURCE_TEMPLATE.format(
+            "nodes/__init__.py": "",
+            "nodes/frame_marking_effect.py": FRAME_MARKING_EFFECT_SOURCE_TEMPLATE.format(
                 delivery_profile=inserted_input_delivery_profile
             ),
-            "processors/marked_frame_sink.py": MARKED_FRAME_SINK_SOURCE_TEMPLATE.format(
+            "nodes/marked_frame_sink.py": MARKED_FRAME_SINK_SOURCE_TEMPLATE.format(
                 delivery_profile=sink_input_delivery_profile
             ),
             "stream.py": STREAM_WITH_A_SOURCE_LINKED_TO_A_SINK,
@@ -313,7 +288,7 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     catalog_paths = [
         entry["type"] for entry in catalog["nodes"] + catalog_of_the_stream["nodes"]
     ] + [installed["node"]["type"] for installed in catalog_of_the_stream["installed"]]
-    inserted_type = "processors.frame_marking_effect:FrameMarkingEffect"
+    inserted_type = "nodes.frame_marking_effect:FrameMarkingEffect"
 
     # The prompt's three arguments, bound by the names the listing gave them:
     # the stream, the link's id, and a catalog import path.
@@ -420,9 +395,6 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         "stuck Idle is a helper that never started it"
     )
 
-    # The sink announces from its own processor interpreter only once a frame
-    # carrying the inserted effect's mark reaches it: frames really pass
-    # through the splice.
     tatolabd.await_marker("SINK_RECEIVED_A_MARKED_FRAME", timeout=FIRST_MARKED_FRAME_TIMEOUT_SECONDS)
 
     # The virtual camera recipe names a type this node's catalog actually holds.

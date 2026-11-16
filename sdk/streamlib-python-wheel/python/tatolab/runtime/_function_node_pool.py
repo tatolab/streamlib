@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The processor the stream's function node pool runs.
+"""The node the stream's function node pool runs.
 
 Each island the pool carries feeds one of its inputs and is evaluated at that
 input's read, as in any reader; the pool writes the value to the matching
@@ -50,10 +50,10 @@ _PORT_FAMILIES_BY_WIRE_NAME: "dict[str, PortFamily[Any]]" = {
 
 
 class FunctionNodePool:
-    """What the pool's helper loads; its processor is built from the pool's config at setup."""
+    """What the pool's helper loads; its node is built from the pool's config at setup."""
 
 
-def the_processor_class_the_function_node_pool_runs_as(
+def the_node_class_the_function_node_pool_runs_as(
     pool_config: "Mapping[str, Any]", link_data_access: NodeLinkDataAccess
 ) -> type:
     """A `@node.process` class with one input and one output per island `pool_config["carries"]` names.
@@ -70,7 +70,7 @@ def the_processor_class_the_function_node_pool_runs_as(
         class_attributes[carry["output_port"]] = Output(family)
     class_attributes["__doc__"] = "The stream's function node pool."
     class_attributes["__module__"] = __name__
-    pool_class = type("FunctionNodePoolProcessor", (_FunctionNodePoolProcessor,), class_attributes)
+    pool_class = type("FunctionNodePoolNode", (_FunctionNodePoolBase,), class_attributes)
     pool_class._carries = tuple(
         (carry["input_port"], carry["output_port"], carry["family"]) for carry in carries
     )
@@ -86,7 +86,7 @@ def _the_port_family_a_carry_declares(carry: "Mapping[str, Any]") -> "PortFamily
     return Channels
 
 
-class _FunctionNodePoolProcessor:
+class _FunctionNodePoolBase:
     """Reads each carried island and writes its value to the island's output."""
 
     _carries: "tuple[tuple[str, str, str], ...]"

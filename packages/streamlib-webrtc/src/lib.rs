@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The native half of `tatolab-webrtc` — the module the wheel's two
-//! `@node.process` classes import as `tatolab.webrtc._native`.
-//!
-//! The engine never calls anything here. A processor extension's per-frame work
-//! is its own package's Rust: the publisher's is reached from its own Python,
-//! and the player's runs on a thread of its own, writing its node's ports
-//! through the module host table.
 
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;

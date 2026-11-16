@@ -103,7 +103,7 @@ fn a_get_with_no_setter_is_refused_naming_it_and_the_variables_set() {
 fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
     let flattening = GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
-        .with_graph_fragments_flattened(&crate::core::processors::NodeTypesOneStreamResolves::new())
+        .with_graph_fragments_flattened(&crate::core::nodes::NodeTypesOneStreamResolves::new())
         .expect("the fragments flatten");
     flattening
         .graph_the_runtime_runs
@@ -464,16 +464,16 @@ fn a_setter_holding_another_variable_node_is_refused() {
         ));
     assert!(refusal_of(graph).contains("holds variable node `get-connection`"));
 }
-fn a_rendered_node(name: &str) -> ProcessorNodeOutput {
-    ProcessorNodeOutput {
+fn a_rendered_node(name: &str) -> GraphNodeOutput {
+    GraphNodeOutput {
         id: format!("id-{name}"),
-        processor_type: ProcessorClassImportPath::new("rig:Node").unwrap(),
+        node_type: NodeClassImportPath::new("rig:Node").unwrap(),
         kind: None,
         language: None,
         name: name.to_string(),
         config: Some(serde_json::json!({})),
         config_checksum: 0,
-        ports: ProcessorNodePortsOutput {
+        ports: GraphNodePortsOutput {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },

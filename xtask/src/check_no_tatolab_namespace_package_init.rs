@@ -1,18 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Keeps `tatolab` a PEP 420 namespace package, in the tree and in the lend.
-//!
-//! A processor interpreter finds `tatolab.runtime` in the runtime unit's lend
-//! directory and `tatolab.stream` in the stream's own venv. Python merges the
-//! two `tatolab/` directories only while neither holds an `__init__.py`: one
-//! regular `tatolab` package anywhere on the path shadows every other portion,
-//! and the interpreter then cannot import whichever half it hid.
-//!
-//! Two scan roots. The repository's files, through `git ls-files` like every
-//! other gate. And the lend `cargo xtask build-runtime` lays out under
-//! `target/`, which git ignores, so it is walked directly when it exists.
-
 use crate::build_runtime::runtime_unit_lend_directory_in_the_workspace;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -52,7 +40,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     }
     for lend_path in &report.lend_paths_holding_an_init {
         failure_lines.push(format!(
-            "{}: the runtime unit's lend holds a `tatolab/__init__.py` — every processor \
+            "{}: the runtime unit's lend holds a `tatolab/__init__.py` — every node \
              interpreter borrowing it would lose the venv's `tatolab.stream`",
             lend_path.display()
         ));
@@ -120,7 +108,7 @@ pub fn ensure_lend_directory_keeps_tatolab_a_namespace(lend_directory: &Path) ->
     anyhow::ensure!(
         lend_paths_holding_an_init.is_empty(),
         "the lend at {} holds {} — `tatolab` must stay a PEP 420 namespace package, or every \
-         processor interpreter borrowing this lend loses the venv's `tatolab.stream`",
+         node interpreter borrowing this lend loses the venv's `tatolab.stream`",
         lend_directory.display(),
         lend_paths_holding_an_init
             .iter()

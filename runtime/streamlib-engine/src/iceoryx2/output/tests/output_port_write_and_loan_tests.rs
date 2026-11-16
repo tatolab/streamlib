@@ -413,11 +413,6 @@ fn write_bytes_with_timestamp_fans_out_single_loan_to_all_subscribers() {
     }
 }
 
-/// A declared output port with no link yet takes the bag and drops it,
-/// the way a port whose consumer cannot keep up does; only a port the
-/// processor never declared is refused. Mentally revert the declared
-/// check and a processor added to a running graph fails every frame
-/// until its output is connected.
 #[test]
 fn a_write_to_a_declared_but_unlinked_port_is_dropped_not_refused() {
     let inner = OutputWriterInner::new();
@@ -437,8 +432,6 @@ fn a_write_to_a_declared_but_unlinked_port_is_dropped_not_refused() {
     );
 }
 
-/// A processor names its own port in the spelling it declared, and the
-/// handle casts it to the name the port was registered under.
 #[test]
 fn a_write_reaches_its_port_by_any_spelling_that_casts_to_its_name() {
     let pubsub = open_channel_data_service("cast/pubsub", 2);

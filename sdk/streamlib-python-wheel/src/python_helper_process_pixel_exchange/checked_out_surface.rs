@@ -36,8 +36,6 @@ pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
 /// What a checkout turned into once its memory was imported: mapped memory
 /// plus the layout facts every view derives from.
 pub(crate) struct HelperCheckedOutPixelSurface {
-    /// The id this surface travels under — what a downstream processor
-    /// resolves, and what keys the parent's registry entry.
     pub(crate) surface_id: String,
     /// The pool slot's import, shared with this helper's per-slot cache and
     /// every other frame checked out over the slot.

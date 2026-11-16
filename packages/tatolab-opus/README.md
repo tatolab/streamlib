@@ -25,5 +25,3 @@ is optional: `bitrate_bps`, and `application` (`audio`, `voip` or `lowdelay`).
 
 `OpusDecoder` takes those Packets on `encoded_audio`, which requires codec `opus`, and writes
 planar `f32` Channels blocks on `audio`, at 48 kHz in the stream's own channel count.
-
-Each node runs in its own processor interpreter, and libopus runs in that process.

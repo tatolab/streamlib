@@ -1,19 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The Vulkan device a processor interpreter imports on, named by the runtime
-//! at spawn.
-//!
-//! An OPAQUE_FD import must land on the `deviceUUID` that exported it; the
-//! runtime names its own device in the interpreter's environment so the
-//! interpreter never resolves one of its own.
-
 use std::ffi::OsString;
 
 use crate::{ConsumerRhiError, Result};
 
-/// The variable the runtime hands a processor interpreter its Vulkan
-/// `deviceUUID` in, spelled by [`lowercase_hex_of_vulkan_device_uuid`].
 pub const RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE: &str =
     "STREAMLIB_RUNTIME_VULKAN_DEVICE_UUID";
 
@@ -77,7 +68,7 @@ fn runtime_vulkan_device_uuid_from_the_environment_value(
     let Some(environment_value) = environment_value else {
         return Err(ConsumerRhiError::Configuration(format!(
             "{RUNTIME_VULKAN_DEVICE_UUID_ENVIRONMENT_VARIABLE} is not set, so this process does \
-             not know which Vulkan device the runtime built on; a processor interpreter is \
+             not know which Vulkan device the runtime built on; a node interpreter is \
              handed it at spawn, and importing on any other device reads the wrong memory"
         )));
     };
