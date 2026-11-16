@@ -25,8 +25,14 @@ pub const CONTROL_CONTRACT_FILE_WORKSPACE_PATH: &str =
 pub const CONTROL_OPERATION_REFUSED_ERROR_CODE: i64 = 1;
 
 /// The JSON-RPC error code of an operation that could not be carried out, its message the
-/// runtime's own words.
+/// runtime's own words and its `data` the refusal.
 pub const CONTROL_OPERATION_FAILED_ERROR_CODE: i64 = 2;
+
+/// JSON-RPC's error code of a method no operation has, its `data` the refusal.
+pub const JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
+
+/// JSON-RPC's error code of params that do not match the operation's, its `data` the refusal.
+pub const JSON_RPC_INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// The JSON-RPC error code of a `discover` from a client built against another contract version,
 /// its `data` both versions.
@@ -150,6 +156,12 @@ fn the_errors_of(
         json!({
             "code": CONTROL_OPERATION_FAILED_ERROR_CODE,
             "message": "failed",
+            "data": refusal_schema,
+        }),
+        json!({
+            "code": JSON_RPC_INVALID_PARAMS_ERROR_CODE,
+            "message": "params do not match",
+            "data": refusal_schema,
         }),
     ];
     if declaration.method_name == Discover::METHOD_NAME {

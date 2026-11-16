@@ -44,7 +44,8 @@ use streamlib::sdk::runtime::{
 use streamlib_control_contract::ControlOperationCall;
 use streamlib_project_repository::ProjectRepositoriesOpenInThisRuntime;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DescribeStreamActionToolResult, DescribeStreamActionToolResultStream, ProjectVenvSyncOnTheWire,
+    ControlOperationRefusalCode, DescribeStreamActionToolResult,
+    DescribeStreamActionToolResultStream, ProjectActionRefusalOnTheWire, ProjectVenvSyncOnTheWire,
     ProjectVenvSyncPackageKindOnTheWire, ProjectVenvSyncPackageOnTheWire,
     ProjectVenvSyncPackageStateOnTheWire, ProjectVenvSyncPhaseOnTheWire, StreamActionKindOnTheWire,
     StreamActionStateOnTheWire,
@@ -205,13 +206,14 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         match answered {
             Ok(answer) => serialized_tool_result(tool_name, &answer),
-            Err(ControlOperationRefusal::RefusedAction(refusal)) => Ok(
-                crate::mcp_agent_tools::a_tool_result_of_the_refusal(*refusal),
-            ),
-            Err(ControlOperationRefusal::Failed(why)) => Err(why),
             Err(ControlOperationRefusal::ContractVersionMismatch(mismatch)) => {
-                Err(format!("{tool_name} failed: {mismatch}"))
+                Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+                    tool_name,
+                    ControlOperationRefusalCode::Refused,
+                    format!("{tool_name} failed: {mismatch}"),
+                )))
             }
+            Err(refusal) => Err(Box::new(refusal.into_the_refusal_on_the_wire(tool_name))),
         }
     }
 }
@@ -252,8 +254,8 @@ pub(crate) fn local_api_mcp_streamable_http_service(
 // Tool arguments
 // ============================================================================
 
-/// A tool's answer: its result, or the message an `isError` result carries.
-pub(crate) type ToolCallAnswer = Result<CallToolResult, String>;
+/// A tool's answer: its result, or the refusal an `isError` result carries.
+pub(crate) type ToolCallAnswer = Result<CallToolResult, Box<ProjectActionRefusalOnTheWire>>;
 
 /// A stream action's state as the local API spells it.
 pub(crate) fn stream_action_state_on_the_wire(
@@ -465,7 +467,9 @@ impl ServerHandler for LocalApiMcpServerHandler {
                 .await?
             {
                 Ok(tool_result) => tool_result.into(),
-                Err(why) => CallToolResult::error(vec![ContentBlock::text(why)]).into(),
+                Err(refusal) => {
+                    crate::mcp_agent_tools::a_tool_result_of_the_refusal(*refusal).into()
+                }
             },
         )
     }
@@ -532,8 +536,13 @@ pub(crate) fn serialized_tool_result(
     tool_name: &str,
     tool_result: &impl Serialize,
 ) -> ToolCallAnswer {
-    let tool_result_json = serde_json::to_value(tool_result)
-        .map_err(|e| format!("{tool_name} result serialization failed: {e}"))?;
+    let tool_result_json = serde_json::to_value(tool_result).map_err(|e| {
+        Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+            tool_name,
+            ControlOperationRefusalCode::RuntimeFailed,
+            format!("{tool_name} result serialization failed: {e}"),
+        ))
+    })?;
     Ok(json_text_tool_result(tool_result_json))
 }
 
@@ -547,7 +556,7 @@ fn json_text_tool_result(value: Value) -> CallToolResult {
     tool_result
 }
 
-fn json_text_content_block(value: &Value) -> ContentBlock {
+pub(crate) fn json_text_content_block(value: &Value) -> ContentBlock {
     let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
     ContentBlock::text(text)
 }

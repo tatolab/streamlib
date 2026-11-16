@@ -9,6 +9,7 @@ mod agent_surface;
 mod control_contract_document;
 mod control_notification;
 mod control_operation;
+mod control_operation_refusals;
 mod control_operation_requests;
 mod control_operation_results;
 mod control_operations;
@@ -26,6 +27,7 @@ pub use agent_surface::{
 pub use control_contract_document::{
     CONTROL_CONTRACT_FILE_WORKSPACE_PATH, CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
     CONTROL_OPERATION_FAILED_ERROR_CODE, CONTROL_OPERATION_REFUSED_ERROR_CODE,
+    JSON_RPC_INVALID_PARAMS_ERROR_CODE, JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE,
     OPENRPC_DOCUMENT_VERSION, control_contract_document, control_contract_file_contents,
 };
 pub use control_notification::{
@@ -40,6 +42,10 @@ pub use control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationDeclaration,
     ControlOperationEffect, ControlOperationExposure, ControlOperationGroup,
     ControlOperationStability,
+};
+pub use control_operation_refusals::{
+    ParamsThatDoNotMatchTheirSchema, the_call_that_describes, the_call_that_lists_every_operation,
+    the_params_read_as, the_suggested_call,
 };
 pub use control_operation_requests::{
     ASSET_ARGUMENT_DESCRIPTION, ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION,

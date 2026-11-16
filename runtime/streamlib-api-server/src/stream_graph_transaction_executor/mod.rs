@@ -34,9 +34,9 @@ use streamlib_project_repository::{
     the_stream_document_of_an_import,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
-    GraphTransactionAddedNote, GraphTransactionConnectedLink, GraphTransactionToolResult,
-    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
+    GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
+    GraphTransactionToolResult, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -277,13 +277,15 @@ impl GraphTransactionRefusal {
     ) -> ProjectActionRefusalOnTheWire {
         let what_the_refused_operation_names = *self.what_the_refused_operation_names;
         ProjectActionRefusalOnTheWire {
-            action: tool_name.to_owned(),
             refused_operation_index: self.refused_operation_index,
             refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
             refused_field: what_the_refused_operation_names.field,
-            not_running_because: None,
-            runtime_words: self.runtime_words,
+            ..ProjectActionRefusalOnTheWire::of_the_action(
+                tool_name,
+                ControlOperationRefusalCode::Refused,
+                self.runtime_words,
+            )
         }
     }
 }

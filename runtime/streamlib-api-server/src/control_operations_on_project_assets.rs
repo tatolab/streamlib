@@ -230,7 +230,7 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("read_asset_preview failed: the read did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!("read_asset_preview failed: the read did not finish: {join_failure}"))
         })?
         .ok_or_else(|| {
             format!(

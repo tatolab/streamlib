@@ -277,10 +277,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 /// The JSON a tool's successful result states, or the text of its refusal.
 fn tool_answer(tool_result: &Value) -> std::result::Result<Value, String> {
     if tool_result["isError"] == true {
-        return Err(tool_result["content"][0]["text"]
-            .as_str()
-            .expect("a refusal's text block")
-            .to_string());
+        return Err(crate::mcp::tests::the_refusal_of_a_tool_result(tool_result).runtime_words);
     }
     Ok(first_text_block_json(tool_result))
 }

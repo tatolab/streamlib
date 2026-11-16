@@ -11,9 +11,12 @@ import type * as ControlContract from "./control_contract.js";
 export interface ControlSchemasOfTheContract {
   readonly components: {
     readonly ProjectActionRefusalOnTheWire: z.ZodType<ControlContract.ProjectActionRefusalOnTheWire>;
+    readonly ControlOperationRefusalCode: z.ZodType<ControlContract.ControlOperationRefusalCode>;
     readonly RefusedGraphLinkOnTheWire: z.ZodType<ControlContract.RefusedGraphLinkOnTheWire>;
     readonly GraphLinkEndOnTheWire: z.ZodType<ControlContract.GraphLinkEndOnTheWire>;
+    readonly ProjectFilePlaceOnTheWire: z.ZodType<ControlContract.ProjectFilePlaceOnTheWire>;
     readonly NodeNotRunningBecauseOnTheWire: z.ZodType<ControlContract.NodeNotRunningBecauseOnTheWire>;
+    readonly SuggestedOperationCall: z.ZodType<ControlContract.SuggestedOperationCall>;
     readonly ControlContractVersionMismatch: z.ZodType<ControlContract.ControlContractVersionMismatch>;
     readonly DiscoverRequest: z.ZodType<ControlContract.DiscoverRequest>;
     readonly DiscoverResult: z.ZodType<ControlContract.DiscoverResult>;

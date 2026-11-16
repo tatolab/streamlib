@@ -366,12 +366,14 @@ pub struct AssetMediaFactsReadOnTheWire {
     pub read_at: String,
 }
 
-/// What a refused action answers under `refusal` in its tool result's `structuredContent`,
-/// beside the same words as the result's text.
+/// A refused call as every door answers it: the `data` of a JSON-RPC error, and both
+/// `structuredContent.refusal` and the text of a failing tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectActionRefusalOnTheWire {
-    /// The action refused, by the name of the tool it was sent to.
+    /// What kind of refusal it is, for a caller to branch on.
+    pub refusal_code: ControlOperationRefusalCode,
+    /// The action refused, by the name of the operation or tool it was sent to.
     pub action: String,
     /// The position, from 0, of the operation refused among those the action sent, when one was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -385,11 +387,92 @@ pub struct ProjectActionRefusalOnTheWire {
     /// The node's input or config field the refused operation names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refused_field: Option<String>,
+    /// The JSON pointer, into the params the caller sent, of the value refused; absent when no
+    /// one value inside them is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_params_pointer: Option<String>,
+    /// The place in a project file the refusal is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused_file: Option<ProjectFilePlaceOnTheWire>,
     /// Why the node the action reached for does not run, when that is why it was refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
+    /// A call that would help, exactly as `call_operation` takes it, when the runtime knows one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_call: Option<SuggestedOperationCall>,
     /// Why, in the runtime's own words, never rewritten.
     pub runtime_words: String,
+}
+
+impl ProjectActionRefusalOnTheWire {
+    /// The refusal of `action`, coded `refusal_code`, in `runtime_words`, naming no place.
+    pub fn of_the_action(
+        action: impl Into<String>,
+        refusal_code: ControlOperationRefusalCode,
+        runtime_words: impl Into<String>,
+    ) -> Self {
+        Self {
+            refusal_code,
+            action: action.into(),
+            refused_operation_index: None,
+            refused_node: None,
+            refused_link: None,
+            refused_field: None,
+            refused_params_pointer: None,
+            refused_file: None,
+            not_running_because: None,
+            suggested_call: None,
+            runtime_words: runtime_words.into(),
+        }
+    }
+}
+
+/// What kind of refusal a refused call is. The set grows: a code a client does not know reads
+/// as `refused`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
+#[serde(rename_all = "snake_case")]
+pub enum ControlOperationRefusalCode {
+    /// The params do not match the operation's params schema; `refused_params_pointer` names the
+    /// value, when one is.
+    ParamsDoNotMatchSchema,
+    /// The runtime serves no operation under the name sent.
+    OperationNotFound,
+    /// The node the call reached for does not run; `not_running_because` says why.
+    NodeNotRunning,
+    /// The runtime could not carry the request out, through no doing of the caller.
+    RuntimeFailed,
+    /// The request was understood and not done; changing it can help. The runtime's words say
+    /// what to change. It stays the last code, because it reads every code this build does not
+    /// know.
+    #[serde(other)]
+    Refused,
+}
+
+/// A place in a project file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct ProjectFilePlaceOnTheWire {
+    /// The file's path in the project, `/`-separated.
+    pub path: String,
+    /// The line, from 1, when the place is narrower than the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// The column, from 1, when the place is narrower than the line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<u32>,
+}
+
+/// A call a refusal suggests: the arguments `call_operation` takes, or a listed tool by its
+/// name with these params.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct SuggestedOperationCall {
+    /// The operation to call, by name.
+    pub operation: String,
+    /// Its params.
+    pub params: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Why a node a refused action reached for does not run.

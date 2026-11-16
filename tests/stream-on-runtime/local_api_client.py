@@ -245,7 +245,7 @@ class LocalApiClient:
         Returns why, and a success raises.
 
         The reason is the protocol error's message when the server refused the
-        request, else the text of the tool error it answered with.
+        request, else the `runtime_words` of the refusal its tool error carries.
         """
         try:
             result = self.answer_over_mcp(
@@ -255,9 +255,11 @@ class LocalApiClient:
         except Exception as raised:
             return str(mcp_error_raised_in(raised))
         assert result.is_error is True, f"`{tool_name}` succeeded: {result.content}"
-        return "\n".join(
-            content.text for content in result.content if isinstance(content, TextContent)
-        )
+        stated = result.content[0]
+        assert isinstance(stated, TextContent), result.content
+        refusal = json.loads(stated.text)
+        assert refusal == (result.structuredContent or {}).get("refusal"), result
+        return str(refusal["runtime_words"])
 
     def await_every_node_running(
         self,

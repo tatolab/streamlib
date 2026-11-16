@@ -58,7 +58,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("refresh_fragments failed: the refresh did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "refresh_fragments failed: the refresh did not finish: {join_failure}"
+            ))
         })?
         .map_err(|refusal| format!("refresh_fragments failed: {refusal}"))?;
         if refreshes.is_empty() {
@@ -180,7 +182,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("{method_name} failed: the transaction did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "{method_name} failed: the transaction did not finish: {join_failure}"
+            ))
         })?;
         applied.map_err(ControlOperationRefusal::RefusedAction)
     }

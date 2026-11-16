@@ -110,7 +110,11 @@ impl ControlOperationDispatcher {
             )
         })
         .await
-        .map_err(|join_failure| format!("logs failed: the read did not finish: {join_failure}"))?
+        .map_err(|join_failure| {
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "logs failed: the read did not finish: {join_failure}"
+            ))
+        })?
         .map_err(|not_read| format!("logs failed: {not_read}"))?;
         Ok(LogsToolResult {
             project_directory,
@@ -200,7 +204,11 @@ impl ControlOperationDispatcher {
         };
         tokio::task::spawn_blocking(move || drop(closed))
             .await
-            .map_err(|join_failure| format!("close_viewer failed: {join_failure}"))?;
+            .map_err(|join_failure| {
+                ControlOperationRefusal::RuntimeFailed(format!(
+                    "close_viewer failed: {join_failure}"
+                ))
+            })?;
         Ok(CloseViewerToolResult { viewer })
     }
 

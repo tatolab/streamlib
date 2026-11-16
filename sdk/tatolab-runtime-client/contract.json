@@ -37,7 +37,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         },
         {
           "code": 3,
@@ -87,7 +97,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -130,7 +150,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 2,
@@ -173,7 +203,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 2,
@@ -216,7 +256,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 2,
@@ -259,7 +309,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -303,7 +363,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -345,7 +415,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -389,7 +469,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -433,7 +523,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -477,7 +577,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -521,7 +631,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -565,7 +685,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -609,7 +739,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -653,7 +793,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -697,7 +847,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -741,7 +901,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -785,7 +955,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -829,7 +1009,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -873,7 +1063,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -917,7 +1117,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -961,7 +1171,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1005,7 +1225,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 2,
@@ -1049,7 +1279,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1093,7 +1333,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1137,7 +1387,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1181,7 +1441,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1225,7 +1495,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1269,7 +1549,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1313,7 +1603,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1357,7 +1657,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1401,7 +1711,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1445,7 +1765,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1489,7 +1819,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1533,7 +1873,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1577,7 +1927,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1621,7 +1981,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1665,7 +2035,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1709,7 +2089,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1753,7 +2143,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1797,7 +2197,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1841,7 +2251,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1885,7 +2305,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -1929,7 +2359,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 2,
@@ -1972,7 +2412,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2016,7 +2466,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2060,7 +2520,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2104,7 +2574,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2148,7 +2628,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2192,7 +2682,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2236,7 +2736,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2280,7 +2790,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2324,7 +2844,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2368,7 +2898,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2412,7 +2952,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2456,7 +3006,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2500,7 +3060,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2544,7 +3114,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2588,7 +3168,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2632,7 +3222,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2676,7 +3276,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2720,7 +3330,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2764,7 +3384,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2808,7 +3438,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2852,7 +3492,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2896,7 +3546,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2940,7 +3600,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -2984,7 +3654,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3028,7 +3708,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3072,7 +3762,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3116,7 +3816,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3160,7 +3870,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3204,7 +3924,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3248,7 +3978,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3292,7 +4032,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3336,7 +4086,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3380,7 +4140,17 @@
         },
         {
           "code": 2,
-          "message": "failed"
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
         }
       ],
       "x-since": 1,
@@ -3521,9 +4291,13 @@
       "ProjectActionRefusalOnTheWire": {
         "type": "object",
         "properties": {
+          "refusal_code": {
+            "$ref": "#/components/schemas/ControlOperationRefusalCode",
+            "description": "What kind of refusal it is, for a caller to branch on."
+          },
           "action": {
             "type": "string",
-            "description": "The action refused, by the name of the tool it was sent to."
+            "description": "The action refused, by the name of the operation or tool it was sent to."
           },
           "refused_operation_index": {
             "type": [
@@ -3559,6 +4333,24 @@
             ],
             "description": "The node's input or config field the refused operation names."
           },
+          "refused_params_pointer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The JSON pointer, into the params the caller sent, of the value refused; absent when no\none value inside them is."
+          },
+          "refused_file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectFilePlaceOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The place in a project file the refusal is about."
+          },
           "not_running_because": {
             "anyOf": [
               {
@@ -3570,16 +4362,59 @@
             ],
             "description": "Why the node the action reached for does not run, when that is why it was refused."
           },
+          "suggested_call": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SuggestedOperationCall"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A call that would help, exactly as `call_operation` takes it, when the runtime knows one."
+          },
           "runtime_words": {
             "type": "string",
             "description": "Why, in the runtime's own words, never rewritten."
           }
         },
         "required": [
+          "refusal_code",
           "action",
           "runtime_words"
         ],
-        "description": "What a refused action answers under `refusal` in its tool result's `structuredContent`,\nbeside the same words as the result's text."
+        "description": "A refused call as every door answers it: the `data` of a JSON-RPC error, and both\n`structuredContent.refusal` and the text of a failing tool call."
+      },
+      "ControlOperationRefusalCode": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "params_do_not_match_schema",
+            "description": "The params do not match the operation's params schema; `refused_params_pointer` names the\nvalue, when one is."
+          },
+          {
+            "type": "string",
+            "const": "operation_not_found",
+            "description": "The runtime serves no operation under the name sent."
+          },
+          {
+            "type": "string",
+            "const": "node_not_running",
+            "description": "The node the call reached for does not run; `not_running_because` says why."
+          },
+          {
+            "type": "string",
+            "const": "runtime_failed",
+            "description": "The runtime could not carry the request out, through no doing of the caller."
+          },
+          {
+            "type": "string",
+            "const": "refused",
+            "description": "The request was understood and not done; changing it can help. The runtime's words say\nwhat to change. It stays the last code, because it reads every code this build does not\nknow."
+          }
+        ],
+        "description": "What kind of refusal a refused call is. The set grows: a code a client does not know reads\nas `refused`.",
+        "x-may-grow": true
       },
       "RefusedGraphLinkOnTheWire": {
         "type": "object",
@@ -3617,6 +4452,37 @@
         ],
         "description": "One end of a link a graph tool names: a node by its UUID and one of its ports."
       },
+      "ProjectFilePlaceOnTheWire": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "The file's path in the project, `/`-separated."
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The line, from 1, when the place is narrower than the file."
+          },
+          "column": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0,
+            "description": "The column, from 1, when the place is narrower than the line."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "description": "A place in a project file."
+      },
       "NodeNotRunningBecauseOnTheWire": {
         "oneOf": [
           {
@@ -3641,6 +4507,25 @@
           }
         ],
         "description": "Why a node a refused action reached for does not run."
+      },
+      "SuggestedOperationCall": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "The operation to call, by name."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Its params."
+          }
+        },
+        "required": [
+          "operation",
+          "params"
+        ],
+        "description": "A call a refusal suggests: the arguments `call_operation` takes, or a listed tool by its\nname with these params."
       },
       "ControlContractVersionMismatch": {
         "type": "object",

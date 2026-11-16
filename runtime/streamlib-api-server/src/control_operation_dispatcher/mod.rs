@@ -30,19 +30,20 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
-    CloseViewerToolResult, CreateNodeFileToolResult, CreateProjectToolResult,
-    DeleteProjectToolResult, DependencyTransactionToolResult, DescribeAssetToolResult,
-    DescribeRuntimeToolResult, DescribeStreamActionToolResult, DuplicateProjectToolResult,
-    GraphTransactionToolResult, ImportProjectToolResult, ListAssetsToolResult,
-    ListDependenciesToolResult, ListProjectFilesToolResult, ListProjectNodeTypesToolResult,
-    ListProjectViewsToolResult, ListSamplesToolResult, ListStreamsToolResult, ListedStreamState,
-    LogsToolResult, NodeNotRunningBecauseOnTheWire, OpenViewerToolResult, PausePlaybackToolResult,
-    ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
-    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
-    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
-    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
-    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
-    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    CloseViewerToolResult, ControlOperationRefusalCode, CreateNodeFileToolResult,
+    CreateProjectToolResult, DeleteProjectToolResult, DependencyTransactionToolResult,
+    DescribeAssetToolResult, DescribeRuntimeToolResult, DescribeStreamActionToolResult,
+    DuplicateProjectToolResult, GraphTransactionToolResult, ImportProjectToolResult,
+    ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
+    ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
+    ListStreamsToolResult, ListedStreamState, LogsToolResult, NodeNotRunningBecauseOnTheWire,
+    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
+    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
+    ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
+    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
+    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
+    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
+    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 use uuid::Uuid;
 
@@ -176,10 +177,38 @@ pub(crate) enum ControlOperationAnswer {
 pub(crate) enum ControlOperationRefusal {
     /// The runtime refused the action, naming what it refused in its own words.
     RefusedAction(Box<ProjectActionRefusalOnTheWire>),
-    /// The operation could not be carried out, in the runtime's own words.
+    /// The operation was understood and not carried out, in the runtime's own words.
     Failed(String),
+    /// The runtime could not carry the operation out through no doing of the caller, in its own
+    /// words.
+    RuntimeFailed(String),
     /// The client was built against another contract version than the runtime serves.
     ContractVersionMismatch(ControlContractVersionMismatch),
+}
+
+impl ControlOperationRefusal {
+    /// This refusal of `action` as every door carries it.
+    pub(crate) fn into_the_refusal_on_the_wire(
+        self,
+        action: &str,
+    ) -> ProjectActionRefusalOnTheWire {
+        let runtime_words = self.to_string();
+        match self {
+            Self::RefusedAction(refused) => *refused,
+            Self::Failed(_) | Self::ContractVersionMismatch(_) => {
+                ProjectActionRefusalOnTheWire::of_the_action(
+                    action,
+                    ControlOperationRefusalCode::Refused,
+                    runtime_words,
+                )
+            }
+            Self::RuntimeFailed(_) => ProjectActionRefusalOnTheWire::of_the_action(
+                action,
+                ControlOperationRefusalCode::RuntimeFailed,
+                runtime_words,
+            ),
+        }
+    }
 }
 
 impl std::fmt::Display for ControlOperationRefusal {
@@ -192,7 +221,7 @@ impl std::fmt::Display for ControlOperationRefusal {
                     refused.action, refused.runtime_words
                 )
             }
-            Self::Failed(why) => formatter.write_str(why),
+            Self::Failed(why) | Self::RuntimeFailed(why) => formatter.write_str(why),
             Self::ContractVersionMismatch(mismatch) => mismatch.fmt(formatter),
         }
     }
@@ -572,7 +601,7 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            ControlOperationRefusal::Failed(format!(
+            ControlOperationRefusal::RuntimeFailed(format!(
                 "{method_name} failed: the call did not finish: {join_failure}"
             ))
         })?
@@ -611,7 +640,7 @@ impl ControlOperationDispatcher {
         tokio::task::spawn_blocking(move || action(operations_on_the_loaded_streams.as_ref()))
             .await
             .map_err(|join_failure| {
-                ControlOperationRefusal::Failed(format!(
+                ControlOperationRefusal::RuntimeFailed(format!(
                     "the stream action did not finish: {join_failure}"
                 ))
             })?
@@ -696,7 +725,7 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            ControlOperationRefusal::Failed(format!(
+            ControlOperationRefusal::RuntimeFailed(format!(
                 "{action_name} failed: the transaction did not finish: {join_failure}"
             ))
         })?
@@ -706,15 +735,13 @@ impl ControlOperationDispatcher {
 /// Refuse a client that names another contract version than the runtime serves.
 pub(crate) fn refuse_another_contract_version(
     client_contract_version: Option<u32>,
-) -> Result<(), ControlOperationRefusal> {
+) -> Result<(), ControlContractVersionMismatch> {
     match client_contract_version {
         Some(client_contract_version) if client_contract_version != CONTROL_CONTRACT_VERSION => {
-            Err(ControlOperationRefusal::ContractVersionMismatch(
-                ControlContractVersionMismatch {
-                    client_contract_version,
-                    runtime_contract_version: CONTROL_CONTRACT_VERSION,
-                },
-            ))
+            Err(ControlContractVersionMismatch {
+                client_contract_version,
+                runtime_contract_version: CONTROL_CONTRACT_VERSION,
+            })
         }
         _ => Ok(()),
     }
@@ -811,11 +838,6 @@ pub(crate) fn the_refusal_of_a_reach_for_a_node(
             not_running_because,
             runtime_words,
         } => ControlOperationRefusal::RefusedAction(Box::new(ProjectActionRefusalOnTheWire {
-            action: method_name.to_owned(),
-            refused_operation_index: None,
-            refused_node: None,
-            refused_link: None,
-            refused_field: None,
             not_running_because: Some(match not_running_because {
                 WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
                     NodeNotRunningBecauseOnTheWire::PlaybackStopped
@@ -830,7 +852,11 @@ pub(crate) fn the_refusal_of_a_reach_for_a_node(
                     NodeNotRunningBecauseOnTheWire::NodeFailed
                 }
             }),
-            runtime_words,
+            ..ProjectActionRefusalOnTheWire::of_the_action(
+                method_name,
+                ControlOperationRefusalCode::NodeNotRunning,
+                runtime_words,
+            )
         })),
         refusal => ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}")),
     }

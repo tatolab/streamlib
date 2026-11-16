@@ -31,7 +31,8 @@ impl ControlOperationDispatcher {
         &self,
         client_contract_version: Option<u32>,
     ) -> Result<DiscoverResult, ControlOperationRefusal> {
-        refuse_another_contract_version(client_contract_version)?;
+        refuse_another_contract_version(client_contract_version)
+            .map_err(ControlOperationRefusal::ContractVersionMismatch)?;
         let this_runtime = self
             .operations_on_the_loaded_streams
             .describe_this_runtime();
@@ -54,7 +55,7 @@ impl ControlOperationDispatcher {
             tokio::task::spawn_blocking(move || operations_on_the_loaded_streams.list_streams())
                 .await
                 .map_err(|join_failure| {
-                    ControlOperationRefusal::Failed(format!(
+                    ControlOperationRefusal::RuntimeFailed(format!(
                         "the stream action did not finish: {join_failure}"
                     ))
                 })?;

@@ -71,13 +71,42 @@ test("an answer that does not match the contract rejects naming what does not", 
   }
 });
 
+test("params that do not match reject with the refusal naming where", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/srv/project" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = {
+      refusal_code: "params_do_not_match_schema",
+      action: "open_project",
+      refused_params_pointer: "/project_directory",
+      suggested_call: { operation: "describe_operations", params: { operations: ["open_project"] } },
+      runtime_words: "`open_project`'s params do not match its request: invalid type",
+    };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: -32602, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.equal(rejection.code, -32602);
+      assert.equal(rejection.message, refusal.runtime_words);
+      assert.deepEqual(rejection.refusal, refusal);
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
 test("the runtime's refusal rejects in its own words with the structured refusal", async () => {
   const localApi = await startALocalApiThatAnswersOnlyWhenTold();
   try {
     const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
     const opened = client.open_project({ project_directory: "relative" });
     await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
-    const refusal = { action: "open_project", runtime_words: "`relative` is not an absolute directory" };
+    const refusal = { refusal_code: "refused", action: "open_project", runtime_words: "`relative` is not an absolute directory" };
     localApi.writeOnTheConnection(
       JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
     );

@@ -79,7 +79,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("add_dependency failed: the call did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "add_dependency failed: the call did not finish: {join_failure}"
+            ))
         })?
         .map_err(|refusal| format!("add_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;
@@ -178,7 +180,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("update_dependency failed: the call did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "update_dependency failed: the call did not finish: {join_failure}"
+            ))
         })?
         .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;
@@ -233,7 +237,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("list_dependencies failed: the call did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "list_dependencies failed: the call did not finish: {join_failure}"
+            ))
         })?
         .map_err(|refusal| format!("list_dependencies failed: {refusal}"))?;
         Ok(answered)
@@ -279,7 +285,9 @@ impl ControlOperationDispatcher {
         })
         .await
         .map_err(|join_failure| {
-            format!("remove_dependency failed: the call did not finish: {join_failure}")
+            ControlOperationRefusal::RuntimeFailed(format!(
+                "remove_dependency failed: the call did not finish: {join_failure}"
+            ))
         })?
         .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;

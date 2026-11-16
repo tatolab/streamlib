@@ -170,13 +170,8 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
     let refusal = &not_running_result["structuredContent"]["refusal"];
     assert_eq!(refusal["action"], "open_viewer", "{refusal}");
     assert_eq!(refusal["not_running_because"], "preparing", "{refusal}");
-    assert_eq!(
-        format!(
-            "open_viewer failed: {}",
-            refusal["runtime_words"].as_str().unwrap()
-        ),
-        not_running
-    );
+    assert_eq!(refusal["refusal_code"], "node_not_running", "{refusal}");
+    assert_eq!(refusal["runtime_words"], not_running);
 
     engine
         .engine

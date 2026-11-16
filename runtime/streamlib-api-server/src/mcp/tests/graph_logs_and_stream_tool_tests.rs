@@ -286,13 +286,14 @@ async fn a_stream_action_the_runtime_refuses_is_a_tool_error_in_its_own_words() 
             arguments,
         )
         .await;
-        assert_eq!(body["isError"], true, "{tool_name}: {body}");
+        let refusal = crate::mcp::tests::the_refusal_of_a_tool_result(&body);
         assert_eq!(
-            body["content"][0]["text"],
+            refusal.runtime_words,
             crate::control_plane_stub_support::the_stub_runtime_takes_no_stream_action(action)
                 .to_string(),
             "{tool_name}"
         );
+        assert_eq!(refusal.action, tool_name);
     }
 }
 
