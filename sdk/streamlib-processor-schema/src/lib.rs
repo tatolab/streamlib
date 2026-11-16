@@ -26,7 +26,6 @@ pub use execution_config::ExecutionConfig;
 pub use process_execution::ProcessExecution;
 pub use thread_priority::ThreadPriority;
 
-// Processor schema re-exports
 pub use audio_window_contract::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,
     AudioWindowContract, AudioWindowContractDeclaredValues,

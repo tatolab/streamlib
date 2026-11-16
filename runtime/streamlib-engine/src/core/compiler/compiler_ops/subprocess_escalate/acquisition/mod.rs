@@ -103,10 +103,6 @@ pub(super) fn handle_acquire_pixel_buffer(
     }
 }
 
-/// Acquire a texture on behalf of a helper process: a one-off the registry
-/// holds until the helper releases it, counted against the node's one-off
-/// acquisitions of its shape, or the next frame of a processor output pool,
-/// which the pool holds.
 pub(super) fn handle_acquire_texture(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -194,10 +190,6 @@ pub(super) fn handle_acquire_texture(
     }
 }
 
-/// Acquire a tensor storage buffer on behalf of a helper process: a one-off
-/// the registry holds until the helper releases it, counted against the
-/// node's one-off acquisitions of its shape, or the next frame of a processor
-/// output pool, which the pool holds.
 pub(super) fn handle_acquire_storage_buffer(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -301,12 +293,6 @@ fn allocate_registered_processor_output_slot(
     }
 }
 
-/// Hand out the next frame of one of the helper's processor output pools,
-/// answering the frame's published id.
-///
-/// Only a fresh slot's allocation enters the escalate scope. The pool lock is
-/// never held across it: the helper's teardown drains the pools under that
-/// lock, and can run while another scope holds the gate.
 fn hand_off_processor_output_frame(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,

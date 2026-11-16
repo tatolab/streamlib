@@ -110,14 +110,6 @@ impl PythonGpuSurfaceHandle {
         self.publish_pending_staged_write(python)
     }
 
-    /// A pooled device texture the parent acquired for this helper.
-    ///
-    /// It carries the name a kernel dispatch binds and a downstream
-    /// processor resolves — the texture's memory is not mapped into this
-    /// process, so the CPU accessors reach it over the engine's
-    /// host-visible staging instead — and the owned-memory anchor its
-    /// device-tensor scope and release debt ride, so a tensor outliving the
-    /// handle keeps the pool slot alive.
     pub(in crate::python_processor_context) fn from_helper_acquired_texture(
         acquired: HelperAcquiredTexture,
     ) -> Self {

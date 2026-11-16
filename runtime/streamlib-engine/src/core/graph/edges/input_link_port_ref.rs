@@ -7,8 +7,6 @@ use std::fmt;
 use crate::core::error::Result;
 use crate::core::graph::{LinkDirection, ProcessorUniqueId, cast_exposed_name_to_url_safe};
 
-/// Reference to the input port a link carries into, on a processor this
-/// runtime's own graph holds.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputLinkPortRef {
     processor_id: ProcessorUniqueId,
@@ -31,12 +29,10 @@ impl InputLinkPortRef {
         Self::DIRECTION
     }
 
-    /// The processor the port belongs to.
     pub fn processor_id(&self) -> &ProcessorUniqueId {
         &self.processor_id
     }
 
-    /// The port's own name on that processor.
     pub fn port_name(&self) -> &str {
         &self.port_name
     }
@@ -84,7 +80,6 @@ mod tests {
         assert_eq!(port_ref, back);
     }
 
-    /// A reference renders as its processor and port.
     #[test]
     fn a_reference_renders_as_its_processor_and_port() {
         assert_eq!(

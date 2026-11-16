@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Internal generated processor trait - DO NOT USE DIRECTLY.
 
 use serde_json::Value as JsonValue;
 
@@ -11,14 +10,9 @@ use crate::core::error::Result;
 use crate::core::execution::ExecutionConfig;
 use crate::core::processors::Config;
 
-/// Internal trait implemented by the processor macro.
-///
-/// **DO NOT IMPLEMENT DIRECTLY** - Use the `#[streamlib::sdk::processor]` macro instead.
-/// For custom processor behavior, implement [`Processor`](super::super::Processor).
 pub trait GeneratedProcessor: Send + 'static {
     type Config: Config;
 
-    /// Returns the processor name.
     fn name(&self) -> &str;
 
     fn from_config(config: Self::Config) -> Result<Self>
@@ -42,7 +36,6 @@ pub trait GeneratedProcessor: Send + 'static {
         self.update_config(config)
     }
 
-    /// Returns the execution configuration for this processor.
     fn execution_config(&self) -> ExecutionConfig {
         ExecutionConfig::default()
     }
@@ -51,24 +44,14 @@ pub trait GeneratedProcessor: Send + 'static {
     where
         Self: Sized;
 
-    /// Check if this processor has iceoryx2-based output ports.
     fn has_iceoryx2_outputs(&self) -> bool {
         false
     }
 
-    /// Check if this processor has iceoryx2-based input ports.
     fn has_iceoryx2_inputs(&self) -> bool {
         false
     }
 
-    /// Install host-allocated iceoryx2 resources on this processor
-    /// (issue #894 host-allocates flip).
-    ///
-    /// Called by the host once after `from_config` returns and
-    /// before any connections are wired. Default impl is a no-op
-    /// for processors that declare no input/output ports; the macro
-    /// emits an override that writes the handles into `self.outputs`
-    /// / `self.inputs` for processors that do.
     fn set_iceoryx2_resources(
         &mut self,
         _output_writer: Option<crate::iceoryx2::OutputWriter>,
@@ -77,29 +60,18 @@ pub trait GeneratedProcessor: Send + 'static {
         Ok(())
     }
 
-    /// Borrow the `OutputWriterInner` Arc the processor's output writer
-    /// is wired to, if any. Default `None`; the macro emits an override
-    /// for processors with outputs.
-    ///
-    /// Used by the connection-wiring path to mutate the inner directly
-    /// (add_connection, etc.). The returned Arc is cloned from the
-    /// handle's stored Arc, so it's safe to retain.
     fn iceoryx2_output_writer_inner(
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
-    /// Borrow the `InputMailboxesInner` Arc the processor's input
-    /// mailboxes are wired to, if any. Default `None`; the macro emits
-    /// an override for processors with inputs.
     fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {
         None
     }
 
-    /// Serialize processor-specific runtime state to JSON.
     fn to_runtime_json(&self) -> JsonValue {
         JsonValue::Null
     }
@@ -134,18 +106,12 @@ pub trait GeneratedProcessor: Send + 'static {
         Ok(())
     }
 
-    /// Called once to start a Manual mode processor. Privileged ctx.
-    ///
-    /// Only valid for Manual execution mode. Returns an error for other modes.
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Err(crate::core::Error::Runtime(
             "start() is only valid for Manual execution mode".into(),
         ))
     }
 
-    /// Called to stop a Manual mode processor. Privileged ctx.
-    ///
-    /// Only valid for Manual execution mode. Returns an error for other modes.
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Err(crate::core::Error::Runtime(
             "stop() is only valid for Manual execution mode".into(),

@@ -13,25 +13,14 @@ use crate::core::graph::ProcessorUniqueId;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 
-/// A processor's state together with the signal that it changed.
-///
-/// One value rather than a state behind one lock and a notification beside it:
-/// a waiter reading the state through a separate lock can miss the very
-/// transition it waits for, because the writer publishes and notifies in the
-/// window between that read and the wait.
 pub struct ObservableProcessorState {
     current: Mutex<ProcessorState>,
     changed: Condvar,
-    /// Why the processor is in `Error`, in the words of whatever refused it —
-    /// a `setup()` that returned an error carries that error's text, so a
-    /// caller waiting for the graph is told the reason and not just the state.
     failure_reason: Mutex<Option<String>>,
     /// The capture device whose access was never asked for, when that is why
     /// `setup()` refused.
     capture_device_access_never_asked_for: Mutex<Option<PrivacyGatedCaptureDevice>>,
     helper_process_restarts: Mutex<HelperProcessRestartRecord>,
-    /// What the processor's `process()` raised or returned as an error the
-    /// last time it ran, while it has not run cleanly since.
     process_raising_because: Mutex<Option<String>>,
     /// Why the node, running, is not ready, in its own words, while it says
     /// so; the runtime keeps its outputs flowing meanwhile.
@@ -39,15 +28,11 @@ pub struct ObservableProcessorState {
     state_changes_published_as: Mutex<Option<ProcessorStateChangesPublishedOnItsStreamsTopic>>,
 }
 
-/// The processor and stream each state change is published as a
-/// `ProcessorStateDidChange` of.
 struct ProcessorStateChangesPublishedOnItsStreamsTopic {
     processor_id: ProcessorUniqueId,
     stream: LoadedStreamIdentity,
 }
 
-/// How often a helper-placed processor's helper process has been started again
-/// after dying on its own, and why it last died.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HelperProcessRestartRecord {
     /// New helper processes started since the stream loaded.
@@ -57,7 +42,6 @@ pub struct HelperProcessRestartRecord {
 }
 
 impl ObservableProcessorState {
-    /// A processor state starting at `initial`.
     pub fn new(initial: ProcessorState) -> Self {
         Self {
             current: Mutex::new(initial),
@@ -71,8 +55,6 @@ impl ObservableProcessorState {
         }
     }
 
-    /// From now on, publish each change of the state as a `ProcessorStateDidChange` of
-    /// `processor_id` on `stream`'s topic.
     pub fn publish_each_change_as_a_processor_of(
         &self,
         processor_id: ProcessorUniqueId,
@@ -111,26 +93,18 @@ impl ObservableProcessorState {
         }
     }
 
-    /// The state the processor is in right now.
     pub fn current(&self) -> ProcessorState {
         *self.current.lock()
     }
 
-    /// Move the processor to `state` and wake everything waiting on it.
     pub fn transition_to(&self, state: ProcessorState) {
         self.write_the_state_and_publish_the_change(&mut self.current.lock(), state);
     }
 
-    /// Move the processor to `Error`, keeping `reason` for whoever asks why,
-    /// and wake everything waiting on it.
     pub fn fail_with(&self, reason: impl Into<String>) {
         self.fail_with_reason_and_capture_device(reason.into(), None);
     }
 
-    /// Move the processor to `Error` because its `setup()` returned
-    /// `setup_refusal`, keeping the refusal's text and the capture device it
-    /// names when nobody had asked for that device's access, and wake
-    /// everything waiting on it.
     pub fn fail_with_the_setup_refusal(&self, setup_refusal: &Error) {
         let capture_device_access_never_asked_for = match setup_refusal {
             Error::CaptureDeviceAccessNeverAskedFor { device, .. } => Some(*device),
@@ -153,19 +127,14 @@ impl ObservableProcessorState {
         self.write_the_state_and_publish_the_change(&mut current, ProcessorState::Error);
     }
 
-    /// Why the processor failed, when it failed through [`Self::fail_with`].
     pub fn failure_reason(&self) -> Option<String> {
         self.failure_reason.lock().clone()
     }
 
-    /// The capture device whose access nobody had asked for, when that is why
-    /// the processor's `setup()` refused.
     pub fn capture_device_access_never_asked_for(&self) -> Option<PrivacyGatedCaptureDevice> {
         *self.capture_device_access_never_asked_for.lock()
     }
 
-    /// Note that the processor's helper process died on its own, for
-    /// `exit_reason`.
     pub fn note_a_helper_process_death(&self, exit_reason: String) {
         self.helper_process_restarts.lock().last_exit_reason = Some(exit_reason);
     }
@@ -180,9 +149,6 @@ impl ObservableProcessorState {
         self.helper_process_restarts.lock().clone()
     }
 
-    /// Note how the processor's `process()` last ended: `Some` with what it
-    /// raised, or `None` once it ran cleanly again. The processor keeps running
-    /// either way.
     pub fn note_why_process_is_raising(&self, raising_because: Option<String>) {
         *self.process_raising_because.lock() = raising_because;
     }
@@ -209,9 +175,6 @@ impl ObservableProcessorState {
         self.process_raising_because.lock().clone()
     }
 
-    /// Note whether the node, running, is ready: `Some` with why it is not, or
-    /// `None` once it is. Kept only while the processor sets up, runs or is
-    /// paused.
     pub fn note_why_the_node_is_not_ready(&self, not_ready_because: Option<String>) {
         let current = self.current.lock();
         let mut held = self.not_ready_because.lock();
@@ -227,13 +190,6 @@ impl ObservableProcessorState {
         self.not_ready_because.lock().clone()
     }
 
-    /// Move the processor to `state`, unless it has already failed.
-    ///
-    /// A thread that unwinds after `Error` would otherwise report the state it
-    /// unwound *into* — `Stopped`, indistinguishable from a clean shutdown —
-    /// and lose the only record that anything went wrong. Checked under the
-    /// same lock as the write, so a failure landing concurrently is not
-    /// overwritten either.
     pub fn transition_to_unless_already_failed(&self, state: ProcessorState) {
         let mut current = self.current.lock();
         if *current == ProcessorState::Error {
@@ -242,8 +198,6 @@ impl ObservableProcessorState {
         self.write_the_state_and_publish_the_change(&mut current, state);
     }
 
-    /// Move the processor to `state` only while it is in `only_from`, and wake
-    /// everything waiting on it; whether it moved.
     pub fn transition_to_only_from(
         &self,
         only_from: ProcessorState,
@@ -257,15 +211,6 @@ impl ObservableProcessorState {
         true
     }
 
-    /// Block until the processor's `setup` has resolved, one way or the other,
-    /// giving up at `deadline`. Returns the state it settled on.
-    ///
-    /// `Running` means setup returned; `Error` means it failed. A state still
-    /// [`before setup completed`] is the deadline expiring. A helper-placed
-    /// processor that reads `Restarting` is waited on until its next start
-    /// resolves.
-    ///
-    /// [`before setup completed`]: ProcessorState::is_before_setup_completed
     pub fn wait_until_setup_resolved(&self, deadline: Instant) -> ProcessorState {
         let mut current = self.current.lock();
         while current.is_before_setup_completed() || *current == ProcessorState::Restarting {
@@ -277,32 +222,25 @@ impl ObservableProcessorState {
     }
 }
 
-/// Current state of the processor.
 pub struct StateComponent(Arc<ObservableProcessorState>);
 
 impl StateComponent {
-    /// A processor state starting at `initial`.
     pub fn new(initial: ProcessorState) -> Self {
         Self(Arc::new(ObservableProcessorState::new(initial)))
     }
 
-    /// The state the processor is in right now.
     pub fn current(&self) -> ProcessorState {
         self.0.current()
     }
 
-    /// Move the processor to `state` and wake everything waiting on it.
     pub fn transition_to(&self, state: ProcessorState) {
         self.0.transition_to(state);
     }
 
-    /// Move the processor to `Error` with the reason kept for whoever asks.
     pub fn fail_with(&self, reason: impl Into<String>) {
         self.0.fail_with(reason);
     }
 
-    /// Move the processor to `state` only while it is in `only_from`; whether
-    /// it moved.
     pub fn transition_to_only_from(
         &self,
         only_from: ProcessorState,
@@ -311,7 +249,6 @@ impl StateComponent {
         self.0.transition_to_only_from(only_from, state)
     }
 
-    /// [`ObservableProcessorState::publish_each_change_as_a_processor_of`].
     pub fn publish_each_change_as_a_processor_of(
         &self,
         processor_id: ProcessorUniqueId,
@@ -321,18 +258,11 @@ impl StateComponent {
             .publish_each_change_as_a_processor_of(processor_id, stream);
     }
 
-    /// Share the state with a thread that will drive or observe it.
-    ///
-    /// The shared value outlives the component, which is what lets a waiter
-    /// keep watching a processor across a graph write it does not hold a lock
-    /// for.
     pub fn clone_inner(&self) -> Arc<ObservableProcessorState> {
         Arc::clone(&self.0)
     }
 }
 
-/// The restart record of a helper-placed processor, rendered beside its
-/// state: `restart_count` and `last_exit_reason`.
 pub struct HelperProcessRestartsComponent(pub Arc<ObservableProcessorState>);
 
 impl JsonSerializableComponent for HelperProcessRestartsComponent {
@@ -349,8 +279,6 @@ impl JsonSerializableComponent for HelperProcessRestartsComponent {
     }
 }
 
-/// Why a processor in `Error` failed, rendered beside its state as
-/// `failed_because`: the failure's own words, or `null` while it has not failed.
 pub struct ProcessorFailureReasonComponent(pub Arc<ObservableProcessorState>);
 
 impl JsonSerializableComponent for ProcessorFailureReasonComponent {
@@ -366,9 +294,6 @@ impl JsonSerializableComponent for ProcessorFailureReasonComponent {
     }
 }
 
-/// What a processor's `process()` keeps raising, rendered beside its state as
-/// `process_raising_because`: the raise's own words while `process()` has not
-/// run cleanly since, or `null`.
 pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableProcessorState>);
 
 impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
@@ -441,8 +366,6 @@ mod tests {
         );
     }
 
-    /// Setup failing has to end the wait too, or a graph with one broken
-    /// processor burns the caller's whole timeout before saying so.
     #[test]
     fn a_failed_setup_ends_the_wait() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
@@ -471,9 +394,6 @@ mod tests {
         );
     }
 
-    /// A failure carries its own words: the state alone says a processor is
-    /// broken, the reason says what refused it, and the thread that unwinds
-    /// afterwards leaves both in place.
     #[test]
     fn a_failure_keeps_the_reason_it_failed_for() {
         let state = ObservableProcessorState::new(ProcessorState::Pending);
@@ -494,8 +414,6 @@ mod tests {
         );
     }
 
-    /// A node's not-ready reason renders from `setup()` on until it reports
-    /// ready, and a processor that stops forgets it.
     #[test]
     fn a_not_ready_reason_is_held_while_the_node_runs_and_forgotten_once_it_stops() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
@@ -569,9 +487,6 @@ mod tests {
         );
     }
 
-    /// The thread that unwinds after a failure reports `Stopped` on its way
-    /// out. It must not bury the failure, or a processor whose `start()` failed
-    /// becomes indistinguishable from one that shut down cleanly.
     #[test]
     fn stopping_a_processor_does_not_bury_why_it_stopped() {
         let failed = ObservableProcessorState::new(ProcessorState::Running);
@@ -584,8 +499,6 @@ mod tests {
         assert_eq!(clean.current(), ProcessorState::Stopped);
     }
 
-    /// A pause or a resume moves only a processor whose setup ran: one still
-    /// in setup, or one that failed, keeps the state it is in.
     #[test]
     fn a_transition_only_from_a_state_leaves_every_other_state_alone() {
         let running = ObservableProcessorState::new(ProcessorState::Running);
@@ -605,8 +518,6 @@ mod tests {
         }
     }
 
-    /// A processor that never starts gives the caller back the state it is
-    /// stuck in, which is what turns the timeout into a diagnostic.
     #[test]
     fn an_expired_deadline_reports_the_state_it_gave_up_in() {
         let state = ObservableProcessorState::new(ProcessorState::Pending);
@@ -636,8 +547,6 @@ mod tests {
         assert_eq!(settled, ProcessorState::Running);
     }
 
-    /// `graph` renders a helper-placed processor's restarts beside its state,
-    /// from the same shared state the lifecycle thread writes.
     #[test]
     fn the_restart_record_renders_its_count_and_the_last_exit_reason() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
@@ -664,8 +573,6 @@ mod tests {
         );
     }
 
-    /// `graph` renders why a processor failed beside its state, and nothing
-    /// while it has not failed.
     #[test]
     fn the_failure_reason_renders_only_once_the_processor_has_failed() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
@@ -681,9 +588,6 @@ mod tests {
         );
     }
 
-    /// `graph` renders what a running processor's `process()` raised beside
-    /// its state, keeping the first raise of a run of them, and nothing once a
-    /// call runs cleanly again; the state never leaves `Running`.
     #[test]
     fn a_raise_renders_beside_a_running_state_until_process_runs_cleanly() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Running));

@@ -17,9 +17,6 @@ use super::{
 };
 
 impl HelperProcessGpuExchangeClient {
-    /// Ask the parent for a tensor storage buffer — a one-off this helper owes
-    /// a release, or the next tensor of a processor output pool — then check
-    /// it out.
     pub(crate) fn acquire_storage_buffer(
         self: &Arc<Self>,
         python: Python<'_>,

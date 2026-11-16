@@ -30,7 +30,6 @@ use crate::rive_image_frame::image_frame_payload_descriptor_of_a_rendered_frame;
 use crate::rive_scene_bridge::RiveSceneOnExternalRendererDevice;
 use crate::view_model_data_message::ViewModelDataMessageApplier;
 
-/// The variable a processor interpreter is handed the surface-share socket in.
 const SURFACE_SHARE_SOCKET_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 
 const RENDERED_FRAME_POOL_KEY: &str = "rive_rendered_frames";

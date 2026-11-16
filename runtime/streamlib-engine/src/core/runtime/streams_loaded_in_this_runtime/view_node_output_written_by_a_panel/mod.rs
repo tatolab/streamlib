@@ -133,10 +133,6 @@ impl LoadedStreamInThisRuntime {
         })?
     }
 
-    /// Publish `value` on output `port_name` of the node `find_the_node` finds in the stream's
-    /// graph, handed why a node that has not failed does not run now, answering what it found
-    /// beside the node's name and processor. The stream's graph lock is held across a compile,
-    /// so the write waits off the async workers.
     async fn publish_a_value_on_an_output_of_the_running_node<
         FoundBesideTheNode: Send + 'static,
     >(
@@ -198,8 +194,6 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// The name, family and processor of the running top-level `GraphInput` declaring the Input
-/// `input_name`, matched as its config's `port` casts.
 fn the_running_top_level_graph_input_declaring(
     graph: &Graph,
     stream_id: &str,
@@ -292,7 +286,6 @@ fn the_family_a_graph_input_carries(
         })
 }
 
-/// The name and processor of the running node of a view type whose UUID is `node_id`.
 fn the_running_view_node_of_the_id(
     graph: &Graph,
     node_types: &NodeTypesOneStreamResolves,

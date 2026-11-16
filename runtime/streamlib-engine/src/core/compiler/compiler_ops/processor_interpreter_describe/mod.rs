@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Asking a stream's own interpreter what its node types declare.
-//!
-//! The runtime process never imports a node's module. It starts the same
-//! command a processor interpreter is, with `--describe` and the import paths
-//! or with `--describe-installed-modules`, and reads the one JSON document the
-//! bootstrap prints on its standard output.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -59,15 +53,12 @@ pub(crate) const PROCESSOR_INTERPRETER_DESCRIBE_BOUND: Duration = Duration::from
 /// type's bound: no graph node waits on it, yet every load does.
 pub(crate) const INSTALLED_MODULES_DESCRIBE_BOUND: Duration = Duration::from_secs(15);
 
-/// The bootstrap argument that asks for a describe rather than a processor.
 const DESCRIBE_ARGUMENT: &str = "--describe";
 
 /// The bootstrap argument that asks for a describe of every class installed
 /// distributions declare in the `tatolab.nodes` entry-point group.
 const DESCRIBE_INSTALLED_MODULES_ARGUMENT: &str = "--describe-installed-modules";
 
-/// The variables that name one processor to the interpreter hosting it, none
-/// of which a describe carries.
 const PER_PROCESSOR_ENVIRONMENT_VARIABLES: [&str; 9] = [
     PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE,
     PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
@@ -80,8 +71,6 @@ const PER_PROCESSOR_ENVIRONMENT_VARIABLES: [&str; 9] = [
     ESCALATE_FD_ENV,
 ];
 
-/// What a describe's standard-error lines are logged under, in place of the
-/// processor id a processor interpreter's are.
 const DESCRIBE_STANDARD_ERROR_LOG_LABEL: &str = "processor-interpreter-describe";
 
 /// Why every type a describe the host interrupted was asked for is refused.
@@ -124,12 +113,6 @@ struct NodeTypeTheDescribeRefused {
     refusal: String,
 }
 
-/// Whether `node_type` is one a processor interpreter describes: a
-/// `module:qualname` path that names no built-in.
-///
-/// A path in another grammar — a Rust `crate::module::Type`, or one with no
-/// module at all — names nothing an interpreter could import, so it is left
-/// for the registry to report as unknown.
 pub(crate) fn a_processor_interpreter_describes(node_type: &ProcessorClassImportPath) -> bool {
     if node_type.names_a_built_in_node() {
         return false;
@@ -195,14 +178,6 @@ fn processor_interpreter_describe_command_with_arguments<'a>(
     Ok(command)
 }
 
-/// Describe `import_paths` in one start of the stream's interpreter and
-/// register each into `node_types_of_the_stream` with a constructor that
-/// starts its processor interpreter in `stream_environment`, replacing
-/// whatever an earlier describe into that stream registered.
-///
-/// The describe's process group is registered under the stream's tag, and the
-/// stream's shutdown, or `is_interrupted_by_the_host` reporting true, at any
-/// point refuses them, killing a describe already started.
 pub(crate) fn describe_and_register_node_types_in_a_processor_interpreter(
     node_types_of_the_stream: &NodeTypesOneStreamResolves,
     import_paths: &[ProcessorClassImportPath],
@@ -586,9 +561,6 @@ fn run_a_describe_reading_its_document(
     Ok((describe_document, quoted_standard_error))
 }
 
-/// Describe every class installed distributions declare in `tatolab.nodes`, in
-/// one start of the stream's interpreter, bounded and cut short like
-/// [`describe_node_types_in_a_processor_interpreter_within`].
 pub(crate) fn describe_the_node_types_installed_modules_declare_within(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,

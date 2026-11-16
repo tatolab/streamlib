@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A viewer against a loaded stream read as running without the GPU
-//! context a real start takes: the source node holds the processor
-//! instance a start leaves it with, and nothing compiles.
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 
 use std::time::{Duration, Instant};
@@ -45,8 +42,6 @@ impl ARunningCameraWithNoLinks {
         )
     }
 
-    /// The stream with a node `camera` of the type `import_path`, `P`'s
-    /// processor, running instead of the Records mock.
     fn load_running<P>(import_path: ProcessorClassImportPath) -> Self
     where
         P: crate::core::GeneratedProcessor + 'static,

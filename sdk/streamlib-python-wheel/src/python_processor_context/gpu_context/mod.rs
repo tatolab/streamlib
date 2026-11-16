@@ -34,8 +34,6 @@ pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(failure.to_string())
 }
 
-/// Acquire a texture through a helper's exchange with its parent — a one-off,
-/// or the next frame of `processor_output_pool`.
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "macos")),
     allow(unused_variables, reason = "only the Linux and macOS builds read it")
@@ -82,9 +80,6 @@ fn acquire_texture_through_the_helper_process_exchange(
     Err(gpu_unreachable_from_a_helper_process_error())
 }
 
-/// Acquire a tensor storage buffer through the helper's exchange client: a
-/// one-off, or the next tensor of the processor output pool named by
-/// `processor_output_pool`.
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "macos")),
     expect(

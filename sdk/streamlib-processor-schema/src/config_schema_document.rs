@@ -1,19 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The JSON Schema a processor descriptor carries for its config type.
-//!
-//! One dialect leaves this seam: JSON Schema draft 2020-12 with no `$schema`
-//! key. `schemars` 0.8 emits draft-07, and the conversion is three things:
-//! the meta-schema key and the pointer prefix, which the generator's own
-//! settings decide; the root keyword `definitions`, which `RootSchema`
-//! hard-codes; and a tuple field's positional item schemas, which draft-07
-//! spells as an array-valued `items`.
-//!
-//! A config key's description is the one its `#[description = …]` attribute
-//! declares under `#[processor_config]`, and nothing else: the doc comment
-//! `schemars` reads into a `description` or a `title` is the code's own
-//! documentation and never reaches the document.
 
 use std::borrow::Cow;
 use std::marker::PhantomData;
@@ -27,12 +14,6 @@ use serde_json::Value;
 /// Where a `$ref` points in a 2020-12 document.
 const DEFINITION_POINTER_PREFIX: &str = "#/$defs/";
 
-/// Marks a type usable as a processor's `config =` type, and derives its
-/// schema document.
-///
-/// Carries the `JsonSchema` bound so that a config type without the derive
-/// fails on this trait, whose note names the fix, rather than on a bare
-/// `schemars` bound the author has no path to.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is a processor `config =` type but does not derive `JsonSchema`",
     note = "add `#[derive(streamlib::sdk::schemars::JsonSchema)]` and `#[schemars(crate = \"streamlib::sdk::schemars\")]` to `{Self}`",
@@ -62,8 +43,6 @@ impl<T: schemars::JsonSchema> ProcessorConfigJsonSchema for T {
     }
 }
 
-/// Marks a `#[processor_config]` type whose `Default` fills each key a config
-/// leaves out, and which a node placed with no config runs with.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is a `#[processor_config]` type but does not implement `Default`",
     note = "derive `Default` on `{Self}`, or implement it, so every key a config leaves out is filled from it",
@@ -84,8 +63,6 @@ pub trait ProcessorConfigKeyDescription {
     const DESCRIPTION: &'static str;
 }
 
-/// The schema `#[processor_config]` gives a described key in place of its
-/// type's: `T`'s, carrying the description `D` declares.
 pub struct ProcessorConfigKeyDescribedBy<T: ?Sized, D>(PhantomData<D>, PhantomData<Box<T>>);
 
 impl<T: JsonSchema + ?Sized, D: ProcessorConfigKeyDescription> JsonSchema

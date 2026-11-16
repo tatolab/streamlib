@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Stopping a processor interpreter: giving up on it, the shutdown ladder, and
-//! reclaiming what it leaves behind.
 
 use crate::core::compiler::compiler_ops::processor_interpreter_shutdown_ladder::{
     HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,

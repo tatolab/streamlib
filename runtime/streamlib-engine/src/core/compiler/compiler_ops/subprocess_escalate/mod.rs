@@ -1,22 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Polyglot escalate-on-behalf IPC for Python subprocess host
-//! processors. The subprocess can only see a `GpuContextLimitedAccess`
-//! sandbox; when it needs the privileged `GpuContextFullAccess` surface it
-//! sends an [`EscalateRequest`] to the host over its stdout, the host
-//! executes the operation, and replies with an [`EscalateResponse`] on the
-//! subprocess's stdin. Ops that create resources — registrations, a pool's
-//! growth — run inside [`GpuContextLimitedAccess::escalate`]; per-frame ops —
-//! a dispatch, a batch, a draw, a trace, a surface copy, a pool slot's reuse —
-//! run against the host context under their own locks.
-//!
-//! Wire format is the existing length-prefixed JSON stdio bridge used for
-//! lifecycle commands (see `SubprocessBridge`). Requests and responses are
-//! discriminated by `op` and `result` fields respectively. The shape is
-//! owned by the types in [`super::subprocess_escalate_wire_types`] — their
-//! serde encoding is the agreement with the helper, which builds the same
-//! documents as plain Python dicts.
 
 mod acquisition;
 mod compute;
@@ -370,9 +354,6 @@ impl EscalateParseError {
     }
 }
 
-/// Convenience wrapper used by host processors: parse, dispatch, envelope.
-/// Anything the subprocess sends that carries `rpc: escalate_request` flows
-/// through this single function; lifecycle traffic is handled by the caller.
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,

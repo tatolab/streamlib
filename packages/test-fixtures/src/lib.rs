@@ -1,11 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Crate root for the attribute-macro test fixtures.
-//!
-//! One `mod` arm per file under `processors/`. Adding a fixture there means
-//! adding its arm here — the generator that used to write this file went with
-//! the packaging tools.
 
 pub mod test_fixture_processor_configs;
 

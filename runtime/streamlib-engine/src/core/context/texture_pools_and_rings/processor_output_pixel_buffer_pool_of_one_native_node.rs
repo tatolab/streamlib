@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The output pool a native built-in node publishes its per-frame pixel
-//! buffers from: the node's own count, under the processor output pool's cap,
-//! over slots it borrows from the runtime's shared pixel-buffer pool. Memory
-//! stays the runtime's; only the count is the node's. At the pool's teardown
-//! the memory goes back: each slot nothing holds is freed, and each held one
-//! returns to the shared ring to be freed once let go.
 
 use std::sync::{Arc, OnceLock};
 
@@ -57,9 +51,6 @@ pub struct ProcessorOutputPixelBufferPoolOfOneNativeNode {
 }
 
 impl ProcessorOutputPixelBufferPoolOfOneNativeNode {
-    /// An empty pool for the node `processor_id_of_the_owning_node` running
-    /// in `loaded_stream_the_owning_node_runs_in`, borrowing from
-    /// `shared_pixel_buffer_pool_manager`.
     pub(in crate::core::context) fn new(
         processor_id_of_the_owning_node: &str,
         loaded_stream_the_owning_node_runs_in: Option<LoadedStreamTag>,

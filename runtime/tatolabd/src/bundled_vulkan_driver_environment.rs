@@ -1,15 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Naming the Vulkan driver the lend carries to the Vulkan loader.
-//!
-//! A stock Mac has no Vulkan driver, and neither has a Linux machine with no
-//! GPU driver installed, so the lend carries one and its ICD manifest in its
-//! bundled Vulkan driver directory: MoltenVK on macOS, Mesa's lavapipe on
-//! Linux. The same rule as
-//! `tatolab/runtime/_bundled_vulkan_driver.py`, which a processor interpreter
-//! runs again on the environment it inherits — so the manifest is named by its
-//! canonical path, and naming it twice adds nothing.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};

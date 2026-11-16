@@ -151,7 +151,6 @@ impl Drop for StepProgressCallbackInFlight<'_> {
     }
 }
 
-/// A processor node's [`StepProgressOfOneNode`], shared with its runner.
 #[derive(Debug, Default, Clone)]
 pub struct StepProgressOfOneNodeComponent(pub Arc<StepProgressOfOneNode>);
 

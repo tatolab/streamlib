@@ -146,11 +146,6 @@ impl VulkanColorConverter {
         Ok(kernel)
     }
 
-    /// [`PixelBuffer`](crate::core::rhi::PixelBuffer)-shape source
-    /// variant — bind a pixel-shaped buffer as the SSBO. Used by
-    /// camera processors that already hold a [`PixelBuffer`] wrapper
-    /// (e.g. V4L2-imported DMA-BUF surfaces wrapped as
-    /// [`PixelBuffer`]).
     pub(crate) fn prepare_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,

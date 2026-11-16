@@ -9,7 +9,6 @@ use std::os::fd::OwnedFd;
 
 use super::JsonSerializableComponent;
 
-/// Channel to signal processor shutdown.
 pub struct ShutdownChannelComponent {
     pub sender: Sender<()>,
     pub receiver: Option<Receiver<()>>,

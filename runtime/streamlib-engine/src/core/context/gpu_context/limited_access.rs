@@ -129,23 +129,6 @@ impl GpuContextLimitedAccess {
         )
     }
 
-    /// Serialized escalation to full GPU capability. Hands the
-    /// closure a [`GpuContextFullAccess`] scoped to its body, with
-    /// the host's escalate gate held for the duration; after the
-    /// closure returns the gate releases and the device waits idle.
-    ///
-    /// This is the single primitive for GPU resource-creation work
-    /// outside `setup()` — used by the compiler to run each
-    /// processor's setup() and by running processors that need to
-    /// reconfigure (acquire a new video session, etc.).
-    ///
-    /// Acquires the gate, constructs a `GpuContextFullAccess`, runs
-    /// the closure, then waits device idle and releases the gate. A
-    /// closure panic still unwinds; the release fires through a guard
-    /// so the gate never leaks.
-    ///
-    /// Closure failure returns the closure's error; on closure
-    /// success a follow-up `wait_device_idle` error is propagated.
     pub fn escalate<F, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
@@ -196,9 +179,6 @@ impl GpuContextLimitedAccess {
     }
 }
 
-// Thread-local escalation rate tracker. Each processor runs `process()` on a
-// dedicated worker thread, so per-thread counters approximate per-processor
-// escalation rates. Sustained rate above the threshold fires `tracing::warn!`.
 std::thread_local! {
     static ESCALATION_TIMESTAMPS_NS: std::cell::RefCell<std::collections::VecDeque<u64>> =
         std::cell::RefCell::new(std::collections::VecDeque::with_capacity(16));

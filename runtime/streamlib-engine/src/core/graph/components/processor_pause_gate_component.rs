@@ -8,13 +8,6 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 
-/// Lock-free pause gate for processors.
-///
-/// Allows pausing individual processors without blocking. The gate is checked
-/// at multiple points (thread runner, link writers/readers) to prevent
-/// unnecessary processing when paused.
-///
-/// This is an ECS component attached to processor entities.
 pub struct ProcessorPauseGateComponent(Arc<AtomicBool>);
 
 impl ProcessorPauseGateComponent {
@@ -23,7 +16,6 @@ impl ProcessorPauseGateComponent {
         Self(Arc::new(AtomicBool::new(false)))
     }
 
-    /// Returns true if the processor is currently paused.
     pub fn is_paused(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
@@ -38,12 +30,10 @@ impl ProcessorPauseGateComponent {
         self.0.store(paused, Ordering::Release);
     }
 
-    /// Pause the processor.
     pub fn pause(&self) {
         self.set_paused(true);
     }
 
-    /// Resume the processor.
     pub fn resume(&self) {
         self.set_paused(false);
     }

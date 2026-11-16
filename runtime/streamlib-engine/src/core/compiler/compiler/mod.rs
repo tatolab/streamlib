@@ -59,7 +59,6 @@ use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
-/// Compiles graph changes into running processor state.
 pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)
     graph: Arc<RwLock<Graph>>,
@@ -68,8 +67,6 @@ pub(crate) struct Compiler {
     /// Held for the whole of a commit: two batches compiling at once would
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
-    /// Processor threads a removal abandoned. Each holds the engine alive
-    /// beneath it until it returns, so teardown asks which still run.
     abandoned_processor_threads: Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
 }
 
@@ -99,8 +96,6 @@ impl Compiler {
         }
     }
 
-    /// The processors whose threads a removal abandoned and that have not
-    /// returned since.
     pub(crate) fn processor_threads_abandoned_and_still_running(
         &self,
     ) -> Vec<ProcessorDisplayNameAndId> {
@@ -164,13 +159,6 @@ impl Compiler {
         )
     }
 
-    /// Compile `operations` against `graph_arc`, then tell the runtime's
-    /// publisher the stream compiled.
-    ///
-    /// A removal whose thread outlived its budget still removes the processor
-    /// and lets the rest of the batch compile; the call then fails naming it.
-    /// Each reader a promotion names learns how it ended, so its host stops
-    /// waiting to start the helper that replaces the one a function node crashed.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
@@ -231,11 +219,6 @@ impl Compiler {
         let mut plan = the_plan_these_operations_make(&graph_arc, operations);
         let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan);
 
-        // A processor removal cascades its incident links out of the graph
-        // (petgraph `remove_node`), so a link queued for wiring against a
-        // processor this same batch removes would vanish before the WIRE
-        // phase and surface a spurious LinkNotFound. Drop those doomed
-        // link-adds now, before any phase runs.
         {
             let graph = graph_arc.read();
             plan.drop_link_adds_into_removed_processors(&graph);
@@ -297,9 +280,6 @@ impl Compiler {
         the_stream_the_compile_belongs_to
             .publish_on_this_streams_topic(RuntimeEvent::CompilerWillCompile);
 
-        // =====================================================================
-        // 2. Handle removals FIRST (before adding new processors)
-        // =====================================================================
         let abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> = if !plan
             .links_to_remove
             .is_empty()
@@ -311,7 +291,6 @@ impl Compiler {
                 plan.links_to_remove.len()
             );
 
-            // Unwire links first (before removing processors)
             for link_id in &plan.links_to_remove {
                 if unwire_and_remove_a_link(&graph_arc, link_id, the_stream_the_compile_belongs_to)?
                 {
@@ -405,9 +384,6 @@ impl Compiler {
             tracing::debug!("[{}] Completed", CompilePhase::Prepare);
         }
 
-        // =====================================================================
-        // 4. Phase 2: SPAWN - Spawn processor threads
-        // =====================================================================
         if !processors_to_build.is_empty() {
             tracing::debug!("[{}] Starting", CompilePhase::Spawn);
             for proc_id in &processors_to_build {
@@ -417,9 +393,6 @@ impl Compiler {
             tracing::debug!("[{}] Completed", CompilePhase::Spawn);
         }
 
-        // =====================================================================
-        // 5. Wait for all processors to signal READY (instances attached)
-        // =====================================================================
         for (proc_id, handle) in &barrier_handles {
             tracing::trace!("[{}] Waiting for READY signal", proc_id);
             if handle.ready_receiver.recv().is_err() {
@@ -474,9 +447,6 @@ impl Compiler {
             record_each_promotion_on_its_nodes_metrics(&mut graph_arc.write(), promotion_planned);
         }
 
-        // =====================================================================
-        // 7. Signal all processors to CONTINUE (wiring complete, run setup)
-        // =====================================================================
         for (proc_id, handle) in barrier_handles {
             tracing::trace!("[{}] Signaling CONTINUE", proc_id);
             if handle.continue_sender.send(()).is_err() {
@@ -871,12 +841,6 @@ fn the_plan_these_operations_make(
     plan
 }
 
-/// Plan each promotion `plan` holds against `graph_arc`, adding the nodes it
-/// moves to `plan`'s processors to build and their links to its links to wire.
-///
-/// A promotion is planned only once it claims the request its reader's host
-/// still waits on; a refused one settles that reader alone, and the rest of
-/// the batch compiles.
 fn plan_every_function_node_promotion(
     graph_arc: &RwLock<Graph>,
     plan: &mut CompilationPlan,

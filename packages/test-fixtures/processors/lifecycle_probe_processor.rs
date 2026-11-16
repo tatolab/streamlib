@@ -1,23 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Lifecycle-probe processor fixture.
-//!
-//! ContinuousProcessor whose lifecycle hooks (`setup`, `process`,
-//! `on_pause`, `on_resume`, `teardown`) each append a single marker
-//! line to `config.output_path`. An integration test parses the file
-//! to assert each hook dispatched correctly.
-//!
-//! `config.max_iterations` caps the number of `PROCESS:n` lines
-//! the probe will append — once the counter hits the cap the
-//! `process()` body becomes a no-op (still returns Ok). Keeps the
-//! file size bounded so the test reads a stable known content
-//! after a sleep.
-//!
-//! What this fixture locks: regressions in `process`, `on_pause`, or
-//! `on_resume` dispatch either surface as missing marker lines or the
-//! hooks fire on the wrong thread / wrong order. Smoke-only — the lines
-//! are observed for presence, not pixel correctness or timing.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

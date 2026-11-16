@@ -10,10 +10,6 @@ use crate::core::graph::{
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::LoadedStreamIdentity;
 
-/// Attach infrastructure components to a processor node, its pause gate
-/// closed while its stream is paused, and publish each change of its state on
-/// `the_stream_the_processor_belongs_to`'s topic from its move to `Idle` on.
-/// Returns a barrier handle for coordinating with the processor thread.
 pub(crate) fn prepare_processor(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
@@ -26,10 +22,8 @@ pub(crate) fn prepare_processor(
         .first_mut()
         .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{}' not found", proc_id)))?;
 
-    // Create barrier for synchronization with processor thread
     let (barrier_component, barrier_handle) = ProcessorReadyBarrierComponent::new();
 
-    // Attach infrastructure components (NO ProcessorInstanceComponent - thread creates it)
     node_mut.insert(barrier_component);
     node_mut.insert(ShutdownChannelComponent::new());
     let pause_gate = ProcessorPauseGateComponent::new();
@@ -89,11 +83,6 @@ mod tests {
             .is_paused()
     }
 
-    /// A processor a compile adds while its stream is paused starts paused,
-    /// and one added while it runs starts open.
-    ///
-    /// Fail-without-fix: open every gate at prepare, and a processor a
-    /// paused stream compiles runs past the pause.
     #[test]
     fn a_processor_prepared_while_its_stream_is_paused_starts_paused() {
         assert!(the_pause_gate_a_processor_is_prepared_with_while_its_graph_is(GraphState::Paused));

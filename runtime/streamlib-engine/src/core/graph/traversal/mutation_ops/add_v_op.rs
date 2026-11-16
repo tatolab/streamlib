@@ -17,25 +17,7 @@ use crate::core::graph::{
 use crate::core::processors::{NodeTypesOneStreamResolves, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
-    /// Add a new processor node to the graph, named by `the_name_a_new_node_takes`.
-    ///
-    /// The node carries a [`StateComponent`] from here on — `Pending`, or
-    /// `Error` on a registry miss.
-    ///
-    /// A built-in that moved to a module, and a config the node's type would
-    /// not take, are refused with nothing added.
-    ///
-    /// On registry miss, the node is still added with empty ports. The caller
-    /// (typically `add_processor_impl`) should detect this and surface
-    /// `Error::UnknownProcessorType`. Leaving the failed node in the graph
-    /// gives API consumers (`GET /api/graph`) visibility of what failed and
-    /// why — runtime-dynamic systems prefer "load-and-mark-failed" over
-    /// "silently-skip" so observability survives the misconfiguration.
     pub fn add_v(self, spec: ProcessorSpec) -> Result<ProcessorTraversalMut<'a>> {
-        // Gated on `port_info` presence — every registered processor has an
-        // entry (subprocess-only descriptors register empty port lists), so
-        // this resolves any registered type and misses only a
-        // genuinely-unregistered one.
         let node_types = self.node_types_this_stream_resolves;
         let resolved_ports = node_types.port_info(&spec.name);
 
@@ -114,10 +96,6 @@ impl<'a> TraversalSourceMut<'a> {
 
         let node_idx = self.graph.add_node(node);
 
-        // Attached here rather than when the compiler prepares the node, so a
-        // processor has an observable state for its whole life in the graph:
-        // a reader waiting for the graph to come up can hold every processor's
-        // state before `start()` has prepared any of them.
         if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
             let state = StateComponent::new(if registry_miss {
                 ProcessorState::Error
@@ -145,9 +123,6 @@ impl<'a> TraversalSourceMut<'a> {
 }
 
 impl TraversalSourceMut<'_> {
-    /// Rename the node `processor_id` to `requested_name` cast, answering the cast; refused
-    /// when another node or a graph-only node holds that name, or a config reference names
-    /// the node by its current name.
     pub fn rename_v(
         self,
         processor_id: &ProcessorUniqueId,

@@ -8,7 +8,6 @@ use serde_json::Value as JsonValue;
 use super::JsonSerializableComponent;
 use crate::core::compiler::ProcessorThreadKind;
 
-/// Thread handle for dedicated-thread processors.
 pub struct ThreadHandleComponent {
     pub join_handle: JoinHandle<()>,
     pub kind: ProcessorThreadKind,

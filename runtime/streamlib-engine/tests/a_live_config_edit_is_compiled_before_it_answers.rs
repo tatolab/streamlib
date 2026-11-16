@@ -1,10 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `set_node_config` applied to a running stream answers only once its compile has run: the
-//! graph holds a configuration the running processor took as soon as the edit answers, and a
-//! configuration the running processor refuses is refused by the edit, the node keeping the
-//! configuration it held.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,9 +15,6 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 use streamlib_project_repository::StreamGraphOperation;
 use uuid::Uuid;
 
-/// The one setting [`FrameWidthTakingTestProcessor`] takes. A `u32` publishes no maximum in
-/// its schema, so a width past `u32::MAX` passes the schema and is refused only by the
-/// running processor.
 #[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
@@ -42,8 +35,6 @@ impl streamlib_engine::ManualProcessor for FrameWidthTakingTestProcessor::Proces
     }
 }
 
-/// A started stream holding one [`FrameWidthTakingTestProcessor`] at `frame_width` 640, the
-/// project directory and runner it lives in, and the node's UUID.
 fn a_running_stream_with_a_frame_width_taking_node() -> (
     tempfile::TempDir,
     Arc<Runner>,

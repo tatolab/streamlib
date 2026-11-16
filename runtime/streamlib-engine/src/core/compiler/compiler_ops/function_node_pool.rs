@@ -25,15 +25,12 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorSpec;
 
-/// The import path the pool's helper loads, which builds the processor it
-/// runs from the pool's config.
 pub(crate) const FUNCTION_NODE_POOL_NODE_TYPE: &str =
     "tatolab.runtime._function_node_pool:FunctionNodePool";
 
 /// How often the pool evaluates every island it carries.
 pub(crate) const FUNCTION_NODE_POOL_INTERVAL_MS: u32 = 10;
 
-/// The name the pool's processor class is known by in the catalog.
 const FUNCTION_NODE_POOL_SHORT_NAME: &str = "FunctionNodePool";
 
 /// The import path the stream's function node pool is registered under.
@@ -156,12 +153,6 @@ pub(crate) fn the_function_node_pool_of(graph: &Graph) -> Option<ProcessorUnique
         .map(|node| node.id.clone())
 }
 
-/// Carry each of `links_to_add` whose reader cannot evaluate its island
-/// through the stream's pool, adding the pool to `processors_to_add` when the
-/// stream has none yet and replacing each carried link with its two links.
-///
-/// Refused by name, changing nothing, when the pool already runs, since a
-/// running pool is not re-islanded in this release.
 pub(crate) fn carry_each_island_its_reader_cannot_evaluate_through_the_function_node_pool(
     graph: &mut Graph,
     processors_to_add: &mut Vec<ProcessorUniqueId>,

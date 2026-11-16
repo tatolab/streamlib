@@ -3,8 +3,6 @@
 
 use super::*;
 
-/// The guard is per thread: a processor's thread opts out of inline
-/// commits and no other thread is affected by it.
 #[test]
 fn a_processor_execution_thread_never_commits_inline_and_other_threads_still_do() {
     assert!(this_thread_may_commit_inline());

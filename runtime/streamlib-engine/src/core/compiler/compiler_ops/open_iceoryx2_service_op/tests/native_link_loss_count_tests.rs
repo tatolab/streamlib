@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Links between engine-placed processors: notification and the losses each end renders.
 
 use super::*;
 

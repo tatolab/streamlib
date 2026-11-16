@@ -1,17 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Keeps `tatolab` a PEP 420 namespace package, in the tree and in the lend.
-//!
-//! A processor interpreter finds `tatolab.runtime` in the runtime unit's lend
-//! directory and `tatolab.stream` in the stream's own venv. Python merges the
-//! two `tatolab/` directories only while neither holds an `__init__.py`: one
-//! regular `tatolab` package anywhere on the path shadows every other portion,
-//! and the interpreter then cannot import whichever half it hid.
-//!
-//! Two scan roots. The repository's files, through `git ls-files` like every
-//! other gate. And the lend `cargo xtask build-runtime` lays out under
-//! `target/`, which git ignores, so it is walked directly when it exists.
 
 use crate::build_runtime::runtime_unit_lend_directory_in_the_workspace;
 use anyhow::{Context, Result};

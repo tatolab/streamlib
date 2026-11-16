@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The source side of a link: opening its channel's publisher, the reserved slot the runtime reads, releasing it, and wiring the source processor.
 
 use std::sync::Arc;
 
@@ -357,12 +356,6 @@ pub(super) fn release_the_source_side_of_a_link(
     }
 }
 
-/// Install (once) the source's single channel publisher, append this link's
-/// destination notifier onto the Rust source's [`OutputWriterInner`], and
-/// publish its loss counts onto its graph node. Hands back that output writer,
-/// or `None` for a processor that holds none.
-///
-/// [`OutputWriterInner`]: crate::iceoryx2::OutputWriterInner
 pub(super) fn wire_rust_source(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -393,14 +386,6 @@ pub(super) fn wire_rust_source(
     Ok(Some(output_inner))
 }
 
-/// Record this link's source-side wiring on a processor whose transport lives
-/// out of process, so it opens its own channel publisher + destination notifier
-/// from the envelope. One entry per link — the far side installs the single
-/// publisher once (keyed by source port) and appends a notifier per entry.
-///
-/// Hands back the cell this end's answer will land in, or `None` where the
-/// entry rides the far side's startup envelope instead and its `ready`
-/// confirms it.
 pub(super) fn wire_subprocess_source(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,

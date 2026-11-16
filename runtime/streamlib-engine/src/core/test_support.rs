@@ -1,15 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Engine-internal test fixtures shared across `#[cfg(test)]` modules.
-//!
-//! The TestMock processor types live here so engine tests can drive
-//! graph + compiler code without depending on any external package's
-//! processors. The `#[processor]` macro never auto-registers; tests
-//! register the mocks explicitly via [`ensure_test_mocks_registered`].
-//!
-//! [`CapturedTracingWarnings`] is the one warning-capture layer every module
-//! asserts a log line against.
 
 use std::fmt::Write;
 use std::sync::{Arc, Mutex, Once};
@@ -22,7 +13,6 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 #[path = "../../tests/support/rig_only_capability_skip.rs"]
 pub(crate) mod rig_only_capability_skip;
 
-/// Mock processor with two input ports + two output ports.
 #[crate::processor(
     execution = manual,
     input("in1", delivery_profile = "newest", family = Records),
@@ -53,7 +43,6 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
     }
 }
 
-/// Mock processor with only output ports.
 #[crate::processor(
     execution = manual,
     output("out1", family = Records),
@@ -107,7 +96,6 @@ impl crate::core::ManualProcessor for MockChannelsSourceProcessor::Processor {
     }
 }
 
-/// Mock processor with only input ports.
 #[crate::processor(
     execution = manual,
     input("in1", delivery_profile = "newest", family = Records),
@@ -136,8 +124,6 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     }
 }
 
-/// Mock processor whose one input port reads `ordered`, beside the `newest`
-/// ports every other input mock declares.
 #[crate::processor(
     execution = manual,
     input("in1", delivery_profile = "ordered", family = Records),
@@ -165,9 +151,6 @@ impl crate::core::ManualProcessor for MockOrderedInputOnlyProcessor::Processor {
     }
 }
 
-/// Mock processor with only input ports, waking on upstream writes rather
-/// than driving itself — the one execution mode that consumes the link
-/// notifications its listener receives.
 #[crate::processor(
     execution = reactive,
     input("in1", delivery_profile = "newest", family = Records),
@@ -358,10 +341,6 @@ impl crate::core::ManualProcessor for MockSourceRefusingAnAccessNobodyAskedFor::
     }
 }
 
-/// Register all engine-internal test mock processors with the global
-/// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
-/// fixture that builds a graph against `lookup_registered_ident` or
-/// drives the compiler against a `ProcessorSpec`.
 pub(crate) fn ensure_test_mocks_registered() {
     static REGISTER: Once = Once::new();
     REGISTER.call_once(|| {
@@ -381,7 +360,6 @@ pub(crate) fn ensure_test_mocks_registered() {
     });
 }
 
-/// Add a [`MockOutputOnlyProcessor`] node to `graph`; its processor id.
 pub(crate) fn add_mock_output_only(graph: &mut crate::core::graph::Graph) -> String {
     add_a_mock_node(
         graph,
@@ -389,7 +367,6 @@ pub(crate) fn add_mock_output_only(graph: &mut crate::core::graph::Graph) -> Str
     )
 }
 
-/// Add a [`MockInputOnlyProcessor`] node to `graph`; its processor id.
 pub(crate) fn add_mock_input_only(graph: &mut crate::core::graph::Graph) -> String {
     add_a_mock_node(graph, MockInputOnlyProcessor::processor_class_import_path())
 }

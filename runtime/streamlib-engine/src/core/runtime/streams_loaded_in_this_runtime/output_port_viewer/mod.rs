@@ -200,8 +200,6 @@ impl LoadedStreamInThisRuntime {
         let port_name = port_name.to_string();
         let why_a_node_that_has_not_failed_does_not_run =
             self.why_a_node_of_this_stream_that_has_not_failed_does_not_run();
-        // A stream's graph lock is held across a compile, which may take a
-        // processor's whole setup, so the open waits off the async workers.
         let viewer_held_open = tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 let (node_name, viewer_reads, source_side) =

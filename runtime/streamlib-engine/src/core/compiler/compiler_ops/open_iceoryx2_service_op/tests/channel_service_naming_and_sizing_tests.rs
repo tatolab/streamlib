@@ -5,11 +5,6 @@
 
 use super::*;
 
-/// The channel service name a link's source output port publishes to is
-/// source-centric (`{source}/{port}`), NOT destination-centric: channel
-/// identity keys on the source only.
-/// Mentally revert to `streamlib/{dest}` and this fails — the derived name is
-/// a pure function of the source processor id + output port.
 #[test]
 fn channel_service_name_is_source_port_shaped() {
     let name = channel_service_name(&OutputLinkPortRef::new("Pabc123", "video_out"))
@@ -277,9 +272,6 @@ fn a_native_destination_knows_each_link_by_its_channel() {
     );
 }
 
-/// A source processor that is gone makes releasing the side the runtime's
-/// publisher held open a no-op, and the hold never kept it alive; one
-/// still there is told to drop its side.
 #[test]
 fn a_dead_source_processor_makes_releasing_the_publishers_source_side_a_no_op() {
     for source_processor_still_there in [true, false] {

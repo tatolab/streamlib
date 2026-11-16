@@ -1,14 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Minimal `extern "C"` shims into CoreVideo + IOSurface frameworks.
-//!
-//! The screen-capture processor's ScreenCaptureKit callback receives
-//! `CVPixelBuffer` handles and walks them down to the backing
-//! `IOSurface` so the engine's `GpuContext::blit_copy_iosurface` path
-//! can stage the frame into a pooled `PixelBuffer`. These declarations
-//! are everything the processor uses — duplicated here rather than
-//! shared via SDK pollution.
 
 use std::ffi::c_void;
 

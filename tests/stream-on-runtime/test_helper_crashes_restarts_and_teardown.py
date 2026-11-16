@@ -53,7 +53,6 @@ pytestmark = pytest.mark.requires_gpu
 # is what separates "the ladder ran" from "the thirty-second callback did".
 LADDER_BUDGET_SECONDS = 15.0
 
-#: How `tatolabd` refuses a processor whose helper exited during its setup.
 HELPER_DIED_SETTING_UP_LOG_LINE_FRAGMENT = "its helper process died before it finished setting up"
 
 #: A build id no build of this checkout mints: its nonce is all zeros.
@@ -306,16 +305,6 @@ def test_a_stateful_function_node_carries_its_state_through_a_helper_crash_and_a
 
 
 def test_no_helper_survives_the_app(start_tatolabd_running_stream: StartTatolabdRunningStream):
-    """`tatolabd` exiting means every helper was reaped.
-
-    Asserted against the helpers' own pids, which `tatolabd` logs as it starts
-    each one. Its process group cannot answer this: every helper leads a group
-    of its own — that is what keeps a terminal Ctrl-C from reaching them
-    directly — so an assertion on `tatolabd`'s group passes over a leak.
-
-    A survivor holds this processor's iceoryx2 ports open, and the next run
-    fails to open them — which reads as a transport bug rather than a leak.
-    """
     tatolabd = run_until_marker_then_interrupt(
         start_tatolabd_running_stream, reaped_labelled_source_into_sink, "SINK_PID"
     )
@@ -395,11 +384,6 @@ def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
 def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """A processor's descendants die with it.
-
-    Fail-without-fix: the kills target the helper's pid, the worker outlives
-    `tatolabd` holding whatever it inherited, and this finds it still running.
-    """
     tatolabd = run_until_marker_then_interrupt(
         start_tatolabd_running_stream, one_probe_forking_a_worker_that_outlives_it, "WORKER_PID"
     )
@@ -414,17 +398,6 @@ def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
 def test_a_crashed_helper_is_restarted_in_a_new_process_and_the_pipeline_keeps_running(
     start_tatolabd_running_stream: StartTatolabdRunningStream,
 ):
-    """The owner's crash policy: surface, restart, keep running.
-
-    A processor that takes its own process down mid-run is reported, a new
-    helper process takes its place after a backoff, and the rest of the stream
-    is unaffected. What notices is the Manual loop's hundred-millisecond poll
-    asking the process itself; the bridge reader seeing EOF is the second
-    signal, and a descendant holding that socket defers it indefinitely.
-
-    Fail-without-fix: break the poll and the death goes unreported until
-    shutdown; latch the death and no second helper ever starts.
-    """
     tatolabd = start_tatolabd_running_stream(dies_abruptly_beside_a_survivor_pair)
     first_helper_pid = tatolabd.await_marker("ABOUT_TO_DIE")["pid"]
     death_line = tatolabd.await_stderr_containing(
@@ -438,8 +411,6 @@ def test_a_crashed_helper_is_restarted_in_a_new_process_and_the_pipeline_keeps_r
     )
     restarted_helper_pid = tatolabd.await_marker("ABOUT_TO_DIE", occurrence=2)["pid"]
     assert restarted_helper_pid != first_helper_pid, "a restart is a new helper process"
-    # The survivors were already producing before the crash and must still be
-    # producing after it — the stream is not brought down with one processor.
     tatolabd.await_marker("SINK_PID", occurrence=sink_reports_before_the_death_was_surfaced + 1)
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -448,22 +419,6 @@ def test_a_crashed_helper_is_restarted_in_a_new_process_and_the_pipeline_keeps_r
 def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds(
     start_tatolabd_running_stream: StartTatolabdRunningStream, tmp_path: Path
 ):
-    """The whole handshake through a real `tatolabd`: it hands its build id
-    over, the child compares it with its own and refuses on raw stderr, and the
-    processor's start is refused by name carrying what the child wrote — the
-    only place an operator reads which two builds disagreed.
-
-    The child is made to see another build the one way a test can reach it
-    before `main()` runs: a `sitecustomize` in the stream's project directory —
-    on the child's `PYTHONPATH` — rewrites the id `tatolabd` handed it, which is
-    what a stale `tatolab.runtime` amounts to from the check's side. Describing
-    sets no `STREAMLIB_ENTRYPOINT`, so the load itself is untouched. The id it
-    rewrites is recorded first: `tatolabd`'s, which the runtime unit's lend
-    shares.
-
-    Fail-without-fix: drop the stderr tail from the refusal and the refusal
-    names the processor but neither build.
-    """
     child_startup_directory = tmp_path / "stale-build-project"
     child_startup_directory.mkdir()
     handed_engine_build_id_record = tmp_path / "engine-build-id-tatolabd-handed-over"

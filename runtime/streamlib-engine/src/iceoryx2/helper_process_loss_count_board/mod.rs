@@ -72,7 +72,6 @@ pub(super) fn output_port_keys(
 pub struct InboundLinkLossCountBoardSlotAndWiringGeneration {
     /// The slot's index in the board's inbound-link section.
     pub slot: usize,
-    /// The wiring's generation, never repeated for the processor's life.
     pub wiring_generation: u64,
 }
 

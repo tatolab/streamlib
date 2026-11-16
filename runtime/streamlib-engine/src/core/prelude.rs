@@ -10,7 +10,6 @@ pub use crate::core::{
     // Graph
     graph::{LinkUniqueId, ProcessorUniqueId},
 
-    // Processor traits (mode-specific)
     processors::{ContinuousProcessor, ManualProcessor, ReactiveProcessor},
 
     // Runtime

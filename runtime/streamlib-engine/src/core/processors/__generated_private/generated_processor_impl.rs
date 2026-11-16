@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Object-safe wrapper for GeneratedProcessor - DO NOT USE DIRECTLY.
 
 use std::sync::Arc;
 
@@ -32,9 +31,6 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         answer_cell: Arc<OutOfProcessLinkWireReply>,
     ) -> Result<()>;
 
-    /// Ask the far side to drop the port it opened for one link being
-    /// disconnected, and stop waiting on that link's answer. `local_port_name`
-    /// is the port on the processor this far side hosts.
     fn tell_the_far_side_a_link_was_unwired(
         &self,
         port_direction: crate::core::PortDirection,
@@ -382,16 +378,6 @@ impl FunctionNodeCallUnderWayInTheFarSide {
     }
 }
 
-/// One out-of-process processor's link wiring, shared between the host of its
-/// far side and its graph node, which is where the compiler op reaches it.
-///
-/// The far side reads the links recorded before its setup began as the `ports`
-/// payload of its setup command and opens its own publishers, subscribers and
-/// notifiers from them; every later link is handed over on its own. It also
-/// holds each inbound link's loss-count board slot and the board itself.
-///
-/// Its lock is never the hosting processor's, which a helper holds across a
-/// whole setup — a cold import — that wiring a link must not wait on.
 pub struct OutOfProcessLinkWiringEnvelope {
     recorded_links_and_how_the_next_reaches_the_far_side:
         Mutex<RecordedLinksAndHowTheNextReachesTheFarSide>,
@@ -425,9 +411,6 @@ impl std::fmt::Debug for OutOfProcessLinkWiringEnvelope {
 }
 
 impl OutOfProcessLinkWiringEnvelope {
-    /// An empty envelope for a far side that drives its processor in
-    /// `far_side_process_execution` — the child's declared mode, never the
-    /// host thread's own.
     pub fn for_a_far_side_driven_in(far_side_process_execution: ProcessExecution) -> Self {
         Self {
             recorded_links_and_how_the_next_reaches_the_far_side: Mutex::new(
@@ -454,36 +437,22 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// What the links on this processor's outputs keep of its output frames,
-    /// shared with the pools its far side publishes from.
     pub(crate) fn output_frames_kept_by_its_output_links(
         &self,
     ) -> Arc<OutputFramesKeptByTheOutputLinksOfOneProcessor> {
         Arc::clone(&self.output_frames_kept_by_its_output_links)
     }
 
-    /// The mode the far side drives its processor in.
     pub fn far_side_process_execution(&self) -> ProcessExecution {
         self.far_side_process_execution
     }
 
-    /// The loss counts this processor's far side writes, shared with its graph
-    /// node so `graph` reads them.
     pub(crate) fn helper_placed_processor_loss_counts(
         &self,
     ) -> Arc<HelperPlacedProcessorLossCounts> {
         Arc::clone(&self.loss_counts)
     }
 
-    /// Create the loss-count board this helper spawn writes on, before the
-    /// child starts, and return the `loss_count_board` payload of its setup
-    /// command: the board's name, its output ports, and each stateful function
-    /// node's entry with the state the stream carries for it.
-    ///
-    /// Named per spawn rather than per processor, so a spawn never opens a
-    /// board an earlier one's dead writer still holds. The envelope keeps the
-    /// board until the next spawn's replaces it, and the counts and states it
-    /// held after.
     pub fn create_the_loss_count_board_for_this_helper_spawn(
         &self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -617,13 +586,6 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Record the function node island feeding one of this processor's input
-    /// ports, in place of any recorded under its link id, numbering each node it
-    /// calls with the breadcrumb its far side writes while calling it, and get
-    /// it to the far side however it reaches it now.
-    ///
-    /// `None` is an island riding the setup command, confirmed by the far side's
-    /// `ready`; `Some` is the cell the far side's own answer lands in.
     pub(crate) fn record_a_function_node_island_and_hand_it_to_a_far_side_past_its_setup_command(
         &self,
         mut function_node_island: JsonValue,
@@ -807,9 +769,6 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Number `function_node_id` first on the breadcrumb, as the function node
-    /// its far side runs as its processor once promoted out of its readers'
-    /// islands; the nodes of the islands feeding it are numbered after it.
     pub(crate) fn number_the_function_node_its_far_side_runs_as_its_processor(
         &self,
         function_node_id: &str,
@@ -1277,13 +1236,6 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 }
 
-/// Object-safe version of [`GeneratedProcessor`] for dynamic dispatch.
-///
-/// **DO NOT USE DIRECTLY** - This is an internal implementation detail.
-///
-/// All lifecycle methods are synchronous per the Phase B ABI; plugins
-/// that want async lifecycle work do their own `block_on` against a
-/// self-owned runtime.
 pub trait DynGeneratedProcessor: Send + 'static {
     /// Generated setup hook called by runtime with privileged ctx.
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
@@ -1299,22 +1251,17 @@ pub trait DynGeneratedProcessor: Send + 'static {
 
     fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
 
-    /// Called once to start a Manual mode processor. Privileged ctx.
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
-    /// Called to stop a Manual mode processor. Privileged ctx.
     fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
 
     fn name(&self) -> &str;
     fn descriptor(&self) -> Option<ProcessorDescriptor>;
 
-    /// Returns the execution configuration for this processor.
     fn execution_config(&self) -> ExecutionConfig;
 
-    /// Check if this processor has iceoryx2-based output ports.
     fn has_iceoryx2_outputs(&self) -> bool;
 
-    /// Check if this processor has iceoryx2-based input ports.
     fn has_iceoryx2_inputs(&self) -> bool;
 
     /// Install host-allocated iceoryx2 resources (issue #894).
@@ -1334,63 +1281,28 @@ pub trait DynGeneratedProcessor: Send + 'static {
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
 
-    /// Notice a helper process that died on its own, and take its process group
-    /// with it.
-    ///
-    /// Polled beside [`Self::has_failed_unrecoverably`] by the Manual-mode
-    /// lifecycle loop. Separate from it because this one acts: a query that
-    /// killed a process group would hide the kill behind a name that reads like
-    /// a read. The engine puts a helper's
-    /// group down at every helper exit, "a crash the engine detects by the
-    /// process itself rather than by its socket" included — a descendant
-    /// holding that socket keeps its EOF from ever arriving.
-    ///
-    /// Does nothing by default: only a processor hosting a child has one to
-    /// lose.
     fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {}
 
-    /// Whether this processor has failed in a way it cannot recover from, so
-    /// the graph shows it in error while the rest of the pipeline keeps
-    /// running.
-    ///
-    /// Polled by the Manual-mode lifecycle loop, which is the only place a
-    /// processor doing its work elsewhere — on a callback thread the engine
-    /// never enters, or in a helper process — can report a failure that never
-    /// comes back from a callback. Reactive and continuous processors report
-    /// by returning `Err` from the callback that failed.
     fn has_failed_unrecoverably(&self) -> bool {
         false
     }
 
-    /// Why this processor's node failed itself, once it has: the graph shows
-    /// it in error and its helper is not started again. `None` by default.
     fn failure_the_node_reported_of_itself(&self) -> Option<String> {
         None
     }
 
-    /// What this processor's `process()` raised as its helper process last
-    /// reported, while it has not run cleanly since; `None` by default, and for
-    /// a processor whose `process()` the engine calls itself.
     fn why_process_is_raising_as_its_helper_reports(&self) -> Option<String> {
         None
     }
 
-    /// Why this processor's node is not ready as its helper process last
-    /// reported; `None` by default, and for a processor with no helper.
     fn why_the_node_is_not_ready_as_its_helper_reports(&self) -> Option<String> {
         None
     }
 
-    /// Why this processor's helper process died on its own, once the engine
-    /// has noticed and taken its group down; `None` for a processor with no
-    /// helper, one whose helper is alive, or one the engine stopped itself.
     fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         None
     }
 
-    /// Ask to promote the function node whose call lost this processor's
-    /// helper out of its islands, before the helper is restarted; `None` when
-    /// no call is known to have lost it, or the promotion could not be asked.
     fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,
@@ -1398,9 +1310,6 @@ pub trait DynGeneratedProcessor: Send + 'static {
         None
     }
 
-    /// Start a new helper process, with a new processor instance in it, in
-    /// place of one that died on its own: the same node, its current config
-    /// and every link it holds, then `run`.
     fn restart_the_out_of_process_helper_that_died(
         &mut self,
         _ctx: &RuntimeContextFullAccess<'_>,
@@ -1411,23 +1320,6 @@ pub trait DynGeneratedProcessor: Send + 'static {
         ))
     }
 
-    /// Where to record this processor's link wiring, when its iceoryx2 ports
-    /// live outside the engine's address space.
-    ///
-    /// `Some` says two things that must never disagree: the engine cannot
-    /// install a publisher or a subscriber for this processor, and this is the
-    /// envelope to hand the service names and channel parameters to instead so
-    /// the far side can open its own. Answering the first without the second
-    /// would produce a processor the engine wires nothing into and that never
-    /// learns what to wire itself — a graph that compiles, comes up, reports
-    /// healthy, and moves no frames. One method, so it cannot be half
-    /// implemented.
-    ///
-    /// Asked once, when the instance is attached to its graph node, which then
-    /// carries the envelope: the compiler op reaches it there and never through
-    /// this processor's lock. A host supplies the envelope and never records on
-    /// it; it arms the envelope with how a later link reaches its far side once
-    /// that far side's setup command is on its way.
     fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
         None
     }
@@ -1435,7 +1327,6 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// Apply a JSON config update at runtime.
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
 
-    /// Serialize processor-specific runtime state to JSON.
     fn to_runtime_json(&self) -> serde_json::Value;
 
     /// Get the current config as JSON.
@@ -1444,7 +1335,6 @@ pub trait DynGeneratedProcessor: Send + 'static {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-/// Blanket implementation of DynGeneratedProcessor for all GeneratedProcessor types.
 impl<T> DynGeneratedProcessor for T
 where
     T: GeneratedProcessor,

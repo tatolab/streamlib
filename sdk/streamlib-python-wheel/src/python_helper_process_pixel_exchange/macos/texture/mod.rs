@@ -266,12 +266,6 @@ fn import_timeline_edge_for_texture_check_out(
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// Acquire a texture over an IOSurface — a one-off this helper owes a
-    /// release, or the next frame of a processor output pool — then check it
-    /// out and import it, so the CPU and this process's device both reach it.
-    ///
-    /// Called attached; the escalate wait releases the GIL, and the checkout
-    /// and imports run detached.
     pub(crate) fn acquire_texture(
         self: &Arc<Self>,
         python: Python<'_>,
@@ -299,9 +293,6 @@ impl HelperProcessGpuExchangeClient {
             })?
             .extract()?;
         self.note_the_pooled_frame_an_acquire_answered(&handle_id, &response)?;
-        // The debt exists from the moment the parent allocated, so a refused
-        // checkout or import below still hands the pool slot back. A processor
-        // output pool's frame owes none: the pool owns the slot.
         let release_to_parent =
             self.release_debt_unless_pooled(python, processor_output_pool, &handle_id);
         let checked_out = python

@@ -3,9 +3,6 @@
 
 use serde::{Serialize, de::DeserializeOwned};
 
-/// Trait for processor configuration types.
-///
-/// All processor configs must be pure data that can round-trip through JSON.
 pub trait Config:
     Send + Sync + 'static + Default + Serialize + DeserializeOwned + PartialEq
 {

@@ -14,70 +14,45 @@ use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode, is_in_exposed_name_cast_form};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 
-/// A created processor instance for runtime use.
-///
-/// Every processor — host-compiled Rust types registered through
-/// `register::<P>()` / `add_local::<P>()` and the processor interpreter hosts
-/// registered when a processor interpreter describes their type — dispatches through a boxed [`DynGeneratedProcessor`] trait object.
-///
-/// # Iceoryx2 resource ownership (issue #894)
-///
-/// The host allocates the inner `OutputWriterInner` and
-/// `InputMailboxesInner` Arcs at instance-construction time and hands
-/// the processor `OutputWriter` / `InputMailboxes` handles over those
-/// Arcs via `set_iceoryx2_resources`; connection-wiring code operates
-/// on the inner Arc directly.
 pub struct ProcessorInstance(Box<dyn DynGeneratedProcessor + Send>);
 
 impl ProcessorInstance {
-    /// Wrap a boxed generated processor for runtime dispatch.
     pub(crate) fn new(processor: Box<dyn DynGeneratedProcessor + Send>) -> Self {
         Self(processor)
     }
 
-    /// Run the processor's `setup` lifecycle.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.0.__generated_setup(ctx)
     }
 
-    /// Run the processor's `teardown` lifecycle.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.0.__generated_teardown(ctx)
     }
 
-    /// Run the processor's `on_pause` hook.
     pub fn on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         self.0.__generated_on_pause(ctx)
     }
 
-    /// Run the processor's `on_resume` hook.
     pub fn on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         self.0.__generated_on_resume(ctx)
     }
 
-    /// Run one tick of the processor's `process` body.
     pub fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         self.0.process(ctx)
     }
 
-    /// Start a Manual-mode processor. Pure passthrough — `start`/`stop` are
-    /// never gate-wrapped (thread_runner calls them directly); a body that
-    /// escalates or spawns threads does its own per-call gate management.
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.0.start(ctx)
     }
 
-    /// Stop a Manual-mode processor. Pure passthrough — see [`Self::start`].
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.0.stop(ctx)
     }
 
-    /// Read the processor's execution config.
     pub fn execution_config(&self) -> ExecutionConfig {
         self.0.execution_config()
     }
 
-    /// Whether the processor's type declares it paces itself on real time.
     pub fn is_paced_by_real_time(&self) -> bool {
         self.0
             .descriptor()
@@ -98,33 +73,26 @@ impl ProcessorInstance {
             .detect_and_clean_up_after_an_out_of_process_helper_that_died()
     }
 
-    /// Whether this processor has failed unrecoverably.
     pub fn has_failed_unrecoverably(&self) -> bool {
         self.0.has_failed_unrecoverably()
     }
 
-    /// Why this processor's node failed itself, once it has.
     pub fn failure_the_node_reported_of_itself(&self) -> Option<String> {
         self.0.failure_the_node_reported_of_itself()
     }
 
-    /// What this processor's `process()` raised as its helper process last reported.
     pub fn why_process_is_raising_as_its_helper_reports(&self) -> Option<String> {
         self.0.why_process_is_raising_as_its_helper_reports()
     }
 
-    /// Why this processor's node is not ready as its helper process last reported.
     pub fn why_the_node_is_not_ready_as_its_helper_reports(&self) -> Option<String> {
         self.0.why_the_node_is_not_ready_as_its_helper_reports()
     }
 
-    /// Why this processor's helper process died on its own, once noticed.
     pub fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
         self.0.why_the_out_of_process_helper_died_on_its_own()
     }
 
-    /// Ask to promote the function node whose call lost this processor's
-    /// helper out of its islands, before the helper is restarted.
     pub(crate) fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -133,8 +101,6 @@ impl ProcessorInstance {
             .ask_to_promote_the_function_node_that_lost_the_helper_that_died(ctx)
     }
 
-    /// Start a new helper process, with a new processor instance, in place of
-    /// one that died on its own.
     pub fn restart_the_out_of_process_helper_that_died(
         &mut self,
         ctx: &RuntimeContextFullAccess<'_>,
@@ -142,51 +108,20 @@ impl ProcessorInstance {
         self.0.restart_the_out_of_process_helper_that_died(ctx)
     }
 
-    /// Where this processor's link wiring goes when its iceoryx2 ports live
-    /// outside the engine's address space, and `None` when the engine wires it
-    /// itself.
-    ///
-    /// Only a subprocess-host registration can be out of process.
     pub fn out_of_process_link_wiring(&self) -> Option<Arc<super::OutOfProcessLinkWiringEnvelope>> {
         self.0.out_of_process_link_wiring()
     }
 
-    /// Borrow the host-side `OutputWriterInner` Arc this processor
-    /// instance is wired to. Returns `None` if the processor has no
-    /// output ports.
-    ///
-    /// Used by the host's connection-wiring path (compiler ops) to
-    /// mutate the inner directly via
-    /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
-    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`].
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         self.0.iceoryx2_output_writer_inner()
     }
 
-    /// Borrow the host-side `InputMailboxesInner` Arc this
-    /// processor instance is wired to. Returns `None` if the
-    /// processor has no input ports.
-    ///
-    /// Used by the host's wiring + scheduler paths to call
-    /// `add_port`, `add_channel_subscriber`, `set_listener`, `listener_fd`,
-    /// `drain_listener`, `any_port_has_data`, etc. directly — all
-    /// host-side, no plugin ABI hop to the cdylib.
     pub fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
         self.0.iceoryx2_input_mailboxes_inner()
     }
 
-    /// Install host-allocated iceoryx2 inner Arcs into this
-    /// processor instance. Called once by the factory after
-    /// `construct` returns; the host owns the Arcs and clones them
-    /// into the cdylib via `set_iceoryx2_resources`.
-    ///
-    /// Returns the resulting error (if any) from the cdylib's
-    /// `set_iceoryx2_resources` vtable slot, plus stashes the Arcs
-    /// on `self` so subsequent
-    /// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
-    /// calls see them.
     pub fn install_iceoryx2_resources(&mut self) -> Result<()> {
         let needs_outputs = self.has_iceoryx2_outputs();
         let needs_inputs = self.has_iceoryx2_inputs();
@@ -210,8 +145,6 @@ impl ProcessorInstance {
         }
     }
 
-    /// Reach `node`'s stream facts from this processor's writer and
-    /// mailboxes — the cells `graph` renders and its links read.
     pub(crate) fn reach_the_stream_facts_of(&self, node: &ProcessorNode) {
         if let Some(output_inner) = self.iceoryx2_output_writer_inner() {
             output_inner.reach_stream_facts_of_output_ports(Arc::clone(
@@ -244,7 +177,6 @@ impl ProcessorInstance {
     }
 }
 
-/// The constructor a registration builds each processor of its type with.
 pub type DynamicProcessorConstructorFn =
     Box<dyn Fn(&ProcessorNode) -> Result<Box<dyn DynGeneratedProcessor + Send>> + Send + Sync>;
 
@@ -260,17 +192,6 @@ struct HostCompiledRustTypeRegistration {
     config_taken_check: NodeConfigTakenCheckFn,
 }
 
-/// The natively compiled node types, registered once for the machine.
-///
-/// Keyed on the import path of the class each processor is — the same string
-/// the control plane reports and a helper process imports its class back by.
-/// Stored verbatim and never parsed: the key holds Python's `module:Qualname`
-/// and Rust's `crate::module::Type` alike, and the engine owns neither grammar.
-///
-/// `descriptors` is the authority on which paths are claimed, and it is the
-/// outer lock: a registration holds it across its duplicate check and its
-/// insert, taking `port_info` and `registrations` inside. Anything that needs
-/// two of these three must take them in that order.
 pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
@@ -288,11 +209,6 @@ struct ModuleNodeThatReplacedABuiltIn {
     module_distribution: String,
 }
 
-/// The machine's registry of natively compiled node types.
-///
-/// Starts empty, and is filled by [`ProcessorInstanceFactory::register`]. A
-/// type a processor interpreter describes belongs to the stream it was
-/// described into, never here.
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
     LazyLock::new(ProcessorInstanceFactory::new);
 
@@ -404,11 +320,6 @@ impl ProcessorInstanceFactory {
         descriptors.insert(processor_class_import_path.clone(), descriptor);
         drop(descriptors);
 
-        // A processor's class is reached by import and nothing else, so "which
-        // class is this?" is a question the registration record has to answer;
-        // a display name cannot, and by the time a helper fails to import one
-        // the app is long past `add`. Named field rather than message text
-        // because that is what a log consumer can select on.
         tracing::info!(
             processor_class_import_path = processor_class_import_path.as_str(),
             "new processor type registered"
@@ -417,10 +328,6 @@ impl ProcessorInstanceFactory {
         Ok(())
     }
 
-    /// Register a processor descriptor without a constructor.
-    ///
-    /// The graph has the descriptor and port info it needs to validate and
-    /// wire, and `create()` refuses the type.
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
         refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
@@ -549,7 +456,6 @@ impl ProcessorInstanceFactory {
         self.registrations.read().contains_key(processor_type)
     }
 
-    /// Get the descriptor for a processor type, if registered.
     pub fn descriptor(
         &self,
         processor_type: &ProcessorClassImportPath,
@@ -557,7 +463,6 @@ impl ProcessorInstanceFactory {
         self.descriptors.read().get(processor_type).cloned()
     }
 
-    /// How `processor_type` runs, projected out under the read lock.
     pub(crate) fn node_kind(&self, processor_type: &ProcessorClassImportPath) -> Option<NodeKind> {
         self.descriptors
             .read()
@@ -581,16 +486,10 @@ impl ProcessorInstanceFactory {
             .map(|descriptor| descriptor.processor_class_short_name.as_str().to_string())
     }
 
-    /// Every processor class import path the registry holds a descriptor for.
-    ///
-    /// Projects the keys out under the read lock rather than going through
-    /// [`Self::list_registered`], which clones every descriptor whole — port
-    /// vectors and config schema included — for callers that want the names.
     pub fn registered_processor_class_import_paths(&self) -> Vec<ProcessorClassImportPath> {
         self.descriptors.read().keys().cloned().collect()
     }
 
-    /// List all registered processor types with their full descriptors.
     pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
         self.descriptors.read().values().cloned().collect()
     }
@@ -610,13 +509,6 @@ fn config_the_node_type_takes<C: serde::de::DeserializeOwned>(
     })
 }
 
-/// The refusal when a second processor claims a class import path the registry
-/// already holds.
-///
-/// One path names one class, so a collision means two declarations that a
-/// fresh interpreter or a `use` cannot tell apart — and the remedy differs by
-/// language, so the message names both. It never resolves the collision by
-/// overwriting: the registration that arrived first stays.
 fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImportPath) -> Error {
     Error::Configuration(format!(
         "two processors both identify as `{processor_class_import_path}`, and one import path \

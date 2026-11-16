@@ -55,10 +55,6 @@ fn a_native_nodes_held_frames_never_refuse_a_second_native_nodes_frames_of_the_s
         .expect("the shared pool serves a frame of the same shape while both nodes hold theirs");
 }
 
-/// A node at its cap is refused at once by the processor output pool's
-/// refusal, naming the node and the shape, before anything is allocated;
-/// a frame its consumer lets go of serves the next one.
-/// GPU-gated: skips when no device is present.
 #[test]
 fn a_native_nodes_seventeenth_held_frame_is_refused_naming_its_pool() {
     let Some((gpu, check_out_leases)) = gpu_context_reading_check_out_leases_or_skip() else {

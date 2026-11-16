@@ -149,10 +149,6 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
     );
 }
 
-/// A processor output pool over the real escalate op: unheld frames rotate
-/// through the ring's depth, a frame a consumer checked out keeps its slot
-/// while the producer keeps producing, a recycled frame's id is refused by name
-/// at resolve, and the helper's teardown releases every slot.
 #[cfg(target_os = "macos")]
 #[cfg_attr(
     not(feature = "hardware-tests"),

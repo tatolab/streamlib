@@ -55,7 +55,6 @@ pub(crate) struct RuntimeLogsVerbArguments {
     /// Follow as new records land (like `tail -F`), by the cursor each page answers.
     #[arg(short = 'f', long = "follow")]
     pub(crate) follow_appended_records: bool,
-    /// Only records from this processor id.
     #[arg(long = "processor", value_name = "ID")]
     pub(crate) processor_id: Option<String>,
     /// Only records from this pipeline id.
@@ -84,7 +83,6 @@ pub(crate) struct RuntimeLogsVerbArguments {
 }
 
 impl RuntimeLogsVerbArguments {
-    /// The `--processor` … `--intercepted-only` narrowing these flags ask for.
     fn record_filters(&self) -> RuntimeLogRecordFilters {
         RuntimeLogRecordFilters {
             processor_id: self.processor_id.clone(),

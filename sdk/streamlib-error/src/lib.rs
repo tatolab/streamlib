@@ -1,14 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Canonical StreamLib [`Error`] + [`Result`].
-//!
-//! Shared by `streamlib-engine` (which re-exports it at
-//! `core::error`) and the engine-free authoring surface. Every variant
-//! is String / std / anyhow based plus the engine-free
-//! `ProcessorClassImportPath` and `ExposedNameCastsToNothingError` (from
-//! `streamlib-processor-schema`) and, on Linux, the engine-free
-//! `ConsumerRhiError` conversion.
 
 mod channel_trust_tier_label;
 #[cfg(target_os = "linux")]

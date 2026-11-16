@@ -48,9 +48,6 @@ mod avfoundation_frame_delivery;
 #[cfg(test)]
 mod tests;
 
-/// How long a stop waits for a frame already on the sample-buffer queue to
-/// finish before saying it could not confirm delivery stopped — well inside
-/// the engine's budget for a processor to stop.
 const DELIVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The AVFoundation backend. The framework is always present, so this arm
@@ -304,9 +301,6 @@ struct CaptureDeviceConfiguredOnItsControlQueue {
 // stream that opens it — which is that one caller.
 unsafe impl Send for CaptureDeviceConfiguredOnItsControlQueue {}
 
-/// Everything that starts and stops the stream's capture, behind one lock: the
-/// processor's start and stop and the user's permission answer all reach it,
-/// from different threads.
 struct AvFoundationCaptureSessionControl {
     capture_device: CaptureDeviceConfiguredOnItsControlQueue,
     pixel_format_to_deliver: PixelFormat,

@@ -93,13 +93,6 @@ pub(super) struct PreparedGraphicsKernelRegistration {
     descriptor_sets_in_flight: u32,
 }
 
-/// Read a `register_graphics_kernel` request into what `GpuContext` builds a
-/// kernel from, without touching the device.
-///
-/// Compilation is CPU work, and the escalate gate it would otherwise be holding
-/// serializes every processor's device work — the same reason
-/// [`RegisteredShaderStageSource::spirv`](crate::core::compiler::compiler_ops::subprocess_escalate::kernel_shader_stage_source::RegisteredShaderStageSource::spirv) takes the sandbox rather than a
-/// `GpuContextFullAccess`.
 pub(super) fn prepare_graphics_kernel_registration(
     sandbox: &GpuContextLimitedAccess,
     req: EscalateRequestRegisterGraphicsKernel,

@@ -172,10 +172,6 @@ fn a_helper_listening_on_its_stream_clock_wakes_when_a_step_opens() {
     });
 }
 
-/// A helper that opened its parent's board mirrors an overrun `ordered`
-/// port's losses onto its link's slot and a refusal at the ceiling onto its
-/// output port's entry, with nothing but the reads and writes the processor
-/// already makes — no loop flush and no timer.
 #[test]
 fn a_helper_that_opened_its_board_mirrors_its_losses_as_its_reads_and_writes_count_them() {
     Python::initialize();

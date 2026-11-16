@@ -1,24 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The shutdown-request handshake end-to-end: a processor inside a stream
-//! asks for its stream's shutdown, and the host waiting on that stream sees
-//! the stream end through its normal teardown.
-//!
-//! What it locks, against a REAL `Runner` (not a stub):
-//! - A processor reaching `ctx.runtime().request_this_streams_shutdown(..)` —
-//!   the same `Arc<dyn RuntimeOperations>` handle every in-graph processor
-//!   holds — ends `Runner::wait_until_the_stream_ends` well inside a watchdog
-//!   bound, and the wait returns `Ok(())` with the stream at
-//!   `RuntimeStatus::Stopped` and out of the stream table: teardown ran, and
-//!   the request never tore the stream down behind the host's back.
-//! - A request issued before the host waits still ends the wait.
-//! - A machine shutdown requested BEFORE the stream starts — by a host that
-//!   decides to abort before its run begins — is honored by the wait of the
-//!   engine that owns the machine's shutdown signals rather than discarded.
-//!
-//! Starts a real stream (GPU + iceoryx2), so this runs outside the `--lib`
-//! gate, which never builds `tests/` integration binaries.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,9 +17,6 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 /// is that the wait ends because of the request, not because of this bound.
 const SHUTDOWN_OBSERVED_WATCHDOG: Duration = Duration::from_secs(5);
 
-/// A processor that asks for its stream's shutdown as soon as it starts — the
-/// "a processor decides the run is over" case, using nothing but the public
-/// `RuntimeOperations` handle its context hands it.
 #[streamlib::sdk::processor(
     execution = manual,
 )]

@@ -1,13 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Processors that report which process they are running in.
-
-The test process imports this module to compile a stream; every other import
-of it is a processor interpreter's, describing a class or running one. With
-`STREAMLIB_TEST_MODULE_IMPORT_RECORD_DIRECTORY` set, each import records its
-own pid and its parent's there — the witness that `tatolabd` never imported it.
-"""
 
 import ctypes
 import dataclasses
@@ -86,9 +79,6 @@ class ReportsUpstreamProcessSink:
         payload = ctx.inputs.read(self.frames_from_upstream)
         if payload is None:
             return
-        # Announced on every tenth message rather than once: a test that waits
-        # for this *after* another processor crashed needs evidence of live
-        # traffic, not a marker emitted before the crash.
         self.messages_seen += 1
         if self.messages_seen % 10 == 1:
             upstream_pid = payload["produced_in_pid"]
@@ -232,11 +222,6 @@ class ForksAWorkerThatOutlivesItProbe:
 
 @node.process(execution="manual")
 class SleepsThroughItsOwnSetupProbe:
-    """Parks in `setup()`, so shutdown finds it still registering.
-
-    That is the one route onto the ladder the engine's `stop()` hook never
-    reaches, and the plan still owes this processor its `teardown()`.
-    """
 
     frames_to_downstream = Output(Records)
 

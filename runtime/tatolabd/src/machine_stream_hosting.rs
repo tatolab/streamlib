@@ -315,9 +315,6 @@ fn refusals_written_once_the_engine_is_torn_down(
 enum EngineTeardownOutcome {
     /// Every engine thread joined, and the engine dropped.
     Dropped,
-    /// Processor threads ignored shutdown past their budget, so the engine is
-    /// left alive beneath them until the process exits: a thread returning late
-    /// would otherwise run the engine's drop on its own thread.
     LeftBeneathAbandonedProcessorThreads(String),
     /// A stream's teardown outlived its watchdog and its thread was
     /// abandoned, so the engine is left alive beneath it and the process ends

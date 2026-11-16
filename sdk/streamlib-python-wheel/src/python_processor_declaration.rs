@@ -42,9 +42,6 @@ mod tests {
     use streamlib::sdk::processor_interpreter::PythonProcessorDeclaration;
     use streamlib::sdk::processors::EmptyConfig;
 
-    /// The described node type a processor interpreter prints for
-    /// `declared_class`: its import path, short name, and every stamp the
-    /// decorator left, carried verbatim.
     fn described_node_type_of(declared_class: &Bound<'_, PyAny>) -> PyResult<serde_json::Value> {
         let stamp = |name: &str| -> PyResult<serde_json::Value> {
             python_object_to_json_value(&declared_class.getattr(name)?)
@@ -67,8 +64,6 @@ mod tests {
         }))
     }
 
-    /// Read `declared_class` the way the engine reads what a processor
-    /// interpreter described of it.
     fn read_declaration_off(
         declared_class: &Bound<'_, PyAny>,
     ) -> Result<PythonProcessorDeclaration, String> {
@@ -168,9 +163,6 @@ mod tests {
             .inputs
     }
 
-    /// The catalog's whole point: an agent reads a processor's keys off the
-    /// descriptor before the class is ever in a graph, so the document the
-    /// decorator derived has to survive the trip into Rust intact.
     #[test]
     fn the_descriptor_carries_the_config_classs_derived_schema() {
         let declaration = read_python_declaration(
@@ -267,12 +259,6 @@ class AudioConsumer:
         assert_eq!(fallback["default"], serde_json::Value::Null);
     }
 
-    /// A processor declaring no config publishes what `EmptyConfig` publishes
-    /// in Rust, so one catalog reads one way whichever language declared the
-    /// processor.
-    ///
-    /// `schemars` stamps a root `title` from the config type's name and no
-    /// Python document carries one, so the comparison drops it.
     #[test]
     fn a_class_declaring_no_config_carries_the_same_document_rust_publishes() {
         let declaration = read_python_declaration(
@@ -309,8 +295,6 @@ class AudioConsumer:
         }
     }
 
-    /// The contract a Rust author declares with the `#[processor]` grammar,
-    /// spelled for the same port the Python class below declares.
     #[streamlib::sdk::processor(
         execution = reactive,
         input(
@@ -399,11 +383,6 @@ class AudioConsumer:
         );
     }
 
-    /// The headline: one contract, two authoring languages, one schema.
-    ///
-    /// Both halves are read from the surfaces an author actually writes — the
-    /// `Input` attribute and the `#[processor]` attribute — so a divergence
-    /// in either grammar fails here rather than reaching a user.
     #[test]
     fn a_python_declared_contract_and_a_rust_declared_one_are_the_same_schema() {
         let python_ports = python_declared_ports(
@@ -436,9 +415,6 @@ class AudioConsumer:
         );
     }
 
-    /// A helper-placed processor opens no device stream, so the sentinel it
-    /// would need to settle never resolves — and `@node.process` says so at the class
-    /// the author wrote, not three seams later in placement vocabulary.
     #[test]
     fn a_python_declared_sentinel_is_refused_at_decoration() {
         let refusal = python_declaration_refusal(

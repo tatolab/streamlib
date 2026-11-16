@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Processor and port descriptor types for introspection.
-//!
-//! These live in the engine-free `streamlib-processor-schema` crate so the
-//! engine and the `#[processor]` macro share one definition. The engine
-//! re-exports them here so every `crate::core::descriptors::*` path resolves
-//! unchanged.
 
 pub use streamlib_processor_schema::config_schema_document::{
     ProcessorConfigFilledFromItsDefault, ProcessorConfigJsonSchema, ProcessorConfigKeyDescribedBy,

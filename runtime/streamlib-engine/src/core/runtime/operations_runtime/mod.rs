@@ -33,10 +33,6 @@ use crate::iceoryx2::ChannelName;
 // Core Implementation Functions ('static async fns for spawn compatibility)
 // =============================================================================
 
-/// The context a graph mutation compiles against the moment it is logged —
-/// `Some` once the runtime is started, `None` while the graph is still being
-/// built ahead of `start()`, which commits the whole batch itself, and `None`
-/// on a processor's own execution thread, which never waits for a compile.
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
 
 /// What every graph change on one stream works through: the stream's
@@ -49,14 +45,9 @@ pub(super) struct LiveGraphChangeOnOneStream {
 }
 
 thread_local! {
-    /// Set on a processor's execution thread. A mutation issued from one must
-    /// not wait for the compile: removing that very processor holds the commit
-    /// gate while it joins the thread, and the wait would never end.
     static IS_A_PROCESSOR_EXECUTION_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Mark the calling thread as one that runs a processor, so a graph mutation it
-/// issues is left to the graph-change listener rather than compiled inline.
 pub(crate) fn mark_this_thread_as_a_processor_execution_thread() {
     IS_A_PROCESSOR_EXECUTION_THREAD.with(|marker| marker.set(true));
 }
@@ -65,11 +56,6 @@ fn this_thread_may_commit_inline() -> bool {
     !IS_A_PROCESSOR_EXECUTION_THREAD.with(|marker| marker.get())
 }
 
-/// Compile the operations a mutation just logged, so the caller learns whether
-/// its change took. A batch that fails to spawn or wire is otherwise discarded
-/// with a log line as its only trace, after the caller was already told the
-/// change was accepted. The compile blocks — it waits for a spawned processor
-/// to report ready — so it runs off the async worker.
 async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
     let Some(runtime_ctx) = live else {
         take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
@@ -128,12 +114,6 @@ pub(super) enum ConfigReferencesOfTheAddedNode {
     ValidatedWithTheWholeGraphBeforeTheAdd,
 }
 
-/// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
-///
-/// Reports the node it became, id and name together. Both come out
-/// of the one `compiler.scope` that added the node, so a caller that needs the
-/// name never has to ask a second time — and never races a concurrent removal
-/// into being told its own successful add does not exist.
 pub(super) async fn add_processor_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     processor_interpreter_launch_record: Arc<ProcessorInterpreterLaunchRecordOfOneStream>,
@@ -186,8 +166,6 @@ pub(super) async fn add_processor_impl(
         })??;
     }
 
-    // Held so a typed `UnknownProcessorType` can name what was asked for —
-    // `spec` is moved into `add_v`.
     let ident_for_err = spec.name.clone();
 
     let added = compiler.scope(|graph, tx| -> Result<NodeInTheGraph> {
@@ -277,11 +255,6 @@ pub(super) async fn add_processor_impl(
     Ok(added)
 }
 
-/// Core implementation for remove_processor - takes owned Arcs for 'static lifetime.
-/// Mark `processor_id` and every link on it pending deletion, each link logged as a link's
-/// removal ahead of the node's, so the compile reclaims both endpoints' ports through the link
-/// path; dropping the node alone would cascade its edges out of the graph with the peers'
-/// publishers, subscribers and notifiers still held against their channels.
 fn mark_the_node_and_each_of_its_links_pending_deletion(
     graph: &mut Graph,
     tx: &CompilerTransactionHandle,
@@ -331,8 +304,6 @@ pub(super) async fn remove_processor_impl(
     })?;
 
     let removal_outcome = commit_live_graph_change(&compiler, live).await;
-    // A removal that abandoned the processor's thread still took the processor
-    // out of the graph, so it is announced before the call fails naming it.
     if removal_outcome.is_err()
         && compiler.scope(|graph, _tx| graph.traversal().v(&processor_id).exists())
     {
@@ -417,24 +388,10 @@ fn apply_a_link(
 ) -> Result<LinkUniqueId> {
     let (link_id, channel) =
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-            // Validate endpoints + ports FIRST — before the channel-name
-            // derivation — so a missing processor/port reads as the typed
-            // ProcessorNotFound / ProcessorPortNotFound and never gets masked by an
-            // InvalidLink from the wire-name grammar. The `add_e` call still checks
-            // defensively; this pre-validation is what gets the typed error out.
             refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
             refuse_a_link_between_ports_whose_families_do_not_match(graph, &from, &to)?;
 
-            // The one channel this link's source output port publishes to — keyed
-            // on the SOURCE only (`{src_processor}/{src_output}`), so every link
-            // from this output port shares one channel / one publisher / N
-            // subscribers (D1, #1419). Endpoints are validated above, so a grammar
-            // failure here is a genuinely-illegal source PORT name (author error),
-            // surfaced as InvalidLink. The processor id is lowercased inside
-            // `source_channel_name`; underscore is legal and rides through. Deriving
-            // inside the transaction means an illegal port name rolls the pending
-            // link back rather than committing a half-built edge.
             let channel = crate::iceoryx2::source_channel_name(
                 from.processor_id().as_str(),
                 from.port_name(),
@@ -462,8 +419,6 @@ fn apply_a_link(
     Ok(link_id)
 }
 
-/// Refuse a source this graph has no processor or no such output port for,
-/// with the typed error a caller can act on.
 fn refuse_a_source_this_graph_cannot_take(
     graph: &crate::core::graph::Graph,
     from: &OutputLinkPortRef,
@@ -483,8 +438,6 @@ fn refuse_a_source_this_graph_cannot_take(
     Ok(())
 }
 
-/// Refuse a destination this graph has no processor or no such input port for,
-/// with the typed error a caller can act on.
 fn refuse_a_destination_this_graph_cannot_take(
     graph: &crate::core::graph::Graph,
     to: &InputLinkPortRef,
@@ -551,10 +504,6 @@ pub(super) async fn disconnect_impl(
 }
 
 impl LoadedStreamInThisRuntime {
-    /// The context a graph mutation compiles against right away, or `None`
-    /// while the stream is still being built ahead of `start()` — and `None`
-    /// from a processor's own execution thread, where the mutation is left to
-    /// the graph-change listener.
     fn live_commit_context(&self) -> LiveCommitContext {
         if !this_thread_may_commit_inline() {
             return None;
@@ -574,9 +523,6 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Update a processor's configuration and compile it right away when the stream runs, so
-    /// a configuration the running processor refuses is refused here, and the node keeps the
-    /// configuration it holds.
     pub(super) async fn update_processor_config_compiled_right_away<C: Serialize>(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -633,8 +579,6 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// Add a processor and report the node it became: its id and its name — the
-    /// requested one cast, or the class's short name with any `-2` suffix.
     pub fn add_processor_reporting_its_name(&self, spec: ProcessorSpec) -> Result<NodeInTheGraph> {
         self.block_on_the_engines_tokio_runtime(add_processor_impl(
             self.live_graph_change(),

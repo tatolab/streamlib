@@ -563,37 +563,6 @@ fn check_packages_facade_runtime_dep(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// the engine-free TRUNK SET must never Cargo-dep the engine
-// ---------------------------------------------------------------------------
-//
-// MEMBERSHIP RULE for the trunk root set: roots = every crate packages are
-// mandated or expected to link directly and consume by version. The
-// engine-free trunk roots — `streamlib-macros` (sdk/streamlib-macros) and
-// `streamlib-consumer-rhi` (runtime/streamlib-consumer-rhi) — are the
-// authoring substrate consumers link against. A non-dev `[dependencies]`
-// entry that resolves to the engine crate (`streamlib-engine` at
-// runtime/streamlib-engine) in either statically pulls the FullAccess engine
-// surface into that substrate.
-//
-// The list is PRINCIPLED, not enumerated ad hoc: a crate earns root status by
-// being something packages dep DIRECTLY and consume by version. The small
-// utility crates (`streamlib-error`, `streamlib-processor-schema`) are
-// deliberately NOT listed — they are covered
-// TRANSITIVELY through the roots (`find_trunk_engine_chains` walks the closure), so a listing
-// would be redundant. `streamlib-consumer-rhi` earns root status on its own
-// because `check_cdylib_and_adapter_runtime_deps` makes it a first-class part of the boundary contract:
-// adapter crates dep it directly (in place of the full facade), so consumers
-// link it by version — an engine dep in it would propagate the FullAccess
-// surface to external consumers.
-//
-// `[dev-dependencies]` are EXEMPT — a trunk crate's conformance tests may
-// legitimately pull the engine to exercise the host backing. Reuses the same
-// `iter_dep_entries_with_values` + `section_is_dev_only` machinery as
-// `check_packages_facade_runtime_dep`, and resolves `package = "..."` alias keys (an entry
-// `foo = { package = "streamlib-engine", ... }` is caught by its resolved
-// package name, not the section key) — closing the exact alias evasion the
-// facade check leaves as a known low.
 
 const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
 
@@ -603,14 +572,6 @@ const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban: an engine-free
 /// Cargo dependency key / `package =` rename resolves to this hyphenated form).
 const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
 
-/// The engine-free trunk roots whose non-dev dep graph must never resolve to
-/// `streamlib-engine`. A fixed list (mirrors `check_cdylib_and_adapter_runtime_deps`'s
-/// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
-/// shrinking ratchet. Roots = every crate packages are mandated or expected to
-/// link directly and consume by version; the small utility crates
-/// (streamlib-error / streamlib-processor-schema) are
-/// covered transitively through these roots (`find_trunk_engine_chains`), and consumer-rhi is a
-/// root because `check_cdylib_and_adapter_runtime_deps` makes it a first-class part of the boundary contract.
 const TRUNK_NO_ENGINE_DEP: &[&str] = &[
     "sdk/streamlib-macros/Cargo.toml",
     "runtime/streamlib-consumer-rhi/Cargo.toml",

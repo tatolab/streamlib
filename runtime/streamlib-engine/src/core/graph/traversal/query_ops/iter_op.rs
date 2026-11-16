@@ -5,9 +5,6 @@ use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
-// =============================================================================
-// ProcessorTraversal (immutable)
-// =============================================================================
 
 impl<'a> ProcessorTraversal<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {
@@ -51,9 +48,6 @@ impl<'a> IntoIterator for LinkTraversal<'a> {
     }
 }
 
-// =============================================================================
-// ProcessorTraversalMut (read-only access via mutable traversal)
-// =============================================================================
 
 impl<'a> ProcessorTraversalMut<'a> {
     pub fn iter(self) -> impl Iterator<Item = &'a ProcessorNode> {

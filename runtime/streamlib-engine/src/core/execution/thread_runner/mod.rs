@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Processor thread runner.
-//!
-//! Handles the main loop for processor threads based on their execution mode.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +26,6 @@ use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId, StepProgressOfOneNode};
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 
-/// Run the processor thread main loop based on execution mode.
 #[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, step_progress, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
 pub fn run_processor_loop(
     id: ProcessorUniqueId,
@@ -100,11 +96,6 @@ pub fn run_processor_loop(
         }
     }
 
-    // Teardown — privileged ctx. Gated by the isolation trust axis: an
-    // untrusted tier yields no `FullAccessGrant`, so no in-process FullAccess
-    // teardown runs (privileged lifecycle belongs behind the subprocess
-    // sandbox). An untrusted processor never ran its setup in-process either,
-    // so there is nothing to tear down here.
     match isolation_tier.grant_full_access() {
         Some(full_access_grant) => {
             tracing::info!("[{}] Invoking teardown()...", id);
@@ -128,9 +119,6 @@ pub fn run_processor_loop(
     tracing::info!("[{}] Thread stopped", id);
 }
 
-/// A processor thread's [`ProcessorSchedulingLoopHost`]: the processor
-/// instance, the shutdown channel and its wake fd, the pause gate, and the
-/// stream clock and step ledger entry its callbacks are counted on.
 struct ProcessorSchedulingLoopHostOnAnEngineThread<'a, CallProcessor> {
     processor: &'a Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &'a crossbeam_channel::Receiver<()>,
@@ -140,8 +128,6 @@ struct ProcessorSchedulingLoopHostOnAnEngineThread<'a, CallProcessor> {
     pause_gate: &'a AtomicBool,
     stream_clock: &'a StreamClock,
     step_progress: &'a StepProgressOfOneNode,
-    /// Makes one callback on the processor; told whether to count it on the
-    /// step ledger.
     call_processor: CallProcessor,
 }
 
@@ -220,8 +206,6 @@ where
     }
 }
 
-/// Make `callback` on `processor`, counted in flight on `step_progress` when
-/// `counted_on_the_step_ledger` and its stream clock is not real time.
 fn dispatch_processor_scheduling_callback(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -247,7 +231,6 @@ fn dispatch_processor_scheduling_callback(
     }
 }
 
-/// The scheduling-loop host of the processor a thread runs.
 fn scheduling_loop_host_on_this_thread<'a>(
     id: &'a ProcessorUniqueId,
     processor: &'a Arc<Mutex<ProcessorInstance>>,
@@ -290,12 +273,6 @@ fn run_manual_mode(
     runtime_ctx: &RuntimeContext,
     isolation_tier: IsolationTier,
 ) {
-    // Call start() - for callback-driven processors this returns immediately
-    // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink).
-    // start() is resource-lifecycle, so it receives full-access ctx. Gated by
-    // the isolation trust axis: an untrusted tier yields no `FullAccessGrant`,
-    // so an in-process FullAccess start() is unrepresentable — the untrusted
-    // processor's privileged lifecycle belongs behind the subprocess sandbox.
     let Some(start_grant) = isolation_tier.grant_full_access() else {
         tracing::warn!(
             "[{}] Untrusted isolation tier ({}): in-process FullAccess denied by \
@@ -314,10 +291,6 @@ fn run_manual_mode(
         match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
             Err(e) => {
-                // Marked here or nowhere: this thread goes straight to
-                // teardown, and a processor whose `start()` failed is not
-                // running — a reader that saw `Running` between `setup` and
-                // here must be able to find out it was wrong.
                 tracing::error!("[{}] start() failed: {}", id, e);
                 state.fail_with(format!("start() failed: {e}"));
                 return;
@@ -415,16 +388,6 @@ fn run_manual_mode(
                 }
             }
         } else if !already_reported_failure {
-            // A processor whose work happens elsewhere reports a failure here
-            // or nowhere. The loop keeps running rather than breaking: the rest
-            // of the pipeline is unaffected, and breaking would run teardown
-            // and then overwrite the state with `Stopped`, hiding what
-            // happened.
-            //
-            // Asked before it is read, under one lock: a helper process that
-            // died on its own is noticed here, by the process rather than by
-            // its escalate socket, whose EOF a surviving descendant defers
-            // indefinitely.
             let (
                 failure_the_node_reported_of_itself,
                 has_failed_unrecoverably,
@@ -523,10 +486,6 @@ fn run_manual_mode(
 const GRACE_FOR_A_HELPER_PROCESS_TO_EXIT_AFTER_ITS_ESCALATE_SOCKET_CLOSED: Duration =
     Duration::from_secs(5);
 
-/// Start a new helper process in place of one that died on its own, under a
-/// fresh full-access grant as the processor's first `setup()` and `start()`
-/// had, once any promotion the death asked for has settled — waited on without
-/// holding the processor, since the compile carrying it may need to.
 fn restart_the_out_of_process_helper_that_died(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -551,9 +510,6 @@ fn restart_the_out_of_process_helper_that_died(
         .restart_the_out_of_process_helper_that_died(&full_ctx)
 }
 
-/// Record a helper process death for `exit_reason` after a run of
-/// `run_before_the_death`, and return when to start the next helper — or
-/// `None` once the crash-loop limit is reached and the processor has failed.
 fn after_a_helper_process_death(
     id: &ProcessorUniqueId,
     state: &ObservableProcessorState,
@@ -593,7 +549,6 @@ fn dispatch_on_pause(
     tracing::info!("[{}] Invoking on_pause()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
     let mut guard = processor.lock();
-    // block_on is internal to ProcessorInstance::on_pause's dispatch.
     match guard.on_pause(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
@@ -625,7 +580,6 @@ fn dispatch_on_resume(
     tracing::info!("[{}] Invoking on_resume()...", id);
     let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
     let mut guard = processor.lock();
-    // block_on is internal to ProcessorInstance::on_resume's dispatch.
     match guard.on_resume(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_resume() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_resume() failed: {}", id, e),

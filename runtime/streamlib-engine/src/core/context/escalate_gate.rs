@@ -23,33 +23,6 @@
 use std::sync::{Condvar, Mutex};
 use std::thread::ThreadId;
 
-/// Exclusivity gate for escalate scopes on a single
-/// [`GpuContext`](super::gpu_context::GpuContext).
-///
-/// `enter` blocks until any active scope releases (via `exit`), then
-/// marks the gate as in-scope. `exit` clears the in-scope flag and
-/// wakes one waiter.
-///
-/// **Same-thread re-entry panics.** The historical contract is that
-/// `escalate(|full| ...)` from inside a setup/teardown lifecycle
-/// body (which already runs with the gate held by the spawn op) is
-/// forbidden — it used to silently deadlock against the original
-/// `processor_setup_lock: Arc<Mutex<()>>`. After PR #912 replaced
-/// that mutex with this gate, the deadlock shape is the same; the
-/// added thread tracking here turns the silent hang into a clear
-/// panic at the call site. The panic is caught by the FFI boundary's
-/// `run_host_extern_c` wrapper (in cdylib mode) and propagates as a
-/// normal Rust panic for engine-internal callers, so the failure
-/// surface is "your code panicked with an actionable message" rather
-/// than "your test hangs forever."
-///
-/// The held-by-thread tracking is best-effort: it catches the
-/// common case (paired same-thread enter/enter recursion) but does
-/// NOT support recursive entry. Cross-thread enter/exit pairs are
-/// still allowed — the cdylib FFI path needs that flexibility
-/// because `escalate_begin` returns before the closure runs and the
-/// matching `escalate_end` may fire from a different thread (panic
-/// recovery, async runtimes).
 pub(crate) struct EscalateGate {
     state: Mutex<GateState>,
     cv: Condvar,

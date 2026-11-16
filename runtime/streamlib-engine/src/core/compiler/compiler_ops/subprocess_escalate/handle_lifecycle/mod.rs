@@ -151,9 +151,6 @@ pub(crate) struct EscalateHandleRegistry {
     /// than panics when poisoned, and is never held across an allocation.
     one_off_acquisitions_held_for_the_helper:
         Mutex<OneOffAcquisitionsHeldForOneNode<RegisteredHandle>>,
-    /// The processor output pools this helper's rings publish from. Their
-    /// slots are never registry entries of their own: a frame's id names a
-    /// generation, and the slot outlives it.
     processor_output_pools: Mutex<ProcessorOutputPoolsOfOneHelper>,
     /// The colour conversions this helper asked for, and the sources they
     /// resolved, which go away with the helper.
@@ -168,8 +165,6 @@ impl EscalateHandleRegistry {
         Arc::new(Self::default())
     }
 
-    /// A registry whose processor output pools are sized for what
-    /// `output_frames_kept_by_its_output_links` records.
     pub(crate) fn for_a_helper_whose_output_links_keep(
         output_frames_kept_by_its_output_links: Arc<
             crate::core::context::texture_pools_and_rings::processor_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneProcessor,
@@ -244,8 +239,6 @@ impl EscalateHandleRegistry {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The processor output pools this helper publishes from, recovered
-    /// rather than panicked on when poisoned: teardown drains them.
     pub(crate) fn processor_output_pools(&self) -> MutexGuard<'_, ProcessorOutputPoolsOfOneHelper> {
         self.processor_output_pools
             .lock()
@@ -395,9 +388,6 @@ pub(crate) fn release_surface_share_and_parent_caches_for_handle(
     }
 }
 
-/// Every release a torn-down helper is owed — each handle it never released
-/// and each slot of its processor output pools — with their shared pool
-/// entries flagged to be freed as soon as nothing holds them.
 pub(crate) fn release_everything_a_torn_down_helper_held(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -416,9 +406,6 @@ pub(crate) fn release_everything_a_torn_down_helper_held(
     }
 }
 
-/// The release a processor output slot is owed when its pool lets it go:
-/// everything a released handle of its kind is owed, and its place in the
-/// generation index.
 pub(crate) fn release_processor_output_pool_slot(
     sandbox: &GpuContextLimitedAccess,
     ReleasedProcessorOutputPoolSlot {

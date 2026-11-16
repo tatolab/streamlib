@@ -6,15 +6,12 @@ use std::fmt;
 /// Result of a successful compilation.
 #[derive(Debug, Clone, Default)]
 pub(super) struct CompileResult {
-    /// Number of processors created in this compile cycle.
     pub processors_created: usize,
-    /// Number of processors removed in this compile cycle.
     pub processors_removed: usize,
     /// Number of links wired in this compile cycle.
     pub links_wired: usize,
     /// Number of links unwired in this compile cycle.
     pub links_unwired: usize,
-    /// Number of processor configs updated.
     pub configs_updated: usize,
 }
 

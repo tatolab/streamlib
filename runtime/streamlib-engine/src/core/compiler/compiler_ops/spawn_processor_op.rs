@@ -27,15 +27,6 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorState;
 
-/// Spawn a processor thread.
-///
-/// The thread will:
-/// 1. Create processor instance via factory
-/// 2. Attach ProcessorInstanceComponent to graph
-/// 3. Signal READY via barrier
-/// 4. Wait for CONTINUE via barrier (wiring happens here)
-/// 5. Call setup (no locks held - safe to call runtime ops)
-/// 6. Run processor loop
 #[tracing::instrument(name = "compiler.spawn_processor", skip(graph_arc, runtime_ctx), fields(processor_id = processor_id.as_ref()))]
 pub(crate) fn spawn_processor(
     graph_arc: Arc<RwLock<Graph>>,
@@ -58,7 +49,6 @@ pub(crate) fn spawn_processor(
         }
     }
 
-    // Check processor runtime to determine dispatch path
     let runtime = {
         let graph = graph_arc.read();
         let proc_type = graph
@@ -96,9 +86,6 @@ pub(crate) fn spawn_processor(
         (barrier, ProcessorUniqueId::from(processor_id))
     };
 
-    // Same strategy resolution for all three runtimes — Python and TypeScript
-    // are hosted by Rust subprocess processors whose host thread participates
-    // in the same scheduling regime as native Rust processors.
     let strategy = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&proc_id_clone).first().ok_or_else(|| {
@@ -107,10 +94,6 @@ pub(crate) fn spawn_processor(
         scheduling_strategy_for_processor(graph.node_types_this_stream_resolves(), node)
     };
 
-    // Names the authoring language, not a placement. What the engine spawns
-    // here is the thread that drives the processor's host; for Python that host
-    // owns a child process, and the label says which language authored the
-    // class rather than restating where it runs.
     let runtime_label = match runtime {
         ProcessorRuntime::Rust => "Rust processor",
         ProcessorRuntime::Python => "Python processor",
@@ -151,8 +134,6 @@ fn spawn_dedicated_thread(
     let runtime_ctx_clone = Arc::clone(runtime_ctx);
     let proc_id_clone = processor_id.clone();
 
-    // Create processor instance now (with lock) since factory needs node
-    // reference.
     let (processor_to_attach, processor_type) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
@@ -180,23 +161,8 @@ fn spawn_dedicated_thread(
         ProcessorRuntime::Python => ProcessorThreadKind::HelperProcessHost,
     };
 
-    // Gates every FullAccess mint on this thread (setup / start / stop /
-    // teardown). Not derived: every processor the engine can spawn is compiled
-    // into this binary.
     let isolation_tier = IsolationTier::TrustedInstalled;
 
-    // Generous 8 MB stack — processors run arbitrary codec / plugin code
-    // with deep call stacks. IPC payloads are slice-based (`[u8]`) in
-    // iceoryx2 shared-memory segments, so frame bytes never sit inline on
-    // this stack.
-    //
-    // No `.name()` set on the Builder — Linux's `pthread_setname_np`
-    // truncates at 15 chars and most apps that name threads use fixed
-    // role names (Postgres `walwriter`, nginx `worker process`,
-    // Chrome `v8.IO`), not unique-per-instance ones. Custom thread
-    // naming for streamlib processors isn't worth the API surface;
-    // tracing spans + the processor id in log lines provide the same
-    // observability without OS-level truncation.
     let thread = std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
@@ -426,8 +392,6 @@ fn spawn_dedicated_thread(
                 step_progress.note_it_finishes_every_step();
             }
 
-            // === PHASE 4: Setup ===
-            // Create processor-specific context with both processor ID and pause gate
             let processor_context = runtime_ctx_clone
                 .with_processor_id(proc_id_clone.clone())
                 .with_processor_display_name(processor_display_name)
@@ -436,11 +400,6 @@ fn spawn_dedicated_thread(
                 .with_processor_state(Arc::clone(&state_arc));
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
-                // The trust-axis moat: an untrusted tier yields no
-                // `FullAccessGrant`, so an in-process FullAccess context is
-                // unrepresentable here — refuse privileged setup() in-process
-                // (the untrusted processor's privileged lifecycle belongs behind
-                // the subprocess sandbox) and leave the processor `Error`.
                 let Some(full_access_grant) = full_access_grant_or_mark_untrusted_error(
                     isolation_tier,
                     &state_arc,
@@ -458,8 +417,6 @@ fn spawn_dedicated_thread(
                     runtime,
                 );
                 let setup_result = run_setup_phase(runtime, &runtime_ctx_clone.gpu, || {
-                    // block_on happens inside the ProcessorInstance::setup
-                    // dispatch via the ctx's tokio handle.
                     let _ = &tokio_handle;
                     guard.setup(&full_ctx)
                 });
@@ -469,12 +426,6 @@ fn spawn_dedicated_thread(
                     return;
                 }
 
-                // `setup()` is where a `match_device` window contract settles,
-                // and the only processor that could settle one has now had its
-                // chance. A port still holding the sentinel belongs to a
-                // processor that opens no device stream — a wiring error, and
-                // one that must surface here rather than as a port that
-                // silently hands its reader nothing for the rest of the run.
                 if let Err(e) = refuse_a_port_setup_left_awaiting_its_device_stream_format(
                     &guard,
                     &processor_type,
@@ -488,8 +439,6 @@ fn spawn_dedicated_thread(
             }
 
             {
-                // Read under the graph lock that a pause or a resume of this
-                // processor holds while it flips the gate and its state.
                 let _no_pause_or_resume_between_the_gate_and_the_state = graph_arc_clone.read();
                 state_arc.transition_to(
                     if pause_gate_inner.load(std::sync::atomic::Ordering::Acquire) {
@@ -540,13 +489,6 @@ fn spawn_dedicated_thread(
     Ok(())
 }
 
-/// Refuse a processor whose `setup()` returned with an input port still
-/// holding an unsettled `audio_window = match_device` sentinel.
-///
-/// The refusal is the wiring path's own, in its own words: the only difference
-/// is where it can be raised. A helper-placed destination is refused at wire
-/// time, because a child can never settle one; an app-process processor cannot
-/// be judged until it has run the hook that would have.
 fn refuse_a_port_setup_left_awaiting_its_device_stream_format(
     processor: &crate::core::processors::ProcessorInstance,
     processor_type: &streamlib_processor_schema::ProcessorClassImportPath,
@@ -554,8 +496,6 @@ fn refuse_a_port_setup_left_awaiting_its_device_stream_format(
     let Some(input_inner) = processor.iceoryx2_input_mailboxes_inner() else {
         return Ok(());
     };
-    // Sorted so a processor with several unsettled ports names the same one on
-    // every run — a refusal that reshuffles reads as two different defects.
     let Some(port) = input_inner
         .input_ports_still_awaiting_their_device_stream_format()
         .into_iter()
@@ -569,11 +509,6 @@ fn refuse_a_port_setup_left_awaiting_its_device_stream_format(
     ))
 }
 
-/// The trust-axis moat at the FullAccess minting seam: yield a
-/// [`FullAccessGrant`] iff the tier permits an in-process FullAccess context.
-/// On refusal (untrusted), mark the processor [`ProcessorState::Error`] — its
-/// privileged lifecycle belongs behind the subprocess sandbox (isolation
-/// enforcement) — and yield `None` so the caller skips setup and the loop.
 fn full_access_grant_or_mark_untrusted_error(
     isolation_tier: IsolationTier,
     state_arc: &Arc<ObservableProcessorState>,
@@ -599,13 +534,6 @@ fn full_access_grant_or_mark_untrusted_error(
     }
 }
 
-/// Run a processor's `__generated_setup` body.
-///
-/// No gate wrap here: an outer wrap would trigger the escalate
-/// gate's same-thread re-entry panic when a setup body that itself
-/// uses `.escalate(...)` also tried to acquire it, and wrapping a
-/// subprocess host's IPC wait would deadlock against the
-/// bridge's escalate worker (#867).
 fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
@@ -652,14 +580,6 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    /// A processor whose `setup()` opened no device stream leaves its
-    /// `match_device` port holding the sentinel, and the spawn seam refuses it
-    /// there — the one place that can know nothing ever will settle it.
-    ///
-    /// Mentally revert the check and that port hands its reader nothing for the
-    /// whole run, with the processor reported Running and `graph` still
-    /// rendering the sentinel: a pipeline that looks healthy and moves no
-    /// audio.
     #[test]
     fn a_setup_that_settled_no_match_device_contract_is_refused_naming_the_port() {
         let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
@@ -685,8 +605,6 @@ mod tests {
         );
     }
 
-    /// The same processor once its `setup()` has settled the contract: nothing
-    /// is waiting, and the spawn seam lets it run.
     #[test]
     fn a_setup_that_settled_its_contract_is_not_refused() {
         let processor = a_device_matched_audio_consumer_whose_port_is(|mailboxes| {
@@ -718,8 +636,6 @@ mod tests {
         .expect("a settled port is not a wiring error");
     }
 
-    /// A processor with no input resources at all reaches the same check and
-    /// passes it — nothing about a port with no contract moves.
     #[test]
     fn a_processor_holding_no_input_mailboxes_is_not_refused() {
         use crate::core::processors::GeneratedProcessor;
@@ -768,11 +684,6 @@ mod tests {
         processor
     }
 
-    /// The trust-axis moat wiring at the spawn setup seam: an untrusted tier
-    /// yields no [`FullAccessGrant`], and the gate marks the processor
-    /// [`ProcessorState::Error`] (so setup + the process loop are skipped).
-    /// Mentally revert the gate to yield `Some(..)` unconditionally — the
-    /// grant-absence and the `Error` state both flip.
     #[test]
     fn untrusted_tier_gate_refuses_and_marks_error() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
@@ -790,8 +701,6 @@ mod tests {
         );
     }
 
-    /// The trusted arm of the same seam: a trusted tier yields a grant and
-    /// never touches processor state (setup proceeds normally).
     #[test]
     fn trusted_tier_gate_yields_grant_and_leaves_state() {
         let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));

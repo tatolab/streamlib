@@ -21,9 +21,6 @@ from tatolab.runtime._helper_process_environment_variables import ESCALATE_FD_EN
 
 
 
-# Upper bound on how long an escalate request waits for its correlated
-# response. Generous enough for a cold GPU allocation under load; bounded so
-# a wedged parent surfaces as an error instead of a hung processor callback.
 ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
 
 # What an answer to each escalate op creates in the app process, as the op that
@@ -107,7 +104,6 @@ class ParentProcessBridge:
         ) = queue.SimpleQueue()
         self._channel_closed = False
         self._the_parent_is_gone = threading.Event()
-        # Non-inheritable by default, so nothing the processor starts holds it.
         (
             self._lifecycle_command_arrival_read_fd,
             self._lifecycle_command_arrival_write_fd,

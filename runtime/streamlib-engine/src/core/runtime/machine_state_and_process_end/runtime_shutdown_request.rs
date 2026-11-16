@@ -32,8 +32,6 @@ pub enum RuntimeShutdownEscalation {
     NotRequested = 0,
     /// The graph stops gracefully: every helper walks its whole ladder.
     Graceful = 1,
-    /// Every helper's ladder skips to terminating its process group, and a
-    /// native processor thread still inside its callback is abandoned.
     Forced = 2,
     /// Every helper's process group is killed and the process exits with
     /// status 130.

@@ -143,19 +143,6 @@ unsafe impl Send for VulkanQueryPool {}
 unsafe impl Sync for VulkanQueryPool {}
 
 impl VulkanQueryPool {
-    /// Build a new query pool. Runs `vkCreateQueryPool` under the
-    /// host's device-level resource lock so concurrent processor
-    /// submissions can't race the create on NVIDIA Linux — same
-    /// threading discipline the other privileged RHI primitives
-    /// inherit (`VulkanVideoSession`, `VulkanVideoDpbImage`,
-    /// `VulkanVideoBitstreamBuffer`).
-    ///
-    /// The descriptor's per-query-type optional fields are checked
-    /// for consistency: `PIPELINE_STATISTICS` requires non-empty
-    /// `pipeline_statistics`; `VIDEO_ENCODE_FEEDBACK_KHR` requires
-    /// non-empty `video_encode_feedback_flags` AND a non-`None`
-    /// `video_profile`. Mismatches surface as a clean
-    /// [`Error::Configuration`] before any Vulkan API call.
     #[tracing::instrument(level = "trace", skip(vulkan_device, descriptor), fields(label = descriptor.label, query_type = ?descriptor.query_type, query_count = descriptor.query_count))]
     pub fn new(
         vulkan_device: &Arc<dyn VulkanVideoCodecDevice>,

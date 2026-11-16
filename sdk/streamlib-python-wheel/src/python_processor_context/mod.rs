@@ -1,16 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The capability-typed runtime contexts handed to Python lifecycle hooks.
-//!
-//! Built in the helper process the processor runs in: everything a hook
-//! reads is local, was passed down by the parent, or crosses to it — the
-//! GPU surface through the exchange client, whose escalate wait releases
-//! the GIL so a slow parent parks one thread and never the interpreter.
-//! GIL discipline: a call that crosses to the parent is made attached —
-//! there is no reaching the bridge otherwise — and releases the GIL inside
-//! its own wait. Everything else that can block runs inside a
-//! `python.detach(..)` closure.
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -92,9 +82,6 @@ fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
     ))
 }
 
-/// The engine build id compiled into this extension, which a processor
-/// interpreter compares with the id its parent handed it before it opens
-/// anything.
 #[pyfunction]
 pub(crate) fn engine_build_id_compiled_into_this_extension() -> &'static str {
     streamlib::sdk::helper_process_transport::ENGINE_BUILD_ID

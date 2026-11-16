@@ -5,12 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::ProcessExecution;
 
-/// Execution configuration for a processor.
-///
-/// Thread priority is **not** part of this type — it's a per-processor
-/// scheduling decision sourced from the manifest's `scheduling:` block at
-/// registration time and stored on `ProcessorDescriptor`. See `compiler/
-/// scheduling.rs` for how the runtime resolves it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ExecutionConfig {
     /// How and when `process()` is called.
@@ -48,10 +42,6 @@ impl ExecutionConfig {
 mod tests {
     use super::*;
 
-    /// msgpack round-trip preserves the full value for every standard
-    /// execution flavor. Mirrors the plugin-ABI encode path that
-    /// forwards `ProcessorInstance::execution_config()` queries from
-    /// the host to cdylib-registered processors.
     #[test]
     fn msgpack_round_trip_preserves_full_value() {
         for cfg in [

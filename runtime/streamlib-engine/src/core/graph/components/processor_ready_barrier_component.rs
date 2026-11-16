@@ -6,15 +6,6 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 
-/// Synchronization barrier for processor startup.
-///
-/// Used to coordinate between the compiler and processor threads:
-/// 1. Compiler spawns processor thread
-/// 2. Processor thread creates instance, attaches to graph
-/// 3. Processor thread signals READY via this barrier
-/// 4. Compiler waits for READY, then wires ring buffers
-/// 5. Compiler signals CONTINUE via this barrier
-/// 6. Processor thread continues with setup() and process loop
 pub struct ProcessorReadyBarrierComponent {
     ready_sender: Option<Sender<()>>,
     continue_receiver: Option<Receiver<()>>,
@@ -45,16 +36,12 @@ impl ProcessorReadyBarrierComponent {
         (component, handle)
     }
 
-    /// Signal that the processor is ready (instance created and attached).
-    /// Called by the processor thread.
     pub fn signal_ready(&mut self) {
         if let Some(sender) = self.ready_sender.take() {
             let _ = sender.send(());
         }
     }
 
-    /// Wait for the compiler to signal that wiring is complete.
-    /// Called by the processor thread.
     pub fn wait_for_continue(&mut self) {
         if let Some(receiver) = self.continue_receiver.take() {
             let _ = receiver.recv();

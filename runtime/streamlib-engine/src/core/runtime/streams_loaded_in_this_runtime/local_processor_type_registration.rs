@@ -1,14 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! [`LoadedStreamInThisRuntime::add_local`] — register an already-compiled
-//! `#[processor]` host type on the machine's processor registry, live, with no
-//! package on disk.
-//!
-//! The type registers under the class import path its own `#[processor]`
-//! descriptor carries. Nothing is minted: identity is derived from the type,
-//! never synthesized for the registration, which is the same rule a Python
-//! class follows: it registers under the import path it was described by.
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
@@ -17,14 +9,6 @@ use crate::core::processors::{Config, GeneratedProcessor, PROCESSOR_REGISTRY};
 use crate::core::runtime::LoadedStreamInThisRuntime;
 
 impl LoadedStreamInThisRuntime {
-    /// Register host type `P` on the machine's processor registry and return
-    /// the class import path [`LoadedStreamInThisRuntime::add_processor`]
-    /// names it by.
-    ///
-    /// `config` is validated against `P::Config` before anything is
-    /// registered, so a type whose config does not deserialize is refused
-    /// here rather than at instantiation. Registering a type twice is an
-    /// error — the registry never overwrites a live registration.
     pub fn add_local<P>(&self, config: serde_json::Value) -> Result<ProcessorClassImportPath>
     where
         P: GeneratedProcessor + 'static,

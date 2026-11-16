@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A processor class's fully-qualified import path — the one string a
-//! processor is identified by.
 
 use std::fmt;
 
@@ -11,25 +9,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{SchemaError, SchemaResult};
 
-/// The fully-qualified import path of the class a processor is —
-/// `my_app.filters:BlurProcessor` from Python, `my_app::filters::BlurProcessor`
-/// from Rust.
-///
-/// Two spellings of one concept, discriminated by the descriptor's sibling
-/// `runtime` field and by nothing in the string itself. Stored verbatim and
-/// never parsed — splitting on `:` or `::` to recover a short name re-invents
-/// the identity grammar this type replaced.
-///
-/// Every inhabitant is valid: the inner string is private, [`Self::new`] and
-/// [`Self::of_built_in_node`], which cannot be blank, are the only
-/// constructors, there is no `Default`, and [`Deserialize`] validates rather
-/// than inheriting `String`'s.
-///
-/// Two things are read: a path in [`BUILT_IN_NODE_CLASS_MODULE`] names one of
-/// the runtime's built-ins, resolved from its own registry and never imported;
-/// and a Python path led by an import's folder,
-/// `imports/<folder>/<module>:<qualname>`, names a class in that import's own
-/// node code, imported from that folder.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
 #[serde(transparent)]
@@ -132,8 +111,6 @@ mod tests {
     const PYTHON_PATH: &str = "my_app.filters:BlurProcessor";
     const RUST_PATH: &str = "my_app::filters::BlurProcessor";
 
-    /// Both spellings ride through unparsed and unaltered. A validator that
-    /// admitted only one grammar would refuse half the processors in a graph.
     #[test]
     fn both_grammars_are_admitted_verbatim() {
         for path in [PYTHON_PATH, RUST_PATH, "app:P", "crate::P"] {

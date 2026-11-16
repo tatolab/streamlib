@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Reading one described node type — the `@node.process` stamps a processor
-//! interpreter printed for a class — into what the engine registers.
-//!
-//! The keys of a described node type are the `__tatolab_node_*__` attributes
-//! `tatolab/stream/_node_declaration.py` stamps, carried verbatim by the
-//! bootstrap's `--describe`; the two move together.
 
 use super::shader_node_program::ShaderNodeProgram;
 use crate::core::descriptors::{
@@ -49,8 +43,6 @@ pub struct PythonProcessorDeclaration {
 /// How a node of a described Python type runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HowAPythonNodeOfTheTypeRuns {
-    /// A `@node.process` class, in its own processor interpreter, driven on
-    /// the execution it declared.
     InItsOwnProcessorInterpreter(ExecutionConfig),
     /// A `@node.function`, inside the read of each node it feeds.
     InsideTheReadOfEachNodeItFeeds,
@@ -478,12 +470,6 @@ fn read_port_family_declaration(
     }
 }
 
-/// Read one `audio_window` declaration off a described port.
-///
-/// The decorator validates first, so this is not the only guard — it is the
-/// guard that holds when the marker was built by something other than the
-/// decorator, and it renders its refusals from the same shared validator the
-/// `#[processor]` grammar uses.
 fn read_audio_window_contract(
     audio_window: &serde_json::Value,
     port_name: &str,
@@ -573,13 +559,6 @@ impl AudioWindowFieldRefusal {
     }
 }
 
-/// Read a `channels` value written either as a count or as the
-/// source-following spelling.
-///
-/// The one parse both readers call — a described declaration, and a processor
-/// interpreter's reading of what the parent wired. The refusal comes back bare
-/// so each frames it in its own terms, the way the contract's own validator
-/// does: one names a declaration, the other names a wiring.
 pub fn read_a_channel_count_or_the_source_spelling(
     value: &serde_json::Value,
 ) -> std::result::Result<Option<u32>, AudioWindowFieldRefusal> {

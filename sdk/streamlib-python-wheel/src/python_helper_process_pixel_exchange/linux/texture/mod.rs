@@ -177,21 +177,11 @@ impl TextureCheckOutRegistrationMetadata {
     }
 }
 
-/// A pooled texture the parent acquired on this child's behalf.
-///
-/// Deliberately not a [`HelperCheckedOutPixelSurface`]: no fds were checked
-/// out and no memory is mapped here. What this carries is the name a dispatch
-/// binds and a downstream processor resolves, the debt that hands the pool
-/// slot back, and the client its device-tensor scope reaches the parent's
-/// export staging through.
 pub(crate) struct HelperAcquiredTexture {
     pub(crate) surface_id: String,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
-    /// Settled by its own Drop, via the owned memory that carries this
-    /// value — so a tensor outliving its handle keeps the pool slot too.
-    /// Absent on a processor output pool's frame: the pool owns the slot.
     #[expect(
         dead_code,
         reason = "the field is the release; its Drop pays the parent"
@@ -393,13 +383,6 @@ impl Drop for HelperCheckedOutTextureSurface {
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// Acquire a texture, and take back the surface id the parent minted for
-    /// it plus the extent it actually allocated — a one-off this helper owes a
-    /// release, or the next frame of a processor output pool.
-    ///
-    /// Nothing is imported: the id is what a kernel dispatch binds and what a
-    /// downstream processor resolves. Mapping the texture's memory into this
-    /// process is a separate capability.
     pub(crate) fn acquire_texture(
         self: &Arc<Self>,
         python: Python<'_>,

@@ -329,8 +329,6 @@ fn an_unresolved_node_renders_under_the_requested_path_and_refuses_to_load() {
 #[test]
 #[serial]
 fn a_load_refused_at_a_link_adds_no_stream() {
-    // A cast port name, so registration and `validate` take it, too long to
-    // leave a channel name room for its processor's chunk.
     let port_name_too_long_for_a_channel = "v".repeat(60);
     let camera = register_test_type(
         "LinkRefusedCamera",

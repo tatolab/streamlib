@@ -1,40 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The raw-handle export consumed by a foreign process (#1900): a Python
-//! processor's `export_opaque_fd` hands its fd over SCM_RIGHTS plus the
-//! typed metadata as JSON, and this test — a separate process from both
-//! the `tatolabd` hosting the stream and the processor interpreter that
-//! answered the export — imports that fd on its own `VkDevice` and
-//! byte-compares the kernel's pixels, or — for a pooled pixel buffer on a
-//! device without DMA-BUF export — the bytes the probe wrote.
-//!
-//! What this locks: the exported fd names the kernel-written allocation
-//! (a wrong fd reads wrong pixels or refuses to import), and the wire
-//! metadata arrives shaped as the contract states (asserted field by
-//! field against the known probe). What it deliberately does not lock:
-//! the in-tree consumer importer hardcodes its own image recipe and
-//! clamps an undersized `allocation_byte_size` up to the driver's
-//! requirement, so those fields are shape-asserted here rather than
-//! driven through the import — the importer's recipe/memoryTypeIndex
-//! conformance is the separate work noted on the change.
-//!
-//! The stream is the integration suite's own
-//! (`tests/stream-on-runtime/device_exchange_streams.py`), loaded with the
-//! runtime unit's `tatolab open --play` into the unit's `tatolabd`, which compiles
-//! it in the suite venv and starts its processor interpreters from that same
-//! venv. The unit (`$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else
-//! `target/tatolab-runtime`) is the integration suite's, built by `cargo xtask
-//! build-runtime --machine-directories-under-a-test-root`, so the runtime this
-//! test starts keeps its lock, sockets and state under a temporary machine
-//! root and never touches the machine's own.
-//!
-//! Test gating: Linux-only by construction; skips when Vulkan (or the
-//! OPAQUE_FD pools the local staging allocation needs) is unavailable —
-//! mirroring the sibling carve-out tests. Once the device is proven, a
-//! missing suite venv, a missing runtime unit or one built without the test
-//! root, a refused load, or a `tatolabd` that ends before the probe connects
-//! for any reason but a missing Vulkan driver, fails the test.
 
 #![cfg(target_os = "linux")]
 
@@ -153,12 +119,6 @@ impl Drop for TatolabRunLoadingTheHandoffStream {
     }
 }
 
-/// The spawned `tatolabd` plus the files its stdout/stderr drain into. It
-/// hosts the stream until signalled, so `Drop` — not the stream — is what
-/// ends it: SIGINT, a grace window, then SIGKILL to its process group. RAII
-/// so every panic path in the test reaps the GPU-holding runtime and its
-/// processor interpreters instead of orphaning them for the rest of a
-/// `#[serial]` rig session.
 struct TatolabdHostingTheHandoffStream {
     tatolabd_process: Child,
     stdout_capture_path: PathBuf,
@@ -195,10 +155,6 @@ impl TatolabdHostingTheHandoffStream {
 
 impl Drop for TatolabdHostingTheHandoffStream {
     fn drop(&mut self) {
-        // A `tatolabd` that already exited was (or is here) reaped by this
-        // `try_wait`; signalling its pid afterwards could hit an unrelated
-        // process on a recycled pid. Its process group may still hold a
-        // processor interpreter, which the group kill reaches.
         if matches!(self.tatolabd_process.try_wait(), Ok(Some(_))) {
             let process_group_id = self.tatolabd_process.id() as libc::pid_t;
             unsafe { libc::killpg(process_group_id, libc::SIGKILL) };

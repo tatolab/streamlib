@@ -1,10 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Processor and port descriptor types for introspection.
-//!
-//! These are engine-free serde data types shared by the engine and the
-//! `#[processor]` macro.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,7 +9,6 @@ use crate::{
     ProcessorClassShortName, ProcessorScheduling,
 };
 
-/// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessorRuntime {
@@ -115,7 +110,6 @@ impl PortDescriptor {
     }
 }
 
-/// Code examples for a processor in different languages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CodeExamples {
     pub rust: String,
@@ -123,20 +117,9 @@ pub struct CodeExamples {
     pub typescript: String,
 }
 
-/// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    /// The class's short name — what an instance's display name defaults to.
-    /// Never the processor's identity: that is `processor_class_import_path`.
     pub processor_class_short_name: ProcessorClassShortName,
-    /// The processor class's fully-qualified import path — what the registry,
-    /// the control plane and helper-process spawning all name this processor
-    /// by.
-    ///
-    /// Derived mechanically by the authoring surface — the `#[processor]`
-    /// macro captures it at the expansion site, the wheel reads it off the
-    /// class — and never authored. Taken by `new` rather than by a builder so
-    /// that adding a descriptor without deriving one does not compile.
     pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
     pub repository: String,
@@ -146,22 +129,12 @@ pub struct ProcessorDescriptor {
     /// Runtime environment (Rust, Python).
     #[serde(default)]
     pub runtime: ProcessorRuntime,
-    /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurProcessor").
     #[serde(default)]
     pub entrypoint: Option<String>,
-    /// The config type's JSON Schema, as JSON Schema draft 2020-12.
-    ///
-    /// `None` only on a descriptor built by hand without one — every
-    /// `#[processor]`-emitted descriptor carries a document, an empty-object
-    /// one where the processor declares no config.
     #[serde(default)]
     pub config_schema: Option<serde_json::Value>,
-    /// Declarative scheduling intent declared in the `#[processor]` attribute.
-    /// Read at thread-spawn time; defaults to `Normal` priority.
     #[serde(default)]
     pub scheduling: ProcessorScheduling,
-    /// Whether the processor paces itself on real time, as a live device does:
-    /// in a stepped stream it stands outside the step barrier.
     #[serde(default)]
     pub paced_by_real_time: bool,
     /// A stateful function node's state record fields, in the order its state
@@ -238,7 +211,6 @@ impl ProcessorDescriptor {
         self
     }
 
-    /// Declare the processor paced by real time.
     pub fn paced_by_real_time(mut self) -> Self {
         self.paced_by_real_time = true;
         self

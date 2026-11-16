@@ -3,25 +3,6 @@
 # no-print-in-python ignores this file: bootstrap; the pre-install fatals below
 # are written to raw stderr because the log channel does not exist yet.
 
-"""The bootstrap a processor interpreter runs — one Python processor, one process.
-
-Every `@node.process` class runs in a processor interpreter: the stream's own venv
-interpreter running this file by path, with the lend directory (the one holding
-`tatolab/runtime/`) and then the project directory on `PYTHONPATH`. It imports
-the class by the import path the parent derived from it, opens that processor's
-own iceoryx2 ports from the wiring the parent sends, and drives its lifecycle.
-Run with `--describe <import path>...`, it instead prints each class's
-declaration as one JSON document on stdout and exits; run with
-`--describe-installed-modules`, it does the same for every class an installed
-distribution declares in the `tatolab.nodes` entry-point group.
-
-Startup order is load-bearing. Up to the lent runtime's import this file uses
-the standard library only and parses as Python 3.7, so an interpreter that
-cannot load the runtime is refused naming what it is. The escalate socket comes
-up next so logging has somewhere to go, and the user's module is imported last
-so anything it raises is already reportable. Fatals before the channel exists
-go to raw stderr, which the parent captures off fd2.
-"""
 
 from __future__ import annotations
 
@@ -375,8 +356,6 @@ def _write_a_bootstrap_fatal_to_raw_stderr(bootstrap_failure: object) -> None:
 
 
 def main(arguments: "list[str]") -> int:
-    """Describe the classes `--describe` names, or the installed modules'
-    classes, or run one processor until its parent tears it down."""
     try:
         _refuse_an_engine_built_other_than_the_parents()
     except HelperProcessProtocolError as bootstrap_failure:
@@ -430,7 +409,6 @@ def _keep_the_native_escalate_socket_from_what_the_processor_starts() -> None:
 
 
 def run_one_processor_until_its_parent_tears_it_down() -> None:
-    """Run the processor `STREAMLIB_ENTRYPOINT` names until its parent tears it down."""
     try:
         import_path = _required_environment(ENTRYPOINT_ENV)
         processor_id = _required_environment(PROCESSOR_ID_ENV)
@@ -452,8 +430,6 @@ def run_one_processor_until_its_parent_tears_it_down() -> None:
     engine_log_forwarder = CapturedEngineLogRecordForwarder(log_sink)
     engine_log_forwarder.capture_and_start()
 
-    # Before anything a processor brings runs, and on macOS only: Linux binds
-    # the helper to its parent with `PR_SET_PDEATHSIG` at spawn.
     if sys.platform == "darwin":
         try:
             watch_for_this_helper_processes_parent_going_away(bridge.parent_channel_fd())

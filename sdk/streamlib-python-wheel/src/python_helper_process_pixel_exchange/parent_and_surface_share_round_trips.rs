@@ -53,8 +53,6 @@ pub(super) fn escalate_round_trip_to_parent<'py>(
 }
 
 impl ProcessorOutputPoolRequest<'_> {
-    /// Name the pool on an acquire's escalate op; a one-off acquire carries
-    /// no `processor_output_pool` field.
     pub(super) fn write_onto_escalate_op(
         processor_output_pool: Option<Self>,
         python: Python<'_>,
@@ -133,9 +131,6 @@ pub(super) fn refuse_check_out_the_service_declined(
 pub(super) type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>);
 
 impl HelperProcessGpuExchangeClient {
-    /// The release an acquire owes its parent from the moment the parent
-    /// allocated: a one-off's own `release_handle`; a processor output pool's
-    /// frame owes none, since the pool owns the slot.
     pub(super) fn release_debt_unless_pooled(
         &self,
         python: Python<'_>,
@@ -200,9 +195,6 @@ impl HelperProcessGpuExchangeClient {
         Ok(checked_out_pixel_surface)
     }
 
-    /// Check out a surface another processor published — pixel buffer or
-    /// texture, whichever its registration names. No release debt: the
-    /// surface belongs to its acquirer.
     pub(crate) fn resolve_surface(
         self: &Arc<Self>,
         python: Python<'_>,

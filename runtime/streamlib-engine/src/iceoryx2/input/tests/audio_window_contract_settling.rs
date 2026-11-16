@@ -65,8 +65,6 @@ fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitte
     );
 }
 
-/// One device stream's format, as a processor's own `setup()` reads it off
-/// the stream it just opened.
 fn a_device_stream_matching(
     sample_rate: u32,
     channels: u32,
@@ -99,13 +97,6 @@ fn scalars_of_one_window(window: &MessageReadFromInputPort) -> (Vec<f32>, u32, u
     )
 }
 
-/// The whole gap the sentinel opens, held at the seam that has to survive
-/// it: the compiler wires this port before its processor reaches `setup()`,
-/// so bags arrive against a contract nobody has settled yet.
-///
-/// Nothing may reach a reader while that lasts — a raw 16 kHz mono bag
-/// handed to a consumer expecting exact 48 kHz stereo windows is precisely
-/// the plausible-looking wrong audio this contract exists to rule out.
 #[test]
 fn a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued() {
     let (publisher, subscriber) = open_channel_for_one_link_loaning("window/awaiting", 8, 16_384);
@@ -146,14 +137,6 @@ fn a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued() {
     );
 }
 
-/// An unsettled port's loss, said in words. The count this link carries is
-/// the very same count a stalled consumer produces, and this line is the
-/// only thing that separates the two.
-///
-/// Mentally revert it and a port that will never settle — one a link was
-/// wired onto after its processor's `setup()` had been and gone — reads
-/// exactly like a consumer that cannot keep up, while it delivers nothing
-/// at all for the rest of the run.
 #[test]
 fn a_bag_evicted_at_a_port_with_an_unsettled_contract_says_so_once_naming_the_port() {
     const MAILBOX_DEPTH: usize = 2;
@@ -389,14 +372,6 @@ fn only_a_port_still_holding_the_sentinel_is_listed_as_awaiting_its_device() {
     );
 }
 
-/// The settle is not a general window setter: only a port that declared the
-/// sentinel and is still waiting on it takes one.
-///
-/// Mentally revert the guard and a processor can window a port whose author
-/// declared nothing, or replace five declared values with its own device's —
-/// and `graph` would go on rendering the author's declaration while the
-/// stage ran something else, which is the plausible-looking wrong answer
-/// this contract exists to rule out.
 #[test]
 fn only_a_port_awaiting_its_device_can_be_settled_and_the_refusal_says_which_it_is() {
     let mailboxes = InputMailboxesInner::new();

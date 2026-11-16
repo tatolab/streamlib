@@ -13,12 +13,6 @@
 use serde::de::{self, DeserializeOwned, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// Video frame bag: references a GPU surface by id — pixels never ride the
-/// link. `surface_id` is the handoff contract (texture cache in-process,
-/// surface-share memory fd cross-process, pixel buffer for CPU readback);
-/// `timestamp_ns` is the ordering primitive; nothing else. Consumers that
-/// need "frame N" semantics derive it from timestamps, never from a
-/// cross-processor counter.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VideoFrame {
     /// GPU surface id, resolved out-of-band via the engine's surface APIs.

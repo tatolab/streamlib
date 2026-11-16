@@ -22,7 +22,6 @@ fn parse_err(tokens: proc_macro2::TokenStream) -> String {
     }
 }
 
-/// The struct a `#[processor]` is handed, with `attributes` written under it.
 fn node_struct_with(attributes: proc_macro2::TokenStream) -> syn::ItemStruct {
     syn::parse_quote! {
         #attributes

@@ -232,7 +232,6 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
-    /// Pause this project: every processor of each of its streams holds its state, at once.
     #[command(
         long_about = "Pause the whole project at once, never waiting behind its queued \
                       actions: every processor of each loaded stream holds its state and \
@@ -247,7 +246,6 @@ enum TatolabVerb {
         #[arg(long = "dir", value_name = "DIR")]
         project_directory: Option<PathBuf>,
     },
-    /// Resume this paused project: its processors carry on from the state they held.
     #[command(
         long_about = "Resume the whole paused project at once: every processor carries on from \
                       the state it held, and each stream compiles the graph edits made while it \

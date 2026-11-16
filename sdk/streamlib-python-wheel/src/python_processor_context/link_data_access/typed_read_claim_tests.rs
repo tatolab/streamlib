@@ -236,9 +236,6 @@ fn the_same_class_constructed_outside_a_read_claims_nothing() {
     });
 }
 
-/// The bare data plane a helper wires by hand holds no context, so a type
-/// it constructs is offered nothing — the claim belongs to the read a
-/// processor actually writes.
 #[test]
 fn the_context_free_data_plane_offers_no_capability() {
     let share = SurfaceShareUnderTest::start("contextfree");

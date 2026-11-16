@@ -12,7 +12,6 @@ use crate::iceoryx2::{
     HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot,
 };
 
-/// Runtime metrics for a processor.
 #[derive(Default, Clone)]
 pub struct ProcessorMetrics {
     /// Frames per second throughput.
@@ -23,21 +22,16 @@ pub struct ProcessorMetrics {
     pub latency_p99_ms: f64,
     /// Total frames processed.
     pub frames_processed: u64,
-    /// What this processor's ports sent and lost, read live from wherever they
-    /// count it.
     pub loss_counts: ProcessorLossCounts,
     /// What moved this function node out of its readers' islands into a
     /// process of its own; `None` for every node never moved.
     pub promotion_out_of_its_readers_islands: Option<FunctionNodePromotionOutOfItsReadersIslands>,
 }
 
-/// Where a processor's loss counts are counted, and so where `graph` reads them.
 #[derive(Clone)]
 pub enum ProcessorLossCounts {
     /// Counted by ports in this process.
     CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess),
-    /// Counted in the processor's helper process and read off the board it
-    /// writes them on.
     CountedInItsHelperProcess(Arc<HelperPlacedProcessorLossCounts>),
 }
 
@@ -47,22 +41,10 @@ impl Default for ProcessorLossCounts {
     }
 }
 
-/// The bag counts a processor's ports in this process share with its node.
 #[derive(Default, Clone)]
 pub struct LossCountsOfPortsInThisProcess {
-    /// Bags lost on the way to this processor's input ports, counted per
-    /// inbound link.
-    ///
-    /// Shared live with the destination's input mailboxes, so a snapshot reads
-    /// the counts as they stand rather than a copy taken at wiring time.
     pub dropped_bag_counts_by_inbound_link: Arc<DroppedBagCountsByInboundLink>,
-    /// Samples this processor's windowed input ports discarded when they
-    /// flushed, counted per inbound link and shared live with its input
-    /// mailboxes.
     pub discarded_sample_counts_by_inbound_link: Arc<DiscardedSampleCountsByInboundLink>,
-    /// Bags this processor's output ports refused at the channel ceiling, bags
-    /// they sent and groups their writer gave up upstream of them, counted per
-    /// output port and shared live with its output writer.
     pub bag_counts_by_output_port: Arc<BagCountsByOutputPort>,
 }
 
@@ -94,8 +76,6 @@ impl ProcessorLossCounts {
         }
     }
 
-    /// What the processor's helper process last wrote of its step progress;
-    /// `None` for a processor counted in this process.
     pub fn step_progress_its_helper_process_wrote(
         &self,
     ) -> Option<HelperProcessStepProgressBoardEntry> {
@@ -121,8 +101,6 @@ impl ProcessorLossCounts {
 }
 
 impl ProcessorMetrics {
-    /// This processor's dropped bags across every inbound link. Derived from
-    /// the per-link counts, which stay the record.
     pub fn total_dropped_bag_count(&self) -> u64 {
         self.loss_counts.total_dropped_bag_count()
     }
@@ -133,12 +111,6 @@ impl JsonSerializableComponent for ProcessorMetrics {
         "metrics"
     }
 
-    /// Only the fields something actually computes reach the wire. Nothing
-    /// writes `throughput_fps`, the two latencies or `frames_processed`, and
-    /// this component had no insert site at all until drop counts gave it one —
-    /// so rendering their zeros would put four permanent false claims on
-    /// `graph`'s first-ever `metrics` key. A reader could not tell an idle
-    /// processor from an uninstrumented one.
     fn to_json(&self) -> JsonValue {
         // One snapshot for every key: taken apart, an eviction landing between
         // them renders a total smaller than the per-link counts it claims to be
@@ -157,11 +129,6 @@ impl JsonSerializableComponent for ProcessorMetrics {
             "refused_bags_by_output_port": refused_bags_by_output_port,
             "written_bags_by_output_port": written_bags_by_output_port,
         });
-        // A map with nothing in it renders no key at all rather than an empty
-        // object. The discarded-sample map is empty only for a processor with
-        // no link into a windowed port, so its absence says none can discard;
-        // the given-up map holds only ports that have given a group up, so its
-        // absence says none has yet.
         let Some(rendered_keys) = rendered.as_object_mut() else {
             return rendered;
         };
@@ -319,8 +286,6 @@ mod tests {
         );
     }
 
-    /// Only a link into a windowed port carries a sample count, and a processor
-    /// with no such link renders no key for one rather than an empty map.
     #[test]
     fn a_processors_metrics_render_discarded_samples_only_for_links_into_windowed_ports() {
         let dropped = Arc::new(DroppedBagCountsByInboundLink::default());

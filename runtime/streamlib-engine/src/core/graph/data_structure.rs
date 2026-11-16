@@ -37,7 +37,6 @@ pub enum GraphState {
 /// - `graph.query()` for read operations
 /// - `graph.query()` for mutations
 pub struct Graph {
-    /// The petgraph DiGraph storing processors as nodes and links as edges.
     digraph: DiGraph<ProcessorNode, Link>,
 
     /// The id of the stream this graph was loaded as, until then `None`.

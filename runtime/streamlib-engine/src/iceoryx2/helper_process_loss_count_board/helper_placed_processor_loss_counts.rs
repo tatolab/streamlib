@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A helper-placed processor's loss counts as its parent reads them off the board.
 
 use std::collections::BTreeMap;
 
@@ -39,7 +38,6 @@ struct OutputPortWithOutboundLinks {
     wiring_generation: u64,
 }
 
-/// The slots and output ports a helper-placed processor's links hold.
 struct HelperPlacedProcessorLossCountWiring {
     inbound_link_slots: Vec<Option<InboundLinkLossCountSlotAssignment>>,
     last_assigned_wiring_generation: u64,
@@ -99,10 +97,6 @@ impl HelperPlacedProcessorLossCountWiring {
     }
 }
 
-/// A helper-placed processor's loss counts as its parent reads them: the slot
-/// each inbound link was assigned, the output ports with a link, the board the
-/// current helper writes on, and what the boards of earlier helpers — ones that
-/// died and were restarted — last held for wirings still in place.
 #[derive(Default)]
 pub struct HelperPlacedProcessorLossCounts {
     wiring: Mutex<HelperPlacedProcessorLossCountWiring>,
@@ -126,8 +120,6 @@ impl std::fmt::Debug for HelperPlacedProcessorLossCounts {
     }
 }
 
-/// Every count `graph` renders under a processor's `metrics`, taken at one
-/// instant.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ProcessorLossCountSnapshot {
     /// Bags lost per inbound link.
@@ -399,8 +391,6 @@ impl HelperPlacedProcessorLossCounts {
             .function_node_state_entry(function_node_breadcrumb_number)
     }
 
-    /// This processor's dropped bags across every inbound link, each read for
-    /// its link's own wiring.
     pub fn total_dropped_bag_count(&self) -> u64 {
         self.loss_count_snapshot()
             .dropped_bags_by_inbound_link

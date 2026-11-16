@@ -1,21 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What the runtime loads from a stream's graph, and what its load refuses by name.
-
-A graph reaches `tatolabd` through `open_project`, as `tatolab open --play` makes it: the
-runtime reads each graph document of the project and loads the graph it holds. A
-graph written here by hand is written as a project's graph document, the text a
-test wrote verbatim but for its stream asset, so the runtime parses exactly that
-text; a `@graph_generator` function is compiled in this process to its graph document. Every
-run here but the rig's is on a `tatolabd` that reaches no Vulkan driver: a document
-the runtime cannot load is a stream recorded failed with the reason; a load that
-succeeds fails at its start, at the GPU, before any device opens — and the runtime
-keeps serving either way.
-
-A Python node type is described in a processor interpreter started from the
-suite venv, which holds `tatolab-stream` and nothing of the runtime.
-"""
 
 from __future__ import annotations
 
@@ -71,7 +56,6 @@ EVERY_BUILT_IN_NODE_CLASS: "list[type[BuiltInNode[Any]]]" = [
 
 OPEN_CONFIG_SINK_TYPE = "runtime_load_open_config_nodes:OpenConfigSink"
 
-# Imported by nothing in this process: `tatolabd` describes it in a processor interpreter.
 DESCRIBED_NODE_MODULE = "runtime_load_nodes"
 DESCRIBED_NODE_TYPE = f"{DESCRIBED_NODE_MODULE}:LoadedFrameRelay"
 

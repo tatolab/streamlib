@@ -1,53 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Integration-test fixture that exercises a handful of the
-//! ray-tracing-kernel methods end-to-end.
-//!
-//! Smoke-only — narrower scope than the compute-kernel CPU-reference
-//! test. Validates that kernel construction, AS-binding setter,
-//! storage-image setter, push-constant staging, and a `trace_rays()`
-//! dispatch complete without panicking or returning an error code.
-//! Pixel correctness is not asserted.
-//!
-//! Lifecycle:
-//!   1. `setup()` — nothing.
-//!   2. `start()` —
-//!      a. Probe `supports_ray_tracing_pipeline()`. If the device
-//!      doesn't expose `VK_KHR_ray_tracing_pipeline`, write `OK`
-//!      immediately — per-platform RT support is a host concern.
-//!      b. Build a single-triangle BLAS via
-//!      `gpu_full_access().build_triangles_blas(...)`.
-//!      c. Build an identity TLAS over the BLAS via
-//!      `gpu_full_access().build_tlas(...)`.
-//!      d. Construct a [`RayTracingKernelDescriptor`] for the
-//!      embedded rgen+rmiss+rchit SPIR-V (acceleration_structure
-//!         + storage_image bindings, push-constant variant gate) and
-//!           create the kernel via
-//!           `gpu_full_access().create_ray_tracing_kernel(...)`.
-//!           e. Acquire a STORAGE_BINDING + COPY_SRC render-target
-//!           `Texture` via `gpu_limited_access().acquire_texture(...)`.
-//!           f. Stage AS binding via
-//!           `kernel.set_acceleration_structure(0, &tlas)`.
-//!           g. Stage storage image binding via
-//!           `kernel.set_storage_image(1, texture)`.
-//!           h. Stage push constants via
-//!           `kernel.set_push_constants_value(&variant)`.
-//!           i. Drive `kernel.trace_rays(width, height, 1)` against the
-//!           acquired texture (including the SBT + queue submit + fence
-//!           wait).
-//!           j. Write `OK` or `ERR:<message>` to the configured
-//!           `output_path` so the integration test can assert the
-//!           round-trip succeeded.
-//!   3. `teardown()` — nothing; the kernel + AS + texture drop
-//!      naturally.
-//!
-//! What this locks: a regression that breaks any of
-//! `supports_ray_tracing_pipeline`, `build_triangles_blas`,
-//! `build_tlas`, `create_ray_tracing_kernel`, `acquire_texture`,
-//! `set_acceleration_structure`, `set_storage_image`,
-//! `set_push_constants`, or `trace_rays` surfaces here as either a
-//! missing output file (the processor panicked) or `ERR:<message>`.
 
 #[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;

@@ -139,8 +139,6 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) exporting_device_uuid: Option<String>,
 
-    /// The descriptor a reader claims the frame by. Set on an acquire from a
-    /// processor output pool whose slots a claim table covers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) gpu_pool_slot_frame: Option<EscalateResponseGpuPoolSlotFrame>,
 

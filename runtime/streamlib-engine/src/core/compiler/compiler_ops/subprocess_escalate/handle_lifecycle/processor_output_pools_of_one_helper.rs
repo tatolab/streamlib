@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The processor output pools one helper process publishes kernel outputs
-//! from — textures and tensor storage buffers alike — each under the pool key
-//! its ring minted.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,7 +24,6 @@ use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
 use streamlib_ipc_types::{GpuPoolSlotFrameDescriptorBody, GpuPoolSlotRehandTest};
 
-/// The allocation every slot of one processor output texture pool shares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ProcessorOutputTextureDescriptor {
     pub(crate) width: u32,
@@ -36,17 +32,12 @@ pub(crate) struct ProcessorOutputTextureDescriptor {
     pub(crate) usage: TextureUsages,
 }
 
-/// The allocation every slot of one processor output pool shares: a texture,
-/// or a tensor storage buffer of one shape and element type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProcessorOutputSlotDescriptor {
     Texture(ProcessorOutputTextureDescriptor),
     StorageBuffer(TensorStorageBufferLayout),
 }
 
-/// One slot of a processor output pool: the texture or storage buffer,
-/// registered with the surface-share service and the parent's texture cache or
-/// storage buffer map under the slot key.
 pub(crate) struct ProcessorOutputPoolSlot {
     registered_handle: RegisteredHandle,
     /// The resource's handle count once allocation and registration settled —
@@ -87,8 +78,6 @@ impl TextureCacheRegistrationOfAPoolSlot {
     }
 }
 
-/// The handle count of a pooled resource's host `Arc`; `None` for any kind of
-/// registered handle no processor output pool may hold.
 fn pooled_resource_strong_count(registered_handle: &RegisteredHandle) -> Option<usize> {
     match registered_handle {
         RegisteredHandle::Texture { texture, .. } => Some(texture.texture().strong_count()),
@@ -139,13 +128,9 @@ pub(crate) struct ProcessorOutputPoolsOfOneHelper {
 pub(crate) enum ProcessorOutputFrameHandOff {
     /// A reused slot's frame, under its published id.
     Published(ProcessorOutputFramePublished),
-    /// The pool must grow: allocate a slot and hand it to
-    /// [`ProcessorOutputPoolsOfOneHelper::hand_off_a_fresh_slot`].
     NeedsAFreshSlot,
 }
 
-/// One frame a processor output pool published: its id, and the descriptor
-/// a reader claims it by when its pool shares a claim table.
 pub(crate) struct ProcessorOutputFramePublished {
     pub(crate) published_frame_id: String,
     pub(crate) gpu_pool_slot_frame: Option<GpuPoolSlotFrameDescriptorBody>,

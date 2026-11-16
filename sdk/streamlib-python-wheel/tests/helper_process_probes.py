@@ -1,13 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Processor classes the helper-process suite loads by import path.
-
-They live in their own module, not in the test module, because that is the
-whole contract under test: a helper process reaches a class by importing the
-module it was declared in, and importing a pytest module would re-run the
-suite inside the child.
-"""
 
 import json
 import struct
@@ -44,7 +37,6 @@ class PassThroughProbe:
 
 
 class OuterProbe:
-    """Holds a nested processor, so the dotted-qualname walk has a target."""
 
     @node.process(execution="manual")
     class InnerProbe:
@@ -158,8 +150,6 @@ class RaisesInSetupProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
-# When the pacing probe's `process()` ran, in monotonic nanoseconds. A test
-# reads it to measure how often a continuous loop called the processor.
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
 
 

@@ -1,28 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Escalate smoke test fixture.
-//!
-//! Proves `escalate()` fires end-to-end and that representative
-//! `GpuContextFullAccess` methods run correctly inside the scope. The
-//! processor's `start()` runs an escalate scope that exercises:
-//!
-//!   1. Entering the escalate gate and constructing a
-//!      `GpuContextFullAccess`.
-//!   2. Inside the closure:
-//!      - `full.wait_device_idle()`.
-//!      - `full.acquire_pixel_buffer(...)` — returns a counted
-//!        `PixelBuffer` handle.
-//!      - `full.acquire_output_texture(...)` — returns the id and a
-//!        counted texture registered under it until the handle drops.
-//!      - `full.register_texture_with_layout(...)` (per #906 exit
-//!        criterion #4).
-//!        If any FullAccess method regresses, this test fails.
-//!   3. Leaving the scope releases the gate and runs `wait_device_idle`.
-//!
-//! Output format:
-//!   - "OK" — escalate round-trip + all four method calls succeeded.
-//!   - "ERR:<message>" — any step failed.
 
 #[cfg(target_os = "linux")]
 use streamlib::engine_internal::sdk::rhi::VulkanLayout;

@@ -1,17 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The engine's half of a Python processor: the processor interpreter it runs in.
-//!
-//! One of these sits in the graph where the processor does, and owns nothing
-//! but the child. It has no mailboxes and no writer — the child opens its own
-//! iceoryx2 ports from the wiring this host forwards — and runs Manual on the
-//! engine's side, because the loop that drives the processor is the child's.
-//!
-//! The child is an exec of the stream's own venv interpreter, never a fork — a
-//! forked GPU context is not usable in the child — running the bootstrap the
-//! lend directory holds, by path. The lend directory leads `PYTHONPATH`, so the
-//! venv borrows `tatolab.runtime` from the runtime rather than installing it.
 
 mod dyn_generated_processor_for_spawn_host;
 mod helper_process_command_exchange;
@@ -49,21 +38,14 @@ use crate::core::runtime::{
     start_the_interpreter_at_the_open_descriptor_soft_limit_the_runtime_started_with,
 };
 
-/// The bootstrap a processor interpreter runs, relative to the lend directory.
 pub const PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY: &str =
     "tatolab/runtime/_processor_interpreter_bootstrap.py";
 
-/// The environment variable carrying the class import path a processor
-/// interpreter hosts.
 pub(crate) const PROCESSOR_INTERPRETER_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str =
     "STREAMLIB_ENTRYPOINT";
 
-/// The environment variable carrying the id of the processor a processor
-/// interpreter hosts.
 pub const PROCESSOR_INTERPRETER_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
 
-/// The environment variable carrying the name the graph gives the node a
-/// processor interpreter hosts.
 pub const PROCESSOR_INTERPRETER_NODE_NAME_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_NODE_NAME";
 
 /// The environment variable carrying the id of the stream the hosted node
@@ -75,9 +57,6 @@ pub const PROCESSOR_INTERPRETER_STREAM_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLI
 pub const PROCESSOR_INTERPRETER_STREAM_PROJECT_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
     "STREAMLIB_STREAM_PROJECT_DIRECTORY";
 
-/// The variable the parent names its surface-share channel to a processor
-/// interpreter in: the Unix socket's path on Linux, the Mach service's name on
-/// macOS.
 #[cfg(not(target_os = "macos"))]
 pub const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 #[cfg(target_os = "macos")]
@@ -111,14 +90,6 @@ const FUNCTION_NODE_CALL_WATCHDOG_FLOOR: Duration = Duration::from_millis(250);
 /// holding the app for the rest of its budget.
 const REGISTRATION_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
-/// How long a child gets to answer a lifecycle command that is not part of the
-/// shutdown ladder before the parent stops waiting on it.
-///
-/// This bounds the engine's own thread, not the child's work: the callbacks
-/// behind these commands are expected to return promptly, and a child that
-/// needs longer has already broken the contract. Shutdown has its own budgets —
-/// see [`super::processor_interpreter_shutdown_ladder`], where they are the
-/// ladder's rungs rather than one deadline reused.
 const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long a refusal waits, once a helper's process group is down, for the
@@ -132,7 +103,6 @@ pub(super) const HELPER_PROCESS_STANDARD_STREAM_CLOSE_DEADLINE: Duration = Durat
 /// How much of a helper's standard error a refusal carries, from the end.
 const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
 
-/// The bootstrap a processor interpreter runs, in `lend_directory`.
 pub fn processor_interpreter_bootstrap_path(lend_directory: &Path) -> PathBuf {
     lend_directory.join(PROCESSOR_INTERPRETER_BOOTSTRAP_PATH_IN_THE_LEND_DIRECTORY)
 }
@@ -161,19 +131,6 @@ pub(crate) fn processor_interpreter_python_path(
     })
 }
 
-/// A command starting `interpreter` as every interpreter a stream starts is
-/// started — its compile, its describe and each processor interpreter: in
-/// `project_directory`, with the runtime's environment minus every variable
-/// whose name begins with `PYTHON`, `PYTHONPATH` set to the lend directory
-/// then the project, and the open-descriptor soft limit the runtime started
-/// with.
-///
-/// The compile adds `-I`, which ignores every `PYTHON*` variable, so this
-/// `PYTHONPATH` reaches only the describe and the processor interpreters; the
-/// compile takes its import root from the compile entry.
-///
-/// Nothing per stream and nothing from a caller is added: what the runtime
-/// itself was started with is what each stream's interpreters inherit.
 pub(crate) fn stream_interpreter_command_in_its_project_directory(
     interpreter: &Path,
     project_directory: &Path,
@@ -205,7 +162,6 @@ pub(crate) fn remove_every_python_variable_named_in(
     }
 }
 
-/// A command running the processor interpreter bootstrap in `stream_environment`.
 pub(crate) fn processor_interpreter_bootstrap_command(
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
@@ -228,9 +184,6 @@ pub(crate) struct SurfaceShareChannelNamedToTheHelperProcess<'a> {
     pub(crate) channel_name: &'a std::ffi::OsStr,
 }
 
-/// The loaded stream a helper process — a processor interpreter or a describe —
-/// belongs to: the tag its process group is registered under, and the shutdown
-/// escalation its waits and its ladder read.
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedStreamAHelperProcessBelongsTo {
     pub(crate) stream_tag: LoadedStreamTag,
@@ -245,22 +198,14 @@ pub(crate) struct ProcessorInterpreterSpawnHostProcessor {
     processor_id: String,
     processor_configuration: Option<serde_json::Value>,
     descriptor: ProcessorDescriptor,
-    /// The stream's project directory and venv interpreter, recorded at the
-    /// load that registered this processor's type.
     stream_environment: StreamEnvironment,
     /// The directory holding the `tatolab/runtime/` the child borrows.
     processor_interpreter_lend_directory: PathBuf,
     the_stream_this_helper_belongs_to: LoadedStreamAHelperProcessBelongsTo,
     child: Option<Child>,
-    /// The engine-owned iceoryx2 domain this processor's nodes live in, kept
-    /// from `setup` because the sweep that reclaims a dead helper's nodes runs
-    /// from a liveness poll that is handed no context.
     iceoryx2_domain_root: Option<PathBuf>,
     child_standard_error_tail: Option<ChildStandardStreamRecording>,
     bridge: Option<SubprocessBridge>,
-    /// Set once the child stops answering. The pipeline keeps running and the
-    /// graph shows this processor in error; the frame in flight is lost, and
-    /// is never silently replayed.
     child_is_gone: bool,
     /// Why the helper died on its own — its exit and the end of its standard
     /// error — once the engine noticed and took its group down.
@@ -330,7 +275,6 @@ fn await_the_reply_to(
     }
 }
 
-/// Refuse a processor whose helper process exited before it reported `ready`.
 fn refusal_of_a_helper_process_that_died_while_setting_up(
     processor_display_name: &str,
     standard_error_tail: &str,
@@ -726,9 +670,6 @@ pub(super) fn spawn_standard_output_reader_keeping_its_head<R: Read + Send + 'st
 }
 
 impl Drop for ProcessorInterpreterSpawnHostProcessor {
-    /// Last resort for the paths teardown never reached — a failed graph
-    /// compile, a panic. A child outliving its host would hold this
-    /// processor's iceoryx2 ports open against the next run.
     fn drop(&mut self) {
         if self.child.is_some() {
             self.take_the_helper_process_group_down();
@@ -736,10 +677,6 @@ impl Drop for ProcessorInterpreterSpawnHostProcessor {
     }
 }
 
-/// Build the host for one graph node of the stream
-/// `the_stream_this_helper_belongs_to` names, launching its child in
-/// `stream_environment` with `tatolab.runtime` lent from
-/// `processor_interpreter_lend_directory`.
 pub(crate) fn spawn_host_for_processor_node(
     processor_class_import_path: &str,
     descriptor: &ProcessorDescriptor,
@@ -788,10 +725,6 @@ pub(crate) fn spawn_host_for_processor_node(
     }
 }
 
-/// Build the host of a function node promoted out of its readers' islands:
-/// its helper runs the node as its processor, driven the way its promotion
-/// says, numbers it first on its function-node call breadcrumb, and reports
-/// how it ran it at the end of its setup.
 pub(crate) fn spawn_host_for_a_function_node_promoted_to_its_own_process(
     function_node_import_path: &str,
     descriptor: &ProcessorDescriptor,

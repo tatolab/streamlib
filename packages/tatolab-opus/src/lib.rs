@@ -1,11 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The native half of `tatolab-opus` — the module the wheel's two `@node.process`
-//! classes import as `tatolab.opus._native`.
-//!
-//! The engine never calls anything here: libopus runs in each node's own
-//! processor interpreter, reached directly from the node's Python.
 
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::PyValueError;

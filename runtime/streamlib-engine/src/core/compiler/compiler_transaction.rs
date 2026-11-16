@@ -23,8 +23,6 @@ impl CompilerTransactionHandle {
         self.inner.lock().push(op);
     }
 
-    /// Take back each logged operation that names one of `processors` or `links`, for a node
-    /// or link taken out of the graph before any commit built it.
     pub(crate) fn retract_every_operation_naming(
         &self,
         processors: &HashSet<ProcessorUniqueId>,

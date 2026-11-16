@@ -13,12 +13,6 @@ use serde::{Deserialize, Serialize};
 use crate::core::context::StreamClockSpec;
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
-/// The processor-identity wire type. Defined in the engine-free
-/// `streamlib-processor-schema` crate so the engine and the engine-free
-/// `streamlib-error` share one definition; re-exported here so the
-/// `streamlib::sdk::json_schema` facade the API server consumes resolves it.
-/// The `utoipa` feature the engine enables gives it the `utoipa::ToSchema`
-/// derive the aggregate response types below require.
 pub use streamlib_processor_schema::ProcessorClassImportPath;
 
 use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
@@ -118,7 +112,6 @@ pub struct ProcessorNodeOutput {
     /// The node's name, unique in its graph and cast to lowercase URL-safe —
     /// what a link end, an exposure and a port address name it by.
     pub name: String,
-    /// Processor configuration as JSON.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     /// Checksum of config for change detection.
@@ -139,7 +132,6 @@ pub struct ProcessorNodeOutput {
     /// declare no default; the node holds without evaluating until each has a value.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_waiting_for_a_value: Vec<String>,
-    /// Runtime components (dynamic, varies based on processor state).
     pub components: serde_json::Map<String, serde_json::Value>,
     /// What a fragment holds: its graph generator's stored output, each node rendered as this
     /// node is. A spec key, present on a fragment alone.
@@ -161,7 +153,6 @@ pub struct GraphFragmentOutput {
     pub groups: Vec<LabelledNodeGroup>,
 }
 
-/// Container for processor input and output ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorNodePortsOutput {
     /// Input ports that receive data.
@@ -223,7 +214,6 @@ pub enum PortKindOutput {
     Control,
 }
 
-/// A link (connection) between two processor ports.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct LinkOutput {
     /// Unique identifier for this link.
@@ -262,8 +252,6 @@ pub struct LinkPortRefOutput {
 }
 
 impl LinkPortRefOutput {
-    /// The port `port_name` on the processor `processor_id`, its node named by
-    /// its name.
     fn of_a_port(
         processor_id: &crate::core::graph::ProcessorUniqueId,
         port_name: &str,
@@ -288,8 +276,6 @@ pub struct ConfigNodeReferenceEdgeOutput {
     pub referenced_node: String,
 }
 
-/// Every node's name by its processor id, for rendering the ends a graph
-/// holds by id under the name a reader knows them by.
 pub(crate) struct NodeNamesByProcessorId(
     std::collections::HashMap<crate::core::graph::ProcessorUniqueId, String>,
 );
@@ -312,8 +298,6 @@ impl NodeNamesByProcessorId {
         Self(std::collections::HashMap::new())
     }
 
-    /// The name of the node `processor_id` names — the id itself for one this
-    /// index does not hold, which only an end whose node is mid-removal is.
     fn name_of(&self, processor_id: &crate::core::graph::ProcessorUniqueId) -> String {
         self.0
             .get(processor_id)
@@ -462,7 +446,6 @@ fn node_kind_rendered_as_kind_and_language(
     }
 }
 
-/// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessorRuntimeOutput {
@@ -471,7 +454,6 @@ pub enum ProcessorRuntimeOutput {
     Python,
 }
 
-/// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
     /// The import path of the class this node type is — the `type` a graph
@@ -497,8 +479,6 @@ pub struct ProcessorDescriptorOutput {
     /// Entrypoint for non-Rust runtimes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
-    /// The config type's JSON Schema, as JSON Schema draft 2020-12 — what an
-    /// agent reads to learn which keys this processor's config takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
     /// Whether the node paces itself on real time, as a live device does: in a
@@ -513,7 +493,6 @@ pub struct ProcessorDescriptorOutput {
     pub examples: CodeExamplesOutput,
 }
 
-/// Descriptor for a processor port.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct PortDescriptorOutput {
     /// Port name.
@@ -541,7 +520,6 @@ pub struct PortDescriptorOutput {
     pub family: crate::core::descriptors::PortFamilyDeclaration,
 }
 
-/// Code examples for a processor in different languages.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct CodeExamplesOutput {
     /// Rust code example.
@@ -585,18 +563,6 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
 }
 
 impl ProcessorNodePortsOutput {
-    /// This node's ports, with any `match_device` contract its own device
-    /// stream has settled rendered as the five values it settled to, and each
-    /// output port's stream facts as it carries them now.
-    ///
-    /// A port declaring the sentinel renders it until its processor's `setup()`
-    /// opens a device, and the resolved values from then on: machine-dependent
-    /// because the device format is, which is truer than a static lie.
-    ///
-    /// Takes the node rather than its ports, and is the only way they are
-    /// rendered: the settled values live beside the ports rather than in them,
-    /// so a renderer handed the ports alone could only ever produce the
-    /// sentinel — and would look like the right call to reach for.
     fn rendered_for_a_node_over_its_settled_contracts(
         node: &crate::core::graph::ProcessorNode,
     ) -> Self {

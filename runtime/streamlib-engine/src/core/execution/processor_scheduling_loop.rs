@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The scheduling of a reactive or continuous processor: when it waits, when
-//! its input listener is drained, and when it is called.
-//!
-//! Written once. A processor thread in the engine and the run loop of a
-//! helper process each run it through their own
-//! [`ProcessorSchedulingLoopHost`].
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,19 +11,14 @@ use std::os::fd::OwnedFd;
 use crate::core::context::{StreamClock, StreamClockSpec};
 use crate::iceoryx2::InputMailboxesInner;
 
-/// How long a paused processor's loop waits before it looks again.
 pub const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
-/// How long a reactive loop with no listener to wait on waits before it looks
-/// again: a processor whose first inbound link is not wired yet, or a platform
-/// with neither epoll nor kqueue.
 pub const NO_WAITER_FALLBACK_SLEEP: Duration = Duration::from_millis(100);
 
 /// Longest single wait before a continuous loop re-reads its clock, so a live
 /// rescale reaches a wait already under way.
 pub const CONTINUOUS_LOOP_CLOCK_RECHECK: Duration = Duration::from_millis(100);
 
-/// One of the processor's own callbacks a scheduling loop decides to make.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorSchedulingCallback {
     OnPause,
@@ -71,25 +60,17 @@ impl ClockAProcessorSchedulingLoopPacesOn for StreamClock {
     }
 }
 
-/// What a scheduling loop reaches its processor, its inputs and its controls
-/// through: an engine thread's processor instance and shutdown channel, or a
-/// helper process's Python instance and lifecycle commands.
 pub trait ProcessorSchedulingLoopHost {
-    /// Make `callback` on the processor, counted in flight on the step ledger
-    /// when `counted_on_the_step_ledger` and the processor's clock may step.
     fn call_processor(
         &mut self,
         callback: ProcessorSchedulingCallback,
         counted_on_the_step_ledger: bool,
     );
 
-    /// Note on the step ledger that this processor finished step `step_index`.
     fn note_step_finished(&mut self, step_index: u64);
 
-    /// Whether the processor is asked to pause.
     fn pause_requested(&self) -> bool;
 
-    /// The processor's input mailboxes; `None` while it holds none.
     fn input_mailboxes(&self) -> Option<Arc<InputMailboxesInner>>;
 
     /// The fd that turns readable when a control arrives, which a reactive
@@ -128,17 +109,6 @@ pub trait ProcessorSchedulingLoopHost {
 // Reactive
 // =============================================================================
 
-/// Call a reactive processor whenever a read would return something, until a
-/// control stops it.
-///
-/// The loop waits on the input listener and the control arrival fd through
-/// epoll on Linux and kqueue on macOS, waking when either fires or its bound
-/// elapses. Waking is not dispatching: every `process()` is gated on a read
-/// having something to return, so a processor whose ports are empty, or not
-/// wired yet, wakes and goes back to waiting. The listener is followed on every
-/// pass, because a processor gets its first listener only when a later connect
-/// wires its first inbound link, and a new one with the next link after its
-/// last went away.
 pub fn run_reactive_scheduling_loop(
     processor_name_for_logs: &str,
     host: &mut impl ProcessorSchedulingLoopHost,
@@ -238,22 +208,11 @@ pub fn run_reactive_scheduling_loop(
                 return;
             }
 
-            // A wake is not evidence that a read would return anything: an
-            // audio input port declaring a window contract reports data only
-            // when a full window can be emitted. A processor with no mailboxes
-            // to ask has nothing to gate on, and gating on an absent answer
-            // would stop it running at all.
             if !ports_would_return_something(host).unwrap_or(true) {
                 continue;
             }
         }
 
-        // iceoryx2 coalesces every notify between two drains into one
-        // fd-readable transition, so the mailboxes can still hold samples from
-        // the same burst after a drain. Call `process()` until every input
-        // port reports empty, then go back to waiting, taking any control
-        // between calls so a producer faster than this processor cannot starve
-        // a stop.
         loop {
             host.call_processor(ProcessorSchedulingCallback::Process, true);
 
@@ -282,15 +241,11 @@ fn wait_without_a_waiter_then_drain(
     waited
 }
 
-/// Whether any of the processor's input ports would hand a reader something;
-/// `None` when it holds no mailboxes to ask.
 fn ports_would_return_something(host: &impl ProcessorSchedulingLoopHost) -> Option<bool> {
     host.input_mailboxes()
         .map(|mailboxes| mailboxes.any_port_has_data())
 }
 
-/// Clear the pending events on the processor's listener, so its fd goes
-/// not-readable and the queue upstream keeps filling has room again.
 fn drain_input_listener(host: &impl ProcessorSchedulingLoopHost) {
     if let Some(mailboxes) = host.input_mailboxes() {
         mailboxes.drain_listener();
@@ -318,8 +273,6 @@ pub(crate) enum ContinuousLoopWaitOutcome {
     StoppedWaitingEarly,
 }
 
-/// A continuous processor paced by real time: on the interval grid of the
-/// machine clock, whatever clock its stream runs, until a control stops it.
 pub fn run_continuous_scheduling_loop_on_real_time(
     host: &mut impl ProcessorSchedulingLoopHost,
     interval_ms: u32,
@@ -336,9 +289,6 @@ pub fn run_continuous_scheduling_loop_on_real_time(
     debug_assert_eq!(why_the_loop_left, ContinuousLoopLeftItsMode::Stopped);
 }
 
-/// A continuous processor on its stream's clock: in steps while the clock
-/// runs behind the step barrier, on the interval grid of stream time while it
-/// runs free, switching whenever the clock does; until a control stops it.
 pub fn run_continuous_scheduling_loop_on_its_stream_clock(
     host: &mut impl ProcessorSchedulingLoopHost,
     stream_clock: &impl ClockAProcessorSchedulingLoopPacesOn,
@@ -370,8 +320,6 @@ pub fn run_continuous_scheduling_loop_on_its_stream_clock(
     }
 }
 
-/// A continuous processor on the interval grid of `clock_it_paces_on`, until
-/// a control stops it or `leaves_when` holds.
 fn run_continuous_scheduling_on_the_interval_grid(
     host: &mut impl ProcessorSchedulingLoopHost,
     clock_it_paces_on: &impl ClockAProcessorSchedulingLoopPacesOn,
@@ -429,10 +377,6 @@ fn run_continuous_scheduling_on_the_interval_grid(
     }
 }
 
-/// A continuous processor on a clock behind the step barrier: once in each
-/// step whose time reached its next deadline, and every step it sees open
-/// marked finished, whether or not it ran; until a control stops it or the
-/// clock runs free of the barrier.
 fn run_continuous_scheduling_in_steps(
     host: &mut impl ProcessorSchedulingLoopHost,
     stream_clock: &impl ClockAProcessorSchedulingLoopPacesOn,
@@ -484,8 +428,6 @@ fn run_continuous_scheduling_in_steps(
     }
 }
 
-/// Nanoseconds between a continuous processor's calls; a floor of 100 µs when
-/// its config names no interval.
 pub fn continuous_interval_ns(interval_ms: u32) -> i64 {
     if interval_ms > 0 {
         i64::from(interval_ms) * 1_000_000
@@ -494,8 +436,6 @@ pub fn continuous_interval_ns(interval_ms: u32) -> i64 {
     }
 }
 
-/// The first deadline on the `previous + k·interval` grid after `now_ns`: a
-/// processor that overran fires once, never a backlog.
 pub fn next_continuous_deadline_ns(
     previous_deadline_ns: i64,
     interval_ns: i64,

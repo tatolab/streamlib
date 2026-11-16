@@ -25,8 +25,6 @@ __all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
 HelperProcessLogSink = Callable[[str, str, "Optional[dict[str, Any]]"], None]
 
-# Installed by `tatolab/runtime/_processor_interpreter_bootstrap.py` at startup
-# and never by app code.
 _helper_process_sink: "Optional[HelperProcessLogSink]" = None
 
 

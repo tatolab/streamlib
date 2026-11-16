@@ -21,12 +21,10 @@ impl LoadedStreamInThisRuntime {
     // Graph operations
     // =========================================================================
 
-    /// Add a processor to this stream's graph.
     pub fn add_processor(&self, spec: impl Into<ProcessorSpec>) -> Result<ProcessorUniqueId> {
         <Self as RuntimeOperations>::add_processor(self, spec.into())
     }
 
-    /// Remove a processor from this stream's graph.
     pub fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         <Self as RuntimeOperations>::remove_processor(self, processor_id)
     }
@@ -45,8 +43,6 @@ impl LoadedStreamInThisRuntime {
         <Self as RuntimeOperations>::disconnect(self, link_id)
     }
 
-    /// Refuse `change` to `processor_id` while a drawn link to a variable or
-    /// interface node names it.
     pub(crate) fn refuse_a_node_change_a_drawn_link_names(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -66,7 +62,6 @@ impl LoadedStreamInThisRuntime {
             .refuse_a_node_change_a_drawn_link_names(&node_name, change)
     }
 
-    /// Rename the node `processor_id` to `requested_name` cast, answering the cast.
     pub(crate) fn rename_node(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -83,7 +78,6 @@ impl LoadedStreamInThisRuntime {
         Ok(renamed)
     }
 
-    /// Set the value on input `input` of the node `processor_id`, `None` taking it off.
     pub(crate) fn set_pin_value(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -134,8 +128,6 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Take `exposed_config_fields` as the config fields the node `processor_id` takes as
-    /// inputs, in place of those it took; a field still linked is refused being taken off.
     pub(crate) fn set_exposed_config_fields(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -207,7 +199,6 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Replace the studio fields of the node `processor_id` whole.
     pub(crate) fn set_studio_fields(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -226,7 +217,6 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Update a processor's configuration, applied at the next commit.
     pub fn update_processor_config<C: Serialize>(
         &self,
         processor_id: &ProcessorUniqueId,
@@ -237,8 +227,6 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Check `config` against everything that holds a processor's configuration and log it
-    /// for the next commit, publishing nothing.
     pub(in crate::core::runtime) fn log_a_processor_config_update_for_the_next_commit<
         C: Serialize,
     >(

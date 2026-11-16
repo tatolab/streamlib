@@ -1,18 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""A processor's identity is its class's import path, and it does not move.
-
-Every Python processor runs in its own child process, which reaches the class by
-importing it. Identity is what the registry, the control plane and the helper
-spawn all agree on, so one that varied with how the user named their stream to
-`tatolab open --play` would be three processors wearing one name.
-
-Every arm is observed at the load, which is where identity is derived — before
-the engine would initialize a GPU context. Each runs on a `tatolabd` that
-reaches no Vulkan driver, so a stream that loads fails at the GPU, before
-any device opens, and the identities are read off `tatolabd`'s own log.
-"""
 
 from __future__ import annotations
 
@@ -29,8 +17,6 @@ from stream_runs_on_tatolabd import TatolabRunOfAProject
 # would agree with a derivation that never ran.
 DERIVED_IDENTITY_PATTERN = re.compile(r'processor_class_import_path="([^"]+)"')
 
-#: The engine's message on that record, written for each node type a stream's
-#: processor interpreter described into the stream; a built-in's says otherwise.
 PROCESSOR_TYPE_REGISTERED_LOG_LINE_FRAGMENT = (
     "node type described in the stream's processor interpreter registered"
 )

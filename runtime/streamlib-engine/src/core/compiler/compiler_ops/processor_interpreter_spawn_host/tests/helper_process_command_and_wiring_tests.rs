@@ -6,11 +6,6 @@
 
 use super::*;
 
-/// The helper a promoted function node runs in reports how it ran it in its
-/// `ready`, and the report lands where the node's promotion holds it.
-///
-/// Fail-without-fix: the host's envelope knows no report for the node it
-/// runs as its processor, so its `ready` is read and dropped.
 #[test]
 fn a_promoted_function_nodes_own_helper_reports_how_it_ran_it() {
     let import_path =
@@ -421,9 +416,6 @@ fn the_child_is_handed_the_vulkan_device_the_runtime_built_on() {
     );
 }
 
-/// The lend directory leads the child's `PYTHONPATH` so the venv borrows
-/// `tatolab.runtime`, and the project directory follows so a processor
-/// module sitting in the project imports — and nothing else is on it.
 #[test]
 fn the_childs_python_path_is_the_lend_directory_then_the_project_exactly() {
     let command = spawn_host_for_test()

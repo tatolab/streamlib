@@ -72,13 +72,6 @@ pub(super) fn registered_shader_stage_source(
 }
 
 impl RegisteredShaderStageSource {
-    /// The stage's SPIR-V, compiling the Slang if that is what was supplied.
-    ///
-    /// Takes the sandbox rather than a `GpuContextFullAccess`, so it needs no
-    /// escalate scope and every handler calls it before opening one:
-    /// compilation is CPU work that touches no device, and that gate
-    /// serializes every processor's device work. A cold C++ compile is
-    /// milliseconds no other processor should ever wait on.
     pub(super) fn spirv(
         &self,
         sandbox: &GpuContextLimitedAccess,

@@ -588,12 +588,6 @@ pub(crate) use a_stub_runtime_loading_this_stub_as_its_only_stream;
 /// unknown class.
 pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
 
-/// Implement the graph-mutating [`RuntimeOperations`] methods for a front-end stub: a graph
-/// edit applied live is recorded on a `recorded_graph_mutations` field and answered as applied,
-/// an added node taking its name cast or [`STUB_ADDED_NODE_NAME`], so a front-end test asserts
-/// the operation its tool reached. An `armed_add_processor_refusal` the test filled makes an add
-/// refuse instead, standing in for an engine's refusal. Every other mutation stays unreachable:
-/// a front end edits a graph through the one operation alone, and asks no stream to shut down.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_processor_async(

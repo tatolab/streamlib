@@ -465,8 +465,6 @@ pub(crate) fn a_stream_record(
     }
 }
 
-/// An interpreter path that exists and is executable, for a stream whose
-/// native-only graph never starts a processor interpreter.
 pub(crate) fn an_executable_standing_in_for_the_interpreter() -> PathBuf {
     PathBuf::from("/bin/sh")
 }

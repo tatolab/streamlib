@@ -22,10 +22,6 @@ use crate::core::runtime::operations::RuntimeOperations;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
-    /// Apply `graph_operation` to this stream's live graph, each node by its UUID, answering
-    /// it as applied: an added node under the name it took. An operation on a node no
-    /// processor runs as, a fragment's above all, or on a labelled group or a canvas note, is applied to the
-    /// graph as drawn and the live graph reconciled to it.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
@@ -276,8 +272,6 @@ impl LoadedStreamInThisRuntime {
         }
     }
 
-    /// The processor the node whose UUID is `node` runs as, refused naming the nodes the
-    /// stream holds when none has it.
     fn the_processor_of_the_node(&self, node: Uuid) -> Result<ProcessorUniqueId> {
         self.compiler.scope(|graph, _tx| {
             let nodes: Vec<_> = graph.traversal().v(()).iter().collect();

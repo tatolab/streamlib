@@ -336,11 +336,6 @@ fn rendered_metrics_keys(rendered: &serde_json::Value) -> Vec<String> {
     keys
 }
 
-/// A helper-placed processor's node renders exactly the keys an
-/// app-process one does, into a plain port and into a windowed one alike.
-///
-/// Fail-without-fix: give a helper's windowed link no sample count, or
-/// every helper link one, and the key sets differ.
 #[test]
 fn a_helper_placed_processors_metrics_carry_exactly_the_keys_an_app_process_ones_do() {
     let mut native_plain = NativeLinkWiredForLossCounting::wire(
@@ -639,9 +634,6 @@ fn wiring_an_out_of_process_link_hands_each_endpoint_its_entry() {
     );
 }
 
-/// The same seam answers the "does the engine wire this one itself?"
-/// question, so a helper-hosted processor is not handed engine-side
-/// publishers it could never use.
 #[test]
 fn a_host_with_an_out_of_process_transport_is_recognised_as_a_subprocess() {
     let mut graph = Graph::new();

@@ -1,17 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The control plane names a processor's class with a string.
-//!
-//! Asserted against the rendered payload rather than the DTO's Rust type: the
-//! shape a reader gets is the contract, and a `Serialize` impl is what decides
-//! it. `to_json_async` is the exact payload `GET /api/graph` and
-//! `tatolab graph` serve.
-//!
-//! The negative half is what makes this a lock rather than a restatement — no
-//! `org`, `package` or `version` key survives anywhere in a node's rendering,
-//! at any depth. Assert only that `type` is a string and a structured identity
-//! could come back beside it.
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
@@ -117,8 +106,6 @@ fn a_processor_node_renders_its_class_as_a_string_and_carries_no_structured_iden
     }
 }
 
-/// Two processors of different classes render two different strings — the
-/// field distinguishes them without an object to look inside.
 #[test]
 #[serial]
 fn two_classes_render_two_distinct_type_strings() {

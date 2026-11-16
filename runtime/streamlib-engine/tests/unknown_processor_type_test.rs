@@ -1,19 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Tests for `Error::UnknownProcessorType` — the typed error surfaced when
-//! a caller asks `add_processor` for a class import path nothing is
-//! registered under.
-//!
-//! Two behaviors locked here:
-//! 1. The error variant is `UnknownProcessorType` (not the old generic
-//!    `GraphError("Could not create node")`), and carries the requested path
-//!    verbatim — the caller asked for a class by that name, and matching
-//!    their spelling is what makes a typo findable.
-//! 2. The failed node is left in the graph in `ProcessorState::Error`, so
-//!    API consumers (`GET /api/graph`) can see what failed and why. This
-//!    is the runtime-dynamic-system shape: the runtime tells you something
-//!    didn't resolve, and leaves a placeholder for observability.
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::ProcessorClassImportPath;

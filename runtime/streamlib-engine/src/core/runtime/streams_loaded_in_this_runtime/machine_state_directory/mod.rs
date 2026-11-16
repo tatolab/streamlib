@@ -26,9 +26,6 @@ pub const STREAM_RECORD_SCHEMA_VERSION: u32 = 9;
 /// The extension every stream record's file name carries.
 const STREAM_RECORD_FILE_EXTENSION: &str = "json";
 
-/// One stream, as its runtime re-loads it from its graph document: its id and location, the
-/// interpreter its processors start in, whether its project is closed or its playback stopped,
-/// and whether it has failed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StreamRecord {

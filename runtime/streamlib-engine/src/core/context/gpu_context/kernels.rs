@@ -197,19 +197,6 @@ impl RayTracingKernelHeldForOneTrace<'_> {
 }
 
 impl GpuContext {
-    /// Acquire a cached `(src, dst)`-keyed color converter.
-    ///
-    /// First call for a given pair builds the converter (lazy kernel
-    /// SPIR-V load + reflection); subsequent calls return the cached
-    /// handle. Per-frame `ResolvedColorInfo` lives in push constants,
-    /// so one cached converter handles every variation of source color
-    /// description without invalidating.
-    ///
-    /// The cached converter's kernel — and the bindings staged on it
-    /// between `prepare_*` and the dispatch — is one object shared by every
-    /// holder of the handle, so two processors driving the same format pair
-    /// from their own threads race it. A processor that records the
-    /// dispatch itself takes [`Self::create_color_converter`] instead.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
@@ -238,10 +225,6 @@ impl GpuContext {
         Ok(RhiColorConverter::from_arc_into_raw(inner_arc))
     }
 
-    /// A color converter of the caller's own — the same `(src, dst)` kernel
-    /// the cached `color_converter` would hand out, built fresh and never
-    /// placed in the cache, so a processor recording its dispatch from its
-    /// own thread shares no pending state with any other.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_color_converter(
         &self,
@@ -261,14 +244,6 @@ impl GpuContext {
         )))
     }
 
-    /// Create a compute kernel from a SPIR-V shader and a binding declaration.
-    ///
-    /// Reflects the SPIR-V at creation time and validates that the declared
-    /// bindings match the shader; mismatches are reported with a clear error
-    /// message rather than producing undefined GPU behavior at first dispatch.
-    /// Returned kernel is held and dispatched via its own `set_*` / `dispatch`
-    /// methods — one kernel handle per processor pipeline stage is the expected
-    /// usage.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_compute_kernel(
         &self,

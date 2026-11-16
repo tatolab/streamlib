@@ -5,10 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
 
-/// Specification for creating a processor.
-///
-/// Contains only what the user provides: processor identity and configuration.
-/// Internal details (id, ports) are resolved by the runtime.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessorSpec {
     /// The import path of the class to instantiate — looked up in the registry
@@ -16,7 +12,6 @@ pub struct ProcessorSpec {
     pub name: ProcessorClassImportPath,
     /// Configuration as JSON value.
     pub config: serde_json::Value,
-    /// Display name override. If `None`, defaults to the processor's PascalCase short name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     /// The node's UUID from its graph document; `None` generates one as the node is placed.
@@ -70,7 +65,6 @@ impl ProcessorSpec {
         self
     }
 
-    /// Set a custom display name for this processor.
     pub fn with_display_name(mut self, display_name: impl Into<String>) -> Self {
         self.display_name = Some(display_name.into());
         self

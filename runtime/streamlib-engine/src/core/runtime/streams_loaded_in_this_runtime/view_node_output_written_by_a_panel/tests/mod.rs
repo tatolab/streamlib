@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! View nodes in a loaded stream read as running without the GPU context a real start takes:
-//! each running node holds the processor instance a start leaves it with, and nothing compiles.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -121,7 +119,6 @@ impl AStreamOfAProjectBringingViews {
         )
     }
 
-    /// Run `node_id` as a start would: its processor built and attached, answering its UUID.
     fn run(&self, node_id: &ProcessorUniqueId) -> String {
         let node_types = Arc::clone(self.stream.node_types_this_stream_resolves());
         self.stream.compiler.scope(|graph, _tx| {

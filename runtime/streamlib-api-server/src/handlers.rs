@@ -62,15 +62,6 @@ pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
         .1
 }
 
-/// Build the full router with shared state and trace layer attached.
-///
-/// The REST surface is observation-shaped: a stream's graph is defined by its
-/// code, so no route creates, replaces, connects, or removes a processor. No
-/// route asks for a credential: whoever can open the local API socket may call
-/// every one. `local_api_stopping_token` is
-/// cancelled when the local API stops serving, ending every
-/// `subscriptions/listen` `/mcp` holds open and every stream `/mcp/stdio`
-/// upgraded.
 pub(crate) fn build_router(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     local_api_stopping_token: CancellationToken,

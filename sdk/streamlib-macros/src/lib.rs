@@ -1,18 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Procedural macros for streamlib.
-//!
-//! - `#[streamlib::processor(execution = …, …)]` — processor definition. The
-//!   attribute is the single source of truth: execution mode and input/output
-//!   ports are declared in code, read from no file at expansion. See
-//!   [`grammar`] for the full grammar. What describes the node type, its
-//!   `category` and `description`, is the `#[meta(…)]` helper attribute
-//!   written under it. It declares no identity — a processor is
-//!   named by the import path of the class it is, which the macro captures from
-//!   its expansion site.
-//! - `#[streamlib::sdk::processor_config]` — a config type whose keys'
-//!   `#[description = …]` attributes are the descriptions its schema serves.
 
 mod codegen;
 mod grammar;
@@ -24,25 +12,6 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{ItemStruct, parse_macro_input};
 
-/// Main processor attribute macro.
-///
-/// The attribute is the single source of truth for a processor's execution mode
-/// and ports — see [`grammar`] for the grammar. It reads no file at expansion
-/// and declares no identity.
-///
-/// Authoring contract for struct fields: `#[cfg]`, `///` docs, and the lint
-/// controls (`allow` / `warn` / `deny` / `forbid`) are forwarded onto the
-/// generated field; `#[cfg]` alone is also forwarded onto its `from_config`
-/// initializer. `#[expect]` is not forwarded — the generated field is `pub`
-/// where the authored one was private, so a `dead_code` expectation would land
-/// unfulfilled and warn. `#[cfg_attr]` on a field is a compile error, because a
-/// `cfg_attr` expanding to a `cfg` would gate one of the two emission sites and
-/// not the other. Every other field attribute is dropped.
-///
-/// The macro emits the processor's type, port markers, and descriptor — but
-/// does NOT register the processor in the global `PROCESSOR_REGISTRY`. In-process Rust callers invoke
-/// `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly; tests and
-/// engine-internal mocks use this path.
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mut item_struct = parse_macro_input!(item as ItemStruct);
@@ -64,9 +33,6 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     ))
 }
 
-/// Describe a processor config type's keys: each field's `#[description = …]`,
-/// a string literal or the path of a `const`, is its key's description. Goes
-/// above `#[derive(JsonSchema)]`.
 #[proc_macro_attribute]
 pub fn processor_config(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);

@@ -116,11 +116,6 @@ fn record_a_not_ready_report(
     Ok(())
 }
 
-/// Privileged runtime context passed to `setup` / `teardown` / `start` / `stop`.
-///
-/// Built in the helper process the processor runs in — there is no engine in
-/// that process to borrow a view from, so everything a hook reads is either
-/// local or was passed down by the parent.
 #[pyclass(name = "RuntimeContextFullAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonRuntimeContextFullAccess {
     runtime_id: String,
@@ -338,7 +333,6 @@ pub(crate) fn note_pause_state_from_parent_on_runtime_context(
 
 #[pymethods]
 impl PythonRuntimeContextFullAccess {
-    /// The processor's configuration, as the dict it was added with.
     #[getter]
     fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         configuration_as_python_dict(python, &self.configuration)
@@ -413,7 +407,6 @@ impl PythonRuntimeContextFullAccess {
         self.stream_and_node.asset_content_path(asset, from_project)
     }
 
-    /// Whether this processor is currently paused.
     fn is_paused(&self) -> bool {
         self.pause_state_announced_by_parent.load(Ordering::Relaxed)
     }
@@ -501,7 +494,6 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
 
 #[pymethods]
 impl PythonRuntimeContextLimitedAccess {
-    /// The processor's configuration, as the dict it was added with.
     #[getter]
     fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         configuration_as_python_dict(python, &self.configuration)
@@ -571,7 +563,6 @@ impl PythonRuntimeContextLimitedAccess {
         self.stream_and_node.asset_content_path(asset, from_project)
     }
 
-    /// Whether this processor is currently paused.
     fn is_paused(&self) -> bool {
         self.pause_state_announced_by_parent.load(Ordering::Relaxed)
     }

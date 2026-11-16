@@ -242,17 +242,6 @@ impl PythonGpuContextFullAccess {
         }
     }
 
-    /// Run `privileged_callback` with a temporary full-access GPU capability.
-    ///
-    /// Refused, and it is the shape rather than the reach that refuses it.
-    /// Every method on this capability already escalates on its own, so
-    /// the privileged *operations* are all here. What the callback adds
-    /// is an atomic scope — the engine's escalate gate held across the
-    /// whole closure, nothing else in the runtime escalating meanwhile —
-    /// and that cannot cross a process boundary: emulating it would run
-    /// each statement in its own gate scope with other processors
-    /// interleaving, keeping the spelling and silently dropping the
-    /// guarantee it exists for.
     #[expect(
         clippy::unused_self,
         reason = "the refusal is this capability's whole answer for escalation"

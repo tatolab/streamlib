@@ -817,12 +817,6 @@ pub(super) fn supplied_kernel_bindings_to_wire<'py>(
     Ok(wire_bindings)
 }
 
-/// The acceleration structure a value bound at `name` names.
-///
-/// The only binding kind that is not a surface, and the only one whose handle
-/// cannot be spelled as an id string — nothing publishes an acceleration
-/// structure for another processor to resolve, so the object a build returned
-/// is the whole way to name it.
 fn bound_acceleration_structure_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
     let structure = bound_to
         .extract::<PyRef<'_, PythonAccelerationStructureHandle>>()

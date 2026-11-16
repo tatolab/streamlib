@@ -22,15 +22,6 @@ impl GpuContext {
         cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
     }
 
-    /// Register a texture with a declared initial Vulkan image layout.
-    ///
-    /// Producers call this when they know the layout the texture is in
-    /// at the moment it becomes visible to consumers — e.g. camera
-    /// processors that finish their compute pipeline with a transition
-    /// to `SHADER_READ_ONLY_OPTIMAL` (so the next display frame's
-    /// barrier source layout is correct), or adapter setup hooks that
-    /// pre-allocate a render target the adapter writes to without
-    /// transitioning the Vulkan layout (declare `UNDEFINED`).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_texture_with_layout(
         &self,

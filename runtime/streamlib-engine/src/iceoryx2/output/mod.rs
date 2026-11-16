@@ -1,24 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Output writer for sending frames to downstream processors.
-//!
-//! # Two-type split: handle vs. inner
-//!
-//! - [`OutputWriterInner`] holds the actual state — the
-//!   `Mutex<HashMap<port, ChannelEgress>>` and the iceoryx2 publish +
-//!   notify logic. All per-frame publish + notify work runs here.
-//! - [`OutputWriter`] is the public handle that processor structs hold
-//!   via the macro-emitted `outputs: OutputWriter` field. It wraps an
-//!   `Arc<OutputWriterInner>` behind an opaque handle; its methods
-//!   (`write_msgpack`, `write_bytes_with_timestamp`, `has_port`, `clone`, `drop`) borrow the
-//!   inner and invoke it directly.
-//!
-//! Host-side code that mutates the inner (e.g. compiler ops installing
-//! a channel publisher + destination notifiers at wiring time) operates
-//! on `Arc<OutputWriterInner>` directly via
-//! [`OutputWriterInner::set_channel_publisher`] and
-//! [`OutputWriterInner::add_channel_link`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -75,15 +57,9 @@ fn payload_area_bytes_mut(loaned_sample: &mut ChannelDataServiceLoanedSample) ->
 pub struct OutputWriterInner {
     /// Map from source output port name to its channel egress.
     channels: Mutex<HashMap<String, ChannelEgress>>,
-    /// The output ports the processor declared. A write to one of these that
-    /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
     bag_counts: Arc<BagCountsByOutputPort>,
-    /// The node's output ports' stream facts, reached once the processor is
-    /// created for its node.
     stream_facts_of_output_ports: std::sync::OnceLock<Arc<StreamFactsOfOutputPorts>>,
-    /// The clock of the stream this processor runs in, reached once it is
-    /// spawned; a write with no stamp is stamped on it.
     stream_clock: std::sync::OnceLock<Arc<StreamClock>>,
 }
 
@@ -172,13 +148,10 @@ impl OutputWriterInner {
         }
     }
 
-    /// Reach the clock of the stream this processor runs in.
     pub(crate) fn reach_the_stream_clock(&self, stream_clock: Arc<StreamClock>) {
         let _ = self.stream_clock.set(stream_clock);
     }
 
-    /// The stamp a write that names none carries: stream time now, or the
-    /// machine clock before the processor has reached its stream's clock.
     fn implicit_stamp_now_ns(&self) -> i64 {
         match self.stream_clock.get() {
             Some(stream_clock) => stream_clock.now_ns(),
@@ -186,8 +159,6 @@ impl OutputWriterInner {
         }
     }
 
-    /// Reach the stream facts of the node this processor was created for —
-    /// the ones `graph` renders and downstream readers read.
     pub(crate) fn reach_stream_facts_of_output_ports(
         &self,
         stream_facts_of_output_ports: Arc<StreamFactsOfOutputPorts>,
@@ -218,8 +189,6 @@ impl OutputWriterInner {
             .replace_facts_of(output_port, stream_facts)
     }
 
-    /// Name the output ports the processor declared, so a write to one that
-    /// no link has reached yet is dropped rather than refused.
     pub fn declare_output_ports(&self, port_names: impl IntoIterator<Item = String>) {
         self.declared_output_ports.lock().extend(port_names);
     }
@@ -315,11 +284,6 @@ impl OutputWriterInner {
             })
     }
 
-    /// This processor's per-output-port refused-bag and written-bag counts,
-    /// shared with the graph node's [`ProcessorMetrics`] so `graph` reads them
-    /// live.
-    ///
-    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
     pub fn bag_counts_by_output_port(&self) -> Arc<BagCountsByOutputPort> {
         Arc::clone(&self.bag_counts)
     }
@@ -536,10 +500,6 @@ impl OutputWriterInner {
         )
     }
 
-    /// `port`'s egress, or `None` for a declared port no link has reached — a
-    /// processor added to a running graph ahead of its connect, or one whose
-    /// last link was taken away — which carries nothing, as for a consumer
-    /// that cannot keep up. An undeclared port is refused.
     fn linked_egress_of_a_declared_port<'channels>(
         &self,
         channels: &'channels mut HashMap<String, ChannelEgress>,

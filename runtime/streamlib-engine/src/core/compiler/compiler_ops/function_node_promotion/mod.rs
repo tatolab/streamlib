@@ -196,7 +196,6 @@ fn the_function_nodes_downstream_of(
 /// What a promotion adds to the compile that carries it.
 #[derive(Debug, Default)]
 pub(crate) struct FunctionNodePromotionPlanned {
-    /// Each promoted function node, now prepared and spawned as a processor.
     pub(crate) processors_to_add: Vec<ProcessorUniqueId>,
     /// Each link into or out of a promoted node, wired again by what its two
     /// ends now are.
@@ -214,12 +213,6 @@ pub(crate) struct WhatTheCompileCarryingAPromotionRemoves<'a> {
     pub(crate) links: &'a [LinkUniqueId],
 }
 
-/// Move `crashed_function_node` and every function node downstream of it out
-/// of `reader`'s islands, marking each to be built as a processor of its own
-/// and each of their links to be wired again. Refused, changing nothing, when
-/// one of them also feeds a reader other than `reader`, since a running reader
-/// is not re-islanded in this release, or when the same compile removes the
-/// reader, a node that would move, or one of their links.
 pub(crate) fn plan_the_promotion_of_a_function_node_out_of_its_readers_islands(
     graph: &mut Graph,
     crashed_function_node: &ProcessorUniqueId,

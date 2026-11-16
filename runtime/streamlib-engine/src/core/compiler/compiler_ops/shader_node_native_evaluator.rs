@@ -62,8 +62,6 @@ struct ImageInputResolvedForOneEvaluation {
     _claim_against_producer_reuse: SurfaceClaimedAgainstProducerReuse,
 }
 
-/// The processor a shader node island runs as in this process, on the node
-/// whose Image leaves the island.
 pub(crate) struct ShaderNodeNativeEvaluatorProcessor {
     node_name: String,
     descriptor: ProcessorDescriptor,

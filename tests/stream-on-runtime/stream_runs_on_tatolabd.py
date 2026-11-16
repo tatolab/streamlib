@@ -1,28 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What a test hands the runtime, turned into the project `tatolab open --play --dir` loads.
-
-A stream reaches `tatolabd` only as a user's does: `tatolab open --play --dir` queues a
-load of a project, the runtime reading each stream asset's graph document under the
-project and loading its graph, the project's Python node types run in its own
-`.venv/bin/python`. Three shapes reach that call:
-
-- a `@graph_generator` function of one of the suite's own modules, compiled in this process
-  and run as a one-stream project of its own: its graph document
-  `streams/<function>.graph.json` beside a link to each of the suite directory's
-  own entries, so its modules import in every processor interpreter, and a `.venv`
-  linked to the suite venv;
-- a graph written by hand — a dict, or text that may not even parse — written as
-  the graph document of a project of its own, linked to the suite directory's
-  entries, or written into `reported_project_directory`, whose node modules the
-  graph names; the project's `.venv/bin/python` execs the interpreter it was given;
-- `TatolabRunOfAProject`, a project directory, run as it is.
-
-A test that writes a project's streams in Python writes its `stream.py`, and
-`write_the_graph_documents_the_stream_py_compiles_to` compiles it in the suite venv to
-the graph documents the runtime reads.
-"""
 
 from __future__ import annotations
 
@@ -256,8 +234,6 @@ def write_a_graph_document(
 
 
 def link_every_suite_directory_entry_into(project_directory: Path) -> None:
-    """Link each of the suite directory's own entries into `project_directory`, so the
-    suite's modules import in every processor interpreter run there."""
     for suite_entry in sorted(STREAM_ON_RUNTIME_SUITE_DIRECTORY.iterdir()):
         if suite_entry.name not in SUITE_DIRECTORY_ENTRIES_A_WRITTEN_PROJECT_LINKS_NONE_OF:
             (project_directory / suite_entry.name).symlink_to(suite_entry)
@@ -385,7 +361,6 @@ class HandWrittenGraphProject:
     project_directory: Path
     #: The graph document the graph was written as.
     graph_document_path: Path
-    #: The project's `.venv/bin/python`, which execs `processor_interpreter`.
     venv_interpreter: Path
     #: What the project's interpreter execs for every invocation.
     processor_interpreter: Path
@@ -410,14 +385,6 @@ def write_a_hand_written_graph_project(
     reported_project_directory: "Path | None" = None,
     processor_interpreter: "Path | None" = None,
 ) -> HandWrittenGraphProject:
-    """Write `graph` as the graph document of the stream its `stream` names in a project.
-
-    The project is `reported_project_directory` when one is given — whose node modules the
-    graph names, and which keeps one project file across every graph written into it — else
-    a new one at `project_directory`, linked to the suite directory's entries so the suite's
-    node modules import. The project's `.venv/bin/python` execs `processor_interpreter`,
-    default the suite venv's.
-    """
     processor_interpreter = processor_interpreter or SUITE_VENV_INTERPRETER
     if reported_project_directory is None:
         project_directory.mkdir(parents=True)

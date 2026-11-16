@@ -7,20 +7,12 @@ use crate::core::graph::LinkUniqueId;
 use crate::core::processors::OutOfProcessLinkWiringEnvelope;
 use crate::iceoryx2::OutputWriterInner;
 
-/// Where the source's side of a link was wired: the output writer of a
-/// processor the engine runs, or the link wiring of a helper process.
 #[derive(Clone)]
 pub(crate) enum SourceSideOfALinkWiredOn {
     ANativeProcessorsOutputWriter(Arc<OutputWriterInner>),
     AHelperProcessesLinkWiring(Arc<OutOfProcessLinkWiringEnvelope>),
 }
 
-/// The source's side of a channel held open for the runtime's publisher, a
-/// reader outside the source's stream, released when dropped: the reader's
-/// notifier comes off the source's output port, taking the port's publisher
-/// with it when it was the last, or a helper source is told to drop what it
-/// opened. Held through weak handles, so a source processor that is gone makes
-/// the release a no-op and is never kept alive by it.
 #[derive(Debug)]
 #[must_use = "dropping it releases the source's side of the link at once"]
 pub(crate) struct SourceSideHeldOpenForAReaderOutsideItsStream {

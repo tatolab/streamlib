@@ -8,21 +8,13 @@ use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorUniqueId,
 };
 
-/// What handing a processor a configuration came to, short of a refusal.
 #[must_use]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ProcessorConfigUpdateOutcome {
-    /// The processor took the configuration and its graph node records it.
     TakenAndRecordedOnTheNode,
-    /// The processor left the graph before the update reached it.
     ProcessorNoLongerInTheGraph,
 }
 
-/// Hand a running processor `config_to_apply`, and record it on the processor's
-/// graph node only once the processor has taken it.
-///
-/// A refusal leaves the node's configuration as it was and returns what the
-/// processor refused with.
 pub(crate) fn apply_processor_config_update(
     graph: &RwLock<Graph>,
     processor_id: &ProcessorUniqueId,
@@ -61,8 +53,6 @@ mod tests {
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
 
-    /// A graph holding one instantiated mock processor that declares no
-    /// config, so it takes an empty configuration and refuses any key.
     fn graph_with_an_instantiated_processor_that_declares_no_config()
     -> (RwLock<Graph>, ProcessorUniqueId) {
         ensure_test_mocks_registered();
@@ -98,9 +88,6 @@ mod tests {
             .clone()
     }
 
-    /// Fail-without-fix: the config was written onto the node when the update
-    /// was requested, so a processor refusing it left `graph` reporting a
-    /// configuration it never took.
     #[test]
     fn a_configuration_the_processor_refuses_never_reaches_its_graph_node() {
         let (graph, processor_id) = graph_with_an_instantiated_processor_that_declares_no_config();

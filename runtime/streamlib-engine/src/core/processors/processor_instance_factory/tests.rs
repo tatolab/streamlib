@@ -72,10 +72,6 @@ fn distinct_import_paths_do_not_collide() {
     }
 }
 
-/// The registration that arrived first stays, and the refusal names both
-/// languages' causes — a Rust processor declared in a function body derives
-/// its enclosing module's path, so two of them collide here and nowhere
-/// else.
 #[test]
 fn a_second_class_claiming_a_registered_import_path_is_refused() {
     let factory = ProcessorInstanceFactory::new();
@@ -111,10 +107,6 @@ fn a_second_class_claiming_a_registered_import_path_is_refused() {
     );
 }
 
-/// Two `#[processor]` types declared inside function bodies in one module
-/// derive the same `module_path!()`. Under the structured key their
-/// distinct idents hid the clash and neither was reachable by `use`; the
-/// import-path key surfaces it at registration.
 #[test]
 fn two_rust_processors_sharing_a_module_path_are_caught_at_registration() {
     let factory = ProcessorInstanceFactory::new();

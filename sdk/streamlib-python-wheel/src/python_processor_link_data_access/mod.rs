@@ -73,9 +73,6 @@ pub(crate) struct PythonProcessorLinkDataAccess {
     /// The wake on each publish of this helper's stream clock, once its setup
     /// found the stream stepped.
     stream_clock_board_publish_listener: OnceLock<StreamClockBoardPublishListener>,
-    /// The ports the processor class declared. A declared port no link has
-    /// reached reads as empty and swallows writes; an undeclared name is
-    /// refused.
     declared_input_ports: parking_lot::Mutex<HashSet<String>>,
     declared_output_ports: parking_lot::Mutex<HashSet<String>>,
     /// The ports Python lent to the node's native code through its module host
@@ -516,15 +513,6 @@ impl PythonProcessorLinkDataAccess {
             })
     }
 
-    /// Release this processor's egress for one disconnected link out of
-    /// `port_name`, dropping the channel publisher with the port's last link.
-    ///
-    /// The mirror of [`wire_output_link`]. The engine cannot do this from the
-    /// parent — the publisher and notifier are this process's — so it asks, and
-    /// a link left behind here is one this child re-opens a second port for on
-    /// reconnect.
-    ///
-    /// [`wire_output_link`]: PythonProcessorLinkDataAccess::wire_output_link
     fn unwire_output_link(
         &self,
         python: Python<'_>,
@@ -536,13 +524,6 @@ impl PythonProcessorLinkDataAccess {
         Ok(())
     }
 
-    /// Release this processor's subscriber for one disconnected link, dropping
-    /// its input port's mailbox and the shared listener with the last one.
-    ///
-    /// The mirror of [`wire_input_link`]. Keyed on the link alone: a subscriber
-    /// already knows which local input port it was bound to.
-    ///
-    /// [`wire_input_link`]: PythonProcessorLinkDataAccess::wire_input_link
     fn unwire_input_link(&self, python: Python<'_>, link_id: &str) -> PyResult<()> {
         let (_, input_mailboxes) = self.helper_process_input_plane()?;
         python.detach(|| input_mailboxes.remove_channel_link(link_id));
@@ -578,16 +559,6 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    /// The next message's payload on `port_name`, or `None` when the mailbox is
-    /// empty.
-    ///
-    /// Without `into` the payload arrives as a `PortPayloadBorrow`; with it the
-    /// read returns `into.from_bytes(payload)`, so a mismatch surfaces here, at
-    /// the consuming read, and nowhere else.
-    ///
-    /// This is the plumbing a helper process wires by hand; it holds no
-    /// context, so a target's `from_bytes` is offered no GPU capability. The
-    /// read a processor writes is `ctx.inputs.read`, which does.
     #[pyo3(signature = (port_name, *, into = None))]
     fn read_from_input_port<'py>(
         &self,
@@ -631,12 +602,6 @@ impl PythonProcessorLinkDataAccess {
         Ok(python.detach(|| input_mailboxes.has_data(port_name)))
     }
 
-    /// Name the ports the processor class declared, ahead of any wiring.
-    ///
-    /// A declared port that no link has reached — a processor added to a
-    /// running graph before its connects, or one whose last link was taken
-    /// away — reads as empty and drops what is written to it; only a name the
-    /// class never declared is refused.
     pub(crate) fn declare_ports(
         &self,
         input_port_names: Vec<String>,

@@ -1,23 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Criterion benches for the unified logging pathway (#447).
-//!
-//! Three benches:
-//! - `hot_path_latency` — `tracing::info!` with 4 structured fields
-//!   against a live pathway; criterion reports p50 / p99.
-//! - `processor_overhead_60fps` — 60 Hz × 10 logs/frame, pathway vs
-//!   a no-op subscriber baseline. Criterion reports both arms so the
-//!   relative overhead is visible.
-//! - `burst_drops_surface` — 10k logs/ms burst for 1 s. Custom harness
-//!   (not a criterion loop): asserts the synthetic `dropped=N` record
-//!   surfaces in the produced JSONL, prints hot-path throughput and
-//!   worker heap high-water.
-//!
-//! Run: `cargo bench -p streamlib --bench logging`. `hot_path_latency`
-//! and `processor_overhead_60fps` run under criterion's default
-//! statistical harness; `burst_drops_surface` runs once at the end as
-//! a throughput assertion and prints its numbers to stdout.
 
 // Benches report per-iteration percentiles and drop counters to
 // stderr as a bench deliverable — criterion's default reporter only

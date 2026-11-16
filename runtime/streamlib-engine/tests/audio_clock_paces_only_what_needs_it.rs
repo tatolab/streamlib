@@ -26,13 +26,9 @@ use streamlib_engine::core::context::{
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 
-/// Recorded from inside the graph, because a processor's `start()` is exactly
-/// where the runtime used to have the clock already running.
 static AUDIO_CLOCK_WAS_RUNNING_IN_A_GRAPH_WITH_NO_AUDIO: AtomicBool = AtomicBool::new(false);
 static AUDIO_CLOCK_WAS_RUNNING_ONCE_A_CAPTURE_STREAM_DELIVERED: AtomicBool = AtomicBool::new(false);
 
-/// A processor with nothing to do with audio — the graph the clock must not
-/// wake up for.
 #[streamlib::sdk::processor(execution = manual)]
 pub struct ProcessorThatNeedsNoAudioClock;
 
@@ -50,8 +46,6 @@ impl streamlib_engine::ManualProcessor for ProcessorThatNeedsNoAudioClock::Proce
     }
 }
 
-/// A processor that opens a deviceless capture stream through the seam, the
-/// way `MicrophoneSource` does.
 #[streamlib::sdk::processor(execution = manual)]
 pub struct ProcessorThatPacesOnTheAudioClock {
     capture_stream: Option<Box<dyn AudioCaptureStream>>,

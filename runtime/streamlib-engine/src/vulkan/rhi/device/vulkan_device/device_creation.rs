@@ -947,14 +947,6 @@ impl HostVulkanDevice {
                      export sentinels must not hold Arc<HostVulkanDevice> clones",
                 )
                 .export_pool_sentinels = sentinels;
-            // Provisional precaution: force the driver's shader-compiler init
-            // now — single-threaded, at construction, before any plugin
-            // processor setup runs. Each probe pipeline is built and dropped
-            // purely for the compiler-init side effect. Compute + graphics
-            // cover the two pipeline-creation paths the engine exercises today;
-            // ray-tracing is a follow-up (it very likely shares the same
-            // compiler `once`). See `prewarm_pipeline_compiler` for why this is
-            // a precaution rather than a proven fix.
             Self::prewarm_pipeline_compiler(&device);
             Self::prewarm_graphics_pipeline(&device);
             device

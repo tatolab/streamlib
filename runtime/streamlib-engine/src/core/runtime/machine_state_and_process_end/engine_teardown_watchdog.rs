@@ -27,9 +27,6 @@ pub(crate) const ENGINE_TEARDOWN_WATCHDOG_BUDGET: Duration = Duration::from_secs
 /// from the third interrupt's 130.
 pub const EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED: i32 = 124;
 
-/// How many threads one process may abandon — processor threads past their
-/// join budget and stream teardowns past their watchdog — before the runtime
-/// ends. Engine-chosen: each one holds the engine alive beneath it.
 const THREADS_ABANDONED_IN_ONE_PROCESS_BEFORE_THE_RUNTIME_ENDS: usize = 32;
 
 /// How long a watchdog waits for the note of what its teardown is waiting on.

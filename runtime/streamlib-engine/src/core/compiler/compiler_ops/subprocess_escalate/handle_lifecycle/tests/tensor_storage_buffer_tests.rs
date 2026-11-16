@@ -6,8 +6,6 @@
 
 use super::*;
 
-/// Acquire a tensor storage buffer over the real escalate op, from a processor
-/// output pool when one is named, answering the surface id or the refusal.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn acquire_tensor_storage_buffer_over_the_escalate_op(
     sandbox: &crate::core::context::GpuContextLimitedAccess,

@@ -1,29 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Panic-injection lifecycle fixtures.
-//!
-//! Two processor types, one Manual (covers `setup` / `start` / `stop` /
-//! `teardown` / `on_pause` / `on_resume`) and one Continuous (covers
-//! `process`, the slot Manual doesn't expose). Each carries a
-//! `panic_at_hook` config field that names the hook to panic in; all
-//! other hooks no-op. The companion integration test drives each
-//! variant in turn and asserts the panic-safety net caught the panic
-//! (i.e. the runtime stayed alive instead of unwinding into the host's
-//! runtime thread).
-//!
-//! Why two fixtures: the processor lifecycle carries
-//! all seven hooks (`setup`, `teardown`, `on_pause`, `on_resume`,
-//! `process`, `start`, `stop`) but a single `Manual` trait impl
-//! delivers only six of them (no `process`) and a single `Continuous`
-//! trait impl delivers only five (no `start` / `stop`). Splitting the
-//! fixture in two covers all seven canonical slots without needing a
-//! synthetic trait merge.
-//!
-//! What this fixture locks: any regression that lets a panic inside a
-//! processor hook escape into the host (rather than being absorbed by
-//! the wrapper's `catch_unwind`) surfaces here as a crashed test binary
-//! instead of a clean "host stayed alive" assertion.
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::Result;

@@ -1,63 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The integration suite's fixtures: one `tatolabd` per test, and streams run on it with `tatolab open --play`.
-
-Every test drives the runtime unit's own binaries under a machine root of its
-own — `TATOLAB_TEST_MACHINE_ROOT`, a short fresh directory under `/tmp` — so
-its `tatolabd` takes that root's machine lock, serves its local API at
-`<root>/run/local-api.sock` and keeps its streams in `<root>/state/`, never the
-machine's. Whatever a test started is killed however it ends, and the root is
-removed.
-
-A stream reaches the runtime only as a user's does: `tatolab open --play --dir`
-queues a load of a project, prints the action and returns — the runtime
-reads each graph document of the project, records each stream and runs it
-until `tatolab stop` or `tatolab rm` — or `tatolab dev`, which queues the load
-and follows the project's log. What a test hands a loading fixture —
-`stream_or_graph` — is one of:
-
-- a `@graph_generator` function of one of the suite's `*_streams.py` (or other non-test)
-  modules, compiled in this process and run as a one-stream project of its own:
-  its graph document beside links to the suite's modules, and a `.venv` linked to
-  the suite venv. A function defined in a test module, inside another function or built at run time
-  is refused by name: move it to a `*_streams.py` module, taking what varies from
-  its config;
-- a graph written by hand, a dict or its text verbatim — refusal tests, or a
-  graph compiled in this process — written as the graph document of a project:
-  `project_directory` when one is given, the directory its Python node types are
-  described and run from, else one of its own linked to the suite's modules; the
-  project's `.venv/bin/python` execs `processor_interpreter` (default: the suite
-  venv's);
-- `TatolabRunOfAProject(working_directory, dir_as_typed=None)`, a project run as it is.
-
-Fixtures, each documented where it is defined: here, in
-`runtime_launching_fixtures.py` and in `project_scaffolding_fixtures.py`, which
-`pytest_plugins` registers:
-- `runtime_unit` — the runtime unit under test; one without the test-root marker ends the session.
-- `private_machine_directories` — this test's machine root, its directories and environment.
-- `start_tatolabd` — start this test's `tatolabd`; returns a `TatolabdUnderTest`.
-- `start_tatolabd_running_stream` — start `tatolabd`, then run a stream on it with `tatolab open --play`.
-- `run_stream_on_tatolabd_with_no_vulkan_driver` — the GPU-free run: loaded and failed at the GPU, or failed or refused before it.
-- `make_tatolab_project` — a project directory whose `.venv` is the suite venv, or one the runtime makes.
-- `run_tatolab` / `start_tatolab` — any `tatolab` command to completion, or started.
-- `run_tatolab_observation_verb` — a `tatolab` verb against this test's runtime, to completion.
-- `held_node_module` — a node module in a project of its own whose describe parks the load.
-
-`TatolabdUnderTest` is the started `tatolabd`: every wait of a
-`RuntimeProcessUnderTest` (marker lines of every loaded stream land on its
-standard error), plus `local_api_socket_path`, `await_serving()`,
-`local_api_client()` and `run_stream(stream_or_graph, ...)`, which starts `tatolab open --play --dir` →
-`TatolabRunOrDevOnTheRuntime`. `tatolabd.interrupt()` is a machine shutdown:
-every loaded stream is unloaded and `tatolabd` exits.
-`TatolabRunOrDevOnTheRuntime.await_loaded()` follows the load it queued with
-`describe_stream_action` until it ends, and answers the stream it loaded —
-`tatolabd.await_the_latest_stream_loaded()` for the latest one, returning its
-id — and `stop_the_stream()` runs `tatolab stop --dir <dir>` on its project, the one
-way a test ends that stream short of the machine shutdown; a Ctrl-C to `dev` ends the following
-and leaves the stream loaded. The local API serves every stream the runtime holds, so the client's
-waits on one stream's graph name it: `await_every_node_running(stream=...)`.
-"""
 
 from __future__ import annotations
 
@@ -137,7 +80,6 @@ VULKAN_LOADER_DRIVER_FILE_VARIABLES = ("VK_DRIVER_FILES", "VK_ICD_FILENAMES", "V
 #: The engine's refusal when the Vulkan loader finds no driver, on every platform.
 NO_VULKAN_DRIVER_REFUSAL = "No usable Vulkan driver (ICD) was found"
 
-#: The engine's line as a stream's unload removes the processors its load added.
 STREAM_UNLOAD_REMOVED_PROCESSORS_LOG_LINE_PATTERN = re.compile(
     r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
 )
@@ -215,12 +157,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Ite
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    """Refuse a venv holding the runtime, or one missing `tatolab.stream`.
-
-    The suite venv is the venv every fixture stream compiles in and its
-    processor interpreters start from; one holding `tatolab.runtime` would let a
-    node run without the lend and prove nothing about it.
-    """
     lent_runtime_spec = importlib.util.find_spec("tatolab.runtime")
     if lent_runtime_spec is not None:
         pytest.exit(
@@ -654,12 +590,6 @@ class TatolabdUnderTest(RuntimeProcessUnderTest):
         extra_environment: "dict[str, str | None] | None" = None,
         verb: str = OPEN_AND_PLAY_VERB,
     ) -> TatolabRunOrDevOnTheRuntime:
-        """Start `tatolab open --play --dir` (or `verb`, such as `dev`) on the project of
-        `stream_or_graph`; return it started.
-
-        `extra_environment` reaches the `tatolab` process alone: a stream's
-        processor interpreters inherit `tatolabd`'s environment, never the CLI's.
-        """
         tatolab_run = self._tatolab_commands.tatolab_run_of(
             stream_or_graph,
             project_directory=project_directory,
@@ -691,7 +621,6 @@ class StreamRunWithNoVulkanDriverOutcome:
     loaded: bool
     #: The stream id the engine loaded it under, once it loaded.
     loaded_stream_id: "str | None"
-    #: How many processors the load added, as its unload removed them.
     loaded_node_count: "int | None"
     #: Whether the load ended without a running stream: refused, failed, or a stream it took in
     #: recorded failed.

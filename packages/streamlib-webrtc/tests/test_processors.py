@@ -1,19 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The two processors as a graph sees them.
-
-`stream_builder.add` with no adapter and no engine change is the whole claim of the
-extension model, so it is what these check — each stream compiled here and loaded
-with `tatolab open --play` on the machine's runtime, a real `tatolabd` from the runtime
-unit, which needs no device to load one. The load is the subject: the runtime
-reaches no Vulkan driver, so the start that follows every load is refused at the
-GPU, and these require exactly that refusal.
-
-The runtime unit is `$STREAMLIB_RUNTIME_UNIT_DIRECTORY`, else the checkout's
-`target/tatolab-runtime` that `cargo xtask build-runtime` lays out. The helper-side
-tests below import `tatolab.runtime` from its lend, on `PYTHONPATH`.
-"""
 
 import dataclasses
 import json
@@ -130,7 +117,6 @@ TATOLAB_EXECUTABLE = RUNTIME_UNIT_DIRECTORY / "bin" / "tatolab"
 #: The line `tatolabd` logs as it begins starting a loaded stream.
 STREAM_START_BEGAN_LINE = re.compile(r"\[start\] Starting the stream `(?P<stream_id>[^`]+)`")
 
-#: The line `tatolabd` logs as a stream's unload removes the processors its load added.
 STREAM_UNLOAD_REMOVED_PROCESSORS_LINE = re.compile(
     r"\[stop\] Queued removal of (?P<processor_count>\d+) processor\(s\)"
 )
@@ -355,14 +341,6 @@ def node_names_loaded_by_tatolabd(
     working_directory: Path,
     tatolabd: TatolabdWithNoVulkanDriver,
 ) -> "list[str]":
-    """Compile `stream_function`, load it on `tatolabd` with `tatolab open --play`, and name the nodes it held.
-
-    `tatolab open --play` queues the load and its playback, and exits 0. The engine loads the compiled
-    names unsuffixed, so they are the names it holds. Its start is then refused
-    at the GPU, which the runtime logs, holding the stream stopped with its graph;
-    `tatolab rm` then unloads it, counting the processors the load added. Fails
-    naming what the runtime said when the load is refused.
-    """
     graph = run_graph_generator(stream_function)
     stream_name = stream_function.__name__
     project_directory = working_directory / "project"
@@ -1002,9 +980,6 @@ def test_a_player_never_started_stops_and_tears_down_cleanly(
 
 
 def test_the_distribution_declares_both_nodes_for_the_node_catalog():
-    """The node catalog lists an installed module's nodes from its `tatolab.nodes`
-    entry points; each must name the class by the import path its processor
-    interpreter imports it back by."""
     from importlib.metadata import distribution
 
     declared = {

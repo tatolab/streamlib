@@ -28,14 +28,6 @@ use super::pending_staged_write_back_to_surface::PendingStagedWriteBackToSurface
 /// settles the debt, whether that is the handle or a capsule Python is
 /// still holding.
 pub(crate) struct GpuSurfaceOwnedMemory {
-    /// The surface itself — one checkout, whichever backing its
-    /// registration names. There is one placement: every processor runs in
-    /// its own helper process, so every surface it holds came out of the
-    /// parent's surface-share service.
-    ///
-    /// Gated to the platforms the exchange runs on; elsewhere no handle is
-    /// constructible at all — every entry point refuses before reaching
-    /// this type.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) checked_out_surface: HelperCheckedOutSurface,
     #[cfg(target_os = "linux")]

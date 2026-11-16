@@ -67,13 +67,6 @@ pub(crate) struct CapturedVideoFrameToPooledRgbaConversionStage {
 }
 
 impl CapturedVideoFrameToPooledRgbaConversionStage {
-    /// Create the stage for frames of `width` × `height` whose device pixels
-    /// are in `source_pixel_format`, published from the output pool of the
-    /// node `processor_id_of_the_owning_node`.
-    ///
-    /// The converter is the stream's own: two cameras of one source format
-    /// each dispatch from their own capture thread, and a shared converter's
-    /// kernel stages bindings both would race.
     pub(crate) fn create(
         full: &GpuContextFullAccess,
         source_pixel_format: PixelFormat,

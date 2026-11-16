@@ -50,10 +50,6 @@ pub(crate) struct Biplanar420IOSurfaceToPooledRgbaConversion {
 }
 
 impl Biplanar420IOSurfaceToPooledRgbaConversion {
-    /// A conversion for `width` × `height` frames whose surfaces are in
-    /// `source_pixel_format`, published from the output pool of the node
-    /// `processor_id_of_the_owning_node`; pooled frames come out at that
-    /// extent, so a larger surface is read from its top-left corner.
     pub(crate) fn create(
         gpu_context: &GpuContextLimitedAccess,
         source_description: &str,

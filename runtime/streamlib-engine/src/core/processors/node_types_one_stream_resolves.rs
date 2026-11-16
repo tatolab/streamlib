@@ -26,9 +26,6 @@ use crate::core::processors::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance,
 };
 
-/// A node type one stream resolves beyond the natively compiled ones — described in its
-/// processor interpreter, or a view its project brings: what it declares, and how a node of it
-/// runs.
 struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
     descriptor: ProcessorDescriptor,
     input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
@@ -60,14 +57,8 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     })
 });
 
-/// How a node of a type a stream's processor interpreter described runs.
 pub(crate) enum HowANodeOfADescribedTypeRuns {
-    /// As a processor the constructor builds, which starts the node in that
-    /// stream's interpreter.
     AsAProcessorItsConstructorBuilds(DynamicProcessorConstructorFn),
-    /// Inside the read of each node it feeds, with no processor of its own: a
-    /// function node, until it is promoted out of its readers' islands and the
-    /// constructor builds the processor of its own helper.
     InsideTheReadOfEachNodeItFeeds {
         processor_once_promoted_to_its_own_process: DynamicProcessorConstructorFn,
     },
@@ -107,10 +98,6 @@ pub(crate) struct DescribedNodeTypesAsTheyStoodBeforeARefusedChange {
     each_node_type: Vec<DescribedNodeTypeAsItStood>,
 }
 
-/// The node types one loaded stream resolves: every natively compiled type in
-/// [`PROCESSOR_REGISTRY`], then the type a top-level `GraphInput` runs as, then each view its
-/// project and their imports bring, then the types described in the stream's own processor
-/// interpreter.
 #[derive(Default)]
 pub struct NodeTypesOneStreamResolves {
     view_types_this_streams_project_brings: RwLock<
@@ -151,7 +138,6 @@ impl NodeTypesOneStreamResolves {
         PROCESSOR_REGISTRY.descriptor(node_type).is_some()
     }
 
-    /// Whether `node_type` was described in this stream's processor interpreter.
     pub fn was_described_in_this_streams_processor_interpreter(
         &self,
         node_type: &ProcessorClassImportPath,
@@ -275,9 +261,6 @@ impl NodeTypesOneStreamResolves {
         descriptors
     }
 
-    /// Register a type this stream's processor interpreter described,
-    /// replacing what an earlier describe into this stream left. A natively
-    /// compiled type of the same path is refused: it is never replaced.
     pub(crate) fn register_a_type_described_in_this_streams_processor_interpreter(
         &self,
         descriptor: ProcessorDescriptor,
@@ -593,7 +576,6 @@ impl NodeTypesOneStreamResolves {
         PROCESSOR_REGISTRY.refuse_a_node_this_runtime_cannot_add(node_name, node_type, config)
     }
 
-    /// Build the processor `node` is, native first.
     pub fn create(&self, node: &ProcessorNode) -> Result<ProcessorInstance> {
         if let Some(placeholder) =
             self.placeholder_of_the_node_type_not_described(&node.processor_type)
@@ -639,9 +621,6 @@ impl NodeTypesOneStreamResolves {
         Ok(instance)
     }
 
-    /// The descriptors of every type described in this stream's processor
-    /// interpreter, leaving out the stream's function node pool, which no
-    /// graph names.
     pub fn descriptors_described_in_this_streams_processor_interpreter(
         &self,
     ) -> Vec<ProcessorDescriptor> {
@@ -778,8 +757,6 @@ impl NodeTypesOneStreamResolves {
         }
     }
 
-    /// The native types, then the views this stream's project brings, then the types described
-    /// in this stream's processor interpreter — the stream's node catalog.
     pub fn node_catalog(&self) -> Vec<ProcessorDescriptor> {
         let mut catalog = PROCESSOR_REGISTRY.list_registered();
         catalog.extend(self.descriptors_of_the_view_types_this_streams_project_brings());

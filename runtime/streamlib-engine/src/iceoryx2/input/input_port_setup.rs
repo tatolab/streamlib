@@ -51,21 +51,6 @@ fn windowed_port_config(
     }
 }
 
-/// The one-shot notice a `match_device` port installs on the mailbox it holds
-/// while its contract is unsettled.
-///
-/// Every other port that evicts is a consumer falling behind, and the per-link
-/// count says so on its own. This one is not: an unsettled port has no contract
-/// to window by, so it hands its reader nothing however much arrives, and the
-/// climbing count reads as a consumer that is merely slow.
-///
-/// The state is reached only by a port being drained while unsettled, and the
-/// dominant way that happens is a link wired onto the port after its processor's
-/// `setup()` has been and gone without settling it — the branch the spawn-time
-/// refusal cannot cover, because a port with no link at `setup()` time is not in
-/// the map to be refused. Such a port stays unsettled for the rest of the run.
-/// Said once per port rather than once per bag: nothing about the state changes
-/// between one evicted bag and the next.
 fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled(
     port: &str,
     depth: usize,
@@ -109,24 +94,6 @@ impl InputMailboxesInner {
         );
     }
 
-    /// Add a mailbox for a port whose window contract is `match_device` and is
-    /// not settled yet.
-    ///
-    /// This is what a `match_device` port looks like while nothing has settled
-    /// it: countable, and readable by nobody. Two things reach the state — the
-    /// compiler wiring every link before it releases any processor into
-    /// `setup()`, and a link wired onto the port after that `setup()` has been
-    /// and gone without settling it. Only the second is ever drained while it
-    /// lasts, and it lasts for the rest of the run. A bag arriving here is
-    /// queued and, on overrun, evicted and counted against its own inbound
-    /// link, exactly as at any other port — and, unlike at any other port, said
-    /// out loud once, because an unsettled port hands its reader nothing and
-    /// the count alone reads as a consumer that is merely slow.
-    ///
-    /// `depth` comes from the caller the way [`Self::add_port`]'s does, rather
-    /// than being assumed from the profile a window contract forces: there is
-    /// no contract to size it from yet, and the settle re-sizes it from one and
-    /// carries anything queued across.
     pub fn add_port_awaiting_its_device_stream_format(
         &self,
         port: &str,
@@ -183,27 +150,6 @@ impl InputMailboxesInner {
         );
     }
 
-    /// Settle a `match_device` port's contract from the format of the device
-    /// stream its own processor just opened, installing the stage that honours
-    /// it.
-    ///
-    /// Called from `setup()`, where the capability typestate is Full — the same
-    /// phase in which a processor requests a window.
-    ///
-    /// **Only a port that declared the sentinel and is still waiting on it can
-    /// be settled.** A wired port carries what its author declared, so the port
-    /// itself is the check: one that declared its values, or none at all, or
-    /// one already settled, is refused naming what it is. Without that a
-    /// processor could window a port whose author asked for nothing, or replace
-    /// a declared contract with its own — and `graph` would go on rendering the
-    /// author's declaration while the stage ran something else.
-    ///
-    /// The settled values outlive the port itself, so a link wired later —
-    /// after `setup()` already ran — finds them rather than a sentinel, and
-    /// `graph` renders what the device gave rather than what the declaration
-    /// asked for. A port not yet wired has no declaration here to check
-    /// against; the wiring path is what reads the settled values, and it reads
-    /// them only for a port whose declaration is the sentinel.
     pub(crate) fn settle_a_ports_device_matched_audio_window_contract(
         &self,
         port: &str,
@@ -252,21 +198,12 @@ impl InputMailboxesInner {
         Ok(())
     }
 
-    /// This processor's settled `match_device` contracts, shared with the graph
-    /// node so `graph` renders the resolved values off the port that resolved
-    /// them.
     pub(crate) fn device_matched_audio_window_contracts(
         &self,
     ) -> Arc<DeviceMatchedAudioWindowContractsByInputPort> {
         Arc::clone(&self.device_matched_audio_window_contracts)
     }
 
-    /// The input ports still holding an unsettled `match_device` sentinel,
-    /// named.
-    ///
-    /// Asked once, after `setup()` returns: by then the only processor that
-    /// could have settled one has had its chance, so a port still here belongs
-    /// to a processor that opens no device stream and is a wiring error.
     pub(crate) fn input_ports_still_awaiting_their_device_stream_format(&self) -> Vec<String> {
         self.ports
             .lock()

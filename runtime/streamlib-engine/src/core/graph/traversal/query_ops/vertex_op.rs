@@ -40,12 +40,6 @@ use crate::core::graph::{
 };
 
 impl<'a> TraversalSource<'a> {
-    /// Start traversal from vertices.
-    ///
-    /// Accepts:
-    /// - `()` - all vertices
-    /// - `&str` - vertex by ID string
-    /// - `ProcessorUniqueId` - vertex by ID
     pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorTraversal<'a> {
         let ids = match filter.into_filter() {
             Some(id) => self
@@ -90,12 +84,6 @@ impl<'a> TraversalSource<'a> {
 }
 
 impl<'a> TraversalSourceMut<'a> {
-    /// Start traversal from vertices.
-    ///
-    /// Accepts:
-    /// - `()` - all vertices
-    /// - `&str` - vertex by ID string
-    /// - `ProcessorUniqueId` - vertex by ID
     pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorTraversalMut<'a> {
         let ids = match filter.into_filter() {
             Some(id) => self

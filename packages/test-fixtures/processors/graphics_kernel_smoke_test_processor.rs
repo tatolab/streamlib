@@ -1,41 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Integration-test fixture that exercises a handful of the
-//! graphics-kernel methods end-to-end.
-//!
-//! Smoke-only — narrower scope than the compute-kernel CPU-reference
-//! test. Validates that kernel construction, a couple of binding-method
-//! setters, push-constant staging, and an `offscreen_render()` dispatch
-//! complete without panicking or returning an error code. Pixel
-//! correctness is not asserted.
-//!
-//! Lifecycle:
-//!   1. `setup()` — nothing.
-//!   2. `start()` —
-//!      a. Construct a [`GraphicsKernelDescriptor`] for the embedded
-//!      vert+frag SPIR-V (centered triangle, push-constant
-//!      variant gate, single Rgba8Unorm color attachment) and
-//!      create the kernel via
-//!      `gpu_full_access().create_graphics_kernel(...)`.
-//!      b. Acquire a render-target `Texture` (Rgba8Unorm,
-//!      COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT) via
-//!      `gpu_limited_access().acquire_texture(...)`.
-//!      c. Stage push constants via
-//!      `kernel.set_push_constants_value(0, &variant)`.
-//!      d. Drive `kernel.offscreen_render(...)` against the acquired
-//!      texture with a single CLEAR-load color target (including
-//!      the parallel-array color-target marshaling + the
-//!      `OffscreenDrawRepr` tagged-union encoding).
-//!      e. Write `OK` or `ERR:<message>` to the configured
-//!      `output_path` so the integration test can assert the
-//!      round-trip succeeded.
-//!   3. `teardown()` — nothing; the kernel + texture drop naturally.
-//!
-//! What this locks: a regression that breaks any of
-//! `create_graphics_kernel`, `acquire_texture`, `set_push_constants`,
-//! or `offscreen_render` surfaces here as either a missing output
-//! file (the processor panicked) or `ERR:<message>` in the file.
 
 #[cfg(target_os = "linux")]
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;

@@ -94,7 +94,6 @@ pub struct LoadedStreamInThisRuntime {
     /// context of this stream is handed.
     this_streams_identity_and_handles: Arc<LoadedStreamARuntimeContextBelongsTo>,
     engine_resources_shared_by_every_stream: Arc<EngineResourcesSharedByEveryStream>,
-    /// Compiles this stream's graph changes into running processors.
     pub(crate) compiler: Arc<Compiler>,
     /// This stream's runtime context, made at its start and cleared at its stop.
     pub(crate) runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
@@ -199,7 +198,6 @@ impl LoadedStreamOutOfTheTableUntilItsEndIsRecorded {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HowALoadedStreamEnded {
-    /// Its teardown finished and every processor was removed.
     Stopped,
     /// Its teardown finished, reporting the failure it met.
     StoppedReportingAFailure(String),
@@ -375,7 +373,6 @@ impl LoadedStreamInThisRuntime {
         function_node_states
     }
 
-    /// The handles every runtime context of this stream's processors holds.
     pub(crate) fn the_handles_a_runtime_context_of_this_stream_belongs_to(
         &self,
     ) -> Arc<LoadedStreamARuntimeContextBelongsTo> {
@@ -386,7 +383,6 @@ impl LoadedStreamInThisRuntime {
         &self.this_streams_identity_and_handles.project_directory
     }
 
-    /// Where the stream's processor interpreters start, if it was given one.
     pub fn stream_environment(&self) -> Option<&StreamEnvironment> {
         self.processor_interpreter_launch_record
             .stream_environment()
@@ -474,8 +470,6 @@ impl LoadedStreamInThisRuntime {
             .scope(|graph, _tx| graph.traversal().v(()).iter().count())
     }
 
-    /// Export this stream's graph as JSON: topology, processor states,
-    /// metrics and buffer levels.
     pub fn to_json(&self) -> Result<serde_json::Value> {
         let machine_name = self
             .engine_resources_shared_by_every_stream

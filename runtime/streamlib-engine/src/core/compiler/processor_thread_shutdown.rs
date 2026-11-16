@@ -1,15 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Removing processors: every thread told to stop before any is waited on, each
-//! wait bounded, and a thread that outlives its budget abandoned and named.
-//!
-//! The engine
-//! stops every helper at once, never one after another, and a native processor
-//! thread that ignores shutdown past its budget is abandoned rather than
-//! joined. A second interrupt abandons a native thread still inside its callback,
-//! while a helper's host thread is still waited on — its ladder skips to
-//! terminating the helper's process group, which is what that wait now bounds.
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -26,30 +17,20 @@ use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::runtime::TeardownProgressNoteOfOneStream;
 
-/// What a processor thread runs, which decides how long its join may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessorThreadKind {
-    /// A processor whose callbacks run on this thread.
     NativeProcessor,
     /// The host of a helper process, which walks that helper's shutdown ladder
     /// before it returns.
     HelperProcessHost,
 }
 
-/// How long each kind of processor thread has to return once told to stop.
-///
-/// Engine-chosen and not authorable: the plan makes every shutdown budget the
-/// engine's.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ProcessorThreadJoinBudgets {
     native_processor_thread: Duration,
     /// Sits above the helper ladder's worst case rather than at the native
     /// budget.
     helper_process_host_thread: Duration,
-    /// How long a native thread has once shutdown is forced. Not zero: a thread
-    /// already returning when the second interrupt lands is not inside its
-    /// callback, and abandoning it would leak the engine over a processor that
-    /// was never stuck.
     native_processor_thread_once_shutdown_is_forced: Duration,
 }
 
@@ -71,22 +52,18 @@ impl ProcessorThreadJoinBudgets {
 /// How often the bounded wait re-checks which threads have returned.
 const PROCESSOR_THREAD_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-/// The processor a thread runs, by the two names a person reads it by.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessorDisplayNameAndId {
     pub processor_id: ProcessorUniqueId,
     pub processor_display_name: String,
 }
 
-/// A processor thread already told to stop, waiting to be joined.
 struct SignalledProcessorThread {
     processor: ProcessorDisplayNameAndId,
     join_handle: JoinHandle<()>,
     kind: ProcessorThreadKind,
 }
 
-/// An abandoned processor thread and the handle that says whether it has since
-/// returned.
 pub(crate) struct AbandonedProcessorThreadStillRunning {
     pub(crate) processor: ProcessorDisplayNameAndId,
     pub(crate) join_handle: JoinHandle<()>,
@@ -111,7 +88,6 @@ impl std::fmt::Display for ProcessorDisplayNamesAndIds<'_> {
     }
 }
 
-/// What to say about processors whose threads were abandoned.
 pub struct DescriptionOfTheAbandonedProcessorThreads<'a>(pub &'a [ProcessorDisplayNameAndId]);
 
 impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
@@ -126,12 +102,6 @@ impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
     }
 }
 
-/// Stop the threads of `processor_ids`, telling every one to stop before
-/// waiting on any, and leave their nodes in the graph.
-///
-/// The threads abandoned are added to `abandoned_processor_threads`, counted
-/// into the process-wide total and named in the return value. The wait writes
-/// what it is waiting on into the stream's `teardown_progress_note`.
 pub(crate) fn stop_processor_threads_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
     the_stream_the_processors_belong_to: &LoadedStreamIdentity,
@@ -150,8 +120,6 @@ pub(crate) fn stop_processor_threads_signalling_every_thread_before_joining_any(
         );
         tracing::info!("[REMOVE] {}", processor_id);
 
-        // The lock is released before any wait: a processor on its way out may
-        // need it to finish the runtime operation it is inside.
         let mut graph = graph_arc.write();
         let Some(node) = graph.traversal_mut().v(processor_id).first_mut() else {
             continue;
@@ -199,14 +167,6 @@ pub(crate) fn stop_processor_threads_signalling_every_thread_before_joining_any(
     abandoned_processors
 }
 
-/// Remove `processor_ids` from the graph, telling every one of their threads to
-/// stop before waiting on any.
-///
-/// Every node is removed whether its thread returned or not. The threads
-/// abandoned are added to `abandoned_processor_threads` and counted into the
-/// process-wide total before any node is dropped, and named in the return
-/// value. The wait writes what it is waiting on into the stream's
-/// `teardown_progress_note`.
 pub(crate) fn remove_processors_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
     the_stream_the_processors_belong_to: &LoadedStreamIdentity,
@@ -277,8 +237,6 @@ fn join_every_signalled_processor_thread_within_its_budget(
             shutdown_forced_at = Some(Instant::now());
         }
 
-        // `remove`, never `swap_remove`: the refusal names processors in the
-        // order they were removed.
         let mut index = 0;
         while index < still_waited_on.len() {
             let thread = &still_waited_on[index];
@@ -393,7 +351,6 @@ mod tests {
         false
     }
 
-    /// How a processor's thread behaves once it is told to stop.
     #[derive(Clone, Copy)]
     enum ThreadOnceToldToStop {
         ReturnsAfter(Duration),
@@ -403,8 +360,6 @@ mod tests {
     /// When each test thread was told to stop, in the order it heard.
     type WhenEachThreadWasToldToStop = Arc<Mutex<Vec<Instant>>>;
 
-    /// A processor node in `graph` carrying a shutdown channel and a thread
-    /// that behaves as `behaviour` says, the way the spawn op leaves one.
     fn a_processor_node_running_a_thread(
         graph: &mut Graph,
         display_name: &str,
@@ -650,12 +605,6 @@ mod tests {
         );
     }
 
-    /// A native thread already on its way out when shutdown is forced is not
-    /// inside its callback, so it is joined rather than abandoned.
-    ///
-    /// Fail-without-fix: abandoning every native thread not yet finished at the
-    /// first check after the force catches this one microseconds after its
-    /// signal, and `run()` raises naming a processor that was never stuck.
     #[test]
     fn a_native_thread_returning_promptly_is_joined_even_when_shutdown_is_forced() {
         ensure_test_mocks_registered();

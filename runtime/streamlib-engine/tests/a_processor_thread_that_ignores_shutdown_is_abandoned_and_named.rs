@@ -1,19 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A native processor thread that ignores shutdown past its budget, against a
-//! real `Runner`.
-//!
-//! Such a thread is abandoned rather
-//! than joined, the engine stays alive beneath it, and the caller is told which
-//! processor it was. What it locks:
-//! - `LoadedStreamInThisRuntime::stop()` finishes the teardown and fails naming
-//!   the processor by display name and id, and the stream still lists the
-//!   thread as abandoned.
-//! - A live `remove_processor` takes the node out of the graph, announces the
-//!   removal, and fails naming the processor.
-//!
-//! Starts a real stream (GPU + iceoryx2), so this runs on the rig only.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -35,7 +22,6 @@ const STOP_CALLBACK_THAT_IGNORES_SHUTDOWN: Duration = Duration::from_secs(20);
 /// The native join budget the engine chooses, which these tests measure against.
 const NATIVE_PROCESSOR_THREAD_JOIN_BUDGET: Duration = Duration::from_secs(5);
 
-/// A processor whose `stop()` does not return for twenty seconds.
 #[streamlib::sdk::processor(execution = manual)]
 pub struct StopIgnoringShutdownTestProcessor;
 
@@ -50,9 +36,6 @@ impl streamlib_engine::ManualProcessor for StopIgnoringShutdownTestProcessor::Pr
     }
 }
 
-/// A started stream holding one processor that ignores shutdown, the project
-/// directory it is loaded from, the runner it is loaded in, and the
-/// processor's id.
 fn a_running_stream_with_a_processor_that_ignores_shutdown(
     display_name: &str,
 ) -> (
@@ -86,7 +69,6 @@ fn a_running_stream_with_a_processor_that_ignores_shutdown(
     (project_directory, runner, stream, processor_id.to_string())
 }
 
-/// Records the ids of the processors a `RuntimeDidRemoveProcessor` names.
 struct RemovedProcessorIdsRecorder(Arc<Mutex<Vec<String>>>);
 
 impl EventListener for RemovedProcessorIdsRecorder {

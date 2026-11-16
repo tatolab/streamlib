@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Attribute-macro test: verifies that `#[streamlib::sdk::processor(...)]`
-//! against a `streamlib.yaml`-declared config schema instantiates and
-//! round-trips through `from_config` / `update_config`.
 
 use streamlib::sdk::processors::GeneratedProcessor;
 use streamlib_test_fixtures::test_configured_processor::ConfiguredProcessor;

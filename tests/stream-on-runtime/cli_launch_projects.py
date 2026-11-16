@@ -26,9 +26,6 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 
 FIRST_FRAME_REPORTER_MODULE = STREAM_ON_RUNTIME_SUITE_DIRECTORY / "first_frame_reporter.py"
 
-# The reporter is copied beside the entry file rather than into a package: that
-# is the other import shape a processor interpreter has to resolve from its
-# project, and the scaffold covers the packaged one.
 STREAM_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
 from tatolab.stream import StreamBuilder, graph_generator

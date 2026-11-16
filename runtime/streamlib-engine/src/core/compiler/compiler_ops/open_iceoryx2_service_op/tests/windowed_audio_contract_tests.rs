@@ -52,12 +52,6 @@ fn a_port_declaring_no_contract_resolves_to_none() {
     assert!(windowing.is_none());
 }
 
-/// `match_device` settles at `setup()` from the device stream the declaring
-/// processor opened — and the compiler wires every link before it releases
-/// any processor into `setup()`. So wire time is not where a sentinel is
-/// judged: the port is wired awaiting its device, and the refusal belongs
-/// where nothing can settle it (a helper-placed destination) or where
-/// nothing did (after `setup()` returned).
 #[test]
 fn a_match_device_contract_wires_awaiting_its_device_rather_than_refusing() {
     let mut graph = Graph::new();
@@ -163,14 +157,6 @@ fn rendered_audio_window_of(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> s
         .clone()
 }
 
-/// A `match_device` port on a helper-placed destination is refused where it
-/// is wired, not left to wait.
-///
-/// A child can never settle one: the format comes from a device stream a
-/// processor opens in the app process, and the wiring envelope carries five
-/// resolved values or nothing. Waiting for a `setup()` that has no way to
-/// answer would be a port that silently hands its reader nothing for the
-/// whole run, which is the failure this refusal exists instead of.
 #[test]
 fn a_match_device_port_on_a_helper_placed_destination_is_refused_at_wire_time() {
     let mut graph = Graph::new();

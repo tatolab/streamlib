@@ -20,9 +20,6 @@ fn add_mock_ordered_input_only(graph: &mut Graph) -> String {
         .to_string()
 }
 
-/// A graph holding one link, wired by the op, from `out1` to `in1` of two
-/// processors that are both helper stubs, so the engine opens no port of
-/// its own on it. Hands back the source's id and the link.
 fn graph_with_one_wired_link_between_two_helper_stubs() -> (Graph, String, LinkUniqueId) {
     let (graph, source_id, link_id, _) = graph_and_owed_answers_of_a_helper_to_helper_link();
     (graph, source_id, link_id)
@@ -147,8 +144,6 @@ fn a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_ow
     );
 }
 
-/// The processor a stream's spawn creates for node `proc_id`, through the
-/// node types the stream resolves.
 fn the_processor_a_spawn_creates_for(graph: &mut Graph, proc_id: &str) -> ProcessorInstance {
     graph
         .node_types_this_stream_resolves()
@@ -162,10 +157,6 @@ fn the_processor_a_spawn_creates_for(graph: &mut Graph, proc_id: &str) -> Proces
         .expect("the node's type creates its processor")
 }
 
-/// A processor created the way a stream's spawn creates it reaches its
-/// node's stream facts from its writer and its mailboxes: a write of facts
-/// is checked against the node's port, and a reader reads its upstream's
-/// facts off the inbound link the compiler wired.
 #[test]
 fn a_spawned_processors_writer_and_mailboxes_reach_their_nodes_stream_facts() {
     use crate::core::descriptors::ImageStreamFacts;
@@ -436,13 +427,6 @@ fn a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened() {
     );
 }
 
-/// A link whose source and destination are the same helper waits on two
-/// answers, because the engine hands that helper both of its ends.
-///
-/// `connect` accepts an output wired to its own processor's input, so this
-/// is reachable rather than theoretical. Fail-without-fix: hand the link
-/// one cell and the first answer reports it `wired` while the other end
-/// may not have opened at all.
 #[test]
 fn a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends() {
     use crate::core::json_schema::LinkStateOutput;
@@ -503,15 +487,9 @@ fn a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends() {
     );
 }
 
-/// How long the op may take while a helper's processor lock is held before
-/// it counts as waiting on that lock.
 const LONGEST_A_WIRING_OP_MAY_TAKE_BESIDE_A_HELPER_SETTING_UP: std::time::Duration =
     std::time::Duration::from_secs(5);
 
-/// Run `wiring_op` on another thread while this one holds both processor
-/// locks, the way each helper's spawn thread holds its own across a setup
-/// still importing, and hand back what it returned — or `None` if it was
-/// still waiting when the budget ran out, once the locks are let go.
 fn run_while_both_processor_locks_are_held<T: Send>(
     source: &Arc<Mutex<ProcessorInstance>>,
     dest: &Arc<Mutex<ProcessorInstance>>,
@@ -574,12 +552,6 @@ impl TwoHelperStubsAndAnUnwiredLinkBetweenThem {
     }
 }
 
-/// A live `connect` onto helpers still inside their setup — their processor
-/// locks held — wires the link without waiting for either lock, so the
-/// graph lock the compiler holds around it is never held across an import.
-///
-/// Fail-without-fix: classify an out-of-process endpoint through its
-/// processor's lock and the op waits out the budget.
 #[test]
 fn a_link_between_helpers_still_setting_up_is_handed_over_without_their_processor_locks() {
     use crate::core::json_schema::LinkStateOutput;
@@ -616,11 +588,6 @@ fn a_link_between_helpers_still_setting_up_is_handed_over_without_their_processo
     );
 }
 
-/// A disconnect of a link between helpers whose processor locks are held
-/// reclaims both ends without waiting for either lock.
-///
-/// Fail-without-fix: reclaim an out-of-process endpoint through its
-/// processor's lock and the op waits out the budget.
 #[test]
 fn a_disconnect_between_helpers_still_setting_up_reclaims_both_ends_without_their_processor_locks()
 {

@@ -16,12 +16,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The values an `audio_window` declaration's `dtype` may take — the two
-/// sample types a Channels block carries.
-///
-/// The single Rust-side list: [`AudioWindowContractDeclaredValues::refuse_if_unhonourable`]
-/// renders its refusal from it, and that is the one validator both the
-/// `#[processor]` grammar and the wheel's declaration bridge call.
 pub const AUDIO_WINDOW_DTYPE_DECLARATION_VALUES: [&str; 2] = ["f32", "f64"];
 
 /// How an undeclared channel count renders wherever a contract is written
@@ -54,28 +48,8 @@ pub enum AudioWindowContract {
     /// The values as the port itself declared them.
     #[serde(rename = "declaration")]
     Declaration(AudioWindowContractDeclaredValues),
-    /// `audio_window = match_device`: the five values resolve at `setup()`
-    /// from the format of the device stream the declaring processor opened.
-    /// Only a processor that opens one can satisfy it.
-    ///
-    /// The empty braces are load-bearing. Under an internally-tagged enum a
-    /// *unit* variant accepts and silently discards sibling keys, so
-    /// `{"resolved_from": "match_device", "window_size": 512}` would read back
-    /// as a bare sentinel; an empty struct variant refuses it.
     #[serde(rename = "match_device")]
     MatchDevice {},
-    /// The five values a [`AudioWindowContract::MatchDevice`] port settled to,
-    /// taken from the format of the device stream its processor opened.
-    ///
-    /// Rendering only — no authoring surface produces it. The `#[processor]`
-    /// grammar and the wheel's declaration bridge each yield
-    /// [`AudioWindowContract::Declaration`] or
-    /// [`AudioWindowContract::MatchDevice`] and nothing else, so an author
-    /// cannot write it. It exists because a port that resolved 48 kHz stereo
-    /// from *this machine's* speaker and one whose author wrote those numbers
-    /// down are not the same fact, and `graph` is where the difference is
-    /// readable: a reader round-tripping the rendering back into a declaration
-    /// would otherwise pin a machine-specific format as if it had been chosen.
     #[serde(rename = "device")]
     Device(AudioWindowContractDeclaredValues),
 }
@@ -116,14 +90,6 @@ pub struct AudioWindowContractDeclaredValues {
 }
 
 impl AudioWindowContractDeclaredValues {
-    /// Refuse a declaration the read-side stage could not honour, naming the
-    /// field and the value.
-    ///
-    /// The one validator both Rust entry paths call — the `#[processor]`
-    /// grammar and the wheel's bridge from a Python declaration — so a
-    /// declaration is refused in the same terms whichever language wrote it.
-    /// Deserializing a contract or building one through the public fields
-    /// runs no check; the two authoring surfaces are what this guards.
     pub fn refuse_if_unhonourable(&self) -> Result<(), String> {
         for (field_name, value) in [
             ("sample_rate", Some(self.sample_rate)),

@@ -55,7 +55,7 @@ struct HostShared {
 impl HostHandlers for HostData {
     type Shared<'a> = HostShared;
     type MainThread<'a> = (); // No additional main thread data needed
-    type AudioProcessor<'a> = (); // No additional audio processor data needed
+    type AudioProcessor<'a> = ();
 }
 
 impl<'a> SharedHandler<'a> for HostShared {

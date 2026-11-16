@@ -47,8 +47,6 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
         Mutex<Vec<LoadedStreamOutOfTheTableUntilItsEndIsRecorded>>,
     /// The one GPU context, created by the first stream that starts.
     pub(super) gpu_context_created_by_the_first_stream_start: Mutex<Option<GpuContext>>,
-    /// Hooks run once, when the GPU context is created, before any
-    /// processor's `setup()` runs.
     pub(super) setup_hooks: Mutex<SetupHooksOfTheEngine>,
     /// The lend directory the host handed this runtime.
     pub(crate) processor_interpreter_lend_directory: RuntimeUnitPathTheHostHandsTheEngineOnce,
@@ -123,12 +121,6 @@ pub(crate) struct EngineResourcesSharedByEveryStream {
 }
 
 impl EngineResourcesSharedByEveryStream {
-    /// The engine's GPU context — created now when no stream has started yet,
-    /// its own surface store installed and the setup hooks run once — and the
-    /// view `make_the_starting_streams_view` builds over it.
-    ///
-    /// The slot stays locked until the hooks have run, so no other stream's
-    /// start commits a processor before them.
     pub(crate) fn gpu_context_view_for_a_starting_stream(
         &self,
         make_the_starting_streams_view: impl FnOnce(&GpuContext) -> Result<GpuContext>,

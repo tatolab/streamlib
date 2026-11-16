@@ -235,13 +235,6 @@ fn the_parent_reads_each_entry_only_for_the_wiring_it_assigned() {
     );
 }
 
-/// A restarted helper writes on a fresh board, and each wiring's counts
-/// keep counting from what the dead helper's board last held rather than
-/// going back to zero; a reconnect still starts from zero.
-///
-/// Fail-without-fix: keep one board per processor and the restarted
-/// helper's board is refused; drop the earlier board's counts and a link's
-/// losses go backwards in `graph` at every restart.
 #[test]
 fn a_restarted_helpers_board_keeps_each_wirings_counts_cumulative() {
     let counts = HelperPlacedProcessorLossCounts::default();

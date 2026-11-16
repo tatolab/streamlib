@@ -22,7 +22,6 @@ impl<'a> TraversalSource<'a> {
     }
 }
 
-/// Read-only query over processor nodes.
 pub struct ProcessorTraversal<'a> {
     pub(in crate::core::graph::traversal) graph: &'a DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,
@@ -70,7 +69,6 @@ impl<'a> TraversalSourceMut<'a> {
     }
 }
 
-/// The node `processor_id` names, if the digraph holds one.
 pub(in crate::core::graph::traversal) fn node_index_of(
     graph: &DiGraph<ProcessorNode, Link>,
     processor_id: &ProcessorUniqueId,
@@ -80,7 +78,6 @@ pub(in crate::core::graph::traversal) fn node_index_of(
         .find(|&node_idx| &graph[node_idx].id == processor_id)
 }
 
-/// Mutable query over processor nodes.
 pub struct ProcessorTraversalMut<'a> {
     pub(in crate::core::graph::traversal) graph: &'a mut DiGraph<ProcessorNode, Link>,
     pub(in crate::core::graph::traversal) ids: Vec<NodeIndex>,

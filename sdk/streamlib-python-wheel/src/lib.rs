@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The native half of `tatolab.runtime` — the extension module a processor
-//! interpreter imports as `tatolab.runtime._engine`.
 
 use pyo3::prelude::*;
 

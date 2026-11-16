@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Waiting for a graph's processors to come up.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -11,13 +10,6 @@ use super::nodes::ProcessorUniqueId;
 use crate::core::error::{Error, Result};
 use crate::core::processors::ProcessorState;
 
-/// Every processor's state, held directly rather than reached through the
-/// graph.
-///
-/// Taken once and then waited on with no lock held: the transitions being
-/// waited for are made by processor threads that need the graph lock to make
-/// them, so a waiter holding it would be waiting for itself. The set is fixed
-/// at the moment it is taken — a processor added afterwards is not in it.
 pub struct ObservableGraphReadiness {
     processor_states: Vec<(ProcessorUniqueId, Arc<ObservableProcessorState>)>,
 }
@@ -29,15 +21,6 @@ impl ObservableGraphReadiness {
         Self { processor_states }
     }
 
-    /// Block until every processor has finished `setup` and reached `Running`,
-    /// giving up after `timeout`.
-    ///
-    /// Processors are waited on in turn against one shared deadline, so a
-    /// failure is reported when the wait reaches it rather than the instant it
-    /// happens. Whichever processor ends the wait, the error names the state
-    /// every processor was in, so a failure behind a slow one is still in the
-    /// report — and a processor whose `setup()` refused carries that refusal's
-    /// own text, so the caller reads why rather than only that.
     pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
 
@@ -68,9 +51,6 @@ impl ObservableGraphReadiness {
         Ok(())
     }
 
-    /// Block until every processor has finished `setup` and is past a
-    /// restart, whether it then runs, is paused or failed, giving up after
-    /// `timeout`; whether every one had.
     pub fn wait_until_every_processor_has_finished_setup(&self, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         self.processor_states.iter().all(|(_, observable_state)| {
@@ -97,9 +77,6 @@ impl ObservableGraphReadiness {
 mod tests {
     use super::*;
 
-    /// The caller who asked whether the graph is up is told, in the refusing
-    /// processor's own words, why it is not — the state alone would send them
-    /// to the logs for what the error already knows.
     #[test]
     fn a_failed_processors_reason_rides_the_readiness_error() {
         let running = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
@@ -155,8 +132,6 @@ mod tests {
         );
     }
 
-    /// A processor that failed without a reason still reads as before: the
-    /// state, and nothing invented after it.
     #[test]
     fn a_failure_without_a_reason_reports_the_state_alone() {
         let failed = Arc::new(ObservableProcessorState::new(ProcessorState::Pending));

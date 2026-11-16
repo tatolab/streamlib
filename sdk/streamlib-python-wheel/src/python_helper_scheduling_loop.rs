@@ -23,24 +23,11 @@ use crate::python_helper_stream_clock::{
 };
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
-/// The Python method that makes one of the processor's callbacks.
 const CALL_HOOK_FROM_THE_SCHEDULING_LOOP_METHOD: &str = "call_hook_from_the_scheduling_loop";
 
-/// The Python method that takes the lifecycle commands whose arrival woke the
-/// loop, answering whether the processor still runs and whether it is paused.
 const TAKE_THE_LIFECYCLE_COMMANDS_THAT_WOKE_THE_SCHEDULING_LOOP_METHOD: &str =
     "take_the_lifecycle_commands_that_woke_the_scheduling_loop";
 
-/// Run the processor this helper hosts on the engine's scheduling loop for
-/// `execution_mode`, `"reactive"` or `"continuous"`, until a lifecycle
-/// command stops it.
-///
-/// `processor_interpreter` is the bootstrap's interpreter object: the loop
-/// calls its `call_hook_from_the_scheduling_loop(hook_name)` for each
-/// callback and its `take_the_lifecycle_commands_that_woke_the_scheduling_loop()`
-/// whenever `lifecycle_command_arrival_fd` turns readable. An exception either
-/// raises, such as the shutdown ladder's `KeyboardInterrupt`, ends the loop
-/// and is raised here.
 #[pyfunction]
 #[pyo3(signature = (
     *,
@@ -104,9 +91,6 @@ pub(crate) fn run_the_scheduling_loop_of_this_helper(
     }
 }
 
-/// A helper process's [`ProcessorSchedulingLoopHost`]: the Python processor
-/// interpreter, the node's link data access, and the pipe its lifecycle
-/// commands arrive on.
 struct ProcessorSchedulingLoopHostInThisHelper {
     processor_interpreter: Py<PyAny>,
     link_data_access: Py<PythonProcessorLinkDataAccess>,

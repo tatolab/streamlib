@@ -3,9 +3,6 @@
 
 use super::*;
 
-/// Two processors driving one format pair from their own threads must
-/// not share a kernel's staged bindings: the cached handle is one
-/// object, an owned converter is the caller's alone.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — needs a GPU device"

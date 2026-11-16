@@ -155,8 +155,6 @@ fn set_high_priority() -> Result<()> {
         let result = pthread_setschedparam(thread, SCHED_RR, &param);
 
         if result != 0 {
-            // Note: This may fail if not running with appropriate privileges
-            // We log a warning but don't fail the processor startup
             tracing::warn!(
                 "Failed to set high thread priority: errno {}. This may require elevated privileges.",
                 result

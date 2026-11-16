@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `#[processor_config]`: a config key's `#[description = …]` becomes the
-//! description its config schema serves. Each described field's schema goes
-//! through `ProcessorConfigKeyDescribedBy<FieldType, Marker>`, whose generated
-//! `Marker` holds the text as a `const`, so a literal and a `const` path read
-//! alike. The struct takes container-level `#[serde(default)]`, so a key a
-//! config leaves out is filled from the struct's `Default`, which it must
-//! implement.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -16,7 +9,6 @@ use syn::{Attribute, Expr, Fields, Ident, ItemStruct, Meta};
 
 const DESCRIPTION_ATTRIBUTE: &str = "description";
 
-/// Expand `#[processor_config]` on `item`.
 pub(crate) fn expand_processor_config(
     attribute: TokenStream,
     mut item: ItemStruct,
@@ -96,8 +88,6 @@ fn config_filled_from_its_default_check(sdk_root: &TokenStream, item: &ItemStruc
     }
 }
 
-/// Container-level `#[serde(default)]` is what `#[processor_config]` adds, and
-/// serde refuses it twice.
 fn refuse_a_struct_that_already_declares_container_serde_default(
     item: &ItemStruct,
 ) -> syn::Result<()> {

@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Exchanging commands with a running processor interpreter, and the budget a
-//! function node call is watched against.
 
 use std::time::Duration;
 
@@ -29,18 +27,6 @@ impl ProcessorInterpreterSpawnHostProcessor {
         sent
     }
 
-    /// Send a command, wait a bounded time for the child's reply, and give up
-    /// on the child if either half fails.
-    ///
-    /// Every command that expects a reply goes through here, so one unusable
-    /// child produces one warning rather than a stream of them — and, the
-    /// reason the wait is bounded, so no command can park the engine's thread
-    /// forever. A child that has died disconnects the channel and is noticed at
-    /// once; a child that is *alive but not reading* — a user callback blocked
-    /// on a socket, a wedged `teardown` — would never reply, and this runs on
-    /// the lifecycle thread holding the processor's lock, so waiting forever
-    /// there hangs the runtime's teardown, with the kill that would have
-    /// resolved it sitting unreachable further down it.
     pub(super) fn exchange_with_child(
         &mut self,
         message: &serde_json::Value,

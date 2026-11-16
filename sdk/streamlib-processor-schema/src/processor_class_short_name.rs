@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A processor class's short name — the label an instance's display name
-//! defaults to.
 
 use std::fmt;
 
@@ -10,18 +8,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{SchemaError, SchemaResult};
 
-/// The bare name of the class a processor is — `BlurProcessor` from
-/// `class BlurProcessor:` in Python, the authored struct's identifier in Rust.
-///
-/// Carried for one job: what an instance's display name defaults to. It is
-/// never the processor's identity — that is
-/// [`ProcessorClassImportPath`](crate::ProcessorClassImportPath) — and it is
-/// read off the class by the authoring surface, never recovered by parsing the
-/// import path.
-///
-/// Every inhabitant is valid: the inner string is private, [`Self::new`] is the
-/// only constructor, there is no `Default`, and [`Deserialize`] validates
-/// rather than inheriting `String`'s.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
 pub struct ProcessorClassShortName(String);
@@ -73,9 +59,6 @@ impl<'de> Deserialize<'de> for ProcessorClassShortName {
 mod tests {
     use super::*;
 
-    /// Neither language enforces PascalCase, so the type admits whatever the
-    /// class is actually called. A shape validator here would refuse legal
-    /// classes — `class blur_processor:` is legal Python.
     #[test]
     fn any_non_blank_class_name_is_admitted_verbatim() {
         for name in [

@@ -9,11 +9,7 @@ use std::borrow::Cow;
 
 use crate::ThreadPriority;
 
-// ============================================================================
-// Processor Schema Types
-// ============================================================================
 
-/// Runtime language for a processor.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessorLanguage {
@@ -54,7 +50,6 @@ impl JsonSchema for ProcessorLanguage {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeOptions {
-    /// [Rust] Generate unsafe Send impl for !Send processors (AVFoundation, etc.)
     #[serde(default)]
     pub unsafe_send: bool,
     /// [Python] Required Python version spec (e.g., ">=3.12"). Python runtime only.
@@ -89,7 +84,6 @@ pub struct RuntimeConfigFull {
     pub env: std::collections::HashMap<String, String>,
 }
 
-/// Runtime configuration for a processor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeConfig {
     /// Language runtime (rust, python, typescript). Defaults to rust.
@@ -175,12 +169,6 @@ impl JsonSchema for RuntimeConfig {
     }
 }
 
-/// Execution mode for a processor (YAML parsing version).
-///
-/// Supports flexible YAML formats:
-/// - Simple string: `execution: reactive` or `execution: manual`
-/// - Object for continuous with interval: `execution: { type: continuous, interval_ms: 10 }`
-/// - Object for continuous default interval: `execution: continuous` (interval_ms defaults to 0)
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum ProcessorSchemaExecution {
     /// Reactive: process() is called when input arrives.
@@ -372,14 +360,8 @@ pub const DEFAULT_INPUT_PORT_BORROW_QUOTA: usize = 2;
 /// limit when the first opener creates it.
 pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
 
-/// The values an input port's `delivery_profile` declaration may take.
-///
-/// The single Rust-side list: the `#[processor]` grammar, the engine's
-/// wire-time resolver, and `DeliveryProfile::from_manifest_str` all render
-/// their errors from this, so a new profile cannot leave one of them lying.
 pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] = ["newest", "ordered"];
 
-/// A port definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorPortSchema {
@@ -410,7 +392,6 @@ pub struct ProcessorPortSchema {
     pub family: crate::PortFamilyDeclaration,
 }
 
-/// Config definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorConfigSchema {
@@ -421,7 +402,6 @@ pub struct ProcessorConfigSchema {
     pub schema: String,
 }
 
-/// A state field definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorStateField {
@@ -435,13 +415,6 @@ pub struct ProcessorStateField {
     pub default: Option<String>,
 }
 
-/// Declarative scheduling intent for a processor — replaces the substring-
-/// matching heuristic that picked priority by processor short name.
-///
-/// Optional; omission means [`ThreadPriority::Normal`]. Authors do not name
-/// processor threads: the compiler leaves the OS thread name unset, because
-/// Linux truncates it at 15 characters and the processor id in the log lines
-/// identifies the instance without it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorScheduling {
@@ -450,15 +423,9 @@ pub struct ProcessorScheduling {
     pub priority: ThreadPriority,
 }
 
-/// A complete processor schema definition — the manifest-shaped view of one
-/// processor, derived from its `#[processor(...)]` attribute (the source of
-/// truth) by the source-scan extractor.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorSchema {
-    /// The processor's PascalCase short name (e.g. "Camera"), NOT reverse-DNS.
-    /// It is not the processor's identity — that is the import path of its
-    /// class — and it is what the display name defaults to.
     pub name: String,
 
     /// Human-readable description.
@@ -469,7 +436,6 @@ pub struct ProcessorSchema {
     #[serde(default)]
     pub runtime: RuntimeConfig,
 
-    /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurProcessor").
     #[serde(default)]
     pub entrypoint: Option<String>,
 
@@ -481,7 +447,6 @@ pub struct ProcessorSchema {
     #[serde(default)]
     pub scheduling: Option<ProcessorScheduling>,
 
-    /// Whether the processor paces itself on real time, as a live device does.
     #[serde(default)]
     pub paced_by_real_time: bool,
 
@@ -489,7 +454,6 @@ pub struct ProcessorSchema {
     #[serde(default)]
     pub config: Option<ProcessorConfigSchema>,
 
-    /// State fields (internal processor state, Default-initialized).
     #[serde(default)]
     pub state: Vec<ProcessorStateField>,
 
@@ -503,13 +467,11 @@ pub struct ProcessorSchema {
 }
 
 impl ProcessorSchema {
-    /// Returns the Rust struct name derived from the processor name.
     pub fn rust_struct_name(&self) -> String {
         let last_segment = self.name.split('.').next_back().unwrap_or(&self.name);
         to_pascal_case(last_segment)
     }
 
-    /// Returns the Rust module name derived from the processor name.
     pub fn rust_module_name(&self) -> String {
         self.name.replace('.', "_").to_lowercase()
     }

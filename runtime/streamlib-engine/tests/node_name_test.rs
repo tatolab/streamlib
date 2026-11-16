@@ -32,9 +32,6 @@ fn an_empty_stream_loaded_into(
         .expect("an empty stream loads")
 }
 
-/// Register a descriptor-only processor type — enough for `add_processor`'s
-/// port-info lookup, with no instance to construct. Idempotent: a second
-/// register under `serial_test` returns an already-registered error we ignore.
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
     register_test_type_named(short, short)
 }

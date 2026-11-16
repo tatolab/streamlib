@@ -1,18 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! `LoadedStreamInThisRuntime::wait_until_every_processor_is_running` — the
-//! signal an app process polls to know the stream's graph is up.
-//!
-//! What makes it load-bearing: a processor in a helper process attaches its
-//! iceoryx2 subscriber during `setup`, tens of milliseconds after the graph
-//! compiles, and a link drops whatever it carries before its consumer attaches.
-//! A publisher gated on this call cannot lose those bags.
-//!
-//! The trap these tests exist for is the *false ready* — a graph reporting
-//! itself up because it has not been asked to start yet, which is
-//! indistinguishable from success at the call site and reintroduces the exact
-//! drop the signal removes.
 
 use std::time::{Duration, Instant};
 use streamlib::sdk::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
@@ -82,13 +70,6 @@ fn a_graph_with_no_processors_has_nothing_to_wait_for() {
         .expect("an empty graph is up by definition");
 }
 
-/// The false-ready guard. A processor is observable from the moment it is
-/// added, not from the moment the compiler prepares it — so a wait that begins
-/// before `start()` sees a `Pending` processor and keeps waiting.
-///
-/// Mentally move the state back to where the compiler attaches it and this
-/// fails: the graph reports zero processors, every one of them is vacuously
-/// running, and the call returns `Ok` on a pipeline that has not started.
 #[test]
 #[serial]
 fn a_graph_that_was_never_started_is_not_reported_as_running() {
@@ -117,14 +98,6 @@ fn a_graph_that_was_never_started_is_not_reported_as_running() {
     );
 }
 
-/// A failure behind a processor that never starts still reaches the report.
-///
-/// Processors are waited on in turn, so a failure is observed when the wait
-/// reaches it — here it never does, because the processor ahead of it stays
-/// `Pending` until the deadline. What must not happen is the failure going
-/// unmentioned: the caller is told which processor ended the wait *and* what
-/// state every other one was in, so the real cause is in the message either
-/// way.
 #[test]
 #[serial]
 fn a_failure_behind_a_processor_that_never_starts_is_still_reported() {
@@ -155,17 +128,12 @@ fn a_failure_behind_a_processor_that_never_starts_is_still_reported() {
     );
 }
 
-/// A processor that cannot run ends the wait where it is rather than burning
-/// the caller's whole timeout — the graph will never come up, and saying so
-/// late is worse than saying so now.
 #[test]
 #[serial]
 fn a_processor_that_failed_ends_the_wait_without_burning_the_timeout() {
     let project_directory = tempfile::tempdir().expect("a project directory");
     let runner = Runner::new().unwrap();
     let stream = an_empty_stream_loaded_into(&runner, project_directory.path());
-    // A registry miss leaves the node in the graph in `Error` — the same state
-    // a failed `setup` lands a processor in, reached without spawning one.
     let _ = stream.add_processor(ProcessorSpec::new(
         ProcessorClassImportPath::new("ghost_package::NotRegistered").unwrap(),
         serde_json::json!({}),

@@ -498,9 +498,6 @@ fn a_settled_match_device_port_renders_the_five_values_its_device_gave() {
     );
 }
 
-/// Before its processor's `setup()` opens a device there is nothing to
-/// render but the declaration, and rendering a guess in its place would be
-/// the static lie the resolved rendering exists instead of.
 #[test]
 fn an_unsettled_match_device_port_still_renders_the_sentinel() {
     let rendered = serde_json::to_value(ProcessorNodeOutput::from(&a_node_declaring_the_sentinel(

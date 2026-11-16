@@ -55,11 +55,6 @@ impl ShaderCompilationCacheKey {
     }
 }
 
-/// Compiles Slang text and remembers what it compiled.
-///
-/// Entries are never evicted: they are bounded by the distinct sources a
-/// graph's processors author, and a kernel outlives the helper that
-/// registered it.
 pub struct SlangShaderSourceCompiler {
     compiled_code_by_key: Mutex<HashMap<ShaderCompilationCacheKey, Arc<[u8]>>>,
     invocation_count: AtomicU64,

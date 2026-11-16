@@ -23,11 +23,6 @@ use crate::core::output_port_stream_facts::{
     StreamFactsOfOutputPorts, UpstreamStreamFactsByInboundLink,
 };
 
-/// What the node a helper-placed processor runs for reaches beside the GPU: its
-/// own output ports' stream facts, the upstream ones its inbound links
-/// reach, the helper's leases on the runtime's shared native services, the
-/// failure the node reported of itself, what its `process()` raises, why it is
-/// not ready, and what its output links keep of its output frames.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct WhatTheNodeOfAHelperPlacedProcessorReaches {
     pub(crate) stream_facts_of_its_output_ports: Arc<StreamFactsOfOutputPorts>,

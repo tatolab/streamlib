@@ -1,16 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! iceoryx2 service operations for the compiler.
-//!
-//! Opens the channel-centric iceoryx2 publish-subscribe services between
-//! processor ports. A channel is keyed on its **source output port**
-//! (`{source_processor}/{source_output_port}`), so one source output port maps
-//! to exactly one iceoryx2 data service: ONE publisher fans a single zero-copy
-//! loan out to its N compile-time-known subscribers (one per `connect()` link),
-//! plus one reserved slot the runtime's publisher reads. The paired Event (notify) service
-//! stays destination-keyed (`streamlib/{dest}/notify`) so a destination waits on
-//! ONE listener fd regardless of fan-in.
 
 mod channel_service_naming_and_sizing;
 mod link_destination_side;
@@ -430,9 +420,6 @@ fn link_still_counts_toward_its_ports(link: &Link) -> bool {
         .unwrap_or(true)
 }
 
-/// The link wiring the node of a processor whose ports live out of process
-/// carries, or `None` for one the engine wires itself — read off the node, never
-/// through the processor's own lock, which a helper holds across its setup.
 fn out_of_process_link_wiring_of(
     graph: &Graph,
     proc_id: &ProcessorUniqueId,
@@ -445,12 +432,6 @@ fn out_of_process_link_wiring_of(
         .map(|component| Arc::clone(&component.0))
 }
 
-/// The processor whose ports one side of a disconnect must release, or `None`
-/// with the reason said out loud.
-///
-/// A missing processor is not an error worth failing the disconnect over — the
-/// link is going away regardless — but it does mean a port stays held, which is
-/// only ever visible in the log.
 fn processor_to_reclaim_from(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
@@ -481,14 +462,6 @@ fn get_single_processor(
         .ok_or_else(|| Error::Configuration(format!("Processor '{}' not found", proc_id)))
 }
 
-/// Share a processor's per-inbound-link dropped-bag and discarded-sample counts
-/// and per-output-port refused-bag counts onto its graph node, so `graph` reads
-/// them live off the ports that count them.
-///
-/// Inserted with the processor's first wired link at either end and left alone
-/// after: each count is one shared object for the whole processor, and a link or
-/// channel wired later mints its own zeroed entry inside it. A producer that only
-/// produces carries its node's metrics as a destination does.
 fn publish_loss_counts_on_processor_node(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,

@@ -9,11 +9,8 @@ use std::io::Write;
 use serde::Deserialize;
 use streamlib_runtime_client_contract::runtime_log_event::{LogLevel, RuntimeLogEvent, Source};
 
-/// The `--processor` / `--pipeline` / `--rhi` / `--level` / `--source` / `--intercepted-only`
-/// narrowing applied to each record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RuntimeLogRecordFilters {
-    /// Only records from this processor id.
     pub(crate) processor_id: Option<String>,
     /// Only records from this pipeline id.
     pub(crate) pipeline_id: Option<String>,

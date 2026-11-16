@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Starting a processor interpreter: the command that becomes the child, its
-//! spawn, and awaiting its registration.
 
 use std::path::Path;
 use std::process::{Command, Stdio};

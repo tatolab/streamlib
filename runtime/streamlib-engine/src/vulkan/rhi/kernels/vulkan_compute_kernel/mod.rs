@@ -340,9 +340,6 @@ impl VulkanComputeKernelInner {
 impl Drop for VulkanComputeKernelInner {
     fn drop(&mut self) {
         unsafe {
-            // Route through the queue-mutex-guarded helper, NOT raw
-            // device_wait_idle — concurrent multi-processor setup makes raw
-            // waits race queue submits (UNASSIGNED-Threading-Info → driver crash).
             let _ = self.vulkan_device.wait_idle();
             if let Some(sampler) = self.default_sampler.lock().take() {
                 self.device.destroy_sampler(sampler, None);

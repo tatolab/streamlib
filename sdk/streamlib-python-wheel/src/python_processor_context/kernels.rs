@@ -572,16 +572,6 @@ impl PythonRayTracingKernel {
     }
 }
 
-/// An acceleration structure the engine built and holds.
-///
-/// The object is the handle: a bottom-level structure is placed in a scene by
-/// `build_tlas`, and the top-level one it returns is what a trace binds. No id
-/// string reaches Python, and nothing publishes an acceleration structure for
-/// another processor to resolve.
-///
-/// Defined on every platform so the stub's surface is honest everywhere; off
-/// Linux it is unconstructible, because both builders refuse before reaching
-/// it.
 #[pyclass(
     name = "AccelerationStructureHandle",
     module = "tatolab.stream",

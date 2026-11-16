@@ -176,18 +176,10 @@ impl InputMailboxesInner {
         );
     }
 
-    /// This processor's per-inbound-link dropped-bag counts, shared with the
-    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
-    ///
-    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
     pub fn dropped_bag_counts_by_inbound_link(&self) -> Arc<DroppedBagCountsByInboundLink> {
         Arc::clone(&self.dropped_bag_counts)
     }
 
-    /// This processor's per-inbound-link counts of samples its windowed ports'
-    /// flushes discarded, shared with the graph node's [`ProcessorMetrics`].
-    ///
-    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
     pub fn discarded_sample_counts_by_inbound_link(
         &self,
     ) -> Arc<DiscardedSampleCountsByInboundLink> {

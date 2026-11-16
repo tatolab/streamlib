@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The `InputLink` / `OutputLink` modules the processor macro generates.
 
 use proc_macro2::TokenStream;
 use quote::quote;

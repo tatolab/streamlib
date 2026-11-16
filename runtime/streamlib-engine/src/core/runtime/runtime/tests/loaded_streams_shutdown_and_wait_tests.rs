@@ -750,9 +750,6 @@ impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Proces
     }
 }
 
-/// An unload of a stream whose native processor holds its callback returns
-/// well inside the graceful join budget once the machine's shutdown is
-/// forced, the thread abandoned rather than waited out.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"
@@ -762,8 +759,6 @@ impl crate::core::ContinuousProcessor for CallbackHeldUntilTheTestLetsGo::Proces
 fn a_forced_machine_shutdown_abandons_a_held_native_callback_an_unload_is_waiting_on() {
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 
-    /// The engine-chosen join budget of a native processor thread under a
-    /// graceful shutdown.
     const NATIVE_PROCESSOR_THREAD_GRACEFUL_JOIN_BUDGET: Duration = Duration::from_secs(5);
 
     let _machine_level_cleared =

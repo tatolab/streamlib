@@ -17,12 +17,6 @@ use crate::python_processor_link_data_access::{
 
 use super::gpu_context::PythonGpuContextLimitedAccess;
 
-/// A processor's input ports, as `ctx.inputs`.
-///
-/// It carries the same GPU capability the context exposes as
-/// `ctx.gpu_limited_access` because this is where the two knowledges meet: the
-/// consumer names the type it is reading into, and the context holds the route
-/// to the engine's surfaces.
 #[pyclass(name = "LinkInputDataReader", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkInputDataReader {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
@@ -34,14 +28,6 @@ pub(crate) struct PythonLinkInputDataReader {
 
 #[pymethods]
 impl PythonLinkInputDataReader {
-    /// The next message on `port`, a port name or an `Input` attribute, or
-    /// `None` when the mailbox is empty: by name a `PortPayloadBorrow` of the
-    /// sample it arrived in, through an attribute the port family's type.
-    ///
-    /// With `into`, the read returns `into.from_bytes(payload)`, so a payload
-    /// that does not fit raises here rather than travelling on. `from_bytes` is
-    /// offered this processor's GPU capability while it runs — see
-    /// `gpu_limited_access_of_the_typed_read_in_progress`.
     #[pyo3(signature = (port, *, into = None))]
     fn read<'py>(
         &self,
@@ -77,13 +63,6 @@ impl PythonLinkInputDataReader {
             )
     }
 
-    /// The next message's payload on `port` with the link it arrived on,
-    /// or `None`.
-    ///
-    /// Any number of links may enter one input port, and each is one producer.
-    /// This is how a many-input processor tells them apart: the name is the
-    /// source channel the link subscribed to, which the engine knows and a
-    /// producer cannot misstate.
     #[pyo3(signature = (port, *, into = None))]
     fn read_from_inbound_link<'py>(
         &self,
@@ -278,14 +257,11 @@ fn port_attribute_name(port: &Bound<'_, PyAny>, expected_class: &str) -> PyResul
     port.getattr("port_name")?.extract()
 }
 
-/// A processor's output ports, as `ctx.outputs`.
 #[pyclass(name = "LinkOutputDataWriter", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonLinkOutputDataWriter {
     pub(super) link_data_access: Py<PythonProcessorLinkDataAccess>,
     /// What names the descriptor of a pooled GPU frame a write carries.
     pub(super) gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
-    /// The bridge's blocking round trip to the parent, which holds the
-    /// stream facts this processor's ports carry.
     pub(super) escalate_request_to_parent: Option<Py<PyAny>>,
 }
 

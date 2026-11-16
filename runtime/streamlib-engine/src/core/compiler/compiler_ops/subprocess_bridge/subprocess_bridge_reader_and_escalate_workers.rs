@@ -339,8 +339,6 @@ pub(super) fn refuse_every_link_this_subprocess_still_owed(
     }
 }
 
-/// At most the first eight characters of a processor id, cut on a character
-/// boundary: Linux thread names are limited to 15 bytes.
 pub(super) fn processor_id_shortened_for_a_thread_name(processor_id: &str) -> &str {
     let end = processor_id
         .char_indices()

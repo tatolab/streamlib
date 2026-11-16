@@ -283,11 +283,6 @@ fn the_default_camera_delivers_stamped_frames_with_real_content() {
     );
 }
 
-/// A camera takes seconds to power up; a stop arriving meanwhile must not wait
-/// for it, or it can run past the engine's five-second budget for a processor
-/// to stop and the processor's thread is abandoned. A stop that waited for the
-/// session to stop takes a second or more on a cold camera; one that does not
-/// wait takes microseconds, and the bound sits between them.
 #[test]
 fn a_stop_while_the_camera_powers_up_does_not_wait_for_the_camera() {
     const A_STOP_THAT_DOES_NOT_WAIT_FOR_THE_CAMERA: Duration = Duration::from_millis(500);

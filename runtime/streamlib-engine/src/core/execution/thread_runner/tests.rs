@@ -30,8 +30,6 @@ fn shutdown_channel_and_its_wake_fd() -> (ShutdownChannelComponent, OwnedFd) {
     (shutdown_channel, shutdown_wake_fd)
 }
 
-/// Whether any of `processor`'s input ports would hand a reader
-/// something; `None` when it holds no mailboxes to ask.
 fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
     processor
         .lock()
@@ -45,9 +43,6 @@ fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
     }
 }
 
-/// Run the reactive scheduling loop over `processor` on an engine thread's
-/// host, recording each callback through `make_callback` rather than
-/// dispatching it.
 fn run_reactive_scheduling_loop_recording_callbacks(
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
@@ -97,14 +92,6 @@ fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc_threadsafe::
     unsafe { listener.file_descriptor().native_handle() }
 }
 
-/// The rule the window contract turns on: a reactive processor is never
-/// dispatched with nothing to read. A bag that does not complete a window
-/// wakes the runner and must not make it call `process()`.
-///
-/// Fail-without-fix: drop the `if !ports_would_return_something(...)` guard
-/// above the drain loop and this goes green while the contract is broken —
-/// which is why the gate is asserted here rather than only through
-/// `has_data`.
 #[test]
 fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner() {
     use crate::core::test_support::MockWindowedAudioConsumerProcessor;
@@ -156,9 +143,6 @@ fn a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner()
     );
 }
 
-/// A processor the runner cannot ask is dispatched rather than silenced —
-/// the pre-dispatch gate's default, which is the opposite of the drain
-/// loop's and is why the helper hands back an `Option` instead of picking.
 #[test]
 fn a_processor_with_no_input_mailboxes_is_not_gated_at_all() {
     use crate::core::test_support::MockOutputOnlyProcessor;
@@ -203,9 +187,6 @@ fn one_mono_audio_frame_for(
     )
 }
 
-/// A reactive processor's scheduling loop running on its own thread, as the
-/// runner runs it, with its processor callbacks recorded and each dispatch
-/// reading one bag off `in1`.
 struct ReactiveSchedulingLoopOnItsOwnThread {
     processor_callbacks: Arc<Mutex<Vec<ProcessorSchedulingCallback>>>,
     shutdown_channel: ShutdownChannelComponent,
@@ -296,8 +277,6 @@ impl ReactiveSchedulingLoopOnItsOwnThread {
     }
 }
 
-/// An input-only processor with a plain `in1` mailbox and, when given one,
-/// the listener its runner waits on.
 fn input_only_processor_with_plain_port(
     listener: Option<iceoryx2::port::listener::Listener<ipc_threadsafe::Service>>,
 ) -> (
@@ -352,15 +331,6 @@ fn open_one_listener_event_service(
         .unwrap()
 }
 
-/// A reactive processor slower than its upstream never leaves its dispatch
-/// loop while bags keep arriving, and every bag notifies — and every notify
-/// is still delivered, the guarantee that lets every destination be
-/// notified whatever mode it runs in.
-///
-/// A 2 ms `process()` against a 1 kHz source.
-/// Fail-without-fix: an event transport queuing a wakeup per send comes
-/// back undelivered about 280 frames in once the dispatch loop stops
-/// draining.
 #[test]
 fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
     const FRAMES_AT_ONE_KILOHERTZ: usize = 1000;
@@ -401,13 +371,6 @@ fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
     );
 }
 
-/// Bags that arrive while a reactive processor is paused are notified, and
-/// the paused ticks drain those notifications — so after the resume there
-/// is nothing left to wake on, and the runner has to ask before it waits.
-///
-/// The ticket's repro: pause, publish three bags, resume, publish nothing
-/// more. Fail-without-fix: drop the check before the wait and `process()`
-/// never runs.
 #[test]
 fn bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing_more_published() {
     let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
@@ -692,12 +655,6 @@ fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {
     );
 }
 
-/// A helper that keeps dying soon after it starts reads `Restarting`, with
-/// the last death's reason, until its fifth death in a row fails the
-/// processor with that reason; a helper that ran healthily starts again.
-///
-/// Fail-without-fix: skip the crash-loop check and a processor whose
-/// `setup()` always raises reads `Restarting` forever.
 #[test]
 fn a_helper_dying_soon_after_each_start_is_restarted_four_times_then_fails() {
     let id = ProcessorUniqueId::from("Pblur");

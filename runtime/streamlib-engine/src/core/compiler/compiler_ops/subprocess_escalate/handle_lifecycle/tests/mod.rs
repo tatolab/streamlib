@@ -55,8 +55,6 @@ fn release_a_handle_over_the_escalate_op(
     .map(|_| ())
 }
 
-/// Ask one of the helper's processor output pools for its next frame over the
-/// real escalate op, answering the published frame id or the refusal.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn next_processor_output_frame_over_the_escalate_op(
     sandbox: &crate::core::context::GpuContextLimitedAccess,

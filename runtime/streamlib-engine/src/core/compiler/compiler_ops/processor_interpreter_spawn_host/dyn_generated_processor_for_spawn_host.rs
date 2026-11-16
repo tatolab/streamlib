@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The graph-facing side of a processor interpreter's host: setup, link wiring
-//! and teardown as the engine drives them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -80,8 +78,6 @@ impl DynGeneratedProcessor for ProcessorInterpreterSpawnHostProcessor {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        // Never called: this host is Manual, and the loop that calls the
-        // processor's `process` is the child's own.
         Ok(())
     }
 

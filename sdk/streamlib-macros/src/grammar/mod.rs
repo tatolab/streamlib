@@ -1,38 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Grammar for the `#[processor(...)]` attribute — the single source of truth
-//! for a processor's execution mode and ports.
-//!
-//! Nothing here reads any file. Everything the macro needs to emit the
-//! processor module is declared in the attribute tokens:
-//!
-//! ```ignore
-//! #[processor(
-//!     execution = manual,               // reactive | manual | continuous | continuous(interval_ms = 10)
-//!     scheduling = high,                // realtime | high | normal (default: normal)
-//!     unsafe_send,                      // flag — emit `unsafe impl Send`
-//!     built_in_node,                    // flag — type is `tatolab.stream:<struct name>`
-//!     paced_by_real_time,               // flag — paces itself on real time, as a live device does
-//!     config = crate::CameraConfig,     // typed Config alias; must derive `JsonSchema`
-//!     input("video_in", delivery_profile = "newest", family = Image),
-//!     output("video", family = Image),
-//! )]
-//! #[meta(category = "Sources/Cameras", description = "Captures a camera.")]
-//! ```
-//!
-//! What describes the node type, its `category` and `description`, is the
-//! `#[meta(...)]` helper attribute written under `#[processor(...)]`. A
-//! category is the group an editor files the node type under, or a path into a
-//! group inside one; a node type that declares none has none.
-//!
-//! A port declares a name, its family, a description, and — on an input — a
-//! delivery profile, plus the family's keys, an optional `audio_window`
-//! contract on an audio input.
-//!
-//! The attribute declares no identity. A processor is named by the import path
-//! of its type, captured by the macro at the expansion site — or, for a
-//! declaration flagged `built_in_node`, by its class in `tatolab.stream`.
 
 use streamlib_processor_schema::{
     AudioWindowContract, PortFamilyDeclaration, ProcessorPortSchema, ProcessorScheduling,
@@ -148,9 +116,6 @@ const NODE_META_ATTRIBUTE_NAME: &str = "meta";
 /// What a category path's levels are separated by, as `Effects/Stylize`.
 const NODE_CATEGORY_PATH_SEPARATOR: char = '/';
 
-/// What the `#[meta(...)]` attributes under `#[processor]` declare; the twin of
-/// `tatolab-module-sdk-macros`' `DeclaredNodeMeta`, which reads the same
-/// grammar under `#[function_node]`.
 #[derive(Default)]
 pub(crate) struct DeclaredNodeMeta {
     /// The group an editor files the node type under, or a path into a group
@@ -280,7 +245,6 @@ pub(crate) struct ParsedPort {
     pub family: PortFamilyDeclaration,
 }
 
-/// The fully-parsed `#[processor(...)]` attribute.
 pub(crate) struct ParsedProcessorAttr {
     /// The author's type name — what an instance's display name defaults to.
     pub processor_class_short_name: String,
@@ -294,7 +258,6 @@ pub(crate) struct ParsedProcessorAttr {
     /// Whether this is one of the runtime's built-in nodes, typed
     /// `tatolab.stream:<struct name>` rather than by its module path.
     pub built_in_node: bool,
-    /// Whether the processor paces itself on real time, as a live device does.
     pub paced_by_real_time: bool,
     pub config_type: Option<Path>,
     pub config_field_name: String,
@@ -303,18 +266,6 @@ pub(crate) struct ParsedProcessorAttr {
 }
 
 impl ParsedProcessorAttr {
-    /// Project the parsed attribute into the manifest-shaped [`ProcessorSchema`].
-    ///
-    /// This is the single projection both readers of the attribute share: the
-    /// proc-macro emits its descriptor from this, and the source-scan extractor
-    /// builds each manifest entry from it — so an added `ParsedProcessorAttr` or
-    /// `ProcessorSchema` field can never silently diverge the two. `name` is the
-    /// author's type name, and the runtime language defaults to Rust (the
-    /// only language a source scan of a Rust crate can produce). `config` stays
-    /// `None`: the attribute binds a config *type*, not a resolved manifest
-    /// schema; the consuming layer projects the config-schema id to a
-    /// release-core catalog entry. A description declared as a `const` has no
-    /// value until rustc evaluates it, so it projects as `None`.
     pub(crate) fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
             name: p.cast_name.clone(),
@@ -356,18 +307,6 @@ impl ParsedProcessorAttr {
     }
 }
 
-/// Parse the `#[processor(...)]` attribute tokens into a [`ParsedProcessorAttr`].
-///
-/// This is the single, shared grammar entrypoint: the proc-macro calls it with
-/// the attribute tokens it receives at expansion (converting its
-/// `proc_macro::TokenStream` via `.into()`), and the source-scan
-/// The attribute macro calls it with the tokens a `syn`-parsed
-/// `#[processor(...)]` attribute carries. There is deliberately no second
-/// parser — code is the
-/// source of truth, so both readers of that truth share one grammar.
-///
-/// `struct_ident` supplies the class short name the display-name default reads,
-/// and `node_meta` what the `#[meta(...)]` under the attribute declares.
 pub(crate) fn parse2(
     attr: proc_macro2::TokenStream,
     node_meta: DeclaredNodeMeta,
@@ -574,7 +513,6 @@ const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
     "output",
 ];
 
-/// [`PROCESSOR_ATTRIBUTE_KEYS`] as a quoted, comma-joined list.
 fn rendered_attribute_keys() -> String {
     PROCESSOR_ATTRIBUTE_KEYS
         .iter()

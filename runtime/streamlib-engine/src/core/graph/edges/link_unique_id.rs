@@ -128,8 +128,6 @@ impl PartialEq<LinkUniqueId> for String {
 mod tests {
     use super::*;
 
-    /// msgpack round-trip preserves the bare-string transparent wire
-    /// shape — the same regression class `ProcessorUniqueId`'s test guards.
     #[test]
     fn msgpack_round_trip_preserves_transparent_shape() {
         let id = LinkUniqueId::from("L-test-link");

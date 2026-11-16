@@ -1,10 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Audio clock for synchronized audio production.
-//!
-//! Provides a timing source for audio processors to produce samples at the correct rate.
-//! The clock is device-independent - sinks handle resampling to their specific devices.
 
 use crate::core::media_clock::MediaClock;
 use std::sync::Arc;

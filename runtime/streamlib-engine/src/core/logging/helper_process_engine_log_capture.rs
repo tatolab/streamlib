@@ -289,9 +289,6 @@ mod tests {
     #[test]
     fn a_record_arriving_after_a_run_of_busy_drains_still_ends_the_wait() {
         let (ring, layer) = HelperProcessEngineLogRecordRing::with_capacity(8);
-        // A `Dispatch` rather than a thread-local default: the record that has
-        // to end the wait is made on another thread, as every record a helper
-        // captures from its own processor's threads is.
         let dispatch = Dispatch::new(Registry::default().with(layer));
 
         for _ in 0..(DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN * 2) {

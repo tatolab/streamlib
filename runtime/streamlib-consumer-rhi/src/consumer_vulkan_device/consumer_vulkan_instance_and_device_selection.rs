@@ -29,9 +29,6 @@ impl Drop for VulkanInstanceDestroyedUnlessKept {
     }
 }
 
-/// The `deviceUUID` of the first device the loader enumerates, for a test with
-/// no runtime to name one; a processor interpreter imports only on the device
-/// the runtime named.
 #[doc(hidden)]
 pub fn vulkan_device_uuid_of_the_first_device_the_loader_enumerates() -> Result<[u8; 16]> {
     vulkan_devices_the_loader_enumerates()?

@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The two evaluators of a function node island: at each read of the port it feeds, or as its
-//! helper's processor.
 
 use std::sync::Arc;
 
@@ -305,8 +303,6 @@ impl FunctionNodeIslandEvaluatedInThisHelper {
     }
 }
 
-/// The function node a helper runs as its own processor, once it is promoted
-/// out of its readers' islands: called with the values its process reads.
 #[pyclass(name = "FunctionNodeEvaluatedAsItsHelpersProcessor", frozen)]
 pub(crate) struct FunctionNodeEvaluatedAsItsHelpersProcessor {
     function_node: Mutex<FunctionNodeInAnIsland>,

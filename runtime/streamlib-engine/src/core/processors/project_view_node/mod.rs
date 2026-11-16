@@ -150,9 +150,6 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<ProcessorDesc
     Ok(descriptor)
 }
 
-/// The processor a node whose outputs a client writes runs as, in this process: it publishes
-/// each value written onto one of its outputs, holds it as that output's current value, and takes
-/// in what its inputs are sent, which a panel reads through a viewer of the port linked in.
 pub(crate) struct NodeWhoseOutputsAClientWritesProcessor {
     node_name: String,
     descriptor: ProcessorDescriptor,
@@ -168,8 +165,6 @@ pub(crate) struct NodeWhoseOutputsAClientWritesProcessor {
 }
 
 impl NodeWhoseOutputsAClientWritesProcessor {
-    /// The processor of a top-level `GraphInput` `node`, its `value` output of the family its
-    /// config names and holding the config's `default` until a client writes.
     pub(crate) fn for_a_top_level_graph_input(node: &ProcessorNode) -> Result<Self> {
         let config = node.config.clone().unwrap_or_default();
         let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
@@ -244,7 +239,6 @@ impl NodeWhoseOutputsAClientWritesProcessor {
         self.current_value_of_each_output.get(port)
     }
 
-    /// The processor of `node`, of the view type `descriptor` describes.
     pub(crate) fn for_the_node(node: &ProcessorNode, descriptor: ProcessorDescriptor) -> Self {
         let family_of_each_output = descriptor
             .outputs

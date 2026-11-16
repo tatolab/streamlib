@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Generated crate root — the mechanical projection of this package's
-//! `processors/` directory. Do not edit: it is rewritten before every
-//! cargo invocation and is excluded from the packed `.slpkg`.
 
 #[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
 pub mod _generated_ {

@@ -1,14 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The single per-port delivery knob on the authoring surface.
-//!
-//! A [`DeliveryProfile`] is the one word an author writes at a port declaration
-//! site (`#[processor]` attribute / `@node.process` decorator). It names a read
-//! policy — which bag the consumer gets next — and resolves to the
-//! consumer-side drain order ([`ReadMode`]) and the ring depth. Every input
-//! port declares one and nothing is inferred — an input port without a profile
-//! is a wiring error.
 
 use streamlib_processor_schema::ProcessorClassImportPath;
 use streamlib_processor_schema::{
@@ -105,17 +97,6 @@ impl DeliveryProfile {
     }
 }
 
-/// Resolve the [`DeliveryProfile`] a destination input port declares.
-///
-/// This is the single delivery-resolution primitive, and it reads exactly one
-/// thing: the port's own declaration. Nothing is inferred, so a registered
-/// input port carrying no declaration is a wiring error, not a silent
-/// substitution.
-///
-/// Falls back to [`DeliveryProfile::Newest`] when the destination processor
-/// type isn't registered or the named port doesn't exist (defensive; a Wired
-/// link always resolves both — the wiring path itself reports the missing
-/// processor).
 pub(crate) fn delivery_profile_for_input_port(
     node_types: &NodeTypesOneStreamResolves,
     processor_type: &ProcessorClassImportPath,
@@ -208,8 +189,6 @@ mod tests {
             ProcessorClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
         }
 
-        /// Registers a processor carrying one input port, optionally declaring a
-        /// delivery profile, and returns the processor's class import path.
         fn register_processor_with_one_input_port(
             type_name: &str,
             port_name: &str,
@@ -239,10 +218,6 @@ mod tests {
             import_path
         }
 
-        /// The default-fallback path: an unregistered processor type yields
-        /// the realtime default, the shallowest ring there is. Mentally
-        /// reverting this to the deeper profile would hand a defensively
-        /// handled case a backlog nothing asked for.
         #[test]
         fn unregistered_processor_falls_back_to_newest() {
             let unknown = class_path("NothingRegisteredUnderThisPath");

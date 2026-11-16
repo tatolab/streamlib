@@ -239,9 +239,6 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     Ok(())
 }
 
-/// Refuse a config update for `processor_id` under which a link wired out of
-/// it would be refused — an output whose names, family or codec resolve from
-/// `config_to_apply` no longer meeting the input it feeds — naming the link.
 pub(crate) fn refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse(
     graph: &Graph,
     processor_id: &ProcessorUniqueId,

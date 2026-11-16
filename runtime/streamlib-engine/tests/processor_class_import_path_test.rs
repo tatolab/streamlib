@@ -1,12 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A Rust processor's identity is its type path, captured by the macro.
-//!
-//! Asserted as whole literal strings rather than against a helper that rebuilds
-//! the same path: a test that recomputed the identity would agree with any
-//! mechanism that produced one, including a reflected one. Spelled out, these
-//! fail on a toolchain bump that moved the string.
 
 use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};

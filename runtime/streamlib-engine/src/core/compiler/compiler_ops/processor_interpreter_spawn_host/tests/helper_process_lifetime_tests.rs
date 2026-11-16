@@ -297,13 +297,6 @@ sys.exit(0)
     );
 }
 
-/// A helper refuses its own start on raw standard error before its log
-/// channel exists, so the processor's refusal is the only place an
-/// operator reads why. A real child, so the pipe closes the way a helper's
-/// does, refused through the host's own path out of a setup that failed.
-///
-/// Fail-without-fix: refuse without the tail and the refusal names the
-/// processor but not the two build ids.
 #[test]
 fn a_helper_that_died_while_setting_up_is_refused_naming_what_it_wrote_to_standard_error() {
     let mut child = Command::new("sh")

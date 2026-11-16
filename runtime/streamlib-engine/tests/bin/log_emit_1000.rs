@@ -71,7 +71,6 @@ fn main() {
         },
     };
     let guard = init_for_tests(config).expect("install logging pathway");
-    // The burst lands in a stream's log, as a processor's records do.
     let route = ProjectLogRouteEntry::for_a_stream_of_the_project_in(
         &jsonl_path,
         "RstraceEmit",

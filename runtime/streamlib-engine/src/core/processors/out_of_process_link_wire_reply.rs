@@ -54,16 +54,6 @@ impl OutOfProcessLinkWireReply {
     }
 }
 
-/// Every link one far side was told to wire and has not answered for yet, kept
-/// by that far side's bridge so its reader thread can route an answer to the
-/// link it names.
-///
-/// A link id maps to *several* outstanding answers, not one: both ends of a
-/// link whose source and destination are the same processor — an output wired
-/// to that processor's own input, which `connect` accepts — are handed to one
-/// far side over one bridge under one link id, and it answers each. Keyed one
-/// deep, the second registration would evict the first and that end would wait
-/// for an answer already spent, leaving the link `pending` for good.
 #[derive(Debug, Default)]
 pub(crate) struct LinksAwaitingTheirOutOfProcessWireReply {
     replies_by_link_id: Mutex<HashMap<String, Vec<Arc<OutOfProcessLinkWireReply>>>>,

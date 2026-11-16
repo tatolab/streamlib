@@ -46,7 +46,6 @@ def {stream_function_name}(stream_builder: StreamBuilder) -> None:
     reader = stream_builder.add(PatternFrameReader, name="reader")
     stream_builder.connect(pattern.output("video"), reader.input("video_from_upstream"))
 '''
-#: The project's reader, in its own module: a processor's only legal home.
 PROJECT_FRAME_READER_SOURCE = '''\
 from tatolab.stream import Image, Input, RuntimeContextLimitedAccess, node
 

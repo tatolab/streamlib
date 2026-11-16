@@ -246,7 +246,6 @@ impl Drop for PythonGpuSurfaceHandle {
 
 #[pymethods]
 impl PythonGpuSurfaceHandle {
-    /// The id downstream processors resolve this surface by.
     #[getter]
     pub(super) fn surface_id(&self) -> PyResult<String> {
         self.minted_surface_id.clone().ok_or_else(|| {

@@ -3,9 +3,6 @@
 
 #![cfg(any(target_os = "macos", target_os = "ios"))]
 
-//! CLAP audio plugin processor — wraps `ClapPluginHost` with a streamlib
-//! processor lifecycle. Polls the input mailbox on a dedicated audio
-//! thread and dispatches converted stereo frames into the plugin.
 
 use crate::_generated_::AudioFrame;
 use std::sync::Arc;

@@ -232,9 +232,6 @@ pub(crate) fn pin_value_of_a_shader_node_input(node: &ProcessorNode, port: &str)
         .unwrap_or(0.0) as f32
 }
 
-/// Read each island among `processors_to_add` and hand it to its host, noting
-/// every member's fused group; the shader nodes fused into another's island,
-/// which have no processor of their own.
 pub(crate) fn place_each_shader_node_island_on_its_host(
     graph: &mut Graph,
     processors_to_add: &[ProcessorUniqueId],
@@ -520,9 +517,6 @@ fn the_host_the_island_of_a_fused_node_was_placed_on(
         })
 }
 
-/// Take each node of `nodes` back to how a node not yet built stands, its
-/// processor dropped and its island forgotten, so the compile builds it again;
-/// their threads are already stopped.
 pub(crate) fn forget_the_build_of_each_shader_node_restarted(
     graph: &mut Graph,
     nodes: &[ProcessorUniqueId],

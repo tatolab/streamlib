@@ -19,9 +19,6 @@ use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 
 use crate::core::runtime::StreamEnvironment;
 
-/// What one loaded stream starts its processor interpreters with: its stream
-/// environment, the node types described into it, the tag and shutdown its
-/// helper processes belong to, and whether its host interrupted its describes.
 pub(crate) struct ProcessorInterpreterLaunchRecordOfOneStream {
     stream_identity: LoadedStreamIdentity,
     project_directory: Arc<Path>,
@@ -90,9 +87,6 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
             .store(true, Ordering::SeqCst);
     }
 
-    /// Describe, in one interpreter start, every type in `node_types` a
-    /// processor interpreter describes and no natively compiled type holds, and
-    /// register each into this stream.
     pub(crate) fn describe_and_register_every_type_a_load_names<'a>(
         &self,
         node_types: impl IntoIterator<Item = &'a ProcessorClassImportPath>,
@@ -116,9 +110,6 @@ impl ProcessorInterpreterLaunchRecordOfOneStream {
         self.describe_and_register(&node_types_to_describe, lend_directory)
     }
 
-    /// Whether a live add of `node_type` has to describe it first: a type a
-    /// processor interpreter describes that this stream does not resolve yet, even once the
-    /// views its project brings are read again.
     pub(crate) fn a_live_add_must_describe(&self, node_type: &ProcessorClassImportPath) -> bool {
         if !a_processor_interpreter_describes(node_type)
             || self
@@ -282,9 +273,6 @@ fn node_types_grouped_by_the_import_folder_holding_their_code(
     node_types_by_import_folder.into_values().collect()
 }
 
-/// A path in the runtime unit that the runtime's host hands it once, before any
-/// load: the lend directory every stream's describes and processor interpreters
-/// borrow, or the uv every project's `.venv` is made with.
 pub(crate) struct RuntimeUnitPathTheHostHandsTheEngineOnce {
     what_the_path_is: &'static str,
     held: std::sync::OnceLock<PathBuf>,

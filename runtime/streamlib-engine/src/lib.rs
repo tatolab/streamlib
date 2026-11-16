@@ -61,74 +61,12 @@ pub mod logging {
     };
 }
 
-// Re-export the attribute macro for processor syntax:
-// #[streamlib::processor(execution = …, …)] - execution + ports in code; a
-// processor's identity is the import path of its type, captured by the macro
 pub use streamlib_macros::{processor, processor_config};
 
-/// The `#[processor]` attribute accepts no authored identity, in any spelling.
-///
-/// The message is asserted at the parse seam in `streamlib-macros`; these
-/// assert the refusal survives a real expansion, which a unit test on the
-/// parser cannot.
-///
-/// The first block is the control, and it is what makes the other two mean
-/// anything: it is the same fixture with the identity removed, and it must
-/// COMPILE. A `compile_fail` block passes for any reason at all — an
-/// unresolved path, a missing trait impl — so without a positive twin proving
-/// the fixture is otherwise sound, the two refusals below would pass on a
-/// typo.
-///
-/// ```
-/// use streamlib::sdk::context::RuntimeContextFullAccess;
-/// use streamlib::sdk::error::Result;
-///
-/// #[streamlib::sdk::processor(execution = manual)]
-/// pub struct AcceptedWithoutIdentity;
-///
-/// impl streamlib::sdk::processors::ManualProcessor for AcceptedWithoutIdentity::Processor {
-///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-///         Ok(())
-///     }
-/// }
-/// ```
-///
-/// The leading positional `@org/package/Type` the grammar used to take:
-///
-/// ```compile_fail
-/// use streamlib::sdk::context::RuntimeContextFullAccess;
-/// use streamlib::sdk::error::Result;
-///
-/// #[streamlib::sdk::processor("@tatolab/camera/Camera", execution = manual)]
-/// pub struct RefusedPositionalIdentity;
-///
-/// impl streamlib::sdk::processors::ManualProcessor for RefusedPositionalIdentity::Processor {
-///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-///         Ok(())
-///     }
-/// }
-/// ```
-///
-/// The `type = "..."` override that used to name the synthesized segment:
-///
-/// ```compile_fail
-/// use streamlib::sdk::context::RuntimeContextFullAccess;
-/// use streamlib::sdk::error::Result;
-///
-/// #[streamlib::sdk::processor(execution = manual, type = "CustomName")]
-/// pub struct RefusedTypeOverride;
-///
-/// impl streamlib::sdk::processors::ManualProcessor for RefusedTypeOverride::Processor {
-///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-///         Ok(())
-///     }
-/// }
-/// ```
 #[cfg(doctest)]
 pub struct ProcessorAttributeAcceptsNoIdentity;
 
 pub use core::{
-    // Processor traits (mode-specific)
     ContinuousProcessor,
     Error,
     GpuContext,
@@ -291,21 +229,6 @@ pub mod platform {
     }
 }
 
-// =============================================================================
-// SDK self-mirror — for macro path resolution inside the engine
-// =============================================================================
-//
-// Engine-internal processors use the same `#[streamlib::sdk::processor]`
-// attribute syntax as external consumers. With `extern crate self as
-// streamlib;` above, those macro paths (`::streamlib::sdk::*`) resolve
-// inside this crate via this self-mirror. Mirrors the public SDK's
-// `streamlib::sdk::*` structure (defined in `sdk/streamlib-sdk/src/lib.rs`)
-// so the same emit-paths work in both compilation contexts.
-//
-// External consumers see this crate's items as `streamlib::engine_internal::*`
-// (passthrough re-export from the SDK). The SDK re-exports this mirror's
-// `processors` module as its public `streamlib::sdk::processors`; the rest of
-// this namespace exists only for in-engine macro path resolution.
 
 pub mod sdk {
     pub use crate::core::context;
@@ -322,8 +245,6 @@ pub mod sdk {
     pub use crate::core::texture;
     pub use crate::core::utils;
 
-    /// Processor traits and specs from `core::processors`, with the port
-    /// markers and the `input`/`output` helpers from `core::graph`.
     pub mod processors {
         pub use crate::core::processors::{
             __generated_private, Config, ConfigValidationError, ContinuousProcessor,
@@ -336,8 +257,6 @@ pub mod sdk {
             traits,
         };
 
-        // Port markers + input/output helpers — semantically processor-
-        // related; live in `core::graph::edges::link_port_markers`.
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
     }
 

@@ -1,7 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Loading a processor class and describing its declaration as JSON."""
 
 from __future__ import annotations
 
@@ -72,9 +71,6 @@ def load_processor_class(import_path: str) -> type:
     return resolved
 
 
-# =============================================================================
-# Describing processor classes
-# =============================================================================
 
 #: Each key of a described process node type the class's own `@node.process` stamp fills, in wire order.
 DESCRIBED_NODE_TYPE_KEYS_AND_THEIR_NODE_STAMPS = (
@@ -134,12 +130,6 @@ class ProcessorClassNotDescribable(Exception):
 
 
 def describe_one_processor_class(import_path: str) -> "dict[str, Any]":
-    """The declaration the `@node.process` class at `import_path` carries, as JSON data.
-
-    Refused unless `import_path` names exactly that class: one whose own
-    `__module__:__qualname__` is the path, since that is the path its processor
-    interpreter imports it back by.
-    """
     import_folder, class_import_path = import_folder_and_class_import_path(import_path)
     module_name, _, qualname = class_import_path.partition(":")
     if not module_name or not qualname:

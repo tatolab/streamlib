@@ -44,11 +44,6 @@ pub(crate) struct PooledGpuFrameClaimHeldByARead(
     Arc<crate::python_helper_process_pixel_exchange::GpuPoolSlotFrameClaimOfThisImporter>,
 );
 
-/// Non-allocating GPU capability, valid for the whole processor life.
-///
-/// Every call crosses to the parent through the exchange client — the
-/// engine and its pools live one process away. `None` means this helper
-/// has no surface-share channel, and every call refuses by name.
 #[pyclass(name = "GpuContextLimitedAccess", module = "tatolab.stream", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
@@ -143,14 +138,6 @@ impl PythonGpuContextLimitedAccess {
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 
-    /// Acquire a pooled device texture, named by the surface id the engine
-    /// minted for it.
-    ///
-    /// The id is the whole handle: a kernel dispatch binds it, and a
-    /// downstream processor resolves it. `copy_src` and `copy_dst` ride
-    /// every request, so the CPU doors reach the pixels — over the surface's
-    /// host-visible staging on Linux, through its IOSurface on macOS — with
-    /// no transfer usage spelled here.
     fn acquire_texture(
         &self,
         python: Python<'_>,
@@ -267,7 +254,6 @@ impl PythonGpuContextLimitedAccess {
         ))
     }
 
-    /// Resolve a surface id another processor published into a handle.
     fn resolve_surface(
         &self,
         python: Python<'_>,

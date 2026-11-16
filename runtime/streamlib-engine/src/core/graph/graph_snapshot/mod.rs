@@ -412,8 +412,6 @@ impl GraphSnapshot {
             .validate(node_types)
     }
 
-    /// The type of every node at every level that a processor runs as: no fragment, variable or
-    /// interface node. These are the types to describe before the graph is resolved.
     pub fn node_types_its_running_nodes_name_at_every_level(
         &self,
     ) -> Vec<ProcessorClassImportPath> {

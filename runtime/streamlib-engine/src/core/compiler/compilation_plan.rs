@@ -13,7 +13,6 @@ pub(super) struct CompilationPlan {
     pub(super) processors_to_remove: Vec<ProcessorUniqueId>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    /// Each processor to reconfigure, beside the configuration it is handed.
     pub(super) config_updates: Vec<(ProcessorUniqueId, serde_json::Value)>,
     /// Each function node to promote out of the islands of the reader whose
     /// helper it crashed, beside that reader and why.
@@ -60,8 +59,6 @@ impl CompilationPlan {
         }
     }
 
-    /// Take each of `node_ids` out of the processors to build, with every link
-    /// into or out of it out of the links to wire.
     pub(super) fn leave_unbuilt_each_node_whose_thread_was_abandoned(
         &mut self,
         graph: &Graph,
@@ -80,13 +77,6 @@ impl CompilationPlan {
         });
     }
 
-    /// Record each config update for a processor this same batch constructs on
-    /// that processor's graph node, and take it out of `config_updates`.
-    ///
-    /// Such a processor is built from its node's config, so construction is
-    /// where it takes the update. Built from the old config and then asked to
-    /// reconfigure instead, a processor that takes no reconfiguration refuses
-    /// and fails the very commit that adds it.
     pub(super) fn hand_config_updates_to_processors_this_batch_constructs(
         &mut self,
         graph: &mut Graph,
@@ -108,16 +98,6 @@ impl CompilationPlan {
         }
     }
 
-    /// Drop any queued link wiring whose endpoint processor this same batch
-    /// removes. petgraph's `remove_node` cascades a node's incident edges, so a
-    /// link scheduled to wire against a processor that this commit also tears
-    /// down no longer exists by the WIRE phase — wiring it would raise a
-    /// spurious [`Error::LinkNotFound`]. Disconnect-then-remove and
-    /// connect-then-immediate-stop are legitimate live-graph edits; reconciling
-    /// the plan keeps processor removal idempotent to the links its own
-    /// cascade removes.
-    ///
-    /// [`Error::LinkNotFound`]: crate::core::error::Error::LinkNotFound
     pub(super) fn drop_link_adds_into_removed_processors(&mut self, graph: &Graph) {
         let Self {
             links_to_add,
@@ -151,8 +131,6 @@ mod tests {
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::processors::ProcessorSpec;
 
-    /// Build `source_output → target_input` between two live mock processors
-    /// and return `(source_id, link_id)`.
     fn graph_with_one_link() -> (Graph, ProcessorUniqueId, LinkUniqueId) {
         crate::core::test_support::ensure_test_mocks_registered();
 
@@ -193,13 +171,6 @@ mod tests {
         (graph, source_id, link_id)
     }
 
-    /// A link scheduled for wiring whose source processor the same batch
-    /// removes is dropped from `links_to_add`: `remove_node` will cascade the
-    /// edge away, so the WIRE phase would otherwise `LinkNotFound`. Mentally
-    /// revert `drop_link_adds_into_removed_processors` to a no-op and the link
-    /// survives — reproducing the shutdown-time crash the dynamic-reconfigure
-    /// example hit (connect-then-immediate-stop leaves a doomed link add that
-    /// runtime teardown removes the endpoints of in the same commit).
     #[test]
     fn drops_link_add_when_its_endpoint_is_removed_in_the_same_batch() {
         let (graph, source_id, link_id) = graph_with_one_link();
@@ -218,10 +189,6 @@ mod tests {
         );
     }
 
-    /// Fail-without-fix: a processor added and reconfigured in one batch — every
-    /// update requested before the runtime starts — was built from its old
-    /// config and then asked to reconfigure, which a processor that takes no
-    /// reconfiguration refuses, failing the start.
     #[test]
     fn a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built()
     {

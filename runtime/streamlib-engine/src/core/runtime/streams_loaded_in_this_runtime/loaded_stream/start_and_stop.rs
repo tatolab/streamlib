@@ -126,8 +126,6 @@ impl LoadedStreamInThisRuntime {
         self.start_with_the_graph_state(GraphState::Running)
     }
 
-    /// Start the stream as [`Self::start`] does with every processor it
-    /// prepares paused, so none processes until [`Self::resume`].
     pub fn start_paused(self: &Arc<Self>) -> Result<()> {
         self.start_with_the_graph_state(GraphState::Paused)
     }
@@ -259,16 +257,6 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
-    /// Stop the stream: every processor removed, its audio clock stopped, its
-    /// surface store closed and every surface it registered released, and its
-    /// runtime context cleared. Never touches the engine's GPU device, surface
-    /// service, iceoryx2 node or tokio.
-    ///
-    /// Runs every step even when removing the processors failed, and reports
-    /// that failure once the rest is down. Idempotent. The stream stays loaded,
-    /// its name taken, until [`Runner::unload_stream`] ends it.
-    ///
-    /// [`Runner::unload_stream`]: crate::core::runtime::Runner::unload_stream
     #[tracing::instrument(name = "stream.stop", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop(&self) -> Result<()> {
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -362,10 +350,6 @@ impl LoadedStreamInThisRuntime {
         (processor_removal_outcome, nodes_torn_down, links_torn_down)
     }
 
-    /// Stop this stream's playback and keep its graph: every processor instance, device claim,
-    /// surface and the clock torn down as [`Self::stop`] does, then each node and link put back
-    /// unbuilt under its UUID, so the stream reads and edits held stopped and its next
-    /// [`Self::start`] runs the graph fresh. Reads no graph document and describes no type.
     #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
@@ -418,8 +402,6 @@ impl LoadedStreamInThisRuntime {
         teardown_outcome
     }
 
-    /// Whether this stream is held stopped: loaded as a graph model that reads and edits, with
-    /// no processor, runtime context or clock until its start.
     pub fn is_held_stopped(&self) -> bool {
         self.is_held_stopped.load(Ordering::Acquire)
     }
@@ -429,11 +411,7 @@ impl LoadedStreamInThisRuntime {
         self.is_held_stopped.store(true, Ordering::Release);
     }
 
-    // =========================================================================
-    // Per-processor pause/resume
-    // =========================================================================
 
-    /// Pause a specific processor.
     pub fn pause_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         self.compiler.scope(|graph, _tx| {
@@ -471,7 +449,6 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Resume a specific processor.
     pub fn resume_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         self.compiler.scope(|graph, _tx| {
@@ -508,7 +485,6 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Whether a specific processor is paused.
     pub fn is_processor_paused(&self, processor_id: &ProcessorUniqueId) -> Result<bool> {
         self.compiler.scope(|graph, _tx| {
             let node = graph
@@ -529,11 +505,6 @@ impl LoadedStreamInThisRuntime {
     // Graph readiness
     // =========================================================================
 
-    /// Take hold of every processor's state, to wait on without the graph.
-    ///
-    /// The graph lock is released before anything blocks on what it hands
-    /// back: the transitions being waited for are made by processor threads
-    /// that need that lock.
     pub fn observable_graph_readiness(&self) -> ObservableGraphReadiness {
         ObservableGraphReadiness::new(self.compiler.scope(|graph, _tx| {
             graph
@@ -570,8 +541,6 @@ impl LoadedStreamInThisRuntime {
         capture_devices
     }
 
-    /// Block until every processor in this stream has finished `setup` and
-    /// reached `Running`, giving up after `timeout`.
     pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
         self.observable_graph_readiness()
             .wait_until_every_processor_is_running(timeout)
@@ -581,8 +550,6 @@ impl LoadedStreamInThisRuntime {
     // Whole-stream pause/resume
     // =========================================================================
 
-    /// Pause every processor in this stream; one a compile prepares while it
-    /// is paused starts paused.
     pub fn pause(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Pausing;
@@ -615,10 +582,6 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
-    /// Set this stream's graph state to `graph_state` and take the id of every
-    /// processor a compile prepared, under one graph lock: a processor prepared
-    /// after it takes its pause gate from `graph_state`, and one prepared
-    /// before it is in the ids.
     fn set_the_graph_state_and_take_every_prepared_processor_id(
         &self,
         graph_state: GraphState,
@@ -635,8 +598,6 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Resume every processor in this stream, then compile every graph change
-    /// logged while it was paused.
     pub fn resume(&self) -> Result<()> {
         let _entered_this_streams_log_route = self.log_route().enter_on_this_thread();
         *self.status.lock() = RuntimeStatus::Starting;

@@ -22,9 +22,6 @@ fn minimal_schema() -> ProcessorSchema {
     }
 }
 
-/// Locks #734: the macro must NOT emit a `pub audio:
-/// ProcessorAudioConverter` field on the generated `Processor` struct.
-/// Mentally revert the codegen.rs deletion and this assertion flips.
 #[test]
 fn processor_struct_does_not_carry_audio_field() {
     let schema = minimal_schema();
@@ -42,9 +39,6 @@ fn processor_struct_does_not_carry_audio_field() {
     );
 }
 
-/// Locks #734: the macro's `from_config` initializer must NOT initialize
-/// an `audio` field via `ProcessorAudioConverter::new()`. Mentally revert
-/// the codegen.rs deletion and this assertion flips.
 #[test]
 fn from_config_initializer_does_not_construct_audio_converter() {
     let schema = minimal_schema();
@@ -231,15 +225,6 @@ fn struct_with_every_custom_field_compiled_out() -> ItemStruct {
     }
 }
 
-/// The `inputs` / `outputs` fields are the `OutputWriter` /
-/// `InputMailboxes` handles the engine patches through
-/// `GeneratedProcessor::set_iceoryx2_resources`, so their presence is
-/// a wiring contract, not an authoring convenience: no authored field
-/// attribute may ever reach them, at either emission site. Compiling out every
-/// authored field is the adversarial case — if the #1588 attribute filter
-/// ever widened to the whole field list, these assertions are what catches
-/// it. Declaration order is deliberately not asserted: `Processor` is not
-/// `#[repr(C)]`, so its field order is not a contract.
 #[test]
 fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
     let schema = schema_declaring_iceoryx2_input_and_output_ports();
@@ -321,10 +306,6 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
     }
 }
 
-/// Locks #1588: a `#[cfg]` authored on a processor struct field must be
-/// re-emitted on the generated `Processor` field, or the field becomes
-/// unconditional and its platform-specific type fails to resolve off that
-/// platform.
 #[test]
 fn processor_struct_preserves_cfg_attribute_on_custom_field() {
     let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
@@ -369,7 +350,6 @@ fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
 fn annotated_field_struct() -> ItemStruct {
     syn::parse_quote! {
         struct AnnotatedFieldProbe {
-            /// Authored doc on a processor field.
             #[allow(dead_code)]
             #[expect(unused_parens)]
             #[cfg_attr(target_os = "linux", allow(unused))]
@@ -491,7 +471,6 @@ fn struct_with_cfg_attr_on_a_field() -> ItemStruct {
 fn struct_with_dropped_derive_helper_attributes_on_a_field() -> ItemStruct {
     syn::parse_quote! {
         struct DeriveHelperAnnotatedFieldProbe {
-            /// Authored doc on a processor field.
             #[allow(dead_code)]
             #[serde(skip)]
             #[schemars(skip)]
@@ -500,9 +479,6 @@ fn struct_with_dropped_derive_helper_attributes_on_a_field() -> ItemStruct {
     }
 }
 
-/// A `cfg_attr` on a processor field is refused loudly instead of dropped
-/// silently — silently dropping a presence-changing attribute is the same
-/// failure class as #1588 itself.
 #[test]
 fn cfg_attr_on_a_processor_field_emits_a_compile_error_naming_the_field() {
     let messages =
@@ -527,8 +503,6 @@ fn cfg_attr_on_a_processor_field_emits_a_compile_error_naming_the_field() {
     );
 }
 
-/// The refusal is scoped to `cfg_attr`. Derive-helper attributes are dropped
-/// by design — erroring on those would break every processor carrying one.
 #[test]
 fn a_dropped_derive_helper_attribute_on_a_processor_field_stays_silent() {
     let messages = compile_error_messages(expand_probe_processor(
@@ -545,7 +519,6 @@ fn a_dropped_derive_helper_attribute_on_a_processor_field_stays_silent() {
 fn struct_with_a_cfg_alongside_every_other_forwardable_attribute() -> ItemStruct {
     syn::parse_quote! {
         struct CfgAlongsideEveryOtherAttributeProbe {
-            /// Authored doc on a processor field.
             #[allow(dead_code)]
             #[expect(unused_parens)]
             #[cfg(target_os = "linux")]
@@ -676,8 +649,6 @@ fn only_a_processor_that_declares_a_category_sets_one_on_its_descriptor() {
     assert!(!rendered_for(None).contains("with_category"));
 }
 
-/// The whole `impl Processor` block, which is where the identity accessor
-/// the descriptor delegates to is emitted.
 fn rendered_processor_impl() -> String {
     rendered_impl_block_declared_as(false)
 }
@@ -695,9 +666,6 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
     ))
 }
 
-/// The mechanism, not the result — what the string comes out as is
-/// asserted where a real `#[processor]` can be expanded and read back
-/// (`streamlib-engine/tests/processor_class_import_path_test.rs`).
 #[test]
 fn the_descriptor_captures_its_identity_with_module_path() {
     let rendered = rendered_processor_impl();
@@ -751,8 +719,6 @@ fn the_descriptor_derives_its_config_schema_from_the_declared_config_type() {
     );
 }
 
-/// A processor declaring no config still publishes a document: the empty
-/// config's, which is an object with no properties.
 #[test]
 fn a_processor_declaring_no_config_still_carries_the_empty_configs_schema() {
     let rendered = rendered_descriptor();
@@ -766,10 +732,6 @@ fn a_processor_declaring_no_config_still_carries_the_empty_configs_schema() {
     );
 }
 
-/// `std::any::type_name`'s output format is documented as unspecified and
-/// free to change between compiler versions. Keying a registry on it means
-/// a toolchain bump silently renames every processor, with nothing failing
-/// to say so — which is why this is a test and not a comment.
 #[test]
 fn the_descriptor_never_reaches_for_type_name() {
     for rendered in [rendered_descriptor(), rendered_processor_impl()] {

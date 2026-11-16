@@ -3,18 +3,10 @@
 
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 
-/// A pending graph mutation operation.
-///
-/// Operations are queued and executed at commit time. Each operation is
-/// validated against current state before execution - if the referenced
-/// processor/link no longer exists or is in an invalid state, the operation
-/// is skipped or returns an error.
 #[derive(Debug, Clone)]
 pub(crate) enum PendingOperation {
-    /// Add a processor that exists in the Graph but isn't running yet.
     AddProcessor(ProcessorUniqueId),
 
-    /// Remove a processor that is currently running.
     RemoveProcessor(ProcessorUniqueId),
 
     /// Wire a link that exists in the Graph but isn't wired yet.
@@ -23,8 +15,6 @@ pub(crate) enum PendingOperation {
     /// Unwire and remove a link that is currently wired.
     RemoveLink(LinkUniqueId),
 
-    /// Hand a running processor a configuration, recorded on its graph node
-    /// only once the processor takes it.
     UpdateProcessorConfig {
         processor_id: ProcessorUniqueId,
         config_to_apply: serde_json::Value,

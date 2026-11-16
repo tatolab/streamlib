@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The TLS provider and the tokio runtime this wheel's sessions share, brought
-//! up on first use in whichever process the sessions run in.
-//!
-//! Both are process-global by construction — rustls keeps one default crypto
-//! provider, and one tokio runtime is what the sessions in a process share — so
-//! the first session to need them brings them up and every later call is a
-//! no-op, rather than each processor instance racing to install them.
 
 use crate::error::{Result, WebRtcExtensionError};
 use std::sync::OnceLock;

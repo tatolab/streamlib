@@ -1,10 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The lend `tatolabd` hands its processor interpreters: found relative to its
-//! own executable, as a runtime unit lays out `bin/tatolabd` beside its lend,
-//! or as the macOS app bundle lays out `Contents/MacOS/tatolabd` beside
-//! `Contents/Resources/lend`.
 
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
@@ -34,11 +30,6 @@ pub(crate) fn the_lend_beside_this_executable() -> Result<PathBuf, String> {
     the_lend_beside_the_executable(&this_executable)
 }
 
-/// The lend beside `canonical_executable`, canonical: the app bundle's
-/// `Contents/Resources/lend` when the executable sits in a bundle's
-/// `Contents/MacOS`, else the runtime unit's lend beside its `bin/`. Refused,
-/// naming every path looked at, unless one holds the processor-interpreter
-/// bootstrap.
 pub(crate) fn the_lend_beside_the_executable(
     canonical_executable: &Path,
 ) -> Result<PathBuf, String> {

@@ -464,8 +464,6 @@ pub enum StreamListingState {
     /// Its project is closed: not loaded, and left unloaded across restarts until
     /// `open_project`.
     Closed,
-    /// Loaded with its project paused: its processors hold their state and process nothing
-    /// until `resume_playback`.
     Paused,
     /// Its code, its venv, its load or its start failed: held stopped from its document when
     /// that reads, its graph there to read and edit, until a play or a `reload_project` retries

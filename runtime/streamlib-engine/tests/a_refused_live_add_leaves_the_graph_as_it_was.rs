@@ -34,8 +34,6 @@ impl streamlib_engine::ManualProcessor for RefusedLiveAddTestProcessor::Processo
     }
 }
 
-/// A stream holding one [`RefusedLiveAddTestProcessor`], started when `started`, with the
-/// project directory and runner it lives in.
 fn a_stream_holding_one_node(
     started: bool,
 ) -> (

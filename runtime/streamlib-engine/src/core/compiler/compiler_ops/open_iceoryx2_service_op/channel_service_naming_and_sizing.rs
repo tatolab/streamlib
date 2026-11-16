@@ -23,12 +23,6 @@ use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DE
 
 use super::link_still_counts_toward_its_ports;
 
-/// The channel service name a link's bags ride on:
-/// `{source_processor}/{source_output_port}`
-/// ([`crate::iceoryx2::source_channel_name`], the single source of truth for
-/// channel identity). One source, one channel, one publisher, N subscribers. A
-/// grammar-illegal port name surfaces as a named [`Error::Configuration`] here
-/// rather than an opaque iceoryx2 `Invalid service name` deep in the FFI.
 pub(super) fn channel_service_name(source: &OutputLinkPortRef) -> Result<String> {
     let processor_id = source.processor_id();
     let port_name = source.port_name();
@@ -287,8 +281,6 @@ pub(super) fn delivery_resolution_of_input_port(
     })
 }
 
-/// The class a processor in the graph was added as, refused by name when the
-/// graph has no such processor.
 pub(super) fn processor_class_import_path_of(
     graph: &Graph,
     proc_id: &ProcessorUniqueId,

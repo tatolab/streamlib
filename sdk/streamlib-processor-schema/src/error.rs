@@ -3,7 +3,6 @@
 
 use thiserror::Error;
 
-/// Errors that can occur during processor schema operations.
 #[derive(Debug, Error)]
 pub enum SchemaError {
     /// Invalid schema name format.

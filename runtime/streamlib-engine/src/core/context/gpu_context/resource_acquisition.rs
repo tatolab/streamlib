@@ -41,14 +41,6 @@ impl GpuContext {
             .acquire(desc, self.loaded_stream_this_view_serves)
     }
 
-    /// Acquire a caller-held storage buffer sized for `layout`: HOST_VISIBLE,
-    /// persistently mapped, never pooled — the caller keeps the
-    /// [`crate::core::rhi::StorageBuffer`] in its processor state and drops it
-    /// at teardown. A byte-shaped SSBO is a one-dimensional `uint8` layout.
-    ///
-    /// Usage is `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST`, plus DMA-BUF
-    /// export flags on Linux; compute kernels bind it via
-    /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer_storage`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
@@ -213,19 +205,6 @@ impl GpuContext {
         Ok(TextureRing::from_arc_into_raw(inner_arc))
     }
 
-    /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
-    /// one-shot command buffer + fence. Used as the prelude to binding
-    /// a freshly-created storage image to a compute / RT kernel that
-    /// will write into it via `imageStore`. The transition uses
-    /// `UNDEFINED` as the source layout, so this is correct for
-    /// just-allocated textures only — once the texture has content
-    /// you'd otherwise lose, callers must use a barrier with the
-    /// actual prior layout.
-    ///
-    /// Lives here (not on `HostVulkanTexture`) so example / processor
-    /// code that needs a one-shot layout transition stays inside the
-    /// RHI boundary instead of pulling vulkanalia directly. Mirrors
-    /// the existing `acquire_*` shape on `GpuContext`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn transition_storage_image_to_general(
         &self,

@@ -37,9 +37,6 @@ fn a_registered_descriptors_config_schema_reaches_the_rendering_unchanged() {
     assert_eq!(rendered["config_schema"], document);
 }
 
-/// A descriptor built without one — which no declared processor is, in
-/// either language — renders no key at all rather than a null an agent
-/// would have to read as "no config".
 #[test]
 fn a_descriptor_carrying_no_config_schema_renders_no_key_rather_than_a_null() {
     let rendered =

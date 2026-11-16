@@ -37,9 +37,6 @@ impl GpuContext {
         )
     }
 
-    /// An empty output pool for the native node `processor_id_of_the_owning_node`,
-    /// which publishes its per-frame pixel buffers from slots it borrows from
-    /// the shared pixel-buffer pool; allocates nothing until its first frame.
     pub(crate) fn create_processor_output_pixel_buffer_pool_for_a_native_node(
         &self,
         processor_id_of_the_owning_node: &str,
@@ -368,11 +365,6 @@ impl GpuContext {
         Ok(())
     }
 
-    /// Free every unheld shared pool entry `stream` last acquired, and flag
-    /// the ones still held to be freed as soon as they are unheld. Run as the
-    /// stream stops, once its processors are gone and its surface store
-    /// closed: it waits, bounded, for the checkout leases its helpers held on
-    /// those entries to clear, then for the GPU work naming them.
     pub(crate) fn free_every_unheld_shared_pool_entry_the_stream_last_acquired(
         &self,
         stream: crate::core::runtime::LoadedStreamTag,

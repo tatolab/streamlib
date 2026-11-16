@@ -16,7 +16,6 @@ use crate::core::output_port_stream_facts::{
 };
 use crate::core::utils::compute_json_checksum;
 
-/// Node in the processor graph with embedded component storage.
 #[derive(Serialize, Deserialize)]
 pub struct ProcessorNode {
     /// This node's id for one run of its stream, which names its channels.
@@ -36,7 +35,6 @@ pub struct ProcessorNode {
     /// The import path of the class this node is an instance of.
     #[serde(rename = "type")]
     pub processor_type: ProcessorClassImportPath,
-    /// Display name for UI. Defaults to the processor's PascalCase short name if not overridden.
     pub display_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
@@ -97,7 +95,6 @@ impl std::fmt::Debug for ProcessorNode {
 }
 
 impl ProcessorNode {
-    /// Create a new processor node. The ID is generated automatically using cuid2.
     pub fn new(
         processor_type: ProcessorClassImportPath,
         node_kind: Option<NodeKind>,
@@ -130,8 +127,6 @@ impl ProcessorNode {
         }
     }
 
-    /// Whether this node's processor runs: an instance in this process, or a
-    /// helper's wiring, and not being deleted.
     pub(crate) fn runs_its_processor(&self) -> bool {
         use super::super::components::{
             OutOfProcessLinkWiringComponent, PendingDeletionComponent, ProcessorInstanceComponent,

@@ -196,22 +196,12 @@ pub use utils::{checksum, compute_json_checksum};
 // external consumers. Each line below is a deliberate boundary
 // crossing — items not listed here stay engine-internal.
 
-/// The framed-IPC transport a processor interpreter is driven over.
-///
-/// Public for the wheel's processor-interpreter side, which checks the engine
-/// build it imported against its parent's, and for the engine's own
-/// integration tests, which drive a bridge across real processes.
 pub mod helper_process_transport {
     pub use super::compiler::compiler_ops::subprocess_bridge::{
         ENGINE_BUILD_ID, SubprocessBridge, SubprocessBridgeLinkDelivery,
     };
 }
 
-/// What a processor interpreter's own side shares with the engine that starts
-/// it: where its bootstrap sits in a lend, where a runtime unit or the macOS
-/// app bundle lays out the lend and the Vulkan driver it carries, the
-/// variables it is named by, the shutdown ladder's budgets, and the reader of
-/// a described node type.
 pub mod processor_interpreter {
     pub use super::compiler::compiler_ops::processor_interpreter_shutdown_ladder::{
         CALLBACK_RETURN_BUDGET, CHILD_SELF_EXIT_GRACE, TEARDOWN_BUDGET,

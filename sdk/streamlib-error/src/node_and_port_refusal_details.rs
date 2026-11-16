@@ -53,11 +53,6 @@ impl WhyANodeOfAStreamIsNotRunning {
     }
 }
 
-/// Direction of a port relative to its processor — `Output` for source-side,
-/// `Input` for destination-side. Used by
-/// [`Error::ProcessorPortNotFound`](crate::Error::ProcessorPortNotFound) to
-/// distinguish "the source processor has no output port named X" from "the
-/// target processor has no input port named X."
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortDirection {
     Input,

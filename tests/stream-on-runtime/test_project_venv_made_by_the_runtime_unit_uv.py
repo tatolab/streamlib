@@ -147,7 +147,6 @@ def test_a_project_with_no_venv_gets_one_from_the_runtime_unit_uv_on_an_open_and
     assert_uv_made_a_venv_whose_interpreter_runs(project_directory)
 
 
-#: What the lines `uv sync` writes are logged under, as `processor_id`.
 PROJECT_VENV_UV_SYNC_LOG_LABEL = "project-venv-uv-sync"
 
 

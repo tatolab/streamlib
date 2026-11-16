@@ -46,17 +46,11 @@ mod out_of_process_link_tests;
 mod windowed_audio_channel_depth_tests;
 mod windowed_audio_contract_tests;
 
-/// A host whose transport lives out of process — the shape the processor
-/// interpreter spawn host has — with its far side already past its setup
-/// command.
 struct OutOfProcessSpawnHostStub {
     link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
 }
 
 impl OutOfProcessSpawnHostStub {
-    /// A stub whose far side drives its processor in
-    /// `far_side_process_execution` and records what it is handed in
-    /// `far_side`.
     fn with_a_far_side_past_its_setup_command(
         far_side: RecordingOutOfProcessFarSideLinkDelivery,
         far_side_process_execution: ProcessExecution,
@@ -182,9 +176,6 @@ fn input_entry_recorded_on(
         .expect("the link's entry is on the envelope")
 }
 
-/// Attach a live instance of `P` to `proc_id`, holding the iceoryx2
-/// resources its declared ports call for — the state the factory leaves a
-/// host-run processor in before the wiring op reaches it.
 fn attach_mock_instance<P>(
     graph: &mut Graph,
     proc_id: &str,

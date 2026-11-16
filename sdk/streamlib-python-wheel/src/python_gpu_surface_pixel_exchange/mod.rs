@@ -204,13 +204,6 @@ fn dlpack_versioned_capsule_from_managed_tensor<'py>(
     Ok(unsafe { Bound::from_owned_ptr(python, capsule) })
 }
 
-/// The exchange shape a consumer negotiated via `__dlpack__`'s
-/// `max_version`.
-///
-/// The distinction is not cosmetic: only the versioned struct carries
-/// flags, and an unversioned tensor has no way to say "this memory is
-/// writable" — so `numpy.from_dlpack` marks it read-only, and a
-/// processor that mutates frames in place gets nothing it can write to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum DlpackExchangeShape {
     Unversioned,

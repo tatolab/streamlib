@@ -1,13 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""What a test sees of the helper processes beneath a `tatolabd`, from outside them.
-
-A helper — the processor interpreter running one Python node — is started by
-`tatolabd`, which logs `[<node>] helper process started: pid=<pid>, ...` for
-each. The processes looked for here are never the test's own children, so
-their lifetime is read with signal 0 rather than a wait.
-"""
 
 from __future__ import annotations
 
@@ -22,7 +15,6 @@ HELPER_PROCESS_STARTED_LOG_LINE_TEXT = "helper process started: pid="
 #: `tatolabd`'s line for each helper process it starts.
 HELPER_PROCESS_STARTED_LOG_LINE_PATTERN = re.compile(re.escape(HELPER_PROCESS_STARTED_LOG_LINE_TEXT) + r"(\d+)")
 
-#: The file every processor interpreter runs, by path, from the lend.
 PROCESSOR_INTERPRETER_BOOTSTRAP_FILE_NAME = b"_processor_interpreter_bootstrap.py"
 
 PROCESS_POLL_INTERVAL_SECONDS = 0.05
@@ -59,11 +51,6 @@ def every_process_still_alive_after(process_ids: "list[int]", budget_seconds: fl
 
 
 def helper_process_is_still_alive(process_id: int) -> bool:
-    """Whether `process_id` is still a live processor interpreter.
-
-    The command line is checked, not just the pid: pids are reused, and a
-    recycled one would otherwise read as a leaked helper.
-    """
     if not _process_exists(process_id):
         return False
     if PROC_FILESYSTEM_IS_MOUNTED:

@@ -6,7 +6,6 @@ use std::borrow::Borrow;
 use std::fmt;
 use std::ops::Deref;
 
-/// Unique identifier for a processor node.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ProcessorUniqueId(String);

@@ -1,21 +1,12 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Test for the ports-in-code `#[processor(...)]` attribute macro.
-//!
-//! The attribute is the single source of truth for identity, execution mode,
-//! and ports — nothing is read from any file at expansion. This test exercises
-//! the macro's typed-API surface (descriptor + ident + port markers) and
-//! intentionally does not register the processor in the global
-//! `PROCESSOR_REGISTRY`.
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::schemars::JsonSchema;
 use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
-// Define a simple processor. The macro emits the type, port markers,
-// descriptor, and the class-path accessor — it never auto-registers.
 #[streamlib::sdk::processor(
     execution = manual,
     input("video_in", delivery_profile = "newest", family = Image),
@@ -23,7 +14,6 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 )]
 pub struct TestProcessor;
 
-// User implements the Processor trait on the generated Processor struct
 impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
@@ -40,8 +30,6 @@ impl streamlib_engine::ManualProcessor for TestProcessor::Processor {
 
 #[test]
 fn test_module_structure_generated() {
-    // Verify the module structure was generated correctly
-    // TestProcessor::Processor should exist
     fn assert_processor_type<T: streamlib_engine::core::ManualProcessor>() {}
     assert_processor_type::<TestProcessor::Processor>();
 }
@@ -77,7 +65,6 @@ fn test_port_marker_names() {
 
 #[test]
 fn test_processor_instantiation() {
-    // Create processor from empty config
     let processor = TestProcessor::Processor::from_config(EmptyConfig).unwrap();
 
     // Verify it has the expected name from YAML schema
@@ -93,8 +80,6 @@ fn a_processor_declaring_no_config_takes_none_and_says_which_key_had_nowhere_to_
         "the refusal must name the key with nowhere to go: {refusal}"
     );
 
-    // The two shapes a no-config processor is legitimately added with: the
-    // empty named map `ProcessorSpec` serializes, and the legacy `nil`.
     let from_empty: EmptyConfig = serde_json::from_value(serde_json::json!({})).unwrap();
     assert_eq!(
         serde_json::to_value(from_empty).unwrap(),
@@ -118,8 +103,6 @@ fn a_processor_declaring_no_config_publishes_an_empty_object_schema() {
     assert!(config_schema.get("properties").is_none());
 }
 
-/// Configuration for [`ConfiguredProbeProcessor`] — the shape the emitted
-/// document is read back from.
 #[streamlib::sdk::processor_config]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
@@ -230,9 +213,6 @@ fn the_class_short_name_is_the_authored_struct_ident() {
     );
 }
 
-// A bare `#[processor]` — the attribute takes no identity in any spelling, so
-// this is the only spelling there is. The class is named by its import path,
-// captured at the expansion site.
 #[streamlib::sdk::processor(execution = manual)]
 pub struct BareProcessor;
 
@@ -261,9 +241,6 @@ fn a_bare_processor_is_named_by_its_import_path() {
     );
 }
 
-/// A field type that only exists on Linux, so the processor below can gate a
-/// field on the real `target_os` rather than only on always-true / always-false
-/// predicates.
 #[cfg(target_os = "linux")]
 #[derive(Default)]
 pub struct CfgGatedFieldLinuxOnlyState {
@@ -283,14 +260,6 @@ pub struct CfgGatedFieldAlwaysCompiledState {
     pub always_compiled_marker: u32,
 }
 
-// A `#[cfg]` authored on a processor struct field must be re-emitted at
-// BOTH generated sites — the `Processor` field definition and its `from_config`
-// struct-literal initializer. This is a compile-level proof: `any()` is false on
-// every target, so `never_compiled_state`'s deliberately-undeclared type only
-// resolves if the macro stripped that field from both sites; `all()` is true on
-// every target, so `always_compiled_state` only compiles if the surviving arm
-// still gets its initializer. The `target_os` pair exercises the real-world
-// shape on top of the target-independent halves.
 #[streamlib::sdk::processor(
     execution = manual,
     input("video_in", delivery_profile = "newest", family = Image),
@@ -367,9 +336,6 @@ fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
     );
 }
 
-// A windowed audio consumer: the declaration the macro must carry all the way
-// into the emitted descriptor, since that descriptor is what the engine reads
-// when the processor is added to a graph.
 #[streamlib::sdk::processor(
     execution = reactive,
     input(

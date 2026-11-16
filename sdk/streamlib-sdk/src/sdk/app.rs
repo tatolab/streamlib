@@ -21,12 +21,8 @@ use crate::sdk::runtime::{
     LoadedStreamInThisRuntime, OptionsForLoadingOneStream, Runner, StreamLocation,
 };
 
-/// A `(processor, port)` endpoint for [`App::connect`]. The processor is
-/// referenced by the [`AddedProcessor`] an `add`/`add_local` call returned;
-/// the port is the source-declared port name.
 pub type AppPortEndpoint<'a> = (&'a AddedProcessor, &'a str);
 
-/// A processor [`App::add`] or [`App::add_local`] put in the graph.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AddedProcessor {
     processor_id: ProcessorUniqueId,
@@ -34,16 +30,10 @@ pub struct AddedProcessor {
 }
 
 impl AddedProcessor {
-    /// The engine's id for this processor — what `tatolab graph` shows.
     pub fn processor_id(&self) -> &ProcessorUniqueId {
         &self.processor_id
     }
 
-    /// The display name the graph assigned this processor.
-    ///
-    /// The requested one only when nothing else in the graph already answered
-    /// to it: the graph appends a counter to a duplicate, so a caller that
-    /// asked for a name cannot assume it got that name.
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
@@ -52,13 +42,6 @@ impl AddedProcessor {
 /// The stream id of the one stream an [`App`] loads; its display name too.
 pub const THE_STREAM_ID_AN_APP_LOADS: &str = "main";
 
-/// Thin authoring sugar over a [`Runner`] and one stream loaded in it:
-/// construct, add processors, connect ports, run.
-///
-/// `App` is not a parallel runtime — it holds one `Runner` and the stream it
-/// loaded, and forwards to them. Errors surface as the underlying engine
-/// [`Error`] variants unchanged. For any capability the sugar omits, drop to
-/// [`App::runner`] or [`App::stream`].
 pub struct App {
     runner: Arc<Runner>,
     stream: Arc<LoadedStreamInThisRuntime>,
@@ -77,11 +60,6 @@ impl App {
         Ok(Self { runner, stream })
     }
 
-    /// Add a processor by the import path of its class, configured from
-    /// `config`. `config` is any [`Serialize`] value (a generated config `Bag`,
-    /// a plain struct, or a [`serde_json::Value`]); it is encoded to JSON and
-    /// handed to the runtime unchanged. A `display_name` of `None` takes the
-    /// class's short name.
     pub fn add(
         &self,
         processor_class_import_path: ProcessorClassImportPath,
@@ -95,10 +73,6 @@ impl App {
         )
     }
 
-    /// Register a `#[processor]`-annotated host type `P` on the processor
-    /// registry (no package on disk) and immediately instantiate it,
-    /// returning the connectable [`AddedProcessor`]. `config` is validated
-    /// against `P::Config` at registration and used as the instance config.
     pub fn add_local<P>(
         &self,
         config: impl Serialize,
@@ -116,9 +90,6 @@ impl App {
         )
     }
 
-    /// Connect an output endpoint to an input endpoint — `((&from, "out"),
-    /// (&to, "in"))`. A nonexistent port surfaces the runtime's
-    /// [`Error::ProcessorPortNotFound`] unchanged.
     pub fn connect(
         &self,
         from: AppPortEndpoint<'_>,

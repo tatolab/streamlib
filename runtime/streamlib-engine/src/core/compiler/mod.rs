@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Graph compilation pipeline.
-//!
-//! Converts graph topology changes into running processor instances.
-//! The compilation process has 3 phases:
-//! 1. PREPARE - Attach infrastructure components to processor nodes
-//! 2. SPAWN - Spawn processor threads (threads create instances, setup runs on thread)
-//! 3. WIRE - Create ring buffers and connect ports
 
 mod compilation_plan;
 mod compile_phase;

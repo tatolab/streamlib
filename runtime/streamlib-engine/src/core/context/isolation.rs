@@ -1,48 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Isolation trust tier — the by-construction capability moat deciding whether
-//! a processor's privileged lifecycle may mint an in-process
-//! [`RuntimeContextFullAccess`](super::RuntimeContextFullAccess).
-//!
-//! This is an **orthogonal trust axis** that composes with the phase-axis
-//! capability typestate (`RuntimeContextFullAccess` for `setup`/`start`/`stop`/
-//! `teardown`, `RuntimeContextLimitedAccess` for the hot path). The phase axis
-//! answers *which* lifecycle method is running; the trust axis answers *whether
-//! the code running it is trusted enough to hold FullAccess in-process at all*.
-//!
-//! Every processor the engine can spawn today is
-//! [`IsolationTier::TrustedInstalled`], and nothing derives the tier.
-//!
-//! The moat is the [`FullAccessGrant`] token: minting a
-//! [`RuntimeContextFullAccess`](super::RuntimeContextFullAccess) requires one,
-//! and a grant is producible **only** from [`IsolationTier::TrustedInstalled`].
-//! The untrusted dispatch has no grant to pass, so an in-process FullAccess
-//! context is unrepresentable for it — a compile-time guarantee, not a runtime
-//! check, and the reason the tier stays a two-variant enum rather than a
-//! constant.
-//!
-//! Runtime *enforcement* of the untrusted tier — own-subprocess sandbox,
-//! cgroup-v2 limits — is a separate concern; this module owns the policy model
-//! and the capability moat at the minting seam.
 
-/// Declarative trust tier a loaded processor runs under.
-///
-/// Composes with — does not replace — the phase-axis capability typestate. A
-/// [`TrustedInstalled`](Self::TrustedInstalled) processor still only sees
-/// FullAccess in its privileged lifecycle methods; an
-/// [`Untrusted`](Self::Untrusted) processor never sees an in-process FullAccess
-/// at all.
-///
-/// The capability moat is sealed by construction: `grant_full_access` (the only
-/// producer of the token `RuntimeContextFullAccess::new` requires) is
-/// crate-internal, so no external caller — trusted tier or not — can mint a
-/// FullAccess grant:
-///
-/// ```compile_fail
-/// use streamlib::sdk::context::IsolationTier;
-/// let _ = IsolationTier::TrustedInstalled.grant_full_access();
-/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsolationTier {
     /// Separately built, untrusted code. Never mints an in-process FullAccess
@@ -50,8 +9,6 @@ pub enum IsolationTier {
     /// subprocess sandbox (isolation enforcement). Nothing the engine can spawn
     /// today classifies here.
     Untrusted,
-    /// Host-binary-compiled code: every processor the engine spawns. May mint
-    /// an in-process FullAccess context via [`Self::grant_full_access`].
     TrustedInstalled,
 }
 

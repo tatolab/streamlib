@@ -1,15 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The config type of a processor that declares none.
 
-/// The config type of a processor that declares none.
-///
-/// It publishes an empty-object schema and takes nothing: a configuration
-/// carrying keys is refused rather than discarded, because a processor that
-/// declares no config cannot act on one and silently dropping it hides a
-/// wiring mistake. It serializes back as an empty named map so it round-trips
-/// as a bag.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmptyConfig;
 
@@ -30,8 +22,6 @@ impl<'de> serde::Deserialize<'de> for EmptyConfig {
     }
 }
 
-/// Accepts an empty named map and the legacy `nil`; refuses anything a
-/// processor declaring no config could not have meant.
 struct EmptyConfigVisitor;
 
 impl<'de> serde::de::Visitor<'de> for EmptyConfigVisitor {

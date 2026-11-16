@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A processor's output slots under one pool key — the lease-aware ring every
-//! processor output ring asks for its next slot.
-//!
-//! The producer never waits on a consumer: a held slot is skipped, the pool
-//! grows to its cap, and at the cap the acquire refuses by name so the
-//! producer drops its own frame. Reuse and growth are separate calls so the
-//! caller can allocate outside whatever lock it holds the pool under.
 
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
 use crate::core::context::texture_pools_and_rings::lease_aware_pool_slot_ring::{
@@ -20,22 +13,14 @@ use parking_lot::Mutex;
 
 use crate::core::{Error, Result};
 
-/// The most slots one processor output pool grows to while consumers hold its
-/// frames, unless the links on its outputs keep more.
 pub(crate) const PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY: usize = 16;
 
-/// The output frames the links on one processor's outputs may keep at once:
-/// queued in their mailboxes, where a frame holds no claim until its read, and
-/// borrowed past them, up to each link's borrow quota.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct OutputFramesKeptByOutputLinks {
     pub(crate) queued_in_their_mailboxes: usize,
     pub(crate) borrowed_past_their_mailboxes: usize,
 }
 
-/// What each wired link on one processor's outputs keeps of its output frames,
-/// recorded at wiring and forgotten at unwiring, which its output pools are
-/// sized from.
 #[derive(Debug, Default)]
 pub(crate) struct OutputFramesKeptByTheOutputLinksOfOneProcessor {
     kept_by_output_link_id: Mutex<HashMap<String, OutputFramesKeptByOutputLinks>>,
@@ -65,7 +50,6 @@ impl OutputFramesKeptByTheOutputLinksOfOneProcessor {
         self.kept_by_output_link_id.lock().remove(link_id);
     }
 
-    /// What every wired link on the processor's outputs keeps, summed.
     pub(crate) fn kept_by_every_output_link(&self) -> OutputFramesKeptByOutputLinks {
         self.kept_by_output_link_id.lock().values().fold(
             OutputFramesKeptByOutputLinks::default(),
@@ -79,14 +63,9 @@ impl OutputFramesKeptByTheOutputLinksOfOneProcessor {
     }
 }
 
-/// What a processor output pool answers when asked for its next frame
-/// without allocating.
 pub(crate) enum ProcessorOutputSurfacePoolHandOff<'pool, Resource> {
     /// An unheld slot, republished under a freshly minted generation.
     ReusedSlot(&'pool LeaseAwarePoolSlot<Resource>),
-    /// Fewer than the rotation depth's slots are unheld: the caller
-    /// allocates one and hands it to
-    /// [`ProcessorOutputSurfacePool::hand_off_a_fresh_slot`].
     NeedsAFreshSlot,
 }
 
@@ -104,7 +83,6 @@ pub(crate) struct ProcessorOutputSurfacePoolRefusedLentSlot<Resource> {
     pub(crate) slot: Box<LeaseAwarePoolSlot<Resource>>,
 }
 
-/// The slots a processor publishes its output frames from, under one pool key.
 pub(crate) struct ProcessorOutputSurfacePool<Resource> {
     pool_key: String,
     ring: LeaseAwarePoolSlotRing<Resource>,
@@ -132,19 +110,6 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         self.kept_by_its_output_links = kept_by_its_output_links;
     }
 
-    /// Hand out the slot this frame publishes into when the pool needs no new
-    /// one: an unheld slot republished under a freshly minted
-    /// `<slot>#<generation>`.
-    ///
-    /// The pool keeps `rotation_depth` slots nobody holds, plus one for each
-    /// frame its output links' mailboxes queue or lend out under their borrow
-    /// quotas — a borrowed frame is unclaimed until it is read as a GPU frame —
-    /// so a frame nobody claimed stays resolvable for that many publishes
-    /// behind the newest however many frames consumers hold. It reuses the unheld slot published longest ago
-    /// while that many are unheld and otherwise asks for a fresh slot. It grows
-    /// to [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`], or to that reserve plus
-    /// its output links' borrow quotas when they are more; at that capacity it
-    /// reuses any unheld slot, and refuses when none is.
     pub(crate) fn hand_off_a_reusable_frame(
         &mut self,
         rotation_depth: usize,

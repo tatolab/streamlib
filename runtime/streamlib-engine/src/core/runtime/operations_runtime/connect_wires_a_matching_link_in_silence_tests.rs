@@ -151,11 +151,6 @@ fn connect_wires_a_producer_to_a_consumer_without_warning() {
     );
 }
 
-/// Removing a processor removes each of its links as a link, ahead of the
-/// node, so the compile reclaims both endpoints' ports through the link
-/// path. Revert lock: log only `RemoveProcessor` and the node's removal
-/// cascades its edges out of the graph with the peer's publisher,
-/// subscriber and notifier still held against their channels.
 #[test]
 fn removing_a_processor_logs_every_incident_link_ahead_of_the_node() {
     register_producer_and_consumer_descriptors();

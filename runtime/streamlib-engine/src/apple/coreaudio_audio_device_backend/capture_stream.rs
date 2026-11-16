@@ -377,10 +377,6 @@ pub(super) enum MicrophoneAccessForTheStream {
     Refused(String),
 }
 
-/// Everything that starts, stops and rebinds a capture stream, behind one
-/// lock: the processor's start and stop, the user's permission answer and
-/// the stream's device changes all reach it, from different threads. The
-/// device's I/O thread never takes it.
 pub(super) struct CoreAudioCaptureControl {
     pub(super) microphone_access: MicrophoneAccessForTheStream,
     stream_format: AudioStreamFormat,

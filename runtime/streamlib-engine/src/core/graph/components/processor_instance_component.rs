@@ -9,7 +9,6 @@ use serde_json::Value as JsonValue;
 use super::JsonSerializableComponent;
 use crate::core::processors::ProcessorInstance;
 
-/// The instantiated processor instance.
 pub struct ProcessorInstanceComponent(pub Arc<Mutex<ProcessorInstance>>);
 
 impl JsonSerializableComponent for ProcessorInstanceComponent {

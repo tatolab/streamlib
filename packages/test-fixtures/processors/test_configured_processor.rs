@@ -1,9 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Attribute-macro test fixture verifying that
-//! `#[streamlib::sdk::processor("...")]` emits the right config-binding
-//! code against a `streamlib.yaml` `package:` block.
 
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::Result;

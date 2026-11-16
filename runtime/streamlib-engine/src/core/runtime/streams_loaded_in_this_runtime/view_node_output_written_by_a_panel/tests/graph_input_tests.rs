@@ -155,7 +155,6 @@ fn a_write_to_an_input_no_graph_input_declares_or_of_the_wrong_shape_is_refused_
 }
 
 impl AStreamOfAProjectBringingViews {
-    /// Run the `GraphInput` `node_id` as a Play does: a fresh processor, handed its store.
     fn play_the_graph_input(
         &self,
         node_id: &ProcessorUniqueId,
@@ -175,7 +174,6 @@ impl AStreamOfAProjectBringingViews {
         node_uuid
     }
 
-    /// Stop the `GraphInput` `node_id` as a Stop does: its processor torn down and dropped.
     fn stop_the_graph_input(&self, node_id: &ProcessorUniqueId) {
         self.with_the_graph_inputs_processor(node_id, |processor| {
             processor.commit_the_kept_value_as_the_node_stops()

@@ -188,8 +188,6 @@ fn the_document_a_placed_stream_holds(
     }
 }
 
-/// The type, name and config of the node `edit` adds to `document` or configures there; none
-/// for a subgraph node or a Graph Input or Output, whose types name no processor.
 fn the_processor_node_an_edit_adds_or_configures(
     edit: &StreamGraphOperation,
     document: &StreamGraphDocument,

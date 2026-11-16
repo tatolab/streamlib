@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Config types for the fixture processors — the seam their encoding is
-//! pinned at.
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::schemars::JsonSchema;

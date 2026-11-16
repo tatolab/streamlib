@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! iceoryx2-based IPC communication layer for cross-process processor communication.
 
 mod audio_window;
 mod channel_ceiling;

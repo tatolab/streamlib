@@ -105,8 +105,6 @@ fn a_graph_of(node_types: &[&ProcessorClassImportPath]) -> GraphSnapshot {
         .expect("the test graph reads")
 }
 
-/// A stream named `main` whose project is `project_directory` and which
-/// starts no processor interpreter.
 fn a_stream_with_no_environment(project_directory: &Path) -> OptionsForLoadingOneStream {
     options_loading_a_stream_of_the_test_project_at(project_directory, "main")
 }

@@ -1,13 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Code generation for the `#[processor(...)]` attribute macro.
-//!
-//! Generates the module wrapper with:
-//! - `Processor` struct with public fields
-//! - `InputLink` module with port markers
-//! - `OutputLink` module with port markers
-//! - Processor trait implementation
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
@@ -29,15 +22,6 @@ use author_visibility::{
 };
 use port_marker_module::generate_port_marker_module;
 
-/// Generate a processor module from the parsed `#[processor(...)]` attribute.
-/// Execution and ports are authored in the attribute — nothing here reads a
-/// file, and nothing authors identity.
-///
-/// The descriptor is emitted from the attribute's [`ProcessorSchema`], which
-/// carries each port's cast name; the port markers keep the author's spelling.
-/// A config declared as `config = <Path>` binds that typed `Config` alias and a
-/// generated struct field; none binds `EmptyConfig`, whose schema is the empty
-/// object a processor declaring no config publishes.
 pub(crate) fn generate_from_parsed_processor_attr(
     item: &ItemStruct,
     parsed: &ParsedProcessorAttr,
@@ -129,14 +113,10 @@ pub(crate) fn generate_from_parsed_processor_attr(
 
             #refused_field_attribute_diagnostics
 
-            /// Configuration type for this processor.
             #member_visibility type Config = #config_type;
 
             #processor_class_import_path_accessor
 
-            /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
-            ///
-            /// Convenience wrapper around [`Processor::node`].
             #member_visibility fn node(config: Config) -> __streamlib_sdk::processors::ProcessorSpec {
                 Processor::node(config)
             }
@@ -162,16 +142,6 @@ struct CustomField {
     attributes_authored_on_processor_struct_field: Vec<syn::Attribute>,
 }
 
-/// Authoring contract for `#[processor]` struct fields. Everything
-/// [`is_forwarded_onto_from_config_initializer`] takes is admitted here first,
-/// because an initializer gating a field the definition did not gate the same
-/// way initializes a field that isn't there. `doc` and the `allow` / `warn` /
-/// `deny` / `forbid` controls are the extras layered on top of that set, so an
-/// author's `///` and `#[allow(dead_code)]` survive expansion. `expect` is
-/// excluded from both: the generated field takes the struct's visibility, wider
-/// than the private field the author wrote, so a `dead_code` expectation the
-/// author wrote to silence a warning
-/// becomes an `unfulfilled_lint_expectation` warning instead.
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
     if is_forwarded_onto_from_config_initializer(attribute) {
         return true;
@@ -194,12 +164,6 @@ fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool
     attribute.path().is_ident("cfg")
 }
 
-/// `cfg_attr` on a processor struct field is refused rather than dropped: it can
-/// expand to a presence-changing `cfg`, and the field definition accepts a strict
-/// superset of what the `from_config` initializer accepts, so an expansion
-/// admitted at the definition site alone gates the field without gating its
-/// initializer — an error far from its cause. Silently discarding it is the same
-/// failure class as #1588.
 fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
     let syn::Fields::Named(fields) = &item.fields else {
         return quote! {};
@@ -248,7 +212,6 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
     }
 }
 
-/// Generate the Processor struct from schema.
 fn generate_processor_struct_from_schema(
     schema: &ProcessorSchema,
     config_field_name: &Option<Ident>,
@@ -259,11 +222,6 @@ fn generate_processor_struct_from_schema(
         quote! { #member_visibility #name: Config, }
     });
 
-    // Generate iceoryx2 port-handle fields if ports are defined. The
-    // processor's `outputs` / `inputs` fields are the layout-stable
-    // `OutputWriter` / `InputMailboxes` handles; the engine patches
-    // them up via `GeneratedProcessor::set_iceoryx2_resources` after
-    // `from_config` returns.
     let ipc_input_field = if !schema.inputs.is_empty() {
         quote! { #member_visibility inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
     } else {
@@ -317,7 +275,6 @@ fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> To
     }
 }
 
-/// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
     member_visibility: &TokenStream,
@@ -415,9 +372,6 @@ fn generate_processor_impl_from_schema(
 
     quote! {
         impl Processor {
-            /// The authored type's name — what an instance's display name
-            /// defaults to. Not the processor's identity: use
-            /// [`Processor::processor_class_import_path`] for that.
             #member_visibility const NAME: &'static str = #processor_class_short_name;
 
             /// This node type's identity: its class in `tatolab.stream` for a
@@ -428,8 +382,6 @@ fn generate_processor_impl_from_schema(
                 #node_type_minted
             }
 
-            /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
-            /// for adding this processor to a runtime.
             #member_visibility fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
                 __streamlib_sdk::processors::ProcessorSpec::new(
                     Self::processor_class_import_path(),
@@ -438,7 +390,6 @@ fn generate_processor_impl_from_schema(
                 )
             }
 
-            /// Returns the execution mode for this processor.
             #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
                 #execution_variant
             }
@@ -520,13 +471,6 @@ fn generate_from_config_from_schema(
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    // The macro emits empty handles; the host's
-    // `ProcessorInstance::install_iceoryx2_resources` patches in real
-    // handles via `GeneratedProcessor::set_iceoryx2_resources`
-    // immediately after `from_config` returns. Per-port delivery
-    // resolution (drain order + ring depth) is owned entirely by the
-    // host wire path, which reads the destination input port's declared
-    // `delivery_profile` at wire time — the macro registers no ports here.
     let ipc_input_init = if !schema.inputs.is_empty() {
         quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes::empty(), }
     } else {
@@ -593,11 +537,6 @@ impl<'parsed> ProcessorDeclaredMetaAndPortDescriptions<'parsed> {
     }
 }
 
-/// Generate descriptor method from schema.
-///
-/// `config_type` is the processor's `Config` type — the declared `config =`
-/// path, or `EmptyConfig` where none was declared. Its JSON Schema is what the
-/// descriptor carries.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
     declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
@@ -675,9 +614,6 @@ fn generate_descriptor_from_schema(
         )
     };
 
-    // Declarative scheduling intent. Absent → `Normal` priority. The OS
-    // thread name is derived by the compiler from the processor type + node
-    // id at spawn time, not authored.
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
         quote! {

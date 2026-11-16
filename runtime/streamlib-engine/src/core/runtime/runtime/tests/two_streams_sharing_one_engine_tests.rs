@@ -77,10 +77,6 @@ impl crate::core::ContinuousProcessor for TickCountingInTheSecondStream::Process
     }
 }
 
-/// Two started streams hold the engine's one Vulkan device, each one's
-/// processor thread logs only to its own stream's file, and one's
-/// shutdown leaves the other started and processing, its graph changes
-/// still committing on its own compiler.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1"

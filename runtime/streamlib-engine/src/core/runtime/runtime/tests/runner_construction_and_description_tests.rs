@@ -57,13 +57,6 @@ fn test_runtime_creation() {
     // Runtime creates successfully
 }
 
-/// `Runner::new()` must not walk any compile-time-linked registration
-/// source: the engine substrate ships empty.
-///
-/// `PROCESSOR_REGISTRY` is a process-global `LazyLock` and earlier
-/// tests in the same binary may have populated it, so the
-/// assertion is over the *delta* `Runner::new()` introduces, not
-/// the absolute size.
 #[test]
 #[serial]
 fn runner_new_registers_zero_processors() {
@@ -176,9 +169,6 @@ fn test_new_inside_tokio_uses_external_handle() {
     ));
 }
 
-/// Fail-without-fix: the request wrote the configuration onto the node
-/// before the processor was asked, so one it refused at commit stayed in
-/// `graph` as though it had been taken.
 #[test]
 #[serial]
 fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {

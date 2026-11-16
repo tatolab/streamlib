@@ -90,34 +90,18 @@ impl StoreOfOneNodeOpenedOnFirstUse {
 
 #[derive(Clone)]
 pub struct RuntimeContext {
-    /// Base GPU context. Crate-private so processor code can only reach GPU
-    /// operations through the capability-typed wrappers
-    /// ([`RuntimeContextFullAccess`] / [`RuntimeContextLimitedAccess`]).
-    /// Runtime-internal code (shutdown, diagnostics) still uses this field
-    /// directly for operations not mirrored on the capability types.
     pub(crate) gpu: GpuContext,
     /// The clock this context's stream runs on; `now_ns` is stream time.
     pub stream_clock: Arc<StreamClock>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
-    /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
-    /// The one-off acquisitions this processor holds, counted per shape
-    /// (None for the shared/global context, which counts none).
     one_off_acquisitions_of_the_node: Option<Arc<OneOffAcquisitionsCountedForOneNativeNode>>,
-    /// The node's name — the one string `stream_builder.add`'s `NodeReference` and the
-    /// control plane's `add_node` report, `graph` renders and the log prefix
-    /// carries — so a processor that has to name itself to the outside world
-    /// names itself the way every other surface does. `None` for the
-    /// shared/global context.
     processor_display_name: Option<String>,
     /// The placed node's UUID, the key its store is scoped to (None for the shared/global
     /// context).
     node_uuid: Option<uuid::Uuid>,
-    /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
-    /// The processor's state, which a node reports itself not ready on (None
-    /// for the shared/global context).
     processor_state: Option<Arc<crate::core::graph::ObservableProcessorState>>,
     /// Runtime operations interface for graph mutations.
     runtime_ops: Arc<dyn RuntimeOperations>,
@@ -197,10 +181,6 @@ impl RuntimeContext {
         &self.shared_native_services
     }
 
-    /// Current platform name.
-    ///
-    /// Returns "macos", "linux", or "windows".
-    /// Use this to branch on platform-specific behavior in processors.
     pub fn platform(&self) -> &'static str {
         #[cfg(target_os = "macos")]
         {
@@ -331,7 +311,6 @@ impl RuntimeContext {
         &self.surface_share_mach_service_rendezvous
     }
 
-    /// Get the processor's unique identifier (None for shared/global context).
     pub fn processor_id(&self) -> Option<&ProcessorUniqueId> {
         self.processor_id.as_ref()
     }
@@ -342,18 +321,10 @@ impl RuntimeContext {
         self.processor_display_name.as_deref()
     }
 
-    /// Access runtime operations for graph mutations.
-    ///
-    /// Returns the runtime operations interface, allowing processors to add/remove
-    /// processors and connections dynamically.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         Arc::clone(&self.runtime_ops)
     }
 
-    /// Get the shared tokio runtime handle.
-    ///
-    /// Use this to spawn async tasks without creating your own runtime.
-    /// The handle is shared across all processors.
     pub fn tokio_handle(&self) -> &tokio::runtime::Handle {
         &self.tokio_handle
     }
@@ -372,7 +343,6 @@ impl RuntimeContext {
         &self.audio_clock
     }
 
-    /// Create a processor-specific context with a processor ID.
     pub fn with_processor_id(&self, processor_id: ProcessorUniqueId) -> Self {
         Self {
             gpu: self.gpu.clone(),
@@ -400,7 +370,6 @@ impl RuntimeContext {
         }
     }
 
-    /// Create a processor-specific context with a pause gate.
     pub fn with_pause_gate(&self, pause_gate: Arc<AtomicBool>) -> Self {
         Self {
             gpu: self.gpu.clone(),
@@ -428,8 +397,6 @@ impl RuntimeContext {
         }
     }
 
-    /// Create a processor-specific context carrying the processor's
-    /// node name.
     pub fn with_processor_display_name(&self, processor_display_name: String) -> Self {
         Self {
             processor_display_name: Some(processor_display_name),
@@ -437,8 +404,6 @@ impl RuntimeContext {
         }
     }
 
-    /// Create a processor-specific context carrying the processor's state, which
-    /// the node reports itself not ready on.
     pub(crate) fn with_processor_state(
         &self,
         processor_state: Arc<crate::core::graph::ObservableProcessorState>,
@@ -449,15 +414,12 @@ impl RuntimeContext {
         }
     }
 
-    /// Report the node running but not ready, for `reason`, or ready again for
-    /// `None`; a context serving no processor reports nothing.
     pub(crate) fn report_why_the_node_is_not_ready(&self, not_ready_because: Option<String>) {
         if let Some(processor_state) = &self.processor_state {
             processor_state.note_why_the_node_is_not_ready(not_ready_because);
         }
     }
 
-    /// Create a processor-specific context carrying the placed node's UUID.
     pub(crate) fn with_node_uuid(&self, node_uuid: uuid::Uuid) -> Self {
         Self {
             node_uuid: Some(node_uuid),
@@ -479,10 +441,6 @@ impl RuntimeContext {
         }
     }
 
-    /// Check if this processor is paused.
-    ///
-    /// For Manual mode processors, call this in your processing loop/callback
-    /// to respect pause/resume requests. Returns `false` if no pause gate is set.
     pub fn is_paused(&self) -> bool {
         self.pause_gate
             .as_ref()
@@ -497,28 +455,6 @@ impl RuntimeContext {
     }
 }
 
-// =============================================================================
-// Capability-typed RuntimeContext views
-// =============================================================================
-//
-// [`RuntimeContextFullAccess`] is handed to privileged lifecycle methods
-// (`setup` / `teardown` / Manual-mode `start` / `stop`). It exposes
-// `gpu_full_access()` returning a borrowed [`GpuContextFullAccess`].
-//
-// [`RuntimeContextLimitedAccess`] is handed to the hot-path methods
-// (`process` / `on_pause` / `on_resume`). It exposes `gpu_limited_access()`
-// returning a borrowed [`GpuContextLimitedAccess`].
-//
-// Both types are deliberately borrow-scoped (`<'a>`) and **not** `Clone`.
-// Processors receive them via `&RuntimeContextFullAccess<'_>` etc. — the
-// borrow cannot be stashed past the call (borrow checker), and the inner
-// `GpuContextFullAccess` is itself `!Clone`. This turns "right ctx, right
-// phase" from a convention into a compile-time guarantee.
-//
-// In commit 2 of #322 the types exist but nothing dispatches to them yet —
-// the wiring lands in the next commit (attribute macro codegen + runtime
-// plumbing). They are already exported so compile-fail doc tests can
-// assert the enforcement invariants.
 
 // Host-internal compiler ops that still need direct access to the
 // underlying `RuntimeContext` (e.g. `surface_socket_path`,
@@ -580,18 +516,6 @@ pub struct RuntimeContextLimitedAccess<'a> {
 }
 
 impl<'a> RuntimeContextFullAccess<'a> {
-    /// Construct a full-access view over `base`. Crate-internal: only the
-    /// runtime's lifecycle dispatch (attribute macro + `spawn_processor_op`)
-    /// is permitted to create these.
-    ///
-    /// Requires a [`FullAccessGrant`](super::isolation::FullAccessGrant) — the
-    /// by-construction capability moat. A grant is producible only from an
-    /// [`IsolationTier::TrustedInstalled`](super::isolation::IsolationTier),
-    /// so an untrusted processor's lifecycle dispatch (a `@session`
-    /// submitted-source module once the operator opts into sandboxing) has no
-    /// token to pass and cannot mint an in-process FullAccess context. The token
-    /// is consumed (not stored): it proves authorization at
-    /// the minting seam and carries no runtime state.
     pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
@@ -624,8 +548,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_id().to_string()
     }
 
-    /// Processor unique id as an owned [`String`], or `None` for the
-    /// shared/global context.
     pub fn processor_id(&self) -> Option<String> {
         self.host_base().processor_id().map(|id| id.to_string())
     }
@@ -636,15 +558,11 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().processor_display_name().map(str::to_owned)
     }
 
-    /// Whether a capture device this processor opens may ask the user for
-    /// access nobody has answered yet: a stream someone loaded or started may,
-    /// one the runtime re-loaded by itself may not.
     pub fn capture_device_access_prompting(&self) -> super::CaptureDeviceAccessPrompting {
         self.host_base()
             .this_streams_capture_device_access_prompting()
     }
 
-    /// Whether this processor is currently paused.
     pub fn is_paused(&self) -> bool {
         self.host_base().is_paused()
     }
@@ -676,9 +594,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().audio_clock()
     }
 
-    /// The operations on the stream this processor runs in
-    /// (`ctx.runtime().add_processor_async(...).await`). The `Arc` is
-    /// stash-safe past the stream's stop.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         self.host_base().runtime()
     }
@@ -719,12 +634,10 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_directory()
     }
 
-    /// The id of the stream this processor runs in.
     pub fn stream_id(&self) -> &str {
         self.host_base().stream_id()
     }
 
-    /// The project directory of the stream this processor runs in.
     pub fn stream_project_directory(&self) -> &std::path::Path {
         self.host_base().stream_project_directory()
     }
@@ -758,13 +671,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         }
     }
 
-    /// Restricted GPU capability — pool-backed, non-allocating ops only.
-    ///
-    /// Call [`GpuContextLimitedAccess::escalate`] on the returned handle to
-    /// temporarily obtain a [`GpuContextFullAccess`] for mid-run
-    /// reconfiguration (a new video session, etc.).
-    /// Escalation serializes against processor setup via the shared
-    /// setup mutex.
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
     }
@@ -816,12 +722,10 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
 
     // ------------ Engine-internal host accessors ------------
 
-    /// The id of the stream this processor runs in.
     pub fn stream_id(&self) -> &str {
         self.host_base().stream_id()
     }
 
-    /// The project directory of the stream this processor runs in.
     pub fn stream_project_directory(&self) -> &std::path::Path {
         self.host_base().stream_project_directory()
     }
@@ -856,9 +760,6 @@ unsafe impl<'a> Sync for RuntimeContextFullAccess<'a> {}
 unsafe impl<'a> Send for RuntimeContextLimitedAccess<'a> {}
 unsafe impl<'a> Sync for RuntimeContextLimitedAccess<'a> {}
 
-// The capability views are `!Clone`: stashing one in a processor field would
-// need a clone of the borrowed handle out of the `&ctx` parameter. Each line
-// below stops compiling, as an ambiguous impl, if a view gains `Clone`.
 mod _assert_capability_views_are_not_clone {
     use super::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 

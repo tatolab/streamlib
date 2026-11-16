@@ -1,13 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""The lifecycle a helper process runs its processor through: setup, ready,
-process, pause and resume, the reactive wait, pacing and configuration.
-
-Everything here drives the helper's own halves against a stand-in parent, so
-what the loop does is asserted directly rather than inferred from a running
-graph.
-"""
 
 import json
 import os
@@ -378,13 +371,6 @@ def test_a_continuous_node_not_ready_is_reported_once_and_still_processed_until_
 def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_cleanly(
     stand_in_parent,
 ):
-    """The first raise of a run sends the parent what `process()` raised, the
-    raises after it send nothing, and the first clean call sends `null`; the
-    processor keeps being driven throughout.
-
-    Fail-without-fix: the raise is only logged, no `set_process_raising_because`
-    arrives, and the graph shows the node `Running` with nothing amiss.
-    """
     from helper_process_probes import RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES
 
     RAISES_UNTIL_TOLD_NOT_TO_PROBE_RAISES[0] = True
@@ -587,14 +573,6 @@ def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_pa
 
 
 def test_an_idle_reactive_helper_answers_a_command_the_moment_it_arrives(stand_in_parent):
-    """A reactive helper parked on its listener wakes for a parent's command as
-    well as for a notify, so an idle processor hears `stop` or `on_pause` at
-    once rather than when its wait next times out.
-
-    Fail-without-fix: wait on the listener alone with the old 100 ms bound and
-    each command sent to the parked loop waits out most of that bound, putting
-    the median round trip near 100 ms.
-    """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -739,8 +717,6 @@ def test_an_unknown_lifecycle_command_is_survived(stand_in_parent):
     assert not lifecycle_thread.is_alive()
 
 
-# The interval the engine's scheduling loop runs a continuous processor
-# declaring none at.
 THE_ENGINES_CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
 
 
@@ -804,8 +780,6 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
 def test_a_paused_continuous_processor_is_not_called_until_it_resumes(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """The native runner skips a paused continuous processor's `process()`;
-    the helper's continuous loop does the same."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -843,9 +817,6 @@ def test_a_paused_continuous_processor_is_not_called_until_it_resumes(
 def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """The native runner calls a continuous processor at once and then paces
-    it, so a Python source's first bag does not trail a Rust one's by an
-    interval."""
     run_sent_ns = run_the_pacing_probe(
         stand_in_parent, interval_ms=1000, running_seconds=0.6
     )
@@ -861,12 +832,6 @@ def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
 def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """An interval of zero runs as often as the engine's floor allows and no
-    more, so a processor with nothing to do does not take a whole core.
-
-    Fail-without-fix: the zero-interval loop calls `process()` back to back
-    with no wait at all, hundreds of thousands of times a second.
-    """
     run_the_pacing_probe(stand_in_parent, interval_ms=0, running_seconds=0.5)
 
     process_calls = len(when_the_pacing_probe_processed_ns)
@@ -922,12 +887,6 @@ def test_a_configuration_the_processor_takes_is_answered_ok(stand_in_parent):
 def test_a_configuration_the_processor_does_not_take_is_refused_naming_the_cause(
     stand_in_parent, probe_name, the_cause_named
 ):
-    """The parent reports a refused update to its caller and keeps the graph's
-    previous configuration, which it can only do if the refusal reaches it.
-
-    Fail-without-fix: the helper logs the refusal and answers `ok`, so the
-    parent reports a configuration the processor never took.
-    """
     answer = reconfigure_a_set_up_probe(stand_in_parent, probe_name, {"gain": 3})
     assert answer["rpc"] == "error"
     assert the_cause_named in answer["error"]

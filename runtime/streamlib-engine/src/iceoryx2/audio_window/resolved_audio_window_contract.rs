@@ -1,15 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The values the read-side stage is driven by, and how a declaration becomes
-//! them.
-//!
-//! [`AudioWindowContract`] is what an author writes; this is what the stage
-//! runs on. The two differ in exactly one way: the declaration may carry the
-//! `match_device` sentinel, and the stage cannot — a sentinel is settled from
-//! the format of a device stream the declaring processor opened, and a port
-//! left holding one when its processor finished `setup()` is a wiring error,
-//! not a default.
 
 use streamlib_processor_schema::ProcessorClassImportPath;
 
@@ -97,12 +88,6 @@ pub(crate) const WINDOWED_PORT_SUBSCRIBER_RING_DEPTH: usize = 64;
 const _: () = assert!(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH >= DeliveryProfile::ORDERED_DEPTH);
 
 impl ResolvedAudioWindowContract {
-    /// Read the values a declaration states, refusing one the stage could not
-    /// honour.
-    ///
-    /// The refusal is returned bare so each caller frames it in its own terms:
-    /// the engine names the processor and the port, a helper child names the
-    /// port the parent wired it for.
     pub fn from_declared_values(
         values: &AudioWindowContractDeclaredValues,
     ) -> std::result::Result<Self, String> {
@@ -129,12 +114,6 @@ impl ResolvedAudioWindowContract {
         })
     }
 
-    /// Read the format a processor's own device stream opened at as the
-    /// contract its port declaring `match_device` asked for.
-    ///
-    /// The refusal is returned bare for the same reason
-    /// [`Self::from_declared_values`]'s is: only the caller knows which
-    /// processor and which port to name.
     pub(crate) fn from_a_device_stream_format(
         matching: &AudioWindowContractMatchingADeviceStream,
     ) -> std::result::Result<Self, String> {
@@ -150,10 +129,6 @@ impl ResolvedAudioWindowContract {
         })
     }
 
-    /// Read a declaration the author wrote, refusing one the stage could not
-    /// honour. A sentinel is not a declaration the stage can run on, so it
-    /// comes back as [`AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream`]
-    /// rather than as values.
     pub(crate) fn read_declaration(
         contract: &AudioWindowContract,
         processor_type: &ProcessorClassImportPath,
@@ -267,36 +242,13 @@ fn audio_window_declared_dtype_of(sample_type: ChannelsBlockSampleType) -> &'sta
     }
 }
 
-/// What one input port's author wrote, as the wiring path reads it.
-///
-/// The declaration, never the runtime state — its sibling
-/// [`InstalledInputPortAudioWindowing`] is what a wired port actually does, and
-/// the two are deliberately spelled apart. This one has no "not windowed" arm
-/// at all: a port with no contract never produces one of these.
-///
-/// The sentinel is the reason this is not just `Option<ResolvedAudioWindowContract>`:
-/// a port declaring it windows, but its values are not knowable until the
-/// declaring processor opens its device in `setup()` — which the compiler runs
-/// *after* it has wired every link. So the wiring path installs a port that
-/// windows nothing yet and hands a reader nothing, and `setup()` completes it.
-///
-/// [`InstalledInputPortAudioWindowing`]: crate::iceoryx2::InputMailboxesInner
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AudioWindowDeclarationOfAnInputPort {
     /// The author wrote the values, and these are they.
     StatedOutright(ResolvedAudioWindowContract),
-    /// The author wrote `audio_window = match_device`, so the five values come
-    /// from the device stream the declaring processor opens.
     MatchesItsProcessorsDeviceStream,
 }
 
-/// Refuse a port still holding an unsettled `match_device` sentinel, naming
-/// where it would have been settled.
-///
-/// One spelling for both places that can raise it: a helper-placed destination,
-/// which can never settle one (its wiring envelope carries resolved values
-/// only), refused at wire time; and an app-process processor whose `setup()`
-/// returned without settling it, refused there.
 pub(crate) fn refuse_an_unsettled_match_device_sentinel(
     processor_type: &ProcessorClassImportPath,
     port_name: &str,
@@ -311,19 +263,6 @@ pub(crate) fn refuse_an_unsettled_match_device_sentinel(
     ))
 }
 
-/// Read the window declaration a destination input port carries, if it carries
-/// one.
-///
-/// The single window-contract declaration primitive, beside
-/// [`delivery_profile_for_input_port`]. `Ok(None)` is a port with no contract,
-/// which is unchanged in every respect.
-///
-/// Falls back to `None` when the destination processor type isn't registered
-/// or the named port doesn't exist — defensive, and the same fallback the
-/// delivery-profile resolution takes: a Wired link always resolves both, and
-/// the wiring path itself reports a missing processor.
-///
-/// [`delivery_profile_for_input_port`]: crate::iceoryx2::delivery_profile_for_input_port
 pub(crate) fn audio_windowing_declared_by_input_port(
     node_types: &NodeTypesOneStreamResolves,
     processor_type: &ProcessorClassImportPath,
@@ -382,9 +321,6 @@ mod tests {
         assert_eq!(resolved.hop, 512);
     }
 
-    /// The sentinel states no values, so reading the declaration cannot produce
-    /// any: it says the port is waiting on the device stream its processor has
-    /// not opened yet. The refusal belongs where it can know nothing ever will.
     #[test]
     fn the_sentinel_reads_as_a_port_awaiting_its_device_rather_than_as_five_values() {
         let windowing = ResolvedAudioWindowContract::read_declaration(

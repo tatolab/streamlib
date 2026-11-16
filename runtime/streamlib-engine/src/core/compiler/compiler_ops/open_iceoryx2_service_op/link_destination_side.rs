@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The destination side of a link: reading its destination, opening its subscriber and notifier, releasing it, and wiring the destination processor.
 
 use std::sync::Arc;
 
@@ -48,15 +47,6 @@ pub(crate) struct DestinationOfALinkAsItsWiringReadsIt {
         RoomForAWindowedReaderTheSourcesGraphCannotSee,
 }
 
-/// Read what wiring link `link_id` into `to_port` needs of its destination,
-/// off the destination's graph, refusing a second inbound link into a port
-/// that windows and a destination past its notifier cap. The port's delivery
-/// profile is the one `delivery_declared_by` declares: `to_port` itself, or the
-/// function node input a reader reads the link for.
-///
-/// A `match_device` sentinel is not refused here: the compiler wires every
-/// link before it releases any processor into `setup()`, which is where the
-/// only format that can settle one comes from.
 pub(crate) fn read_the_destination_of_a_link(
     dest_graph: &mut Graph,
     to_port: &InputLinkPortRef,
@@ -168,20 +158,6 @@ pub(crate) fn open_the_destination_side_of_a_link(
     Ok(wire_reply_awaited_from_the_destination)
 }
 
-/// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
-///
-/// Stamping [`LinkState::Disconnected`] is not enough: the source-side notifier
-/// and dest-side subscriber (plus listener, orphaned mailbox, channel publisher)
-/// must be dropped, and the services the link held released, else a reconnect
-/// re-appends past the notify service's create-time `max_notifiers` cap
-/// (`ExceedsMaxSupportedNotifiers`).
-///
-/// An endpoint whose ports live out of process owns them itself, so its half is
-/// reclaimed through its wiring envelope — which forgets the entry a reconnect
-/// would otherwise be set up with twice and asks a running far side to drop its
-/// port — without taking that processor's lock.
-///
-/// [`LinkState::Disconnected`]: crate::core::graph::LinkState::Disconnected
 #[tracing::instrument(
     name = "compiler.close_iceoryx2_service",
     skip(graph),
@@ -257,9 +233,6 @@ pub(super) fn wire_rust_dest(
             Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
                 input_inner.add_windowed_port(dest_port, drain_order, contract)
             }
-            // A sentinel this processor already settled — a link wired after
-            // its `setup()` ran — windows from the settled values rather than
-            // waiting for a `setup()` that has been and gone.
             Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
                 match input_inner
                     .device_matched_audio_window_contracts()
@@ -330,15 +303,6 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
     ));
 }
 
-/// Record this link's dest-side wiring on a processor whose transport lives out
-/// of process, so it opens its own channel subscriber (bound to its local input
-/// port) from the envelope.
-///
-/// The envelope's `inbound_link_name` is the channel's own name: a helper
-/// knows each link into it by the channel that carries it.
-///
-/// Hands back the cell this end's answer will land in, on the same terms as
-/// [`wire_subprocess_source`](super::link_source_side::wire_subprocess_source).
 pub(super) fn wire_subprocess_dest(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,
@@ -375,13 +339,6 @@ pub(super) fn wire_subprocess_dest(
         "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
-    // The window contract rides the envelope beside `read_mode`, or the child's
-    // own stage windows nothing. The values go over resolved, so the child
-    // reads one shape and never a sentinel it could not settle — and a helper
-    // can never settle one: the format comes from a device stream a processor
-    // opens in the app process, and nothing crosses to say so. A sentinel on a
-    // helper-placed port is therefore refused here, where the destination's
-    // placement is known.
     let into_a_windowed_port = audio_windowing.is_some();
     match audio_windowing {
         None => {}

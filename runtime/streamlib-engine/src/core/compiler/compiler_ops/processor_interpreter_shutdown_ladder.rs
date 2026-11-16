@@ -1,22 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The bounded ladder one helper process is stopped on.
-//!
-//! Shutdown always ends, and a cooperative processor's `teardown()` always
-//! runs. The rungs are `stop` and `teardown` sent together, a one-second
-//! interrupt for a callback that has not returned, five seconds for
-//! `teardown()`, the child's own window to leave, then its whole process group
-//! terminated, killed, and reaped — or the child abandoned and named.
-//!
-//! The ladder owns the child rather than borrowing it, and nothing here reaps
-//! it until the last signal has gone out: reaping a group leader frees its pid,
-//! and the process group id equals that pid, so a group signalled after the
-//! reap could land on whoever the OS handed it to next. Every wait is bounded.
-//!
-//! §Language SDKs: once a second interrupt forces the shutdown, the ladder
-//! skips whatever cooperative rung it is on — and the child's own window to
-//! leave — straight to terminating the helper's process group.
 
 use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
@@ -25,26 +9,11 @@ use super::subprocess_bridge::HelperProcessShutdownCommand;
 use crate::core::child_process_lifetime::a_child_process_has_exited_without_being_reaped;
 use crate::core::runtime::ShutdownEscalationOfOneStream;
 
-/// How long a Python callback has to return before the ladder interrupts it.
-///
-/// Engine-chosen and not authorable: the plan makes every budget here the
-/// engine's, so none is reachable from a processor's configuration.
 pub const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
 
 /// How long `teardown()` has once the helper has been asked for it.
 pub const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
-/// How long the child has to leave on its own once its hooks have returned.
-///
-/// Spent before any signal: a helper that answered `done` is already on its way
-/// out, and terminating it mid-finalization would cut short the teardown the
-/// ladder just waited for — and leave the iceoryx2 node its engine half holds
-/// registered as a dead one.
-///
-/// Measured `done`-to-exit on a real helper: 15.3 ms for a bare processor and
-/// 15.3–31.4 ms for one holding a 16 MiB array, over three runs each. The
-/// budget is set well above that rather than at it, because what it covers is
-/// an interpreter finalizing whatever a processor imported.
 pub const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the helper's process group has to leave on `SIGTERM` before it is

@@ -135,7 +135,6 @@ pub struct RuntimeLogEvent {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pipeline_id: Option<String>,
 
-    /// Processor identifier. `None` for events outside a processor.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub processor_id: Option<String>,
 

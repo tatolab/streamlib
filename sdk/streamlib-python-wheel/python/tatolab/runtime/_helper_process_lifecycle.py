@@ -1,7 +1,6 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 
-"""Driving one hosted processor from the commands its parent sends."""
 
 from __future__ import annotations
 
@@ -75,7 +74,6 @@ RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
 
 
 class HelperProcessLifecycle:
-    """Drives one hosted processor from the commands its parent sends."""
 
     def __init__(
         self,
@@ -211,9 +209,6 @@ class HelperProcessLifecycle:
         log.warn(message, **fields)
 
     def _tear_down_after_the_parent_went_away(self) -> None:
-        """Run the `stop` and `teardown()` a parent that is gone can no longer
-        ask for, so a processor still releases what it holds — unless its
-        `setup()` raised on its own, which the ladder never tears down."""
         if self._hosted is None or self._torn_down or self._setup_raised_on_its_own:
             return
         self._stop()
@@ -282,9 +277,6 @@ class HelperProcessLifecycle:
             )
             self._config_as_last_applied = dict(configuration or {})
             self._config_its_node_was_last_handed = dict(configuration or {})
-            # Declared ahead of any wiring: a processor added to a running
-            # graph has ports before it has links, and reads and writes on
-            # them must not raise in between.
             self._link_data_access.declare_ports(
                 [
                     port["name"]
@@ -405,11 +397,6 @@ class HelperProcessLifecycle:
             log.warn("the parent named an unknown execution mode", mode=execution_mode)
 
     def _start_failing_the_node_when_it_raises(self) -> None:
-        """Call a manual processor's `start()`; one that raises fails its node,
-        with what it raised as the reason the graph shows.
-
-        `run` is unanswered, so the failure reaches the parent as the node
-        failing itself rather than as a reply."""
         assert self._hosted is not None
         try:
             self._hosted.call_hook_letting_failure_propagate(
@@ -443,8 +430,6 @@ class HelperProcessLifecycle:
                 )
 
     def _run_the_scheduling_loop(self, execution_mode: str, interval_ms: int) -> None:
-        """Hand the processor to the engine's scheduling loop for
-        `execution_mode` until a lifecycle command stops it."""
         board_service_name = self._board_service_name_of_a_stream_clock_that_may_step
         if (
             execution_mode == "continuous"
@@ -521,10 +506,6 @@ class HelperProcessLifecycle:
         self._link_data_access.declare_ports(list(exposed_config_fields), [])
 
     def _take_each_new_value_a_link_gives_an_exposed_config_field(self) -> None:
-        """Hand the processor each new value a link gives a config field it exposes, as a live config update.
-
-        A value the update refuses is logged once and the config it last took is kept.
-        """
         assert self._hosted is not None
         changed_values_by_field: "dict[str, Any]" = {}
         for field in self._config_fields_its_node_exposes_as_inputs:
@@ -553,10 +534,6 @@ class HelperProcessLifecycle:
         self._config_as_last_applied = configuration
 
     def _hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(self, field: str) -> None:
-        """Hand the processor the config's own value of `field`, in place of the last one its link gave.
-
-        A field its node's config does not set goes back to its declared default.
-        """
         if self._hosted is None or field not in self._config_fields_its_node_exposes_as_inputs:
             return
         configuration = {
@@ -580,8 +557,6 @@ class HelperProcessLifecycle:
         self._config_as_last_applied = configuration
 
     def take_the_lifecycle_commands_that_woke_the_scheduling_loop(self) -> "tuple[bool, bool]":
-        """Dispatch every lifecycle command waiting, answering whether the
-        processor still runs and whether it is paused."""
         self._bridge.clear_lifecycle_command_arrivals()
         self._drain_commands_arriving_mid_run()
         return (self._running and not self._torn_down, self._paused)
@@ -671,9 +646,6 @@ class HelperProcessLifecycle:
         try:
             unwire_link_data_access(self._link_data_access, command)
         except Exception as unwire_failure:
-            # The link is going away either way, and this processor's own
-            # callbacks are unaffected — the cost of failing is a port that
-            # stays counted against its channel until this process exits.
             log.error(
                 "this processor could not release a disconnected link's port",
                 link_id=command.get("link_id"),
@@ -689,9 +661,6 @@ class HelperProcessLifecycle:
         link = command.get("link") or {}
         link_id = link.get("link_id")
         if not self._set_up_succeeded:
-            # The engine can hand a link over while `setup` is still running;
-            # it reaches this loop only once `setup` has answered, and a
-            # processor whose setup failed must not report a port open.
             self._answer_the_parents_wire_link(
                 link_id, "this processor's setup did not succeed, so it opens no port"
             )
@@ -771,16 +740,6 @@ class HelperProcessLifecycle:
             )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
-        """Tell the parent whether this processor's port for one link is open.
-
-        Wire contract: the two rpc tags are link-scoped rather than lifecycle
-        ones, so the parent's bridge routes an answer to the link it names
-        instead of reading it as the reply to whatever command it sends next.
-        Only this answer makes the engine report the link `wired`; a refusal
-        carries its reason into `graph`, where the caller of a live `connect`
-        reads it. A frame naming no link is answered to nothing, so there is
-        nothing to send.
-        """
         if link_id is None:
             log.warn("the parent asked to wire a link it did not name")
             return

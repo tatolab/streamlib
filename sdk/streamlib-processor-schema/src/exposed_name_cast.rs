@@ -1,11 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The cast every exposed name — machine, stream, node, port — goes through.
-//!
-//! The engine and `#[processor]` both cast through this one copy. The wheel's
-//! pure-Python twin (`tatolab.stream._exposed_name_cast`) casts the same way, and both
-//! are held to `runtime/streamlib-engine/tests/fixtures/exposed_name_cast_cases.json`.
 
 use std::borrow::Cow;
 

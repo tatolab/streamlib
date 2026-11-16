@@ -1,11 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! ProcessorState enum and ECS component.
 
 use serde::{Deserialize, Serialize};
 
-/// State of a processor instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ProcessorState {
     /// Waiting to be started (registered but not yet running).
@@ -29,21 +27,10 @@ pub enum ProcessorState {
 }
 
 impl ProcessorState {
-    /// Whether the processor has yet to finish `setup`.
-    ///
-    /// The two states a processor passes through before its thread runs
-    /// `setup`: `Pending` from the moment it is added to the graph, `Idle` once
-    /// the compiler has prepared it. Every later state means setup resolved —
-    /// `Running` if it returned, `Error` if it raised — which is what makes
-    /// this the readiness predicate: for a processor in a helper process,
-    /// `setup` is the call that waits for the child to register and wire its
-    /// ports.
     pub fn is_before_setup_completed(self) -> bool {
         matches!(self, Self::Pending | Self::Idle)
     }
 
-    /// Whether the processor is setting up or runs, paused or not — the states
-    /// in which a node's report of itself not ready is held.
     pub fn holds_a_not_ready_report(self) -> bool {
         matches!(
             self,
@@ -67,5 +54,4 @@ impl std::fmt::Display for ProcessorState {
     }
 }
 
-/// ECS component for processor state (attached to processor entities).
 pub struct ProcessorStateComponent(pub ProcessorState);

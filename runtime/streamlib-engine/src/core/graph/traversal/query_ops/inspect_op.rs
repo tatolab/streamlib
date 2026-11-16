@@ -6,10 +6,6 @@ use crate::core::graph::{
 };
 
 impl<'a> ProcessorTraversal<'a> {
-    /// Calls the provided closure for each processor node in the traversal.
-    ///
-    /// This is useful for side effects (logging, events, etc.) while continuing
-    /// the traversal chain. Similar to [`Iterator::inspect`].
     pub fn inspect<F: FnMut(&ProcessorNode)>(self, mut f: F) -> Self {
         for &idx in &self.ids {
             if let Some(node) = self.graph.node_weight(idx) {
@@ -21,10 +17,6 @@ impl<'a> ProcessorTraversal<'a> {
 }
 
 impl<'a> ProcessorTraversalMut<'a> {
-    /// Calls the provided closure for each processor node in the traversal.
-    ///
-    /// This is useful for side effects (logging, events, etc.) while continuing
-    /// the traversal chain. Similar to [`Iterator::inspect`].
     pub fn inspect<F: FnMut(&ProcessorNode)>(self, mut f: F) -> Self {
         for &idx in &self.ids {
             if let Some(node) = self.graph.node_weight(idx) {

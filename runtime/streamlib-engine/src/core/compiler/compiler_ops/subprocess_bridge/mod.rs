@@ -1,40 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Length-prefixed JSON escalate-IPC bridge shared by the Python and Deno
-//! subprocess host processors.
-//!
-//! Frames travel over a dedicated [`UnixStream`] pair created by
-//! [`EscalateTransport::attach`] before spawn — not over the subprocess's
-//! stdin/stdout. The parent keeps one half of the socketpair and the
-//! child inherits the other via `STREAMLIB_ESCALATE_FD`, freeing fd1/fd2
-//! to be captured as intercepted log pipes by the host.
-//!
-//! Three roles travel over the same socket:
-//! 1. Lifecycle RPC (`setup`, `run`, `stop`, `teardown`, `on_pause`,
-//!    `on_resume`, …) — initiated by the host, the subprocess replies with
-//!    `rpc: "ready" | "stopped" | "ok" | "done" | "error"`.
-//! 2. Escalate-on-behalf (`rpc: "escalate_request"`) — initiated by the
-//!    subprocess, the host replies with `rpc: "escalate_response"`.
-//! 3. Link wiring after setup (`wire_link`, `unwire_link`) — sent by
-//!    [`SubprocessBridgeLinkDelivery`]; the subprocess answers a `wire_link`
-//!    with [`OUT_OF_PROCESS_LINK_WIRED_RPC`] or
-//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`], naming the link it is about, and
-//!    leaves an `unwire_link` unanswered.
-//!
-//! A dedicated reader thread (`br-…`) owns the parent-side read half and only
-//! demultiplexes: a log record is handed to the log pipeline, a link's wire
-//! answer lands on that link's own cell, a lifecycle reply is forwarded to the
-//! main thread over an mpsc channel, and an escalate request that waits on an
-//! answer is queued for the helper's one escalate worker (`br-esc-…`), which
-//! dispatches through [`subprocess_escalate::process_bridge_message`](super::subprocess_escalate::process_bridge_message) in
-//! arrival order. Nothing the reader does waits on GPU work, so one slow
-//! escalate never delays the helper's log records or its lifecycle replies,
-//! and the helper's writes never back up behind it. The third role has its own
-//! tags for the same reason the lifecycle queue is kept clean: an answer routed
-//! there would be read as the reply to whatever command the host sends next.
-//! Every frame the parent writes goes through one writer lock, so no two
-//! threads interleave halves of a length-prefixed frame.
 
 mod subprocess_bridge_link_delivery;
 mod subprocess_bridge_reader_and_escalate_workers;
@@ -181,17 +147,9 @@ impl EscalateTransport {
 /// The lifecycle command that runs a helper's `setup()`.
 pub(crate) const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
-/// A shutdown command the parent sends a helper, paired with the reply tag the
-/// helper answers it with.
-///
-/// The pairing lives beside [`SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS`] and
-/// the protocol this module's doc enumerates, so the two halves of one exchange
-/// cannot drift apart between the spawn host and the processor interpreter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HelperProcessShutdownCommand {
-    /// Leave the execution loop and run the processor's `stop()`.
     Stop,
-    /// Run the processor's `teardown()` and leave.
     Teardown,
 }
 

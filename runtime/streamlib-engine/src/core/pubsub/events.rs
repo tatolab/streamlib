@@ -31,7 +31,6 @@ pub mod topics {
     /// Window events (resize, focus, close)
     pub const WINDOW: &str = "input:window";
 
-    /// Get topic for specific processor
     pub fn processor(processor_id: &str) -> String {
         format!("processor:{}", processor_id)
     }
@@ -144,7 +143,6 @@ impl Event {
         Event::KeyboardMouseOrWindowInput(KeyboardMouseOrWindowInputEvent::WindowEvent { event })
     }
 
-    /// Create a processor event
     pub fn processor(processor_id: impl Into<ProcessorUniqueId>, event: ProcessorEvent) -> Self {
         Event::ProcessorEvent {
             processor_id: processor_id.into(),
@@ -241,21 +239,15 @@ pub enum RuntimeEvent {
         error: String,
     },
 
-    // ===== Runtime Processor Events =====
-    // Emitted by Runtime when user adds/removes processors
-    /// Emitted when runtime will add a processor to the graph
     RuntimeWillAddProcessor {
         processor_id: ProcessorUniqueId,
     },
-    /// Emitted when runtime did add a processor to the graph
     RuntimeDidAddProcessor {
         processor_id: ProcessorUniqueId,
     },
-    /// Emitted when runtime will remove a processor from the graph
     RuntimeWillRemoveProcessor {
         processor_id: ProcessorUniqueId,
     },
-    /// Emitted when runtime did remove a processor from the graph
     RuntimeDidRemoveProcessor {
         processor_id: ProcessorUniqueId,
     },
@@ -286,12 +278,9 @@ pub enum RuntimeEvent {
         to_port: String,
     },
 
-    // ===== Processor State Events =====
-    /// Emitted when a processor's configuration is updated
     ProcessorConfigDidChange {
         processor_id: ProcessorUniqueId,
     },
-    /// Emitted when a processor's state changes (started, stopped, paused, etc.)
     ProcessorStateDidChange {
         processor_id: ProcessorUniqueId,
         old_state: ProcessorState,
@@ -308,21 +297,17 @@ pub enum RuntimeEvent {
     CompilerDidFail {
         error: String,
     },
-    /// Emitted when compiler will create a processor instance
     CompilerWillCreateProcessor {
         processor_id: ProcessorUniqueId,
         processor_type: ProcessorClassImportPath,
     },
-    /// Emitted when compiler did create a processor instance
     CompilerDidCreateProcessor {
         processor_id: ProcessorUniqueId,
         processor_type: ProcessorClassImportPath,
     },
-    /// Emitted when compiler will destroy a processor instance
     CompilerWillDestroyProcessor {
         processor_id: ProcessorUniqueId,
     },
-    /// Emitted when compiler did destroy a processor instance
     CompilerDidDestroyProcessor {
         processor_id: ProcessorUniqueId,
     },
@@ -358,8 +343,6 @@ pub enum RuntimeEvent {
     /// Emitted after graph changed
     GraphDidChange,
 
-    // ===== Factory/Registration Events =====
-    /// Emitted when a new processor type is registered with the factory
     RuntimeDidRegisterProcessorType {
         processor_type: ProcessorClassImportPath,
     },
@@ -436,14 +419,12 @@ pub enum ProcessorEvent {
         value: serde_json::Value,
     },
 
-    // ===== Custom Processor Commands =====
     Custom {
         command: String,
         args: serde_json::Value,
     },
 }
 
-// Re-export ProcessorState from the canonical location
 pub(super) use crate::core::processors::ProcessorState;
 
 // ===== Input Types =====
@@ -645,7 +626,6 @@ mod tests {
         let window = Event::window(WindowEventType::Closed);
         assert_eq!(window.topic(), topics::WINDOW);
 
-        // Processor → processor:{id}
         let proc = Event::processor("audio-mixer", ProcessorEvent::Started);
         assert_eq!(proc.topic(), topics::processor("audio-mixer"));
 

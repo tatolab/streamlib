@@ -1,18 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Processor scheduling logic for the compiler.
-//!
-//! Resolves a [`SchedulingStrategy`] for a processor by reading the
-//! [`ProcessorScheduling`] block off the registered [`ProcessorDescriptor`].
-//! The block is declared in the `#[processor]` attribute; processors that
-//! don't declare one fall through to [`ThreadPriority::Normal`].
 
 use crate::core::execution::ThreadPriority;
 use crate::core::graph::ProcessorNode;
 use crate::core::processors::NodeTypesOneStreamResolves;
 
-/// How a processor should be scheduled at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchedulingStrategy {
     /// Dedicated OS thread with configurable priority.
@@ -30,10 +23,6 @@ impl SchedulingStrategy {
     }
 }
 
-/// Resolve the [`SchedulingStrategy`] for a processor. Reads the
-/// `priority` off its registered [`ProcessorDescriptor`] (defaults to
-/// [`ThreadPriority::Normal`] when the processor isn't registered or has
-/// no `scheduling:` block declared).
 pub(crate) fn scheduling_strategy_for_processor(
     node_types: &NodeTypesOneStreamResolves,
     node: &ProcessorNode,
@@ -55,14 +44,6 @@ mod tests {
     use crate::core::error::Error;
     use crate::core::processors::PROCESSOR_REGISTRY;
 
-    /// Build a class import path that is **deliberately neutral** — no segment
-    /// of it, module included, is one of the substrings the pre-#722 heuristic
-    /// matched on (`Camera`, `Display`, `Audio`, `Microphone`, `Speaker`,
-    /// `Encoder`, `Decoder`, `H264`, `H265`, `Compositor`). That way mentally
-    /// reverting `scheduling_strategy_for_processor` back to the old
-    /// substring-match heuristic causes these tests to fail. The whole path is
-    /// what has to stay neutral now: the key is the whole string, and this
-    /// module's own path is part of it.
     fn class_import_path(short: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap()
     }
