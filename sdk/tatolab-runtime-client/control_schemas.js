@@ -1535,8 +1535,8 @@ const ListPinValue = z.array(z.unknown());
 /** @type {z.ZodType<ControlContract.BundlePinValue>} */
 const BundlePinValue = z.record(z.string(), z.unknown());
 
-/** @type {z.ZodType<ControlContract.NodeReferencePinValue>} */
-const NodeReferencePinValue = z.strictObject({
+/** @type {z.ZodType<ControlContract.NodeReferenceInConfig>} */
+const NodeReferenceInConfig = z.strictObject({
   node: z.string(),
 });
 
@@ -1651,32 +1651,35 @@ const PinNumberRange = z.strictObject({
   maximum: z.number().nullable().optional(),
 });
 
-/** @type {z.ZodType<ControlContract.PinFrameRateAnnotation>} */
-const PinFrameRateAnnotation = z.union([z.strictObject({
-  stated: z.strictObject({
-    numerator: z.number().int().min(0),
-    denominator: z.number().int().min(0),
-  }),
+/** @type {z.ZodType<ControlContract.ImageStreamFrameRate>} */
+const ImageStreamFrameRate = z.strictObject({
+  numerator: z.number().int().min(0),
+  denominator: z.number().int().min(0),
+});
+
+/** @type {z.ZodType<ControlContract.ImageOutputPortFrameRate>} */
+const ImageOutputPortFrameRate = z.union([z.strictObject({
+  stated: ImageStreamFrameRate,
 }), z.strictObject({
-  from_setting: z.strictObject({
-    setting: z.string(),
+  from_config: z.looseObject({
+    config_key: z.string(),
   }),
 })]);
 
-/** @type {z.ZodType<ControlContract.PinSampleRateAnnotation>} */
-const PinSampleRateAnnotation = z.union([z.strictObject({
+/** @type {z.ZodType<ControlContract.ChannelsOutputPortSampleRate>} */
+const ChannelsOutputPortSampleRate = z.union([z.strictObject({
   stated: z.number().int().min(0),
 }), z.strictObject({
-  from_setting: z.strictObject({
-    setting: z.string(),
+  from_config: z.looseObject({
+    config_key: z.string(),
   }),
 })]);
 
-/** @type {z.ZodType<ControlContract.PinAudioSampleType>} */
-const PinAudioSampleType = z.union([z.literal("f32"), z.literal("f64")]);
+/** @type {z.ZodType<ControlContract.ChannelsOutputPortSampleType>} */
+const ChannelsOutputPortSampleType = z.union([z.literal("f32"), z.literal("f64")]);
 
-/** @type {z.ZodType<ControlContract.PinTensorResidency>} */
-const PinTensorResidency = z.union([z.literal("gpu"), z.literal("cpu")]);
+/** @type {z.ZodType<ControlContract.ArrayOutputPortResidency>} */
+const ArrayOutputPortResidency = z.union([z.literal("gpu"), z.literal("cpu")]);
 
 /** @type {z.ZodType<ControlContract.PinAnnotations>} */
 const PinAnnotations = z.strictObject({
@@ -1685,10 +1688,10 @@ const PinAnnotations = z.strictObject({
   unit: z.string().nullable().optional(),
   meaning: z.string().nullable().optional(),
   control: z.string().nullable().optional(),
-  frame_rate: PinFrameRateAnnotation.nullable().optional(),
-  sample_rate: PinSampleRateAnnotation.nullable().optional(),
-  sample_type: PinAudioSampleType.nullable().optional(),
-  residency: PinTensorResidency.nullable().optional(),
+  frame_rate: ImageOutputPortFrameRate.nullable().optional(),
+  sample_rate: ChannelsOutputPortSampleRate.nullable().optional(),
+  sample_type: ChannelsOutputPortSampleType.nullable().optional(),
+  residency: ArrayOutputPortResidency.nullable().optional(),
 });
 
 /** @type {z.ZodType<ControlContract.PinDeclaration>} */
@@ -1907,7 +1910,7 @@ export const ControlSchemas = Object.freeze({
     AssetPinValue,
     ListPinValue,
     BundlePinValue,
-    NodeReferencePinValue,
+    NodeReferenceInConfig,
     PinType,
     IntegerSize,
     FloatSize,
@@ -1921,10 +1924,11 @@ export const ControlSchemas = Object.freeze({
     PinFlow,
     PinAnnotations,
     PinNumberRange,
-    PinFrameRateAnnotation,
-    PinSampleRateAnnotation,
-    PinAudioSampleType,
-    PinTensorResidency,
+    ImageOutputPortFrameRate,
+    ImageStreamFrameRate,
+    ChannelsOutputPortSampleRate,
+    ChannelsOutputPortSampleType,
+    ArrayOutputPortResidency,
     NodeInputMode,
     SettingReadTime,
   }),

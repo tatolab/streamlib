@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The JSON form of each built-in pin type's stored value, as a document saves it and a client
-//! sets and reads it. `PinType::check_value` holds what a schema cannot say: an Integer's exact
-//! size, a Menu's options, a Vector's declared size, a List's element and a bundle's members.
+//! sets and reads it. A schema here cannot say what depends on the pin type: an Integer's exact
+//! size, a Menu's options, a Vector's declared size, a List's element and a bundle's members. A
+//! node reference's stored value is [`crate::NodeReferenceInConfig`].
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 /// A Boolean's stored value: a JSON boolean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,15 +137,11 @@ pub struct TransformPinValue(pub [f64; 16]);
 #[serde(deny_unknown_fields)]
 pub struct AssetPinValue {
     /// The asset's UUID.
-    #[cfg_attr(feature = "contract-json-schema", schemars(extend("format" = "uuid")))]
-    pub asset: String,
+    pub asset: Uuid,
     /// The UUID of the imported project that holds the asset; absent, the project's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(
-        feature = "contract-json-schema",
-        schemars(with = "String", extend("format" = "uuid"))
-    )]
-    pub from: Option<String>,
+    #[cfg_attr(feature = "contract-json-schema", schemars(with = "Uuid"))]
+    pub from: Option<Uuid>,
 }
 
 /// A List's stored value: a list of its element's form, in order. `[]` is a value.
@@ -166,16 +164,3 @@ pub struct ListPinValue(pub Vec<serde_json::Value>);
 )]
 #[serde(transparent)]
 pub struct BundlePinValue(pub serde_json::Map<String, serde_json::Value>);
-
-/// A node reference's stored value: the referenced node's name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(deny_unknown_fields)]
-pub struct NodeReferencePinValue {
-    /// The node's name.
-    pub node: String,
-}

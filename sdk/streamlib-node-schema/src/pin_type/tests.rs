@@ -8,34 +8,34 @@ use crate::IMAGE_TEXTURE_FORMAT_WIRE_NAMES;
 
 fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
     match name {
-        BuiltInPinTypeName::Boolean => PinType::Boolean,
+        BuiltInPinTypeName::Boolean => PinType::Boolean {},
         BuiltInPinTypeName::Integer => PinType::Integer {
             exact_size: Some(IntegerSize::UInt8),
         },
         BuiltInPinTypeName::Float => PinType::Float { exact_size: None },
-        BuiltInPinTypeName::String => PinType::String,
+        BuiltInPinTypeName::String => PinType::String {},
         BuiltInPinTypeName::Menu => PinType::Menu {
             option_names: vec!["sine".into(), "square".into()],
         },
-        BuiltInPinTypeName::Color => PinType::Color,
+        BuiltInPinTypeName::Color => PinType::Color {},
         BuiltInPinTypeName::Vector => PinType::Vector {
             component_count: VectorComponentCount::Three,
         },
-        BuiltInPinTypeName::Rectangle => PinType::Rectangle,
-        BuiltInPinTypeName::Transform => PinType::Transform,
+        BuiltInPinTypeName::Rectangle => PinType::Rectangle {},
+        BuiltInPinTypeName::Transform => PinType::Transform {},
         BuiltInPinTypeName::Texture => PinType::Texture {
             pixel_formats: vec![TexturePixelFormat::Rgba8Unorm],
         },
-        BuiltInPinTypeName::Audio => PinType::Audio,
+        BuiltInPinTypeName::Audio => PinType::Audio {},
         BuiltInPinTypeName::EncodedVideo => PinType::EncodedVideo {
             codecs: vec!["h264".into()],
         },
         BuiltInPinTypeName::EncodedAudio => PinType::EncodedAudio { codecs: vec![] },
-        BuiltInPinTypeName::Tensor => PinType::Tensor,
+        BuiltInPinTypeName::Tensor => PinType::Tensor {},
         BuiltInPinTypeName::Asset => PinType::Asset {
             media: vec![ProjectAssetMedia::Stream],
         },
-        BuiltInPinTypeName::Trigger => PinType::Trigger,
+        BuiltInPinTypeName::Trigger => PinType::Trigger {},
         BuiltInPinTypeName::ListOf => PinType::ListOf {
             element_type: Box::new(PinType::Float { exact_size: None }),
         },
@@ -48,30 +48,23 @@ fn a_pin_type_named(name: BuiltInPinTypeName) -> PinType {
             }],
         },
         BuiltInPinTypeName::Named => PinType::Named {
-            named_pin_type: NamedPinTypeImportPath("faces:FaceBox".into()),
+            named_pin_type: NamedPinTypeImportPath::new("faces:FaceBox").expect("names a class"),
         },
         BuiltInPinTypeName::NodeReference => PinType::NodeReference {
             referenced_node_type: None,
             one_referrer_per_referenced_node: true,
         },
         BuiltInPinTypeName::PinTypeChoice => PinType::PinTypeChoice {
-            among: vec![PinType::Audio],
+            among: vec![PinType::Audio {}],
         },
     }
 }
 
-fn wire_name_of(name: BuiltInPinTypeName) -> String {
-    serde_json::to_value(name)
+fn wire_name_of(value: impl serde::Serialize + std::fmt::Debug) -> String {
+    serde_json::to_value(&value)
         .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| panic!("{name:?} serializes as a string"))
-}
-
-#[test]
-fn every_name_sits_at_its_own_position() {
-    for (position, name) in BuiltInPinTypeName::EVERY_NAME.into_iter().enumerate() {
-        assert_eq!(name.position(), position, "{name:?}");
-    }
+        .and_then(|written| written.as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("{value:?} serializes as a string"))
 }
 
 #[test]
@@ -99,8 +92,6 @@ fn there_is_one_row_per_built_in_name_in_order_with_its_typescript_literal() {
         assert!(!row.flows.is_empty(), "{:?} allows no flow", row.name);
         assert!(!row.label.is_empty() && !row.documentation.is_empty());
         assert!(!row.python_form.is_empty());
-        assert_eq!(row.since_contract_version, 3);
-        assert_eq!(row.stability, PinTypeStability::Experimental);
     }
 }
 
@@ -119,17 +110,14 @@ fn a_setting_only_type_flows_only_as_a_value_and_a_trigger_only_as_a_trigger() {
 }
 
 #[test]
-fn the_texture_pixel_formats_are_the_texture_format_wire_names() {
-    let names: Vec<String> = TexturePixelFormat::EVERY_FORMAT
-        .into_iter()
-        .map(|format| {
-            serde_json::to_value(format)
-                .ok()
-                .and_then(|value| value.as_str().map(str::to_owned))
-                .unwrap_or_default()
-        })
-        .collect();
-    assert_eq!(names, IMAGE_TEXTURE_FORMAT_WIRE_NAMES.map(str::to_owned));
+fn each_texture_pixel_format_serializes_as_its_wire_name() {
+    for format in TexturePixelFormat::EVERY_FORMAT {
+        assert_eq!(wire_name_of(format), format.wire_name());
+    }
+    assert_eq!(
+        IMAGE_TEXTURE_FORMAT_WIRE_NAMES,
+        TexturePixelFormat::EVERY_FORMAT.map(TexturePixelFormat::wire_name)
+    );
 }
 
 #[test]
@@ -160,6 +148,40 @@ fn a_pin_type_with_its_narrowing_left_out_reads_as_taking_any() {
 fn a_pin_type_with_a_key_its_variant_does_not_name_is_refused() {
     assert!(serde_json::from_value::<PinType>(json!({ "type": "texture", "codecs": [] })).is_err());
     assert!(serde_json::from_value::<PinType>(json!({ "type": "channels" })).is_err());
+}
+
+#[test]
+fn a_type_with_nothing_to_state_refuses_any_key_but_its_tag() {
+    assert_eq!(
+        serde_json::from_value::<PinType>(json!({ "type": "boolean" })).expect("reads"),
+        PinType::Boolean {}
+    );
+    assert_eq!(
+        serde_json::to_value(PinType::Boolean {}).expect("writes"),
+        json!({ "type": "boolean" })
+    );
+    for name in BuiltInPinTypeName::EVERY_NAME {
+        let mut written = serde_json::to_value(a_pin_type_named(name)).expect("writes");
+        written["not_a_key_of_any_type"] = json!([]);
+        assert!(
+            serde_json::from_value::<PinType>(written).is_err(),
+            "{name:?} took a key it does not name"
+        );
+    }
+}
+
+#[test]
+fn a_named_pin_type_names_a_module_and_a_class() {
+    for refused in ["", "  ", "faces.FaceBox", ":FaceBox", "faces:", " : "] {
+        assert!(
+            NamedPinTypeImportPath::new(refused).is_err(),
+            "`{refused}` was taken"
+        );
+        assert!(serde_json::from_value::<NamedPinTypeImportPath>(json!(refused)).is_err());
+    }
+    let read: NamedPinTypeImportPath =
+        serde_json::from_value(json!("faces.boxes:FaceBox.Inner")).expect("names a class");
+    assert_eq!(read.as_str(), "faces.boxes:FaceBox.Inner");
 }
 
 #[test]
@@ -219,7 +241,7 @@ fn each_stored_value_reads_the_json_form_the_code_saves() {
         json!({ "asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d" }),
     )
     .expect("an asset");
-    serde_json::from_value::<NodeReferencePinValue>(json!({ "node": "gateway" }))
+    serde_json::from_value::<crate::NodeReferenceInConfig>(json!({ "node": "gateway" }))
         .expect("a node reference");
 }
 
@@ -231,4 +253,42 @@ fn a_stored_value_with_a_key_its_form_does_not_name_or_a_bare_asset_string_is_re
             .is_err()
     );
     assert!(serde_json::from_value::<TransformPinValue>(json!([1, 0, 0])).is_err());
+}
+
+#[test]
+fn an_asset_that_is_not_a_uuid_is_refused() {
+    assert!(serde_json::from_value::<AssetPinValue>(json!({ "asset": "logo.png" })).is_err());
+    assert!(
+        serde_json::from_value::<AssetPinValue>(json!({
+            "asset": "0eaf9ee2-0f73-4154-a3f6-a99c261b850d",
+            "from": "the-other-project"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn a_pin_annotation_reuses_the_port_stream_fact_forms() {
+    let annotations: PinAnnotations = serde_json::from_value(json!({
+        "frame_rate": { "stated": { "numerator": 30000, "denominator": 1001 } },
+        "sample_rate": { "from_config": { "config_key": "rate" } },
+        "sample_type": "f32",
+        "residency": "gpu",
+    }))
+    .expect("reads");
+    assert_eq!(
+        annotations.frame_rate,
+        Some(crate::ImageOutputPortFrameRate::Stated(
+            crate::ImageStreamFrameRate {
+                numerator: 30000,
+                denominator: 1001
+            }
+        ))
+    );
+    assert_eq!(
+        annotations.sample_rate,
+        Some(crate::ChannelsOutputPortSampleRate::FromConfig {
+            config_key: "rate".into()
+        })
+    );
 }

@@ -7,8 +7,7 @@
 use schemars::generate::SchemaSettings;
 use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
-    NodeInputMode, PinDeclaration, PinType, PinTypeDescription, PinTypeStability,
-    built_in_pin_types,
+    NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
@@ -148,6 +147,9 @@ fn the_agent_discovery_tool_entry_of(
     entry
 }
 
+/// The contract version the built-in pin type rows first appeared in.
+pub(crate) const PIN_TYPES_SINCE_CONTRACT_VERSION: u32 = 3;
+
 fn the_pin_type_entry_of(
     row: &PinTypeDescription,
     schema_generator: &mut schemars::SchemaGenerator,
@@ -160,8 +162,8 @@ fn the_pin_type_entry_of(
         "annotations": row.annotations,
         "python_form": row.python_form,
         "typescript_form": row.typescript_form,
-        "x-since": row.since_contract_version,
-        "x-stability": the_contract_stability_of(row.stability),
+        "x-since": PIN_TYPES_SINCE_CONTRACT_VERSION,
+        "x-stability": ControlOperationStability::Experimental,
     });
     if let Some(value_json_schema) = row.name.value_json_schema(schema_generator) {
         entry["value_json_schema"] = value_json_schema.to_value();
@@ -169,14 +171,7 @@ fn the_pin_type_entry_of(
     entry
 }
 
-fn the_contract_stability_of(stability: PinTypeStability) -> ControlOperationStability {
-    match stability {
-        PinTypeStability::Stable => ControlOperationStability::Stable,
-        PinTypeStability::Experimental => ControlOperationStability::Experimental,
-    }
-}
-
-/// Adds the pin type shapes no operation names yet, so a client generates them from the file.
+/// Adds the pin type shapes no operation names, so a client generates them from the file.
 fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGenerator) {
     schema_generator.subschema_for::<PinType>();
     schema_generator.subschema_for::<PinDeclaration>();
@@ -297,11 +292,12 @@ mod tests {
             .map(|name| json!(name))
             .collect();
         assert_eq!(row_names, built_in_names);
+        assert!((1..=CONTROL_CONTRACT_VERSION).contains(&PIN_TYPES_SINCE_CONTRACT_VERSION));
         for row in rows {
             assert_eq!(row["x-stability"], json!("experimental"), "{}", row["name"]);
             assert_eq!(
                 row["x-since"],
-                json!(CONTROL_CONTRACT_VERSION),
+                json!(PIN_TYPES_SINCE_CONTRACT_VERSION),
                 "{}",
                 row["name"]
             );
@@ -329,16 +325,25 @@ mod tests {
             "named",
         ];
         let document = control_contract_document();
-        for row in document["x-pin-types"].as_array().into_iter().flatten() {
-            let name = row["name"].as_str().unwrap_or_default();
+        let rows = document["x-pin-types"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`x-pin-types` is an array"));
+        for row in rows {
+            let name = row["name"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a row's `name` is a string: {row}"));
             assert_eq!(
                 row.get("value_json_schema").is_some(),
                 !stores_no_value.contains(&name),
                 "`{name}`"
             );
         }
+        let asset_row = rows
+            .iter()
+            .find(|row| row["name"] == json!(BuiltInPinTypeName::Asset))
+            .unwrap_or_else(|| panic!("`x-pin-types` has an `asset` row"));
         assert_eq!(
-            document["x-pin-types"][BuiltInPinTypeName::Asset.position()]["value_json_schema"],
+            asset_row["value_json_schema"],
             json!({ "$ref": "#/components/schemas/AssetPinValue" })
         );
     }

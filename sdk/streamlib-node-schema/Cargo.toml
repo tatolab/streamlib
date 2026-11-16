@@ -23,7 +23,8 @@ utoipa = { version = "5.3", optional = true }
 # The schemars the control contract renders, behind the off-by-default `contract-json-schema`
 # feature. Renamed because the crate's other types still derive schemars 0.8; only `pin_type/`
 # derives this one.
-schemars_1 = { package = "schemars", version = "1.2", optional = true }
+schemars_1 = { package = "schemars", version = "1.2", optional = true, features = ["uuid1"] }
+uuid = { version = "1.11", features = ["serde"] }  # an Asset pin's stored value names its asset by UUID
 
 [features]
 # Adds a `utoipa::ToSchema` derive to the types the control plane renders —

@@ -4191,11 +4191,11 @@ export type ListPinValue = Array<unknown>;
 export type BundlePinValue = { [key: string]: unknown };
 
 /**
- * A node reference's stored value: the referenced node's name.
+ * A config value naming another node of the graph, of any type.
  */
-export interface NodeReferencePinValue {
+export interface NodeReferenceInConfig {
   /**
-   * The node's name.
+   * The referenced node's name, as `add` gave it.
    */
   node: string;
 }
@@ -4445,21 +4445,21 @@ export interface PinAnnotations {
    */
   control?: string | null;
   /**
-   * The frame rate a Texture output's stream has.
+   * The frame rate a Texture output's stream has, stated or read from a setting.
    */
-  frame_rate?: PinFrameRateAnnotation | null;
+  frame_rate?: ImageOutputPortFrameRate | null;
   /**
-   * The sample rate an Audio output's stream has.
+   * The sample rate an Audio output's stream has, stated or read from a setting.
    */
-  sample_rate?: PinSampleRateAnnotation | null;
+  sample_rate?: ChannelsOutputPortSampleRate | null;
   /**
    * The sample type an Audio output's stream has.
    */
-  sample_type?: PinAudioSampleType | null;
+  sample_type?: ChannelsOutputPortSampleType | null;
   /**
    * Where a Tensor output's values live.
    */
-  residency?: PinTensorResidency | null;
+  residency?: ArrayOutputPortResidency | null;
 }
 
 /**
@@ -4477,39 +4477,44 @@ export interface PinNumberRange {
 }
 
 /**
- * The frame rate a Texture output states, or the setting it follows.
+ * The frame rate an Image output states, written on the class or read from its node's config.
  */
-export type PinFrameRateAnnotation = {
-  stated: {
-    numerator: number;
-    denominator: number;
-  };
+export type ImageOutputPortFrameRate = {
+  stated: ImageStreamFrameRate;
 } | {
-  from_setting: {
-    setting: string;
+  from_config: {
+    config_key: string;
   };
 };
 
 /**
- * The sample rate an Audio output states, or the setting it follows.
+ * An Image stream's frame rate, as a rational number of frames per second.
  */
-export type PinSampleRateAnnotation = {
+export interface ImageStreamFrameRate {
+  numerator: number;
+  denominator: number;
+}
+
+/**
+ * The sample rate a Channels output states, written on the class or read from its node's config.
+ */
+export type ChannelsOutputPortSampleRate = {
   stated: number;
 } | {
-  from_setting: {
-    setting: string;
+  from_config: {
+    config_key: string;
   };
 };
 
 /**
- * The type of each sample of an Audio stream.
+ * The sample type of a Channels output.
  */
-export type PinAudioSampleType = "f32" | "f64";
+export type ChannelsOutputPortSampleType = "f32" | "f64";
 
 /**
- * Where a Tensor's values live.
+ * Where an Array output's attributes live.
  */
-export type PinTensorResidency = "gpu" | "cpu";
+export type ArrayOutputPortResidency = "gpu" | "cpu";
 
 /**
  * Whether an input takes a wire, a stored value, or both.

@@ -3890,7 +3890,7 @@
       "x-since": 3,
       "x-stability": "experimental",
       "value_json_schema": {
-        "$ref": "#/components/schemas/NodeReferencePinValue"
+        "$ref": "#/components/schemas/NodeReferenceInConfig"
       }
     },
     {
@@ -11252,13 +11252,13 @@
         "properties": {
           "asset": {
             "type": "string",
-            "description": "The asset's UUID.",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The asset's UUID."
           },
           "from": {
             "type": "string",
-            "description": "The UUID of the imported project that holds the asset; absent, the project's own.",
-            "format": "uuid"
+            "format": "uuid",
+            "description": "The UUID of the imported project that holds the asset; absent, the project's own."
           }
         },
         "required": [
@@ -11276,24 +11276,25 @@
         "additionalProperties": true,
         "description": "A bundle's stored value: an object keyed by member name, each member in its own type's form.\nOnly a member that declares a default may be left out."
       },
-      "NodeReferencePinValue": {
+      "NodeReferenceInConfig": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "node": {
             "type": "string",
-            "description": "The node's name."
+            "description": "The referenced node's name, as `add` gave it."
           }
         },
         "required": [
           "node"
         ],
-        "description": "A node reference's stored value: the referenced node's name."
+        "description": "A config value naming another node of the graph, of any type."
       },
       "PinType": {
         "oneOf": [
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11303,7 +11304,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "True or false."
           },
           {
@@ -11358,6 +11358,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11367,7 +11368,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "Text."
           },
           {
@@ -11394,6 +11394,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11403,7 +11404,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "An sRGB colour with alpha."
           },
           {
@@ -11427,6 +11427,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11436,11 +11437,11 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "A rectangle by its left and top edges, width and height."
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11450,7 +11451,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "A 4 by 4 matrix."
           },
           {
@@ -11476,6 +11476,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11485,7 +11486,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "A stream of audio samples."
           },
           {
@@ -11532,6 +11532,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11541,7 +11542,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "An array of numbers with a shape."
           },
           {
@@ -11567,6 +11567,7 @@
           },
           {
             "type": "object",
+            "additionalProperties": false,
             "properties": {
               "type": {
                 "type": "string",
@@ -11576,7 +11577,6 @@
             "required": [
               "type"
             ],
-            "additionalProperties": false,
             "description": "An event with no payload."
           },
           {
@@ -12076,29 +12076,29 @@
           "frame_rate": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PinFrameRateAnnotation"
+                "$ref": "#/components/schemas/ImageOutputPortFrameRate"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "The frame rate a Texture output's stream has."
+            "description": "The frame rate a Texture output's stream has, stated or read from a setting."
           },
           "sample_rate": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PinSampleRateAnnotation"
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleRate"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "The sample rate an Audio output's stream has."
+            "description": "The sample rate an Audio output's stream has, stated or read from a setting."
           },
           "sample_type": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PinAudioSampleType"
+                "$ref": "#/components/schemas/ChannelsOutputPortSampleType"
               },
               {
                 "type": "null"
@@ -12109,7 +12109,7 @@
           "residency": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PinTensorResidency"
+                "$ref": "#/components/schemas/ArrayOutputPortResidency"
               },
               {
                 "type": "null"
@@ -12143,66 +12143,70 @@
         },
         "description": "The lowest and highest number a pin holds; either may be left open."
       },
-      "PinFrameRateAnnotation": {
+      "ImageOutputPortFrameRate": {
         "oneOf": [
           {
+            "description": "Frames per second, stated on the class.",
             "type": "object",
             "properties": {
               "stated": {
-                "type": "object",
-                "properties": {
-                  "numerator": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "minimum": 0
-                  },
-                  "denominator": {
-                    "type": "integer",
-                    "format": "uint32",
-                    "minimum": 0
-                  }
-                },
-                "additionalProperties": false,
-                "required": [
-                  "numerator",
-                  "denominator"
-                ]
+                "$ref": "#/components/schemas/ImageStreamFrameRate"
               }
             },
             "required": [
               "stated"
             ],
-            "additionalProperties": false,
-            "description": "Frames per second, as a rational number."
+            "additionalProperties": false
           },
           {
+            "description": "The value of the node's config key of this name.",
             "type": "object",
             "properties": {
-              "from_setting": {
+              "from_config": {
                 "type": "object",
                 "properties": {
-                  "setting": {
+                  "config_key": {
                     "type": "string"
                   }
                 },
-                "additionalProperties": false,
                 "required": [
-                  "setting"
+                  "config_key"
                 ]
               }
             },
             "required": [
-              "from_setting"
+              "from_config"
             ],
-            "additionalProperties": false,
-            "description": "The value of the node's input of this name."
+            "additionalProperties": false
           }
         ],
-        "description": "The frame rate a Texture output states, or the setting it follows."
+        "description": "The frame rate an Image output states, written on the class or read from its node's config."
       },
-      "PinSampleRateAnnotation": {
+      "ImageStreamFrameRate": {
+        "type": "object",
+        "properties": {
+          "numerator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "denominator": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "numerator",
+          "denominator"
+        ],
+        "additionalProperties": false,
+        "description": "An Image stream's frame rate, as a rational number of frames per second."
+      },
+      "ChannelsOutputPortSampleRate": {
         "oneOf": [
           {
+            "description": "Samples per second, stated on the class.",
             "type": "object",
             "properties": {
               "stated": {
@@ -12214,63 +12218,57 @@
             "required": [
               "stated"
             ],
-            "additionalProperties": false,
-            "description": "Samples per second."
+            "additionalProperties": false
           },
           {
+            "description": "The value of the node's config key of this name.",
             "type": "object",
             "properties": {
-              "from_setting": {
+              "from_config": {
                 "type": "object",
                 "properties": {
-                  "setting": {
+                  "config_key": {
                     "type": "string"
                   }
                 },
-                "additionalProperties": false,
                 "required": [
-                  "setting"
+                  "config_key"
                 ]
               }
             },
             "required": [
-              "from_setting"
+              "from_config"
             ],
-            "additionalProperties": false,
-            "description": "The value of the node's input of this name."
+            "additionalProperties": false
           }
         ],
-        "description": "The sample rate an Audio output states, or the setting it follows."
+        "description": "The sample rate a Channels output states, written on the class or read from its node's config."
       },
-      "PinAudioSampleType": {
+      "ChannelsOutputPortSampleType": {
         "oneOf": [
           {
             "type": "string",
-            "const": "f32",
-            "description": "32-bit float samples."
+            "const": "f32"
           },
           {
             "type": "string",
-            "const": "f64",
-            "description": "64-bit float samples."
+            "const": "f64"
           }
         ],
-        "description": "The type of each sample of an Audio stream."
+        "description": "The sample type of a Channels output."
       },
-      "PinTensorResidency": {
+      "ArrayOutputPortResidency": {
         "oneOf": [
           {
             "type": "string",
-            "const": "gpu",
-            "description": "In GPU memory."
+            "const": "gpu"
           },
           {
             "type": "string",
-            "const": "cpu",
-            "description": "In CPU memory."
+            "const": "cpu"
           }
         ],
-        "description": "Where a Tensor's values live."
+        "description": "Where an Array output's attributes live."
       },
       "NodeInputMode": {
         "oneOf": [

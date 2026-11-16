@@ -1,13 +1,16 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::NodeClassImportPath;
+use crate::error::{SchemaError, SchemaResult};
 
 /// What a port carries, as an author, a person and a client name it.
 ///
 /// The set is closed: a named type and a bundle are how a project adds its own.
+// A type with nothing to state is an empty struct variant: serde ignores the keys beside the tag
+// of an internally tagged unit variant, and refuses them on a struct variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
@@ -17,7 +20,7 @@ use crate::NodeClassImportPath;
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PinType {
     /// True or false.
-    Boolean,
+    Boolean {},
     /// A whole number.
     Integer {
         /// The size the number must fit; absent, any whole number exact to 2^53.
@@ -31,23 +34,23 @@ pub enum PinType {
         exact_size: Option<FloatSize>,
     },
     /// Text.
-    String,
+    String {},
     /// One of a fixed list of option names.
     Menu {
         /// The options, spelled as declared.
         option_names: Vec<String>,
     },
     /// An sRGB colour with alpha.
-    Color,
+    Color {},
     /// Two, three or four numbers.
     Vector {
         /// How many numbers it holds.
         component_count: VectorComponentCount,
     },
     /// A rectangle by its left and top edges, width and height.
-    Rectangle,
+    Rectangle {},
     /// A 4 by 4 matrix.
-    Transform,
+    Transform {},
     /// A GPU picture.
     Texture {
         /// The formats it may hold; on an input, empty takes any.
@@ -55,7 +58,7 @@ pub enum PinType {
         pixel_formats: Vec<TexturePixelFormat>,
     },
     /// A stream of audio samples.
-    Audio,
+    Audio {},
     /// Encoded video, one access unit per message.
     EncodedVideo {
         /// The codecs it may hold; empty takes any.
@@ -69,7 +72,7 @@ pub enum PinType {
         codecs: Vec<String>,
     },
     /// An array of numbers with a shape.
-    Tensor,
+    Tensor {},
     /// One of the project's assets.
     Asset {
         /// The media the asset must hold one of; empty takes any asset.
@@ -77,7 +80,7 @@ pub enum PinType {
         media: Vec<ProjectAssetMedia>,
     },
     /// An event with no payload.
-    Trigger,
+    Trigger {},
     /// A list of values of one type.
     ListOf {
         /// The type of each element.
@@ -201,7 +204,7 @@ pub enum TexturePixelFormat {
 }
 
 impl TexturePixelFormat {
-    /// Every format, in the order [`crate::IMAGE_TEXTURE_FORMAT_WIRE_NAMES`] lists them.
+    /// Every format, in the order [`crate::IMAGE_TEXTURE_FORMAT_WIRE_NAMES`] lists their names.
     pub const EVERY_FORMAT: [Self; 7] = [
         Self::Rgba8Unorm,
         Self::Rgba8UnormSrgb,
@@ -211,6 +214,19 @@ impl TexturePixelFormat {
         Self::Rgba32Float,
         Self::Nv12,
     ];
+
+    /// The format's name on the escalate wire, as it serializes.
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Rgba8Unorm => "rgba8_unorm",
+            Self::Rgba8UnormSrgb => "rgba8_unorm_srgb",
+            Self::Bgra8Unorm => "bgra8_unorm",
+            Self::Bgra8UnormSrgb => "bgra8_unorm_srgb",
+            Self::Rgba16Float => "rgba16_float",
+            Self::Rgba32Float => "rgba32_float",
+            Self::Nv12 => "nv12",
+        }
+    }
 }
 
 /// What an asset holds, as its media facts or its kind name it.
@@ -259,11 +275,48 @@ pub struct BundleMember {
 }
 
 /// The class that declares a named pin type, `module:QualifiedClassName`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// Every inhabitant names one: the inner string is private, `new` is the only constructor, and
+// `Deserialize` validates rather than inheriting `String`'s.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
     derive(schemars_1::JsonSchema),
     schemars(crate = "schemars_1")
 )]
 #[serde(transparent)]
-pub struct NamedPinTypeImportPath(pub String);
+pub struct NamedPinTypeImportPath(String);
+
+impl NamedPinTypeImportPath {
+    /// Build a path, refusing one that is blank or has no `:` between its module and its
+    /// class.
+    pub fn new(import_path: impl Into<String>) -> SchemaResult<Self> {
+        let import_path = import_path.into();
+        let names_a_class =
+            import_path
+                .split_once(':')
+                .is_some_and(|(module_name, qualified_class_name)| {
+                    !module_name.trim().is_empty() && !qualified_class_name.trim().is_empty()
+                });
+        if !names_a_class {
+            return Err(SchemaError::InvalidName {
+                name: import_path,
+                reason: "a named pin type is the class that declares it, written \
+                         `module:QualifiedClassName`; this one names no module and class"
+                    .to_string(),
+            });
+        }
+        Ok(Self(import_path))
+    }
+
+    /// The path as written.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for NamedPinTypeImportPath {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::new(raw).map_err(serde::de::Error::custom)
+    }
+}

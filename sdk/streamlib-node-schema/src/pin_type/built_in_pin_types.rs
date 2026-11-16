@@ -5,18 +5,30 @@ use serde::{Deserialize, Serialize};
 
 use super::{PinFlow, PinType};
 
-/// The contract version the built-in pin type rows first appeared in.
-const PIN_TYPES_SINCE_CONTRACT_VERSION: u32 = 3;
+/// Declares [`BuiltInPinTypeName`] and its [`BuiltInPinTypeName::EVERY_NAME`] from one list, so
+/// a name cannot be declared without being listed.
+macro_rules! built_in_pin_type_names {
+    ($($name:ident),+ $(,)?) => {
+        /// The name of each built-in pin type: the `type` tag of its [`PinType`].
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[cfg_attr(
+            feature = "contract-json-schema",
+            derive(schemars_1::JsonSchema),
+            schemars(crate = "schemars_1")
+        )]
+        #[serde(rename_all = "snake_case")]
+        pub enum BuiltInPinTypeName {
+            $($name),+
+        }
 
-/// The name of each built-in pin type: the `type` tag of its [`PinType`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case")]
-pub enum BuiltInPinTypeName {
+        impl BuiltInPinTypeName {
+            /// Every name, in the order the contract lists the rows.
+            pub const EVERY_NAME: [Self; [$(Self::$name),+].len()] = [$(Self::$name),+];
+        }
+    };
+}
+
+built_in_pin_type_names![
     Boolean,
     Integer,
     Float,
@@ -38,82 +50,28 @@ pub enum BuiltInPinTypeName {
     Named,
     NodeReference,
     PinTypeChoice,
-}
-
-impl BuiltInPinTypeName {
-    /// Every name, in the order the contract lists the rows.
-    pub const EVERY_NAME: [Self; 21] = [
-        Self::Boolean,
-        Self::Integer,
-        Self::Float,
-        Self::String,
-        Self::Menu,
-        Self::Color,
-        Self::Vector,
-        Self::Rectangle,
-        Self::Transform,
-        Self::Texture,
-        Self::Audio,
-        Self::EncodedVideo,
-        Self::EncodedAudio,
-        Self::Tensor,
-        Self::Asset,
-        Self::Trigger,
-        Self::ListOf,
-        Self::Bundle,
-        Self::Named,
-        Self::NodeReference,
-        Self::PinTypeChoice,
-    ];
-
-    /// The name's place in [`Self::EVERY_NAME`]. A new name does not compile until it has one.
-    pub const fn position(self) -> usize {
-        match self {
-            Self::Boolean => 0,
-            Self::Integer => 1,
-            Self::Float => 2,
-            Self::String => 3,
-            Self::Menu => 4,
-            Self::Color => 5,
-            Self::Vector => 6,
-            Self::Rectangle => 7,
-            Self::Transform => 8,
-            Self::Texture => 9,
-            Self::Audio => 10,
-            Self::EncodedVideo => 11,
-            Self::EncodedAudio => 12,
-            Self::Tensor => 13,
-            Self::Asset => 14,
-            Self::Trigger => 15,
-            Self::ListOf => 16,
-            Self::Bundle => 17,
-            Self::Named => 18,
-            Self::NodeReference => 19,
-            Self::PinTypeChoice => 20,
-        }
-    }
-}
+];
 
 impl PinType {
     /// The name of the built-in type this is.
     pub fn built_in_name(&self) -> BuiltInPinTypeName {
         match self {
-            Self::Boolean => BuiltInPinTypeName::Boolean,
+            Self::Boolean {} => BuiltInPinTypeName::Boolean,
             Self::Integer { .. } => BuiltInPinTypeName::Integer,
             Self::Float { .. } => BuiltInPinTypeName::Float,
-            Self::String => BuiltInPinTypeName::String,
+            Self::String {} => BuiltInPinTypeName::String,
             Self::Menu { .. } => BuiltInPinTypeName::Menu,
-            Self::Color => BuiltInPinTypeName::Color,
+            Self::Color {} => BuiltInPinTypeName::Color,
             Self::Vector { .. } => BuiltInPinTypeName::Vector,
-            Self::Rectangle => BuiltInPinTypeName::Rectangle,
-            Self::Transform => BuiltInPinTypeName::Transform,
+            Self::Rectangle {} => BuiltInPinTypeName::Rectangle,
+            Self::Transform {} => BuiltInPinTypeName::Transform,
             Self::Texture { .. } => BuiltInPinTypeName::Texture,
-            Self::Audio => BuiltInPinTypeName::Audio,
+            Self::Audio {} => BuiltInPinTypeName::Audio,
             Self::EncodedVideo { .. } => BuiltInPinTypeName::EncodedVideo,
             Self::EncodedAudio { .. } => BuiltInPinTypeName::EncodedAudio,
-            Self::Tensor => BuiltInPinTypeName::Tensor,
+            Self::Tensor {} => BuiltInPinTypeName::Tensor,
             Self::Asset { .. } => BuiltInPinTypeName::Asset,
-            Self::Trigger => BuiltInPinTypeName::Trigger,
+            Self::Trigger {} => BuiltInPinTypeName::Trigger,
             Self::ListOf { .. } => BuiltInPinTypeName::ListOf,
             Self::Bundle { .. } => BuiltInPinTypeName::Bundle,
             Self::Named { .. } => BuiltInPinTypeName::Named,
@@ -143,17 +101,7 @@ pub enum PinAnnotationName {
     Residency,
 }
 
-/// Whether a built-in pin type's row may still change with no contract version bump.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PinTypeStability {
-    /// Changing it breaks the contract and bumps its version.
-    Stable,
-    /// It may change before it turns stable, with no version bump.
-    Experimental,
-}
-
-/// One built-in pin type, as the contract and `list_pin_types` state it.
+/// One built-in pin type, as the contract states it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinTypeDescription {
     /// Its name.
@@ -170,10 +118,6 @@ pub struct PinTypeDescription {
     pub python_form: &'static str,
     /// How the TypeScript SDK writes it: its name as a string literal.
     pub typescript_form: &'static str,
-    /// The contract version it first appeared in.
-    pub since_contract_version: u32,
-    /// Whether it may still change with no contract version bump.
-    pub stability: PinTypeStability,
 }
 
 use PinAnnotationName::{
@@ -191,11 +135,8 @@ const VALUE_ANNOTATIONS: &[PinAnnotationName] = &[Meaning, Control];
 const MEANING_ONLY: &[PinAnnotationName] = &[Meaning];
 
 /// One row per built-in pin type, in [`BuiltInPinTypeName::EVERY_NAME`] order.
-pub fn built_in_pin_types() -> Vec<PinTypeDescription> {
-    BuiltInPinTypeName::EVERY_NAME
-        .into_iter()
-        .map(built_in_pin_type)
-        .collect()
+pub fn built_in_pin_types() -> [PinTypeDescription; BuiltInPinTypeName::EVERY_NAME.len()] {
+    BuiltInPinTypeName::EVERY_NAME.map(built_in_pin_type)
 }
 
 /// The row of one built-in pin type.
@@ -209,8 +150,6 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             annotations,
             python_form,
             typescript_form,
-            since_contract_version: PIN_TYPES_SINCE_CONTRACT_VERSION,
-            stability: PinTypeStability::Experimental,
         }
     };
     match name {
@@ -397,8 +336,8 @@ impl BuiltInPinTypeName {
     ) -> Option<schemars_1::Schema> {
         use super::stored_pin_values::{
             AssetPinValue, BooleanPinValue, BundlePinValue, ColorPinValue, FloatPinValue,
-            IntegerPinValue, ListPinValue, MenuPinValue, NodeReferencePinValue, RectanglePinValue,
-            StringPinValue, TransformPinValue, VectorPinValue,
+            IntegerPinValue, ListPinValue, MenuPinValue, RectanglePinValue, StringPinValue,
+            TransformPinValue, VectorPinValue,
         };
         match self {
             Self::Boolean => Some(generator.subschema_for::<BooleanPinValue>()),
@@ -413,7 +352,7 @@ impl BuiltInPinTypeName {
             Self::Asset => Some(generator.subschema_for::<AssetPinValue>()),
             Self::ListOf => Some(generator.subschema_for::<ListPinValue>()),
             Self::Bundle => Some(generator.subschema_for::<BundlePinValue>()),
-            Self::NodeReference => Some(generator.subschema_for::<NodeReferencePinValue>()),
+            Self::NodeReference => Some(generator.subschema_for::<crate::NodeReferenceInConfig>()),
             Self::PinTypeChoice => Some(generator.subschema_for::<PinType>()),
             Self::Texture
             | Self::Audio

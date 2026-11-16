@@ -4,6 +4,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::PinType;
+use crate::{
+    ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
+    ImageOutputPortFrameRate,
+};
 
 /// What a port declares about what it carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,18 +107,18 @@ pub struct PinAnnotations {
     /// The control that edits or shows it: one of the Studio's, or a module's qualified name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control: Option<String>,
-    /// The frame rate a Texture output's stream has.
+    /// The frame rate a Texture output's stream has, stated or read from a setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame_rate: Option<PinFrameRateAnnotation>,
-    /// The sample rate an Audio output's stream has.
+    pub frame_rate: Option<ImageOutputPortFrameRate>,
+    /// The sample rate an Audio output's stream has, stated or read from a setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sample_rate: Option<PinSampleRateAnnotation>,
+    pub sample_rate: Option<ChannelsOutputPortSampleRate>,
     /// The sample type an Audio output's stream has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sample_type: Option<PinAudioSampleType>,
+    pub sample_type: Option<ChannelsOutputPortSampleType>,
     /// Where a Tensor output's values live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub residency: Option<PinTensorResidency>,
+    pub residency: Option<ArrayOutputPortResidency>,
 }
 
 impl PinAnnotations {
@@ -139,66 +143,6 @@ pub struct PinNumberRange {
     /// The highest; absent, no upper bound.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum: Option<f64>,
-}
-
-/// The frame rate a Texture output states, or the setting it follows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum PinFrameRateAnnotation {
-    /// Frames per second, as a rational number.
-    Stated { numerator: u32, denominator: u32 },
-    /// The value of the node's input of this name.
-    FromSetting { setting: String },
-}
-
-/// The sample rate an Audio output states, or the setting it follows.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub enum PinSampleRateAnnotation {
-    /// Samples per second.
-    Stated(u32),
-    /// The value of the node's input of this name.
-    FromSetting { setting: String },
-}
-
-/// The type of each sample of an Audio stream.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PinAudioSampleType {
-    /// 32-bit float samples.
-    F32,
-    /// 64-bit float samples.
-    F64,
-}
-
-/// Where a Tensor's values live.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "contract-json-schema",
-    derive(schemars_1::JsonSchema),
-    schemars(crate = "schemars_1")
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PinTensorResidency {
-    /// In GPU memory.
-    Gpu,
-    /// In CPU memory.
-    Cpu,
 }
 
 /// Whether an input takes a wire, a stored value, or both.

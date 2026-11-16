@@ -201,7 +201,7 @@ export interface ControlSchemasOfTheContract {
     readonly AssetPinValue: z.ZodType<ControlContract.AssetPinValue>;
     readonly ListPinValue: z.ZodType<ControlContract.ListPinValue>;
     readonly BundlePinValue: z.ZodType<ControlContract.BundlePinValue>;
-    readonly NodeReferencePinValue: z.ZodType<ControlContract.NodeReferencePinValue>;
+    readonly NodeReferenceInConfig: z.ZodType<ControlContract.NodeReferenceInConfig>;
     readonly PinType: z.ZodType<ControlContract.PinType>;
     readonly IntegerSize: z.ZodType<ControlContract.IntegerSize>;
     readonly FloatSize: z.ZodType<ControlContract.FloatSize>;
@@ -215,10 +215,11 @@ export interface ControlSchemasOfTheContract {
     readonly PinFlow: z.ZodType<ControlContract.PinFlow>;
     readonly PinAnnotations: z.ZodType<ControlContract.PinAnnotations>;
     readonly PinNumberRange: z.ZodType<ControlContract.PinNumberRange>;
-    readonly PinFrameRateAnnotation: z.ZodType<ControlContract.PinFrameRateAnnotation>;
-    readonly PinSampleRateAnnotation: z.ZodType<ControlContract.PinSampleRateAnnotation>;
-    readonly PinAudioSampleType: z.ZodType<ControlContract.PinAudioSampleType>;
-    readonly PinTensorResidency: z.ZodType<ControlContract.PinTensorResidency>;
+    readonly ImageOutputPortFrameRate: z.ZodType<ControlContract.ImageOutputPortFrameRate>;
+    readonly ImageStreamFrameRate: z.ZodType<ControlContract.ImageStreamFrameRate>;
+    readonly ChannelsOutputPortSampleRate: z.ZodType<ControlContract.ChannelsOutputPortSampleRate>;
+    readonly ChannelsOutputPortSampleType: z.ZodType<ControlContract.ChannelsOutputPortSampleType>;
+    readonly ArrayOutputPortResidency: z.ZodType<ControlContract.ArrayOutputPortResidency>;
     readonly NodeInputMode: z.ZodType<ControlContract.NodeInputMode>;
     readonly SettingReadTime: z.ZodType<ControlContract.SettingReadTime>;
   };

@@ -11,12 +11,11 @@ mod pin_type_variants;
 mod stored_pin_values;
 
 pub use built_in_pin_types::{
-    BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, PinTypeStability, built_in_pin_type,
+    BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
     built_in_pin_types,
 };
 pub use pin_declaration::{
-    DeclaredPinType, NodeInputMode, PinAnnotations, PinAudioSampleType, PinDeclaration, PinFlow,
-    PinFrameRateAnnotation, PinNumberRange, PinSampleRateAnnotation, PinTensorResidency,
+    DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,
     SettingReadTime,
 };
 pub use pin_type_variants::{
@@ -25,8 +24,8 @@ pub use pin_type_variants::{
 };
 pub use stored_pin_values::{
     AssetPinValue, BooleanPinValue, BundlePinValue, ColorPinValue, FloatPinValue, IntegerPinValue,
-    ListPinValue, MenuPinValue, NodeReferencePinValue, RectanglePinValue, StringPinValue,
-    TransformPinValue, VectorPinValue,
+    ListPinValue, MenuPinValue, RectanglePinValue, StringPinValue, TransformPinValue,
+    VectorPinValue,
 };
 
 #[cfg(test)]
