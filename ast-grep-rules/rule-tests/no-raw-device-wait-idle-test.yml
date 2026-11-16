@@ -11,6 +11,19 @@ valid:
   - |
     #![cfg(all(test, target_os = "linux"))]
     fn helper() { let _ = device.device_wait_idle(); }
+  - |
+    #[cfg(test)]
+    #[allow(dead_code)]
+    mod tests {
+        fn helper() { let _ = device.device_wait_idle(); }
+    }
+  - |
+    #[cfg(test)]
+    // helpers that drain the device between cases
+    mod tests {
+        fn helper() { let _ = device.device_wait_idle(); }
+    }
+  - "fn drain() { vk_check!(self.vulkan_device.wait_idle()); }\n"
 invalid:
   - "impl Drop for Kernel { fn drop(&mut self) { unsafe { let _ = self.device.device_wait_idle(); } } }"
   - |
@@ -22,5 +35,12 @@ invalid:
   - |
     #[cfg(feature = "slow")]
     mod slow_path {
+        fn drain() { let _ = device.device_wait_idle(); }
+    }
+  - "fn drain() { vk_check!(self.device.device_wait_idle()); }"
+  - |
+    #[cfg(test)]
+    fn only_this_function_is_test_code() {}
+    mod real {
         fn drain() { let _ = device.device_wait_idle(); }
     }

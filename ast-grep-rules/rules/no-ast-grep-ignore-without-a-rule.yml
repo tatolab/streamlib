@@ -1,0 +1,11 @@
+id: no-ast-grep-ignore-without-a-rule
+language: rust
+severity: error
+message: "An `ast-grep-ignore` comment names the rule it silences, `// ast-grep-ignore: <rule-id>`; a bare one silences every rule on the next line."
+rule:
+  any:
+    - kind: line_comment
+    - kind: block_comment
+  regex: 'ast-grep-ignore\s*(\*/)?$'
+ignores:
+  - "**/vendor/**"

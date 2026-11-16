@@ -10,6 +10,12 @@ rule:
         stopBy: end
         kind: mod_item
         follows:
+          stopBy:
+            not:
+              any:
+                - kind: attribute_item
+                - kind: line_comment
+                - kind: block_comment
           kind: attribute_item
           regex: '^#\[cfg\((all\()?test\b'
     - inside:

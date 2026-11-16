@@ -186,7 +186,7 @@ type SourceWalkingGate = fn(&Path) -> Result<()>;
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all sixteen in well under a second, and why CI runs them as
+/// lets one process run them all in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     ("lint-logging", lint_logging::run),

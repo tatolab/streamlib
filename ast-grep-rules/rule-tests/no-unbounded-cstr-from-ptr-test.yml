@@ -3,6 +3,7 @@ valid:
   - "let name = properties.extension_name.as_cstr();"
   - "let name = unsafe { CStr::from_ptr(extension_names_ptr) };"
   - "let name = unsafe { std::ffi::CStr::from_ptr(*names.add(index)) };"
+  - "tracing::info!(name = ?unsafe { CStr::from_ptr(extension_names_ptr) });"
 invalid:
   - "let name = unsafe { CStr::from_ptr(properties.extension_name.as_ptr()) };"
   - "let name = unsafe { std::ffi::CStr::from_ptr(layer.layer_name.as_ptr()) };"
@@ -14,3 +15,5 @@ invalid:
                 .as_ptr(),
         )
     };
+  - "tracing::info!(name = ?unsafe { CStr::from_ptr(p.device_name.as_ptr()) });"
+  - "let text = format!(\"{:?}\", unsafe { std::ffi::CStr::from_ptr(p.device_name.as_ptr()) });"

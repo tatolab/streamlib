@@ -13,13 +13,31 @@ files:
   - runtime/streamlib-engine/src/vulkan/**/*.rs
   - runtime/streamlib-consumer-rhi/src/**/*.rs
 rule:
-  kind: call_expression
-  all:
-    - has:
-        field: function
-        regex: '(^|::)CStr::from_ptr$'
-    - has:
-        field: arguments
+  any:
+    - kind: call_expression
+      all:
+        - has:
+            field: function
+            regex: '(^|::)CStr::from_ptr$'
+        - has:
+            field: arguments
+            has:
+              stopBy: end
+              pattern: $OWNER.as_ptr()
+    - kind: identifier
+      regex: '^from_ptr$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^CStr$'
+      precedes:
+        kind: token_tree
         has:
           stopBy: end
-          pattern: $OWNER.as_ptr()
+          kind: identifier
+          regex: '^as_ptr$'
+          follows:
+            regex: '^\.$'

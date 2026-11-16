@@ -18,6 +18,15 @@ ignores:
   - "**/tests.rs"
   - "**/tests/**"
 rule:
-  pattern: $DEVICE.device_wait_idle($$$ARGUMENTS)
+  any:
+    - pattern: $DEVICE.device_wait_idle($$$ARGUMENTS)
+    - kind: identifier
+      regex: '^device_wait_idle$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^\.$'
+      precedes:
+        kind: token_tree
   not:
     matches: inside-rust-test-code

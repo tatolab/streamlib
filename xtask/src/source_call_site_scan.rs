@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Finding calls in Rust source by a cheap text scan, for the gates that refuse
-//! a call by what its arguments carry.
+//! Finding calls in Rust source by a cheap text scan, for a gate that refuses a
+//! call by what its arguments carry.
 
 /// One call found in source.
 #[derive(Debug, PartialEq, Eq)]
