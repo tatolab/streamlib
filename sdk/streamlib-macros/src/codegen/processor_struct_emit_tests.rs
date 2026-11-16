@@ -28,7 +28,8 @@ fn minimal_schema() -> ProcessorSchema {
 #[test]
 fn processor_struct_does_not_carry_audio_field() {
     let schema = minimal_schema();
-    let rendered = generate_processor_struct_from_schema(&schema, &None, &[]).to_string();
+    let rendered =
+        generate_processor_struct_from_schema(&schema, &None, &[], &quote! { pub }).to_string();
     assert!(
         !rendered.contains("audio"),
         "generated Processor struct must not declare an `audio` field — got: {}",
@@ -248,6 +249,7 @@ fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
         &schema,
         &None,
         &custom_fields,
+        &quote! { pub },
     ));
     for (port_field_name, port_field_type) in
         [("inputs", "InputMailboxes"), ("outputs", "OutputWriter")]
@@ -330,6 +332,7 @@ fn processor_struct_preserves_cfg_attribute_on_custom_field() {
         &minimal_schema(),
         &None,
         &custom_fields,
+        &quote! { pub },
     ));
     assert!(
         rendered.contains(r#"#[cfg(target_os="linux")]publinux_only_backend_state"#),
@@ -386,6 +389,7 @@ fn processor_struct_forwards_doc_and_lint_attributes_but_not_cfg_attr() {
         &minimal_schema(),
         &None,
         &custom_fields,
+        &quote! { pub },
     ));
     assert!(
         rendered.contains("Authoreddoconaprocessorfield."),
@@ -682,6 +686,7 @@ fn rendered_impl_block_declared_as(built_in_node: bool) -> String {
     let schema = minimal_schema();
     render_token_stream_without_whitespace(generate_processor_impl_from_schema(
         &schema,
+        &quote! { pub },
         &no_declared_meta_or_port_descriptions(),
         &node_type_minted(built_in_node, &schema.name),
         &quote! { __streamlib_sdk::processors::EmptyConfig },
@@ -788,8 +793,13 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         audio_window: None,
         family: PortFamilyDeclaration::of_family(PortFamily::Image),
     };
-    let rendered =
-        generate_port_marker_module(PortDirection::Output, &[declared_output_port]).to_string();
+    let rendered = generate_port_marker_module(
+        PortDirection::Output,
+        &[declared_output_port],
+        &quote! { pub },
+        &quote! { pub },
+    )
+    .to_string();
     assert!(rendered.contains("pub mod OutputLink"), "got: {rendered}");
     assert!(rendered.contains("pub struct videoOut"), "got: {rendered}");
     assert!(
@@ -799,5 +809,79 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
     assert!(
         rendered.contains(r#"const PORT_NAME : & 'static str = "videoout""#),
         "got: {rendered}"
+    );
+}
+
+#[test]
+fn the_authors_visibility_is_written_as_seen_from_each_nested_module() {
+    use std::num::NonZeroUsize;
+    let written_from = |visibility: syn::Visibility, depth: usize| {
+        render_token_stream_without_whitespace(author_visibility_written_from_a_nested_module(
+            &visibility,
+            NonZeroUsize::new(depth).expect("every case names a nested module"),
+        ))
+    };
+    for (visibility, depth, expected) in [
+        (syn::parse_quote! { pub }, 1, "pub"),
+        (syn::parse_quote! { pub }, 2, "pub"),
+        (syn::parse_quote! { pub(crate) }, 2, "pub(crate)"),
+        (syn::Visibility::Inherited, 1, "pub(insuper)"),
+        (syn::Visibility::Inherited, 2, "pub(insuper::super)"),
+        (syn::parse_quote! { pub(self) }, 1, "pub(insuper)"),
+        (syn::parse_quote! { pub(super) }, 1, "pub(insuper::super)"),
+        (
+            syn::parse_quote! { pub(super) },
+            2,
+            "pub(insuper::super::super)",
+        ),
+        (syn::parse_quote! { pub(crate) }, 1, "pub(crate)"),
+        (
+            syn::parse_quote! { pub(in super::super) },
+            1,
+            "pub(insuper::super::super)",
+        ),
+        (
+            syn::parse_quote! { pub(in super::nodes) },
+            2,
+            "pub(insuper::super::super::nodes)",
+        ),
+        (
+            syn::parse_quote! { pub(in super::nodes) },
+            1,
+            "pub(insuper::super::nodes)",
+        ),
+        (
+            syn::parse_quote! { pub(in crate::nodes) },
+            2,
+            "pub(incrate::nodes)",
+        ),
+    ] {
+        assert_eq!(written_from(visibility, depth), expected);
+    }
+}
+
+#[test]
+fn a_crate_visible_node_generates_crate_visible_items_only() {
+    let item: ItemStruct = syn::parse_quote! {
+        pub(crate) struct CrateVisibleProbe;
+    };
+    let rendered = render_token_stream_without_whitespace(expand_probe_processor(&item));
+    for crate_visible_item in [
+        "pub(crate)modCrateVisibleProbe",
+        "pub(crate)typeConfig",
+        "pub(crate)fnnode(",
+        "pub(crate)structProcessor",
+        "pub(crate)fnprocessor_class_import_path(",
+    ] {
+        assert!(
+            rendered.contains(crate_visible_item),
+            "expected `{crate_visible_item}` in: {rendered}"
+        );
+    }
+    assert!(
+        !rendered.contains("pubmod")
+            && !rendered.contains("pubstruct")
+            && !rendered.contains("pubtype"),
+        "a pub(crate) node must generate no public item — got: {rendered}"
     );
 }

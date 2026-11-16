@@ -70,6 +70,7 @@ impl ProjectRelativeFilePath {
     }
 
     /// Each folder the path passes through, outermost first, without the file's own name.
+    #[cfg(feature = "history")]
     pub(crate) fn folders(&self) -> impl Iterator<Item = &str> {
         let folders = self.0.rsplit_once('/').map_or("", |(folders, _)| folders);
         folders.split('/').filter(|folder| !folder.is_empty())

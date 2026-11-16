@@ -20,6 +20,15 @@ use crate::grammar::{
 use syn::ItemStruct;
 use syn::spanned::Spanned;
 
+mod author_visibility;
+mod port_marker_module;
+
+use author_visibility::{
+    GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
+    author_visibility_written_from_a_nested_module,
+};
+use port_marker_module::generate_port_marker_module;
+
 /// Generate a processor module from the parsed `#[processor(...)]` attribute.
 /// Execution and ports are authored in the attribute — nothing here reads a
 /// file, and nothing authors identity.
@@ -35,6 +44,11 @@ pub(crate) fn generate_from_parsed_processor_attr(
     sdk_root: TokenStream,
 ) -> TokenStream {
     let module_name = &item.ident;
+    let module_visibility = &item.vis;
+    let member_visibility =
+        author_visibility_written_from_a_nested_module(&item.vis, GENERATED_MODULE_MEMBER_DEPTH);
+    let port_marker_visibility =
+        author_visibility_written_from_a_nested_module(&item.vis, GENERATED_PORT_MARKER_DEPTH);
     let schema = &parsed.to_processor_schema();
 
     let config_type = match &parsed.config_type {
@@ -51,12 +65,27 @@ pub(crate) fn generate_from_parsed_processor_attr(
     let custom_fields = extract_custom_fields(item);
     let refused_field_attribute_diagnostics = refused_field_attribute_diagnostics(item);
 
-    let processor_struct =
-        generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
-    let input_link_module = generate_port_marker_module(PortDirection::Input, &parsed.inputs);
-    let output_link_module = generate_port_marker_module(PortDirection::Output, &parsed.outputs);
+    let processor_struct = generate_processor_struct_from_schema(
+        schema,
+        &config_field_name,
+        &custom_fields,
+        &member_visibility,
+    );
+    let input_link_module = generate_port_marker_module(
+        PortDirection::Input,
+        &parsed.inputs,
+        &member_visibility,
+        &port_marker_visibility,
+    );
+    let output_link_module = generate_port_marker_module(
+        PortDirection::Output,
+        &parsed.outputs,
+        &member_visibility,
+        &port_marker_visibility,
+    );
     let processor_impl = generate_processor_impl_from_schema(
         schema,
+        &member_visibility,
         &ProcessorDeclaredMetaAndPortDescriptions::of(parsed),
         &node_type_minted(parsed.built_in_node, &schema.name),
         &config_type,
@@ -68,7 +97,7 @@ pub(crate) fn generate_from_parsed_processor_attr(
         /// This node type's identity: its class in `tatolab.stream` for a
         /// built-in, else the module path captured where the macro expanded.
         #[allow(dead_code, reason = "the identity function is emitted for every node, and not every crate calls it")]
-        pub fn processor_class_import_path()
+        #member_visibility fn processor_class_import_path()
             -> __streamlib_sdk::descriptors::ProcessorClassImportPath
         {
             Processor::processor_class_import_path()
@@ -89,7 +118,7 @@ pub(crate) fn generate_from_parsed_processor_attr(
 
     quote! {
         #[allow(non_snake_case, reason = "the generated module is named after the author's processor type")]
-        pub mod #module_name {
+        #module_visibility mod #module_name {
             use super::*;
 
             // Alias the consumer's real SDK crate (streamlib-plugin-sdk for
@@ -101,14 +130,14 @@ pub(crate) fn generate_from_parsed_processor_attr(
             #refused_field_attribute_diagnostics
 
             /// Configuration type for this processor.
-            pub type Config = #config_type;
+            #member_visibility type Config = #config_type;
 
             #processor_class_import_path_accessor
 
             /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
             ///
             /// Convenience wrapper around [`Processor::node`].
-            pub fn node(config: Config) -> __streamlib_sdk::processors::ProcessorSpec {
+            #member_visibility fn node(config: Config) -> __streamlib_sdk::processors::ProcessorSpec {
                 Processor::node(config)
             }
 
@@ -139,8 +168,9 @@ struct CustomField {
 /// way initializes a field that isn't there. `doc` and the `allow` / `warn` /
 /// `deny` / `forbid` controls are the extras layered on top of that set, so an
 /// author's `///` and `#[allow(dead_code)]` survive expansion. `expect` is
-/// excluded from both: the generated field is `pub` where the authored one was
-/// private, so a `dead_code` expectation the author wrote to silence a warning
+/// excluded from both: the generated field takes the struct's visibility, wider
+/// than the private field the author wrote, so a `dead_code` expectation the
+/// author wrote to silence a warning
 /// becomes an `unfulfilled_lint_expectation` warning instead.
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
     if is_forwarded_onto_from_config_initializer(attribute) {
@@ -223,9 +253,10 @@ fn generate_processor_struct_from_schema(
     schema: &ProcessorSchema,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
+    member_visibility: &TokenStream,
 ) -> TokenStream {
     let config_field = config_field_name.as_ref().map(|name| {
-        quote! { pub #name: Config, }
+        quote! { #member_visibility #name: Config, }
     });
 
     // Generate iceoryx2 port-handle fields if ports are defined. The
@@ -234,13 +265,13 @@ fn generate_processor_struct_from_schema(
     // them up via `GeneratedProcessor::set_iceoryx2_resources` after
     // `from_config` returns.
     let ipc_input_field = if !schema.inputs.is_empty() {
-        quote! { pub inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
+        quote! { #member_visibility inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
     } else {
         quote! {}
     };
 
     let ipc_output_field = if !schema.outputs.is_empty() {
-        quote! { pub outputs: __streamlib_sdk::iceoryx2::OutputWriter, }
+        quote! { #member_visibility outputs: __streamlib_sdk::iceoryx2::OutputWriter, }
     } else {
         quote! {}
     };
@@ -255,49 +286,16 @@ fn generate_processor_struct_from_schema(
                 .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute));
             let name = &custom_field.name;
             let ty = &custom_field.ty;
-            quote! { #(#attributes)* pub #name: #ty, }
+            quote! { #(#attributes)* #member_visibility #name: #ty, }
         })
         .collect();
 
     quote! {
-        pub struct Processor {
+        #member_visibility struct Processor {
             #ipc_input_field
             #ipc_output_field
             #config_field
             #(#custom_field_defs)*
-        }
-    }
-}
-
-/// Generate a port-marker module (`InputLink` / `OutputLink`): one marker per
-/// declared port, named by its declared spelling and carrying its cast name.
-fn generate_port_marker_module(
-    direction: PortDirection,
-    declared_ports: &[ParsedPort],
-) -> TokenStream {
-    let module_name = direction.port_marker_module_ident();
-    let port_marker_trait = direction.port_marker_trait_ident();
-    let port_markers: Vec<TokenStream> = declared_ports
-        .iter()
-        .map(|port| {
-            let marker_name = &port.declared_marker_ident;
-            let cast_name = &port.cast_name;
-            quote! {
-                pub struct #marker_name;
-                impl super::__streamlib_sdk::processors::#port_marker_trait for #marker_name {
-                    const PORT_NAME: &'static str = #cast_name;
-                    type Processor = super::Processor;
-                }
-            }
-        })
-        .collect();
-
-    // A marker is named by the author's spelling, `video_in` as often as
-    // `VideoIn`, and its span is the author's literal, so rustc would lint it.
-    quote! {
-        #[allow(non_camel_case_types, reason = "the generated module is named after the author's port names")]
-        pub mod #module_name {
-            #(#port_markers)*
         }
     }
 }
@@ -322,6 +320,7 @@ fn node_type_minted(built_in_node: bool, processor_class_short_name: &str) -> To
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
+    member_visibility: &TokenStream,
     declared_meta_and_port_descriptions: &ProcessorDeclaredMetaAndPortDescriptions<'_>,
     node_type_minted: &TokenStream,
     config_type: &TokenStream,
@@ -419,11 +418,11 @@ fn generate_processor_impl_from_schema(
             /// The authored type's name — what an instance's display name
             /// defaults to. Not the processor's identity: use
             /// [`Processor::processor_class_import_path`] for that.
-            pub const NAME: &'static str = #processor_class_short_name;
+            #member_visibility const NAME: &'static str = #processor_class_short_name;
 
             /// This node type's identity: its class in `tatolab.stream` for a
             /// built-in, else the module path captured where the macro expanded.
-            pub fn processor_class_import_path()
+            #member_visibility fn processor_class_import_path()
                 -> __streamlib_sdk::descriptors::ProcessorClassImportPath
             {
                 #node_type_minted
@@ -431,7 +430,7 @@ fn generate_processor_impl_from_schema(
 
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
-            pub fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
+            #member_visibility fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
                 __streamlib_sdk::processors::ProcessorSpec::new(
                     Self::processor_class_import_path(),
                     __streamlib_sdk::serde_json::to_value(&config)
@@ -440,12 +439,12 @@ fn generate_processor_impl_from_schema(
             }
 
             /// Returns the execution mode for this processor.
-            pub fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
+            #member_visibility fn execution_mode(&self) -> __streamlib_sdk::execution::ProcessExecution {
                 #execution_variant
             }
 
             /// Returns a human-readable description of the execution mode.
-            pub fn execution_mode_description(&self) -> &'static str {
+            #member_visibility fn execution_mode_description(&self) -> &'static str {
                 #execution_description
             }
         }
@@ -697,7 +696,7 @@ fn generate_descriptor_from_schema(
         .map(|category| quote! { .with_category(#category) });
 
     // `module_path!()` resolves here to `<author's module>::<authored type>`,
-    // because this expansion lands inside the `pub mod` the macro names after
+    // because this expansion lands inside the module the macro names after
     // the author's struct — the generated module's own path *is* the type
     // path, with no `stringify!` needed to append the name.
     quote! {

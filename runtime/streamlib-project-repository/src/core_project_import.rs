@@ -133,6 +133,7 @@ pub fn link_the_core_project_into_each_import_of(
 /// folder the runtime links the core project at, in the project or in an import at any depth,
 /// or a path inside it. No copy of a project carries it: the runtime that opens the copy links
 /// its own.
+#[cfg(feature = "history")]
 pub(crate) fn is_at_or_inside_a_core_project_import_folder(relative_path: &str) -> bool {
     let mut folders = relative_path.split('/').peekable();
     while let Some(folder) = folders.next() {
@@ -269,6 +270,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "history")]
     #[test]
     fn the_core_project_folder_is_named_in_a_project_and_in_an_import_at_any_depth() {
         for (relative_path, is_the_core_project_folder) in [

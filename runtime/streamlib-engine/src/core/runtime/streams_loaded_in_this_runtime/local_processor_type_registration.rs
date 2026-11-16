@@ -53,11 +53,7 @@ mod tests {
         Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
     )]
     #[serde(deny_unknown_fields)]
-    #[allow(
-        unreachable_pub,
-        reason = "the processor macro names the config in a trait impl, which needs it public"
-    )]
-    pub struct AddLocalSourceTakingOneSettingConfig {
+    pub(super) struct AddLocalSourceTakingOneSettingConfig {
         #[serde(default)]
         pub frame_width: Option<u32>,
     }
@@ -70,7 +66,7 @@ mod tests {
         config = crate::core::runtime::streams_loaded_in_this_runtime::local_processor_type_registration::tests::AddLocalSourceTakingOneSettingConfig,
         output("video", family = Image),
     )]
-    pub struct AddLocalSourceTakingOneSetting;
+    pub(super) struct AddLocalSourceTakingOneSetting;
 
     impl crate::core::ManualProcessor for AddLocalSourceTakingOneSetting::Processor {
         fn start(
