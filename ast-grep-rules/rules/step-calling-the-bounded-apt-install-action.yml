@@ -1,0 +1,20 @@
+# Not a refusal: scripts/check_ast_grep_required_matches.py requires a finding in
+# each file listed here, so a renamed action, which would leave the rule named on
+# the next line matching nothing, fails the lint instead of passing it.
+# keeps-wired: bounded-apt-install-step-without-timeout
+id: step-calling-the-bounded-apt-install-action
+language: yaml
+severity: hint
+message: This workflow calls the bounded-apt-install action, which bounded-apt-install-step-without-timeout keys on.
+files:
+  - .github/workflows/ci.yml
+  - .github/workflows/control-plane-client.yml
+rule:
+  kind: block_mapping_pair
+  all:
+    - has:
+        field: key
+        regex: '^uses$'
+    - has:
+        field: value
+        regex: '^\./\.github/actions/install-linux-engine-build-dependencies$'

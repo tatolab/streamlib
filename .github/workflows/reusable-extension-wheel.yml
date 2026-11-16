@@ -100,7 +100,7 @@ jobs:
           # wheel links no libpython, and installing those headers replaces the
           # image's python3 (3.12) with AlmaLinux's 3.6, which maturin refuses.
           #
-          # A bounded, mirror-escaping install: `check-bounded-apt-install`
+          # A bounded, mirror-escaping install: `no-unbounded-apt-install-in-ci`
           # covers the apt family under .github/ and cannot reach a `dnf` inside
           # this container. The mode that costs is a *slow* mirror, not a
           # stalled one — a measured apt run fetched 35.6 MB at 48 kB/s over

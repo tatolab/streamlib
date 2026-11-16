@@ -7,9 +7,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+mod bounded_retry_apt_install_script_tests;
 pub mod build_runtime;
 pub mod check_boundaries;
-pub mod check_bounded_apt_install;
 pub mod check_control_contract_compatibility;
 pub mod check_graph_document_node_types;
 pub mod check_module_host_table_surface;
@@ -137,7 +138,6 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
         "generate-module-host-table-c-header --check",
         generate_module_host_table_c_header::check,
     ),
-    ("check-bounded-apt-install", check_bounded_apt_install::run),
     (
         "check-workspace-version-pins",
         check_workspace_version_pins::run,
@@ -424,19 +424,6 @@ enum Commands {
     /// depends on no engine crate. See [`check_module_host_table_surface`].
     CheckModuleHostTableSurface,
 
-    /// CI gate keeping every apt install in CI behind
-    /// `.github/actions/install-linux-engine-build-dependencies`. Fails on any
-    /// `apt-get` under `.github/workflows/`, and on any step calling that
-    /// action without `timeout-minutes`. An inline `apt-get update && apt-get
-    /// install` has no wall-clock bound, and the mode that costs is a mirror
-    /// that is slow rather than stalled — one measured run fetched 35.6 MB at
-    /// 48 kB/s over 12m17s while every request made progress, so neither
-    /// `Acquire::Retries` (nothing failed) nor `Acquire::http::Timeout`
-    /// (nothing went idle) engaged. Composite-action steps cannot declare
-    /// `timeout-minutes`, so the caller's step is the only place the native
-    /// backstop can live.
-    CheckBoundedAptInstall,
-
     /// Drift trip-wire for the vendored third-party trees — the vulkanalia
     /// fork (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored
     /// crate dir and fails on any byte change vs. the recorded hash — the
@@ -616,7 +603,6 @@ fn main() -> Result<()> {
         Commands::CheckModuleHostTableSurface => {
             check_module_host_table_surface::run(&workspace_root()?)?
         }
-        Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredTrees => check_vendored_trees::run(&workspace_root()?)?,
         Commands::CheckWorkspaceVersionPins { fix } => {
             let workspace_root = workspace_root()?;

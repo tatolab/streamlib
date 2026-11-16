@@ -75,9 +75,21 @@ class RequiredMatchFailuresTest(unittest.TestCase):
         self.assertEqual(
             failures,
             [
-                "wall-clock-read-on-a-permitted-surface names no `# required-by:` rule that exists"
+                (
+                    "wall-clock-read-on-a-permitted-surface names no `# required-by:` or "
+                    "`# keeps-wired:` rule that exists"
+                )
             ],
         )
+
+    def test_a_keeps_wired_rule_needs_only_its_findings(self) -> None:
+        keeps_wired_rule = ["# keeps-wired: no-wall-clock-read", *HINT_RULE[1:]]
+        self.assertEqual(
+            failures_for(keeps_wired_rule, refusing_rule=REFUSING_RULE[:2]), []
+        )
+        failures = failures_for(keeps_wired_rule, found_in={"runtime/a.rs"})
+        self.assertEqual(len(failures), 1)
+        self.assertIn("requires a finding in runtime/b.rs", failures[0])
 
     def test_a_failed_scan_fails(self) -> None:
         self.assertEqual(

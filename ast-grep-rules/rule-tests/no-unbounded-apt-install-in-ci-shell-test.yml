@@ -1,0 +1,9 @@
+id: no-unbounded-apt-install-in-ci-shell
+valid:
+  - "ls /var/cache/apt/archives"
+  - "dpkg -L libfoo"
+  - "# apt-get install foo"
+invalid:
+  - "sudo apt-get install -y libfoo"
+  - "apt update"
+  - "dpkg --install foo.deb"

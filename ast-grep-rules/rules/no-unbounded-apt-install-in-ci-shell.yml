@@ -1,0 +1,16 @@
+id: no-unbounded-apt-install-in-ci-shell
+language: bash
+severity: error
+message: >-
+  This fetches apt packages outside the bounded-retry action; install through
+  ./.github/actions/install-linux-engine-build-dependencies, which bounds each command and
+  escapes to a second mirror.
+files:
+  - .github/**/*.sh
+ignores:
+  # The one file under .github/ that runs apt, under its own bound and mirror fallback.
+  - .github/actions/install-linux-engine-build-dependencies/install-system-dependencies-with-bounded-retry.sh
+rule:
+  # The same words no-unbounded-apt-install-in-ci refuses in a workflow's shell.
+  kind: command
+  regex: '(?m)^[ \t"]*(?:[^#\s"][^\n]*?[ \t"])?(?:(?:apt-get|apt|aptitude)(?:[ \t]+(?:-[^-\s]\S*|--\S+))*[ \t]+(?:install|reinstall|update|upgrade|dist-upgrade|full-upgrade|build-dep|\\)|dpkg[ \t]+(?:-i|--install|--unpack))(?:[ \t"'';&|]|$)'

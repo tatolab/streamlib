@@ -9,7 +9,7 @@ description: >-
 # Composite-action steps cannot declare `timeout-minutes`, so the ceiling is the
 # script's own per-command bound (790s worst case) plus the restore's one-minute
 # download bound; callers add `timeout-minutes` on the `uses:`
-# step as the native backstop, and `check-bounded-apt-install` fails the build
+# step as the native backstop, and `bounded-apt-install-step-without-timeout` fails the build
 # if one forgets.
 #
 # Only `main` saves the .debs, as every other cache in this repo does: a merge

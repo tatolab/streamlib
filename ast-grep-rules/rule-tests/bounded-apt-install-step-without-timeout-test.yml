@@ -1,0 +1,30 @@
+id: bounded-apt-install-step-without-timeout
+valid:
+  - |
+    steps:
+      - name: Install
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        timeout-minutes: 10
+  - |
+    steps:
+      -
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        timeout-minutes: 10
+  - |
+    steps:
+      - uses: ./.github/actions/cache-rust-dependencies
+invalid:
+  - |
+    steps:
+      - name: Install
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+  - |
+    steps:
+      - name: Install
+        uses: ./.github/actions/install-linux-engine-build-dependencies
+        with:
+          timeout-minutes: 10
+  - |
+    steps:
+      -   uses: ./.github/actions/install-linux-engine-build-dependencies
+          # timeout-minutes: 10

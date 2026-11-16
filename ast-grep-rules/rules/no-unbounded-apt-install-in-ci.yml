@@ -1,0 +1,28 @@
+id: no-unbounded-apt-install-in-ci
+language: yaml
+severity: error
+message: >-
+  This fetches apt packages outside the bounded-retry action; install through
+  ./.github/actions/install-linux-engine-build-dependencies, which bounds each command and
+  escapes to a second mirror.
+note: >-
+  An unbounded apt install can hang a job for 13 minutes. Only
+  install-system-dependencies-with-bounded-retry.sh may run apt under .github/.
+files:
+  - .github/**/*.yml
+  - .github/**/*.yaml
+ignores:
+  # Prose by construction: an issue template quotes commands and runs none.
+  - .github/ISSUE_TEMPLATE/**
+rule:
+  # `apt-get`, `apt` or `aptitude` as a whole word followed, past any flags, by a
+  # subcommand that reaches the network or by a `\` continuation, or `dpkg` with an
+  # installing flag. A line that opens with `#` is a shell comment. A word after `--`
+  # is prose, and a flag whose value is a separate word (`-o Foo=bar update`) ends the
+  # flag skip.
+  any:
+    - kind: string_scalar
+    - kind: block_scalar
+    - kind: double_quote_scalar
+    - kind: single_quote_scalar
+  regex: '(?m)^[ \t"]*(?:[^#\s"][^\n]*?[ \t"])?(?:(?:apt-get|apt|aptitude)(?:[ \t]+(?:-[^-\s]\S*|--\S+))*[ \t]+(?:install|reinstall|update|upgrade|dist-upgrade|full-upgrade|build-dep|\\)|dpkg[ \t]+(?:-i|--install|--unpack))(?:[ \t"'';&|]|$)'

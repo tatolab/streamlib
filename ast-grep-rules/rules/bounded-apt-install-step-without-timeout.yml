@@ -1,0 +1,28 @@
+id: bounded-apt-install-step-without-timeout
+language: yaml
+severity: error
+message: >-
+  This step calls the bounded-apt-install action without `timeout-minutes`; a composite
+  action cannot declare one, so this step is the only place the native ceiling can live.
+files:
+  - .github/workflows/**/*.yml
+  - .github/workflows/**/*.yaml
+rule:
+  # Only a key of the step itself counts: a `with:` input named `timeout-minutes` is an
+  # input GitHub ignores, not a ceiling.
+  kind: block_mapping
+  has:
+    kind: block_mapping_pair
+    all:
+      - has:
+          field: key
+          regex: '^uses$'
+      - has:
+          field: value
+          regex: '^\./\.github/actions/install-linux-engine-build-dependencies$'
+  not:
+    has:
+      kind: block_mapping_pair
+      has:
+        field: key
+        regex: '^timeout-minutes$'
