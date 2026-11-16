@@ -9,6 +9,8 @@ valid:
     import tatolab.stream.log as log
   - "stream = sys.stdin"
 invalid:
+  - "pprint(value)"
+  - "pprint.pprint(value)"
   - "print('ready')"
   - "builtins.print('ready')"
   - "sys.stderr.write('ready')"

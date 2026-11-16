@@ -22,6 +22,10 @@ rule:
       has:
         field: function
         regex: '^(builtins\.)?print$'
+    - kind: call
+      has:
+        field: function
+        regex: '^(pprint\.)?(pprint|pp)$'
     - kind: attribute
       regex: '^sys\.(stdout|stderr)$'
     - kind: call

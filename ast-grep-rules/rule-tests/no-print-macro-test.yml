@@ -1,5 +1,14 @@
 id: no-print-macro
 valid:
+  - |
+    #[expect(clippy::disallowed_macros)]
+    fn f() { println!("ready"); }
+  - |
+    #[allow(
+        clippy::disallowed_macros,
+        reason = "writes to the harness on stderr"
+    )]
+    fn f() { eprintln!("ready"); }
   - "fn f() { tracing::info!(\"ready\"); }"
   - "fn f() { let s = format!(\"{}\", 1); }"
   - |
@@ -15,6 +24,10 @@ valid:
     fn f() { dbg!(1); }
   - "// println!(\"ready\")"
 invalid:
+  - "fn f() { ::std::println!(\"x\"); }"
+  - |
+    #[cfg_attr(test, allow(clippy::disallowed_macros))]
+    fn f() { println!("x"); }
   - "fn f() { println!(\"ready\"); }"
   - "fn f() { eprintln!(\"ready\"); }"
   - "fn f() { print!(\"ready\"); }"

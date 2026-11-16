@@ -8,7 +8,6 @@ files:
   - adapters/**/*.rs
   - packages/test-fixtures/**/*.rs
 ignores:
-  - "**/*_test.rs"
   - "**/*_tests.rs"
   - "**/tests.rs"
   - "**/tests/**"
@@ -19,7 +18,7 @@ rule:
   kind: macro_invocation
   has:
     field: macro
-    regex: '^(std::)?(println|eprintln|print|eprint|dbg)$'
+    regex: '^(::)?(std::)?(println|eprintln|print|eprint|dbg)$'
   not:
     any:
       - matches: inside-rust-test-code
@@ -33,10 +32,10 @@ rule:
                   - kind: line_comment
                   - kind: block_comment
             kind: attribute_item
-            regex: 'allow\(.*clippy::disallowed_macros'
+            regex: '(?s)^#!?\[(allow|expect)\(.*clippy::disallowed_macros'
       - inside:
           stopBy: end
           kind: source_file
           has:
             kind: inner_attribute_item
-            regex: 'allow\(.*clippy::disallowed_macros'
+            regex: '(?s)^#!?\[(allow|expect)\(.*clippy::disallowed_macros'
