@@ -1,0 +1,35 @@
+id: no-inheritable-descriptor
+valid:
+  - "unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };"
+  - "let (read_end, write_end) = std::io::pipe()?;"
+  - "unsafe { libc::dup2(fd, libc::STDOUT_FILENO) };"
+  - "unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };"
+  - "let epoll = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };"
+  - |
+    let timer = unsafe {
+        libc::timerfd_create(
+            libc::CLOCK_MONOTONIC,
+            libc::TFD_NONBLOCK | libc::TFD_CLOEXEC,
+        )
+    };
+  - "let n = unsafe { libc::recvmsg(socket, &mut message, libc::MSG_CMSG_CLOEXEC) };"
+  - "let event = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };"
+  - "// unsafe { libc::dup(fd) } would leak into children"
+  - "let checked = check!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) });"
+invalid:
+  - "fn dup_fd(fd: libc::c_int) -> i32 { unsafe { libc::dup(fd) } }"
+  - "unsafe { libc::pipe(fds.as_mut_ptr()) };"
+  - "unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK) };"
+  - "let epoll = unsafe { libc::epoll_create(1) };"
+  - "let epoll = unsafe { libc::epoll_create1(0) };"
+  - "let timer = unsafe { libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_NONBLOCK) };"
+  - "let event = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK) };"
+  - "let n = unsafe { libc::recvmsg(socket, &mut message, 0) };"
+  - "let fd = unsafe { nix::libc::dup(fd) };"
+  - "let checked = check!(unsafe { libc::dup(fd) });"
+  - "let checked = check!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK) });"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn leaks() { unsafe { libc::pipe(fds.as_mut_ptr()) }; }
+    }

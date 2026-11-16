@@ -1,0 +1,11 @@
+# Rules that take no `ast-grep-ignore`, one id per line. They guard against
+# faults that fail silently or only in a grandchild process, so none has a
+# per-line way past it. scripts/check_ast_grep_suppressions.py refuses a
+# suppression comment naming one; ast-grep can't, since a comment suppresses
+# its own line.
+no-inheritable-descriptor
+no-iceoryx2-node-outside-the-engine-owned-domain
+no-iceoryx2-node-outside-the-domain-constructor
+no-iceoryx2-global-config
+no-publish-subscribe-service-outside-the-engine-wrapper
+no-escalate-in-lifecycle

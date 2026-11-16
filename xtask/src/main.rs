@@ -13,10 +13,7 @@ pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_control_contract_compatibility;
 pub mod check_graph_document_node_types;
-pub mod check_iceoryx2_construction;
 pub mod check_module_host_table_surface;
-pub mod check_no_escalate_in_lifecycle;
-pub mod check_no_inheritable_descriptor;
 pub mod check_no_tatolab_namespace_package_init;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
@@ -30,7 +27,6 @@ pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod runtime_client_zod_schemas;
 pub mod sign_the_carried_packages_with_a_developer_id;
-pub mod source_call_site_scan;
 pub mod stage_browser_host;
 pub mod stage_core_projects;
 pub mod stage_first_party_modules;
@@ -130,24 +126,6 @@ pub fn ensure_source_walking_gate_read_source(
     Ok(())
 }
 
-/// Refuse a gate run where one of its scan roots contributed no file.
-///
-/// A renamed or moved root leaves the others carrying the whole gate, which
-/// reads identically to a clean tree.
-pub fn ensure_every_source_walking_gate_scan_root_contributed(
-    gate_name: &str,
-    files_scanned_per_scan_root: &[(&str, usize)],
-) -> Result<()> {
-    for (scan_root, files_scanned) in files_scanned_per_scan_root {
-        anyhow::ensure!(
-            *files_scanned > 0,
-            "{gate_name} scanned 0 files under {scan_root} — that scan root moved out from \
-             under the gate"
-        );
-    }
-    Ok(())
-}
-
 /// Workspace-relative paths git tracks under `scan_roots`.
 ///
 /// A filesystem walk would descend `sdk/streamlib-python-wheel/.venv-pyright`
@@ -200,19 +178,7 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
         "generate-module-host-table-c-header --check",
         generate_module_host_table_c_header::check,
     ),
-    (
-        "check-no-escalate-in-lifecycle",
-        check_no_escalate_in_lifecycle::run,
-    ),
-    (
-        "check-iceoryx2-construction",
-        check_iceoryx2_construction::run,
-    ),
     ("check-clock-usage", check_clock_usage::run),
-    (
-        "check-no-inheritable-descriptor",
-        check_no_inheritable_descriptor::run,
-    ),
     ("check-bounded-apt-install", check_bounded_apt_install::run),
     (
         "check-workspace-version-pins",
@@ -504,31 +470,6 @@ enum Commands {
     /// depends on no engine crate. See [`check_module_host_table_surface`].
     CheckModuleHostTableSurface,
 
-    /// CI gate for the escalate-from-lifecycle ban. Fails when
-    /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
-    /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
-    /// `.escalate(...)` in its body. The lifecycle dispatch already
-    /// holds the escalate gate; re-entry panics at runtime via
-    /// `EscalateGate::enter`. The xtask is defense-in-depth — catches
-    /// the violation at PR review before the runtime panic fires.
-    CheckNoEscalateInLifecycle,
-
-    /// CI gate for the engine-owned iceoryx2 domain. Fails on any
-    /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
-    /// `adapters/` outside `iceoryx2/node/`, and on any `Config::global_config()`
-    /// anywhere — tests and benches included, since a node in another domain hangs
-    /// a test silently and a service without the user header counts no loss.
-    CheckIceoryx2Construction,
-
-    /// CI gate for close-on-exec at source. Fails on a raw `libc::dup` or
-    /// `libc::pipe`, and on a `pipe2`, `epoll_create1`, `timerfd_create`,
-    /// `eventfd` or `recvmsg` missing its close-on-exec flag, anywhere under
-    /// `runtime/ sdk/ adapters/` — test code included. A descriptor created
-    /// inheritable reaches every process the app spawns, and a grandchild
-    /// holding a copy of the app's stdout keeps anything reading that output
-    /// waiting after the app has died.
-    CheckNoInheritableDescriptor,
-
     /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
     /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
     /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
@@ -734,16 +675,7 @@ fn main() -> Result<()> {
         Commands::CheckModuleHostTableSurface => {
             check_module_host_table_surface::run(&workspace_root()?)?
         }
-        Commands::CheckNoEscalateInLifecycle => {
-            check_no_escalate_in_lifecycle::run(&workspace_root()?)?
-        }
-        Commands::CheckIceoryx2Construction => {
-            check_iceoryx2_construction::run(&workspace_root()?)?
-        }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
-        Commands::CheckNoInheritableDescriptor => {
-            check_no_inheritable_descriptor::run(&workspace_root()?)?
-        }
         Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredTrees => check_vendored_trees::run(&workspace_root()?)?,
         Commands::CheckWorkspaceVersionPins { fix } => {

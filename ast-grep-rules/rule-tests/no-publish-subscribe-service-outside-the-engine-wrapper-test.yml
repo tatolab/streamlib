@@ -1,0 +1,16 @@
+id: no-publish-subscribe-service-outside-the-engine-wrapper
+valid:
+  - "use iceoryx2::service::header::publish_subscribe::Header;"
+  - "const HEADER_BYTES: usize = std::mem::size_of::<iceoryx2::service::header::publish_subscribe::Header>();"
+  - "let service = node.open_or_create_service(&service_name)?;"
+  - "fn publish_subscribe_count() -> usize { 0 }"
+invalid:
+  - "let service = node.service_builder(&name).publish_subscribe::<[u8]>().open_or_create()?;"
+  - |
+    let service = node
+        .service_builder(&name)
+        .publish_subscribe
+        ::<[u8]>()
+        .open_or_create()?;
+  - "let service = node.service_builder(&name).publish_subscribe().open_or_create()?;"
+  - "let service = build!(node.service_builder(&name).publish_subscribe::<[u8]>());"

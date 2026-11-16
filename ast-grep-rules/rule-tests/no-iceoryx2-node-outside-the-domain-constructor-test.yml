@@ -1,0 +1,14 @@
+id: no-iceoryx2-node-outside-the-domain-constructor
+valid:
+  - |
+    pub fn create_iceoryx2_node_in_domain(config: &Config) -> Result<Node<ipc::Service>> {
+        NodeBuilder::new().config(config).create::<ipc::Service>()
+    }
+invalid:
+  - |
+    pub fn create_iceoryx2_node_in_domain(config: &Config) -> Result<Node<ipc::Service>> {
+        NodeBuilder::new().config(config).create::<ipc::Service>()
+    }
+    pub fn a_second_node_for_the_domain() -> Result<Node<ipc::Service>> {
+        NodeBuilder::new().create::<ipc::Service>()
+    }

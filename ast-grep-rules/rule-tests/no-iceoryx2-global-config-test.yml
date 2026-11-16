@@ -1,0 +1,8 @@
+id: no-iceoryx2-global-config
+valid:
+  - "let config = engine_owned_iceoryx2_domain_config();"
+  - "let config = AppConfig::global();"
+invalid:
+  - "let config = Config::global_config();"
+  - "let config = iceoryx2::config::Config::global_config().clone();"
+  - "let config = expect_ok!(Config::global_config());"

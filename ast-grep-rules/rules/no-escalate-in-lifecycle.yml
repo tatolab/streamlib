@@ -1,0 +1,45 @@
+id: no-escalate-in-lifecycle
+language: rust
+severity: error
+message: A lifecycle body that takes `&RuntimeContextFullAccess` already holds full access; `.escalate(…)` there re-enters the escalate gate on the same thread and panics. Call `ctx.gpu_full_access()` directly.
+note: >-
+  Checked in any `setup`, `teardown`, `start` or `stop` function, or its `_inner`
+  helper, that takes `RuntimeContextFullAccess`. A reactive `start` takes
+  `RuntimeContextLimitedAccess`, and escalating from it is the legitimate use.
+  The runtime panics on this at `EscalateGate::enter`; the rule catches it before
+  the code runs.
+files:
+  - packages/**/*.rs
+  - examples/**/*.rs
+ignores:
+  # Tests gate serialization across concurrent workers, so it escalates from start() on purpose.
+  - packages/test-fixtures/processors/concurrent_escalate_test_processor.rs
+rule:
+  kind: call_expression
+  has:
+    field: function
+    any:
+      - kind: field_expression
+        has:
+          field: field
+          regex: '^escalate$'
+      - kind: generic_function
+        has:
+          field: function
+          kind: field_expression
+          has:
+            field: field
+            regex: '^escalate$'
+  inside:
+    stopBy: end
+    kind: function_item
+    all:
+      - has:
+          field: name
+          regex: '^(setup|teardown|start|stop)(_inner)?$'
+      - has:
+          field: parameters
+          has:
+            stopBy: end
+            kind: type_identifier
+            regex: '^RuntimeContextFullAccess$'

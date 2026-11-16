@@ -1,0 +1,29 @@
+id: no-iceoryx2-global-config
+language: rust
+severity: error
+message: "`Config::global_config()` reads iceoryx2's ambient configuration, which lands outside the engine-owned domain; use `create_iceoryx2_node_in_engine_owned_domain` or `Iceoryx2Node::new`."
+note: >-
+  Nothing reads iceoryx2's global configuration, the engine-owned domain module
+  included. Test modules, test files and benches are checked too, and the rule
+  takes no ast-grep-ignore.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+rule:
+  any:
+    - kind: call_expression
+      has:
+        field: function
+        regex: '(^|::)Config::global_config$'
+    - kind: identifier
+      regex: '^global_config$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^Config$'
+      precedes:
+        kind: token_tree

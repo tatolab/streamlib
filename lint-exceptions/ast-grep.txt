@@ -406,10 +406,7 @@
 1 no-inline-test-module xtask/src/check_clock_usage.rs
 1 no-inline-test-module xtask/src/check_control_contract_compatibility.rs
 1 no-inline-test-module xtask/src/check_graph_document_node_types.rs
-1 no-inline-test-module xtask/src/check_iceoryx2_construction.rs
 1 no-inline-test-module xtask/src/check_module_host_table_surface.rs
-1 no-inline-test-module xtask/src/check_no_escalate_in_lifecycle.rs
-1 no-inline-test-module xtask/src/check_no_inheritable_descriptor.rs
 1 no-inline-test-module xtask/src/check_no_tatolab_namespace_package_init.rs
 1 no-inline-test-module xtask/src/check_vendored_trees.rs
 1 no-inline-test-module xtask/src/check_workspace_version_pins.rs
@@ -419,7 +416,6 @@
 1 no-inline-test-module xtask/src/psnr.rs
 1 no-inline-test-module xtask/src/runtime_client_zod_schemas.rs
 1 no-inline-test-module xtask/src/sign_the_carried_packages_with_a_developer_id.rs
-1 no-inline-test-module xtask/src/source_call_site_scan.rs
 1 no-inline-test-module xtask/src/stage_browser_host.rs
 1 no-inline-test-module xtask/src/stage_core_projects.rs
 1 no-inline-test-module xtask/src/stage_first_party_modules.rs

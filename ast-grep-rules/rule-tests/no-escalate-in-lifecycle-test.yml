@@ -1,0 +1,64 @@
+id: no-escalate-in-lifecycle
+valid:
+  - |
+    impl Processor for P {
+        fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
+        }
+    }
+  - |
+    impl Processor for P {
+        fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            ctx.gpu_full_access().do_it()
+        }
+    }
+  - |
+    impl Processor for P {
+        fn start(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
+        }
+    }
+  - |
+    fn setup(config: &Config) -> Result<()> {
+        limited.escalate(|gpu| gpu.do_it())
+    }
+  - |
+    fn run_my_smoke(&self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
+    }
+invalid:
+  - |
+    impl Processor for P {
+        fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
+        }
+    }
+  - |
+    impl P {
+        fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())?;
+            Ok(())
+        }
+    }
+  - |
+    impl Processor for P {
+        fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            ctx.gpu_limited_access().escalate::<()>(|gpu| gpu.do_it())
+        }
+    }
+  - |
+    impl Processor for P {
+        fn stop(
+            &mut self,
+            ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
+        ) -> Result<()> {
+            ctx.gpu_limited_access().escalate(|gpu| gpu.do_it())
+        }
+    }
+  - |
+    impl Processor for P {
+        fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            let run = || ctx.gpu_limited_access().escalate(|gpu| gpu.do_it());
+            run()
+        }
+    }
