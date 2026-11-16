@@ -14,13 +14,14 @@ use tempfile::TempDir;
 
 const BOUNDED_RETRY_SCRIPT_RELATIVE_PATH: &str = ".github/actions/install-linux-engine-build-dependencies/install-system-dependencies-with-bounded-retry.sh";
 
-fn workspace_root() -> PathBuf {
+fn workspace_root_above_the_xtask_manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("xtask/ always has a workspace root above it")
         .to_path_buf()
 }
 
+/// Drives the real script against a fake `apt-get` that logs every
 /// subcommand it is handed, so a test can assert what ran and in what order.
 struct BoundedRetryScriptHarness {
     _temp: TempDir,
@@ -40,7 +41,8 @@ impl BoundedRetryScriptHarness {
         fs::write(&invocation_log, "").unwrap();
 
         Self {
-            script: workspace_root().join(BOUNDED_RETRY_SCRIPT_RELATIVE_PATH),
+            script: workspace_root_above_the_xtask_manifest()
+                .join(BOUNDED_RETRY_SCRIPT_RELATIVE_PATH),
             apt_get_fixture: write_executable_fixture(
                 temp.path().join("apt-get-fixture"),
                 apt_get_fixture_body,

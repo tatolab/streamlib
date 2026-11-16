@@ -7,8 +7,6 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-mod bounded_retry_apt_install_script_tests;
 pub mod build_runtime;
 pub mod check_boundaries;
 pub mod check_control_contract_compatibility;
