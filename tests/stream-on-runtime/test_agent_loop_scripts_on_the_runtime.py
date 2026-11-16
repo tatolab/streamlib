@@ -61,7 +61,7 @@ def test_an_agent_loop_script_plays_through_on_a_runtime_unit(
     script_path: Path,
     make_tatolab_project: "Callable[..., Path]",
     start_tatolabd: "Callable[..., TatolabdUnderTest]",
-):
+) -> None:
     script = load_agent_loop_script(script_path)
     project_directory = make_tatolab_project(AGENT_LOOP_PROJECT_FILES)
     tatolabd = start_tatolabd()

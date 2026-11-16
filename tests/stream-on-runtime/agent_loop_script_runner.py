@@ -5,7 +5,7 @@
 
 A script is data, in `agent_loop_scripts/`: a task statement with its named givens, then steps.
 Each step names a tool, the arguments it is called with and expectations on typed fields of
-its answer. An argument value is a structural constant its params schema declares, a
+its answer. An argument value is a constant its params schema declares at that position, a
 `{"$given": name}` from the task, or a `{"$read": {"step", "pointer"}}` JSON pointer into an
 earlier step's answer; nothing else may appear, so a script can only pass what it was told or
 what the runtime said in the same session.
@@ -196,18 +196,49 @@ def value_at(document: Any, pointer: str) -> Any:
     return value
 
 
-def constants_a_schema_declares(schema: Any) -> "list[Any]":
-    """Every `const` and `enum` member anywhere in `schema`, `$defs` included."""
+def subschemas_in_force(schemas: "Sequence[Any]", root: Any) -> "list[dict[str, Any]]":
+    """`schemas` with each `$ref` into the root followed and each `allOf`, `anyOf` and `oneOf`
+    member added, so every subschema that can apply at one position is listed."""
+    in_force: "list[dict[str, Any]]" = []
+    pending = list(schemas)
+    while pending:
+        schema = pending.pop(0)
+        if not isinstance(schema, dict) or any(schema is seen for seen in in_force):
+            continue
+        in_force.append(schema)
+        reference = schema.get("$ref")
+        if isinstance(reference, str) and reference.startswith("#"):
+            pending.append(value_at(root, reference[1:]))
+        for combinator in ("allOf", "anyOf", "oneOf"):
+            pending.extend(schema.get(combinator, []))
+    return in_force
+
+
+def constants_declared_at(params_schema: Any, path: "Sequence[str | int]") -> "list[Any]":
+    """Each `const` and `enum` member the params schema declares for the value at `path` in the
+    arguments: a literal is allowed only where the schema itself fixes it."""
+    schemas = subschemas_in_force([params_schema], params_schema)
+    for token in path:
+        reached: "list[Any]" = []
+        for schema in schemas:
+            if isinstance(token, str):
+                properties = schema.get("properties", {})
+                if token in properties:
+                    reached.append(properties[token])
+                elif isinstance(schema.get("additionalProperties"), dict):
+                    reached.append(schema["additionalProperties"])
+            else:
+                prefix_items = schema.get("prefixItems", [])
+                if token < len(prefix_items):
+                    reached.append(prefix_items[token])
+                elif isinstance(schema.get("items"), dict):
+                    reached.append(schema["items"])
+        schemas = subschemas_in_force(reached, params_schema)
     declared: "list[Any]" = []
-    if isinstance(schema, dict):
+    for schema in schemas:
         if "const" in schema:
             declared.append(schema["const"])
         declared.extend(schema.get("enum", []))
-        for value in schema.values():
-            declared.extend(constants_a_schema_declares(value))
-    elif isinstance(schema, list):
-        for value in schema:
-            declared.extend(constants_a_schema_declares(value))
     return declared
 
 
@@ -215,13 +246,15 @@ def resolved(
     template: Any,
     givens: "Mapping[str, Any]",
     answers: "Mapping[str, Any]",
-    literals_allowed: "Sequence[Any] | None",
+    params_schema: Any,
     where: str,
+    path: "tuple[str | int, ...]" = (),
 ) -> Any:
     """`template` with each reference replaced by the given or the answered value it names.
 
-    With `literals_allowed`, a scalar written in the script itself must be one of them: what an
-    argument holds came from the task, an answer or the operation's own schema.
+    With a `params_schema`, a scalar written in the script itself must be a constant that schema
+    declares at the scalar's own position: what an argument holds came from the task, an answer
+    or the operation's own schema.
     """
     if isinstance(template, dict):
         if set(template) == {GIVEN_REFERENCE_KEY}:
@@ -230,17 +263,23 @@ def resolved(
             read = template[READ_REFERENCE_KEY]
             return value_at(answers[read["step"]], read["pointer"])
         return {
-            key: resolved(value, givens, answers, literals_allowed, where)
+            key: resolved(value, givens, answers, params_schema, where, (*path, key))
             for key, value in template.items()
         }
     if isinstance(template, list):
-        return [resolved(value, givens, answers, literals_allowed, where) for value in template]
-    if literals_allowed is not None and not any(
-        type(template) is type(allowed) and template == allowed for allowed in literals_allowed
+        return [
+            resolved(value, givens, answers, params_schema, where, (*path, index))
+            for index, value in enumerate(template)
+        ]
+    if params_schema is not None and not any(
+        type(template) is type(allowed) and template == allowed
+        for allowed in constants_declared_at(params_schema, path)
     ):
+        position = "/" + "/".join(str(token) for token in path)
         raise AgentLoopScriptRunFailed(
-            f"{where}: {template!r} is written in the script, but is neither a given, nor read "
-            f"from an answer, nor a constant the operation's params schema declares"
+            f"{where}: {template!r} is written in the script at `{position}`, but is neither a "
+            f"given, nor read from an answer, nor a constant the operation's params schema "
+            f"declares there"
         )
     return template
 
@@ -397,7 +436,7 @@ async def play_agent_loop_script(client: AgentToolClient, script: AgentLoopScrip
             step.arguments,
             script.givens,
             session.answers,
-            constants_a_schema_declares(params_schema),
+            params_schema,
             where,
         )
         refusals = sorted(
