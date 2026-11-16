@@ -20,7 +20,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-LINT_CONFIG_COMMIT=be918bd6af6854fbf8efaedc3877b2418e387422
+LINT_CONFIG_COMMIT=79020cc823c1f21b1c68747fb1bc9f623ba6df54
 
 compared_ref=""
 case "$#" in
@@ -80,7 +80,8 @@ run_lint() {
 # shellcheck disable=SC2046 # compare_arguments_for prints nothing or two words.
 run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
   "${lint_config_directory}/ast-grep/check_ast_grep_scan.py" \
-  --exceptions lint-exceptions/ast-grep.txt $(compare_arguments_for lint-exceptions/ast-grep.txt)
+  --exceptions lint-exceptions/ast-grep.txt --path . --path .github \
+  $(compare_arguments_for lint-exceptions/ast-grep.txt)
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
 for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py; do
