@@ -71,7 +71,7 @@ doesn't state, the owner wants to make that call (§Asking the owner).
 - **A converted consumer** — current-idiom shape: a scaffolded project (`stream.py` + `pyproject.toml`)
   or an ordinary Python package — **is the model of the current authoring idiom and ordinary
   editable work.**
-- **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) keeps the old treatment:
+- **A held pre-pivot consumer** (`Cargo.toml` + `setup.sh` shape) was
   written against deleted machinery — the identity grammar, the schema layer, `streamlib.yaml`
   manifests, the package-as-distributable shape — so read it for *logic* only (how a codec was
   wired to the RHI, what a capture path must handle), never for form.
