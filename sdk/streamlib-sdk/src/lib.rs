@@ -49,8 +49,8 @@
 //! around the boundary.
 //!
 //! Direct `streamlib_engine::*` imports outside the engine itself and
-//! this facade source are forbidden by `cargo xtask check-boundaries`
-//! Check 6.
+//! this facade source are refused by the ast-grep rule
+//! `no-streamlib-engine-outside-the-engine`.
 
 // Allow `::streamlib::*` paths emitted by the procedural macro to
 // resolve back to this crate when invoked from external consumer
@@ -264,8 +264,8 @@ pub mod sdk {
 /// the SDK's curated surface or open an issue.
 ///
 /// Direct `streamlib_engine::*` imports outside the engine itself and
-/// this facade source are forbidden by
-/// `cargo xtask check-boundaries` Check 6 — `engine_internal` is the
+/// this facade source are refused by the ast-grep rule
+/// `no-streamlib-engine-outside-the-engine` — `engine_internal` is the
 /// allowed escape hatch for the very rare cases that need it.
 pub mod engine_internal {
     #[cfg(not(any(target_os = "macos", target_os = "ios")))]

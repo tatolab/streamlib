@@ -8,3 +8,6 @@ invalid:
   - "use streamlib::sdk::engine::{GpuContext, HostRhi};"
   - "fn f() { let d = ctx.host_vulkan_device_arc(); }"
   - "fn f() { m!(streamlib::sdk::engine::GpuContext); }"
+  - "fn f() { let _ = ::streamlib::sdk::engine::GpuContext::new(); }"
+  - "fn f(c: &streamlib::sdk::engine::GpuContext) {}"
+  - "use streamlib::sdk::engine;"

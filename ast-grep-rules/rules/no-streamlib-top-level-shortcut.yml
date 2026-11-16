@@ -22,12 +22,15 @@ ignores:
   - sdk/streamlib-macros/**
 rule:
   any:
-    - kind: scoped_identifier
+    # The path's first step below streamlib, in an expression, a type, a trait, a
+    # struct literal or a use, with or without a leading `::`.
+    - any:
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
       all:
         - has:
             field: path
-            kind: identifier
-            regex: '^streamlib$'
+            regex: '^(::)?\s*streamlib$'
         - not:
             has:
               field: name
@@ -36,8 +39,7 @@ rule:
       all:
         - has:
             field: path
-            kind: identifier
-            regex: '^streamlib$'
+            regex: '^(::)?\s*streamlib$'
         - has:
             field: list
             has:

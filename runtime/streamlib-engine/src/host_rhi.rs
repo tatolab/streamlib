@@ -71,7 +71,7 @@ pub use crate::vulkan::rhi::PixelBufferUploadFinalTextureLayout;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use crate::vulkan::rhi::{OffscreenCompositorScalingMode, VulkanOffscreenCompositor};
 
-pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
+pub use crate::vulkan::rhi::GeometryInstanceFlagsKHR;
 
 use crate::core::error::Result;
 use crate::core::rhi::texture::TextureInner;

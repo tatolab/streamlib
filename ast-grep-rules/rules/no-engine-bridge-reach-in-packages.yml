@@ -19,12 +19,10 @@ ignores:
   - packages/*/benches/**
 rule:
   any:
+    # The engine module's own path, wherever it is written: alone, or as the path of a
+    # longer one, a type or a use list.
     - kind: scoped_identifier
-      regex: '^streamlib::sdk::engine(::|$)'
-    - kind: scoped_use_list
-      has:
-        field: path
-        regex: '^streamlib::sdk::engine$'
+      regex: '^(::)?\s*streamlib\s*::\s*sdk\s*::\s*engine$'
     - kind: identifier
       regex: '^engine$'
       inside:

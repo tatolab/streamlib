@@ -18,8 +18,6 @@ ignores:
   - runtime/streamlib-vulkan-video/**
   # The wrapper layer between processors and the RHI wires a few Vulkan handles into pools.
   - runtime/streamlib-engine/src/core/context/gpu_context/**
-  # The engine's privileged RHI surface re-exports the one vk type its ray-tracing API takes.
-  - runtime/streamlib-engine/src/host_rhi.rs
   # Tests bring up real Vulkan devices for end-to-end validation.
   - "**/tests/**"
   # The vendored fork is the Vulkan surface the RHI rides; only these three crates.
