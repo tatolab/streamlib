@@ -33,7 +33,7 @@ use streamlib_project_repository::{
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_VERSION_HEADER_NAME,
-    NodeTypeOfOneProjectSource, ProjectActionRefusalOnTheWire,
+    NodeTypeOfOneProjectSource, ProjectActionRefusalOnTheWire, SuggestedOperationCall,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -791,7 +791,9 @@ async fn the_answer_to_one_json_rpc_message(
                 }
             },
             parse_refusal.to_string(),
-            the_data_of_a_refusal(parse_refusal.the_refusal_on_the_wire()),
+            Some(the_data_of_a_refusal(
+                parse_refusal.the_refusal_on_the_wire(),
+            )),
         ),
         Ok(call) => match dispatcher.dispatch(call, request_origin).await {
             Err(refusal) => the_json_rpc_error_of_a_refusal(id_to_answer, &method_name, refusal),
@@ -817,21 +819,23 @@ fn the_json_rpc_error_of_a_refusal(
     action: &str,
     refusal: ControlOperationRefusal,
 ) -> Value {
-    let runtime_words = refusal.to_string();
-    let code = match &refusal {
+    let code = match refusal {
+        ControlOperationRefusal::ContractVersionMismatch(mismatch) => {
+            return the_json_rpc_error_of_a_contract_version_mismatch(request_id, mismatch);
+        }
         ControlOperationRefusal::RefusedAction(_) => CONTROL_OPERATION_REFUSED_ERROR_CODE,
         ControlOperationRefusal::Failed(_) | ControlOperationRefusal::RuntimeFailed(_) => {
             CONTROL_OPERATION_FAILED_ERROR_CODE
         }
-        ControlOperationRefusal::ContractVersionMismatch(mismatch) => {
-            return the_json_rpc_error_of_a_contract_version_mismatch(request_id, mismatch.clone());
-        }
     };
+    let runtime_words = refusal.to_string();
     a_json_rpc_error(
         request_id,
         code,
         runtime_words,
-        the_data_of_a_refusal(refusal.into_the_refusal_on_the_wire(action)),
+        Some(the_data_of_a_refusal(
+            refusal.into_the_refusal_on_the_wire(action),
+        )),
     )
 }
 
@@ -847,8 +851,18 @@ fn the_json_rpc_error_of_a_contract_version_mismatch(
     )
 }
 
-fn the_data_of_a_refusal(refusal: ProjectActionRefusalOnTheWire) -> Option<Value> {
-    serde_json::to_value(refusal).ok()
+/// `refusal` as `/control` carries it: a suggested call is kept only when `/control` serves it,
+/// so a discovery tool only an agent reaches is never suggested here.
+fn the_data_of_a_refusal(mut refusal: ProjectActionRefusalOnTheWire) -> Value {
+    let suggests_a_call_control_does_not_serve = refusal.suggested_call.as_ref().is_some_and(
+        |SuggestedOperationCall { operation, params }| {
+            ControlOperationCall::parse(operation, Some(Value::Object(params.clone()))).is_err()
+        },
+    );
+    if suggests_a_call_control_does_not_serve {
+        refusal.suggested_call = None;
+    }
+    refusal.the_refusal_as_json()
 }
 
 fn a_json_rpc_error(request_id: Value, code: i64, message: String, data: Option<Value>) -> Value {

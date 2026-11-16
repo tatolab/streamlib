@@ -11,7 +11,7 @@
 import { z } from "zod";
 
 /** @type {z.ZodType<ControlContract.ControlOperationRefusalCode>} */
-const ControlOperationRefusalCode = z.union([z.literal("params_do_not_match_schema"), z.literal("operation_not_found"), z.literal("node_not_running"), z.literal("runtime_failed"), z.literal("refused")]);
+const ControlOperationRefusalCode = z.union([z.literal("params_do_not_match_schema"), z.literal("operation_not_found"), z.literal("node_not_running"), z.literal("runtime_failed"), z.literal("refused")]).catch("refused");
 
 /** @type {z.ZodType<ControlContract.GraphLinkEndOnTheWire>} */
 const GraphLinkEndOnTheWire = z.looseObject({
@@ -43,7 +43,7 @@ const SuggestedOperationCall = z.looseObject({
 
 /** @type {z.ZodType<ControlContract.ProjectActionRefusalOnTheWire>} */
 const ProjectActionRefusalOnTheWire = z.looseObject({
-  refusal_code: ControlOperationRefusalCode,
+  refusal_code: ControlOperationRefusalCode.optional(),
   action: z.string(),
   refused_operation_index: z.number().int().min(0).nullable().optional(),
   refused_node: z.string().nullable().optional(),

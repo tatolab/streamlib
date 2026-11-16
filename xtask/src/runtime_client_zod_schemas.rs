@@ -186,6 +186,14 @@ impl ZodSourceWriter<'_> {
                 format!("z.lazy(() => {name})")
             };
         }
+        if let Some((closed, fallback)) = the_closed_set_and_fallback_of_a_set_that_may_grow(schema)
+        {
+            return format!(
+                "{}.catch({})",
+                self.expression_of(&closed, indent_level),
+                json_text_of(fallback)
+            );
+        }
         if let Some(constant) = schema.get("const") {
             return literal_expression_of(constant);
         }
@@ -367,6 +375,22 @@ impl ZodSourceWriter<'_> {
     }
 }
 
+/// A set marked `x-may-grow`, without the mark, and the member a value it does not name reads
+/// as: its last, as the runtime's `#[serde(other)]` reads one. `None` for any other schema.
+fn the_closed_set_and_fallback_of_a_set_that_may_grow(schema: &Value) -> Option<(Value, &Value)> {
+    if schema.get("x-may-grow") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let fallback = match (schema["enum"].as_array(), schema["oneOf"].as_array()) {
+        (Some(members), _) => members.last()?,
+        (None, Some(variants)) => variants.last()?.get("const")?,
+        (None, None) => return None,
+    };
+    let mut closed = schema.clone();
+    closed.as_object_mut()?.remove("x-may-grow");
+    Some((closed, fallback))
+}
+
 fn literal_expression_of(constant: &Value) -> String {
     match constant {
         Value::Null => "z.null()".to_owned(),
@@ -414,6 +438,28 @@ mod tests {
             position_being_declared: None,
         }
         .expression_of(schema, 0)
+    }
+
+    #[test]
+    fn a_set_that_may_grow_reads_a_member_it_does_not_name_as_its_last() {
+        assert_eq!(
+            expression_outside_any_component(&json!({
+                "oneOf": [
+                    { "type": "string", "const": "operation_not_found" },
+                    { "type": "string", "const": "refused" },
+                ],
+                "x-may-grow": true,
+            })),
+            "z.union([z.literal(\"operation_not_found\"), z.literal(\"refused\")]).catch(\"refused\")"
+        );
+        assert_eq!(
+            expression_outside_any_component(&json!({ "enum": ["a", "b"], "x-may-grow": true })),
+            "z.enum([\"a\", \"b\"]).catch(\"b\")"
+        );
+        assert_eq!(
+            expression_outside_any_component(&json!({ "enum": ["a", "b"] })),
+            "z.enum([\"a\", \"b\"])"
+        );
     }
 
     #[test]

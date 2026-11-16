@@ -45,7 +45,7 @@ pub use control_operation::{
 };
 pub use control_operation_refusals::{
     ParamsThatDoNotMatchTheirSchema, the_call_that_describes, the_call_that_lists_every_operation,
-    the_params_read_as, the_suggested_call,
+    the_params_read_as, the_refusal_of_an_unknown_operation, the_suggested_call,
 };
 pub use control_operation_requests::{
     ASSET_ARGUMENT_DESCRIPTION, ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION,

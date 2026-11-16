@@ -192,22 +192,34 @@ impl ControlOperationRefusal {
         self,
         action: &str,
     ) -> ProjectActionRefusalOnTheWire {
-        let runtime_words = self.to_string();
         match self {
             Self::RefusedAction(refused) => *refused,
-            Self::Failed(_) | Self::ContractVersionMismatch(_) => {
+            Self::Failed(why) => ProjectActionRefusalOnTheWire::of_the_action(
+                action,
+                ControlOperationRefusalCode::Refused,
+                why,
+            ),
+            Self::RuntimeFailed(why) => ProjectActionRefusalOnTheWire::of_the_action(
+                action,
+                ControlOperationRefusalCode::RuntimeFailed,
+                why,
+            ),
+            Self::ContractVersionMismatch(mismatch) => {
                 ProjectActionRefusalOnTheWire::of_the_action(
                     action,
                     ControlOperationRefusalCode::Refused,
-                    runtime_words,
+                    format!("{action} failed: {mismatch}"),
                 )
             }
-            Self::RuntimeFailed(_) => ProjectActionRefusalOnTheWire::of_the_action(
-                action,
-                ControlOperationRefusalCode::RuntimeFailed,
-                runtime_words,
-            ),
         }
+    }
+
+    /// The refusal of a task handed off the async runtime that did not finish, `task` naming it,
+    /// as in `"logs failed: the read"`.
+    pub(crate) fn the_task_did_not_finish(
+        task: impl std::fmt::Display,
+    ) -> impl FnOnce(tokio::task::JoinError) -> Self {
+        move |join_failure| Self::RuntimeFailed(format!("{task} did not finish: {join_failure}"))
     }
 }
 
@@ -600,11 +612,9 @@ impl ControlOperationDispatcher {
             call(&mut project_repository)
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "{method_name} failed: the call did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+            "{method_name} failed: the call"
+        )))?
         .map_err(|refusal| {
             ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
         })
@@ -639,11 +649,9 @@ impl ControlOperationDispatcher {
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         tokio::task::spawn_blocking(move || action(operations_on_the_loaded_streams.as_ref()))
             .await
-            .map_err(|join_failure| {
-                ControlOperationRefusal::RuntimeFailed(format!(
-                    "the stream action did not finish: {join_failure}"
-                ))
-            })?
+            .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                "the stream action",
+            ))?
             .map_err(|refusal| ControlOperationRefusal::Failed(refusal.to_string()))
     }
 
@@ -724,11 +732,9 @@ impl ControlOperationDispatcher {
             })
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "{action_name} failed: the transaction did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+            "{action_name} failed: the transaction"
+        )))?
     }
 }
 

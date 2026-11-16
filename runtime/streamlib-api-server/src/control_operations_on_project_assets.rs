@@ -229,9 +229,7 @@ impl ControlOperationDispatcher {
                 .preview_png_bytes(&content_sha256, &asset_file_path)
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!("read_asset_preview failed: the read did not finish: {join_failure}"))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish("read_asset_preview failed: the read"))?
         .ok_or_else(|| {
             format!(
                 "read_asset_preview failed: asset {asset}'s preview picture is gone from the project's `.tatolab/`; it is made again after the asset's next `replace_asset`"

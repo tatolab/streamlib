@@ -206,13 +206,6 @@ impl LocalApiMcpServerHandler {
     ) -> ToolCallAnswer {
         match answered {
             Ok(answer) => serialized_tool_result(tool_name, &answer),
-            Err(ControlOperationRefusal::ContractVersionMismatch(mismatch)) => {
-                Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
-                    tool_name,
-                    ControlOperationRefusalCode::Refused,
-                    format!("{tool_name} failed: {mismatch}"),
-                )))
-            }
             Err(refusal) => Err(Box::new(refusal.into_the_refusal_on_the_wire(tool_name))),
         }
     }

@@ -414,18 +414,11 @@ fn operation_answered_by(
     tool_result: CallToolResult,
 ) -> Result<OperationAnswered, LocalApiMcpToolClientFailure> {
     let refused = tool_result.is_error.unwrap_or(false);
-    let first_text = tool_result
-        .content
-        .into_iter()
-        .find_map(|content_block| match content_block {
-            ContentBlock::Text(text_block) => Some(text_block.text),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            LocalApiMcpToolClientFailure::tool_call_failed(format!(
-                "{operation} returned no text content"
-            ))
-        })?;
+    let first_text = first_text_of(tool_result).ok_or_else(|| {
+        LocalApiMcpToolClientFailure::tool_call_failed(format!(
+            "{operation} returned no text content"
+        ))
+    })?;
     Ok(if refused {
         OperationAnswered::Refused(first_text)
     } else {
@@ -433,30 +426,47 @@ fn operation_answered_by(
     })
 }
 
-/// The first text block of a tool's result, or the failure it reported.
+/// The first text block of a tool's result, or the failure it reported in the runtime's words.
 fn first_text_block_of_tool_result(
     tool_name: &str,
     tool_result: CallToolResult,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
     let tool_reported_a_failure = tool_result.is_error.unwrap_or(false);
-    let first_text =
-        tool_result
-            .content
-            .into_iter()
-            .find_map(|content_block| match content_block {
-                ContentBlock::Text(text_block) => Some(text_block.text),
-                _ => None,
-            });
-    match (tool_reported_a_failure, first_text) {
+    match (tool_reported_a_failure, first_text_of(tool_result)) {
         (false, Some(first_text)) => Ok(first_text),
         (true, failure_text) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
             "{tool_name} failed: {}",
-            failure_text.as_deref().unwrap_or("no detail given")
+            failure_text.map_or_else(
+                || "no detail given".to_owned(),
+                the_runtime_words_of_a_refusal
+            )
         ))),
         (false, None) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
             "{tool_name} returned no text content"
         ))),
     }
+}
+
+/// The text of a tool's first text block.
+fn first_text_of(tool_result: CallToolResult) -> Option<String> {
+    tool_result
+        .content
+        .into_iter()
+        .find_map(|content_block| match content_block {
+            ContentBlock::Text(text_block) => Some(text_block.text),
+            _ => None,
+        })
+}
+
+/// The `runtime_words` of the refusal a failed tool's text is the JSON of, or the text itself
+/// from a runtime that answers a sentence.
+fn the_runtime_words_of_a_refusal(failure_text: String) -> String {
+    #[derive(serde::Deserialize)]
+    struct RefusalWords {
+        runtime_words: String,
+    }
+    serde_json::from_str::<RefusalWords>(&failure_text)
+        .map_or(failure_text, |RefusalWords { runtime_words }| runtime_words)
 }
 
 /// Connect, call `tool_name` once with `tool_arguments` waiting at most `call_timeout` for its
@@ -785,6 +795,37 @@ mod tests {
                 "no runtime answers MCP at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
             )),
             "{unreachable_message}"
+        );
+    }
+
+    #[test]
+    fn a_failed_tool_reports_its_refusals_words_on_one_line() {
+        let refusal = serde_json::json!({
+            "refusal_code": "refused",
+            "action": "graph",
+            "suggested_call": { "operation": "list_streams", "params": {} },
+            "runtime_words": "no stream named \"nope\" is loaded",
+        });
+        assert_eq!(
+            first_text_block_of_tool_result(
+                "graph",
+                CallToolResult::error(vec![ContentBlock::text(
+                    serde_json::to_string_pretty(&refusal).unwrap()
+                )])
+            ),
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph failed: no stream named \"nope\" is loaded".to_owned()
+            ))
+        );
+        assert_eq!(
+            first_text_block_of_tool_result(
+                "graph",
+                CallToolResult::error(vec![ContentBlock::text("a sentence")])
+            ),
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph failed: a sentence".to_owned()
+            )),
+            "a runtime that answers a sentence"
         );
     }
 

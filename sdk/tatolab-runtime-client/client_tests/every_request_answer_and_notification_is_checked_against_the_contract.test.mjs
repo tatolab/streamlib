@@ -122,6 +122,33 @@ test("the runtime's refusal rejects in its own words with the structured refusal
   }
 });
 
+test("a refusal code this client does not know reads as refused and keeps the refusal's other fields", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = {
+      refusal_code: "a_code_added_after_this_client",
+      action: "open_project",
+      refused_params_pointer: "/project_directory",
+      suggested_call: { operation: "list_streams", params: {} },
+      runtime_words: "the runtime refused it",
+    };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.deepEqual(rejection.refusal, { ...refusal, refusal_code: "refused" });
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
 test("an integer past Number.MAX_SAFE_INTEGER keeps its digits as a bigint, both ways", async () => {
   const localApi = await startALocalApiThatAnswersOnlyWhenTold();
   try {

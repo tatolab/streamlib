@@ -16,9 +16,9 @@ use streamlib_control_contract::{
     AgentToolListed, CALL_OPERATION_TOOL_NAME, CallOperationRequest, ControlOperationCall,
     ControlOperationCallParseRefusal, ControlOperationEffect, DESCRIBE_OPERATIONS_TOOL_NAME,
     DescribeOperationsRequest, LIST_OPERATION_GROUPS_TOOL_NAME, ListOperationGroupsRequest,
-    ParamsThatDoNotMatchTheirSchema, the_agent_tools_listed, the_call_that_lists_every_operation,
-    the_operation_groups_served_to_agents, the_operation_served_to_agents_as,
-    the_operations_described_for, the_params_read_as, the_suggested_call,
+    ParamsThatDoNotMatchTheirSchema, the_agent_tools_listed, the_operation_groups_served_to_agents,
+    the_operation_served_to_agents_as, the_operations_described_for, the_params_read_as,
+    the_refusal_of_an_unknown_operation, the_suggested_call,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
@@ -76,49 +76,32 @@ impl LocalApiMcpServerHandler {
         }: CallToolRequestParams,
         tool_call_request_context: &RequestContext<RoleServer>,
     ) -> Result<ToolCallAnswer, McpError> {
-        let arguments = arguments.unwrap_or_default();
+        let arguments =
+            match the_answer_of_a_discovery_tool(&tool_name, arguments.unwrap_or_default()) {
+                Ok(answer) => return Ok(answer),
+                Err(arguments) => arguments,
+            };
         match tool_name.as_ref() {
-            LIST_OPERATION_GROUPS_TOOL_NAME => Ok(the_arguments_of(
-                LIST_OPERATION_GROUPS_TOOL_NAME,
-                arguments,
-            )
-            .and_then(|ListOperationGroupsRequest {}| {
-                serialized_tool_result(
-                    LIST_OPERATION_GROUPS_TOOL_NAME,
-                    &the_operation_groups_served_to_agents(),
-                )
-            })),
-            DESCRIBE_OPERATIONS_TOOL_NAME => Ok(the_arguments_of::<DescribeOperationsRequest>(
-                DESCRIBE_OPERATIONS_TOOL_NAME,
-                arguments,
-            )
-            .and_then(the_operations_described_for)
-            .and_then(|described| {
-                serialized_tool_result(DESCRIBE_OPERATIONS_TOOL_NAME, &described)
-            })),
             CALL_OPERATION_TOOL_NAME => {
                 let CallOperationRequest { operation, params } =
                     match the_arguments_of(CALL_OPERATION_TOOL_NAME, arguments) {
                         Ok(request) => request,
                         Err(refusal) => return Ok(Err(refusal)),
                     };
+                let params =
+                    match the_answer_of_a_discovery_tool(&operation, params.unwrap_or_default()) {
+                        Ok(answer) => return Ok(answer),
+                        Err(params) => params,
+                    };
                 if the_operation_served_to_agents_as(&operation).is_none() {
-                    return Ok(Err(Box::new(ProjectActionRefusalOnTheWire {
-                        suggested_call: the_call_that_lists_every_operation(),
-                        ..ProjectActionRefusalOnTheWire::of_the_action(
-                            operation.as_str(),
-                            ControlOperationRefusalCode::OperationNotFound,
-                            format!(
-                                "{CALL_OPERATION_TOOL_NAME} failed: the runtime serves no \
-                                 operation named `{operation}`; \
-                                 `{LIST_OPERATION_GROUPS_TOOL_NAME}` lists every one"
-                            ),
-                        )
-                    })));
+                    return Ok(Err(Box::new(the_refusal_of_an_unknown_operation(
+                        Some(CALL_OPERATION_TOOL_NAME),
+                        &operation,
+                    ))));
                 }
                 self.the_answer_to_an_operation_an_agent_called(
                     &operation,
-                    params.unwrap_or_default(),
+                    params,
                     tool_call_request_context,
                 )
                 .await
@@ -169,6 +152,34 @@ impl LocalApiMcpServerHandler {
     }
 }
 
+/// What the discovery tool `tool_name` answers `arguments`, whether called by its name or through
+/// `call_operation`; the `arguments` handed back when `tool_name` names no discovery tool that
+/// answers without the dispatcher.
+fn the_answer_of_a_discovery_tool(
+    tool_name: &str,
+    arguments: Map<String, Value>,
+) -> Result<ToolCallAnswer, Map<String, Value>> {
+    match tool_name {
+        LIST_OPERATION_GROUPS_TOOL_NAME => Ok(the_arguments_of(
+            LIST_OPERATION_GROUPS_TOOL_NAME,
+            arguments,
+        )
+        .and_then(|ListOperationGroupsRequest {}| {
+            serialized_tool_result(
+                LIST_OPERATION_GROUPS_TOOL_NAME,
+                &the_operation_groups_served_to_agents(),
+            )
+        })),
+        DESCRIBE_OPERATIONS_TOOL_NAME => Ok(the_arguments_of::<DescribeOperationsRequest>(
+            DESCRIBE_OPERATIONS_TOOL_NAME,
+            arguments,
+        )
+        .and_then(the_operations_described_for)
+        .and_then(|described| serialized_tool_result(DESCRIBE_OPERATIONS_TOOL_NAME, &described))),
+        _ => Err(arguments),
+    }
+}
+
 /// A discovery tool's `arguments` read as `Arguments`, or the refusal naming where they do not
 /// match its input schema.
 fn the_arguments_of<Arguments: DeserializeOwned>(
@@ -196,8 +207,7 @@ fn the_arguments_of<Arguments: DeserializeOwned>(
 pub(crate) fn a_tool_result_of_the_refusal(
     refusal: ProjectActionRefusalOnTheWire,
 ) -> CallToolResult {
-    let refusal = serde_json::to_value(refusal)
-        .unwrap_or_else(|_| unreachable!("a refusal always serializes to JSON"));
+    let refusal = refusal.the_refusal_as_json();
     let mut tool_result = CallToolResult::error(vec![json_text_content_block(&refusal)]);
     tool_result.structured_content = Some(json!({ "refusal": refusal }));
     tool_result

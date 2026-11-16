@@ -94,19 +94,36 @@ pub fn the_call_that_describes(operation: &str) -> Option<SuggestedOperationCall
     )
 }
 
+/// The refusal of a call naming `operation`, which the runtime serves under no name, sent
+/// through the discovery tool `through_tool` or, with none, straight to `operation`. Its
+/// `action` is the tool the call came through, else the operation it named, and it suggests the
+/// call that lists every operation.
+pub fn the_refusal_of_an_unknown_operation(
+    through_tool: Option<&str>,
+    operation: &str,
+) -> ProjectActionRefusalOnTheWire {
+    let no_such_operation = format!("the runtime serves no operation named `{operation}`");
+    let (action, runtime_words) = match through_tool {
+        Some(tool) => (tool, format!("{tool} failed: {no_such_operation}")),
+        None => (operation, no_such_operation),
+    };
+    ProjectActionRefusalOnTheWire {
+        suggested_call: the_call_that_lists_every_operation(),
+        ..ProjectActionRefusalOnTheWire::of_the_action(
+            action,
+            ControlOperationRefusalCode::OperationNotFound,
+            runtime_words,
+        )
+    }
+}
+
 impl ControlOperationCallParseRefusal {
     /// This refusal as every door carries it.
     pub fn the_refusal_on_the_wire(&self) -> ProjectActionRefusalOnTheWire {
-        let runtime_words = self.to_string();
         match self {
-            Self::NoSuchMethod { method_name } => ProjectActionRefusalOnTheWire {
-                suggested_call: the_call_that_lists_every_operation(),
-                ..ProjectActionRefusalOnTheWire::of_the_action(
-                    method_name.as_str(),
-                    ControlOperationRefusalCode::OperationNotFound,
-                    runtime_words,
-                )
-            },
+            Self::NoSuchMethod { method_name } => {
+                the_refusal_of_an_unknown_operation(None, method_name)
+            }
             Self::InvalidParams {
                 method_name,
                 params_pointer,
@@ -117,7 +134,7 @@ impl ControlOperationCallParseRefusal {
                 ..ProjectActionRefusalOnTheWire::of_the_action(
                     *method_name,
                     ControlOperationRefusalCode::ParamsDoNotMatchSchema,
-                    runtime_words,
+                    self.to_string(),
                 )
             },
         }

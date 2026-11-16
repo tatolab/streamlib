@@ -9,9 +9,10 @@
  */
 export interface ProjectActionRefusalOnTheWire {
   /**
-   * What kind of refusal it is, for a caller to branch on.
+   * What kind of refusal it is, for a caller to branch on; `refused` when a runtime that
+   * answers no code sent it.
    */
-  refusal_code: ControlOperationRefusalCode;
+  refusal_code?: ControlOperationRefusalCode;
   /**
    * The action refused, by the name of the operation or tool it was sent to.
    */

@@ -54,11 +54,9 @@ impl ControlOperationDispatcher {
         let listings =
             tokio::task::spawn_blocking(move || operations_on_the_loaded_streams.list_streams())
                 .await
-                .map_err(|join_failure| {
-                    ControlOperationRefusal::RuntimeFailed(format!(
-                        "the stream action did not finish: {join_failure}"
-                    ))
-                })?;
+                .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                    "the stream action",
+                ))?;
         Ok(ListStreamsToolResult {
             streams: listings
                 .into_iter()

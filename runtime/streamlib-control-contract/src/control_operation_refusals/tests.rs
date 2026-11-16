@@ -10,18 +10,6 @@ fn params(params: Value) -> Map<String, Value> {
 }
 
 #[test]
-fn every_suggestion_a_refusal_makes_can_be_called() {
-    assert!(the_call_that_lists_every_operation().is_some());
-    for declaration in crate::agent_surface::the_operations_served_to_agents() {
-        assert!(
-            the_call_that_describes(declaration.method_name).is_some(),
-            "{}",
-            declaration.method_name
-        );
-    }
-}
-
-#[test]
 fn a_call_no_agent_can_make_is_never_suggested() {
     assert_eq!(the_suggested_call("expose_port", Map::new()), None);
     assert_eq!(

@@ -17,7 +17,7 @@ use crate::control_operation::{
     ControlOperationDeclaration, ControlOperationEffect, ControlOperationGroup,
     ControlOperationStability,
 };
-use crate::control_operation_refusals::the_call_that_lists_every_operation;
+use crate::control_operation_refusals::the_refusal_of_an_unknown_operation;
 use crate::control_operations::CONTROL_OPERATIONS;
 
 /// The name of the discovery tool that lists the groups and the operations in each.
@@ -220,18 +220,10 @@ pub fn the_operations_described_for(
                 .iter()
                 .find(|name| the_operation_served_to_agents_as(name).is_none())
             {
-                return Err(Box::new(ProjectActionRefusalOnTheWire {
-                    suggested_call: the_call_that_lists_every_operation(),
-                    ..ProjectActionRefusalOnTheWire::of_the_action(
-                        DESCRIBE_OPERATIONS_TOOL_NAME,
-                        ControlOperationRefusalCode::OperationNotFound,
-                        format!(
-                            "{DESCRIBE_OPERATIONS_TOOL_NAME} failed: the runtime serves no \
-                             operation named `{unknown}`; `{LIST_OPERATION_GROUPS_TOOL_NAME}` \
-                             lists every one"
-                        ),
-                    )
-                }));
+                return Err(Box::new(the_refusal_of_an_unknown_operation(
+                    Some(DESCRIBE_OPERATIONS_TOOL_NAME),
+                    unknown,
+                )));
             }
             the_operations_served_to_agents()
                 .filter(|declaration| names.iter().any(|name| name == declaration.method_name))

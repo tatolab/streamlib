@@ -4293,7 +4293,8 @@
         "properties": {
           "refusal_code": {
             "$ref": "#/components/schemas/ControlOperationRefusalCode",
-            "description": "What kind of refusal it is, for a caller to branch on."
+            "description": "What kind of refusal it is, for a caller to branch on; `refused` when a runtime that\nanswers no code sent it.",
+            "default": "refused"
           },
           "action": {
             "type": "string",
@@ -4379,7 +4380,6 @@
           }
         },
         "required": [
-          "refusal_code",
           "action",
           "runtime_words"
         ],
@@ -4410,7 +4410,7 @@
           {
             "type": "string",
             "const": "refused",
-            "description": "The request was understood and not done; changing it can help. The runtime's words say\nwhat to change. It stays the last code, because it reads every code this build does not\nknow."
+            "description": "The request was understood and not done; changing it can help. The runtime's words say\nwhat to change."
           }
         ],
         "description": "What kind of refusal a refused call is. The set grows: a code a client does not know reads\nas `refused`.",

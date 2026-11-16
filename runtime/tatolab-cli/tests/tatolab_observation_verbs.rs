@@ -90,7 +90,12 @@ mod against_an_isolated_machine {
         let isolated_machine_directories = IsolatedMachineDirectories::new();
         let _stub_local_api_server = isolated_machine_directories.serve_stub_local_api(
             StubLocalApiScript::answering_every_tool_call_with(StubToolAnswer::tool_failure(
-                "no stream named `nope` is loaded",
+                &serde_json::to_string_pretty(&serde_json::json!({
+                    "refusal_code": "refused",
+                    "action": "graph",
+                    "runtime_words": "no stream named `nope` is loaded",
+                }))
+                .unwrap(),
             )),
         );
 

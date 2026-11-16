@@ -78,11 +78,9 @@ impl ControlOperationDispatcher {
             ))
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "add_dependency failed: the call did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "add_dependency failed: the call",
+        ))?
         .map_err(|refusal| format!("add_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);
@@ -179,11 +177,9 @@ impl ControlOperationDispatcher {
             ))
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "update_dependency failed: the call did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "update_dependency failed: the call",
+        ))?
         .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);
@@ -236,11 +232,9 @@ impl ControlOperationDispatcher {
             })
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "list_dependencies failed: the call did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "list_dependencies failed: the call",
+        ))?
         .map_err(|refusal| format!("list_dependencies failed: {refusal}"))?;
         Ok(answered)
     }
@@ -284,11 +278,9 @@ impl ControlOperationDispatcher {
             ))
         })
         .await
-        .map_err(|join_failure| {
-            ControlOperationRefusal::RuntimeFailed(format!(
-                "remove_dependency failed: the call did not finish: {join_failure}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "remove_dependency failed: the call",
+        ))?
         .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);

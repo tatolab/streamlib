@@ -355,6 +355,19 @@ fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
 }
 
 #[test]
+fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
+    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+        "action": "transact",
+        "refused_operation_index": 1,
+        "runtime_words": "no",
+    }))
+    .unwrap();
+
+    assert_eq!(refusal.refusal_code, ControlOperationRefusalCode::Refused);
+    assert_eq!(refusal.refused_operation_index, Some(1));
+}
+
+#[test]
 fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
     let refusal = ProjectActionRefusalOnTheWire {
         refused_params_pointer: Some("/operations/0/stream".to_owned()),

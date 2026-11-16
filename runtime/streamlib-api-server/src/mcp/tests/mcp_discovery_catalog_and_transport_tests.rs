@@ -434,6 +434,55 @@ async fn call_operation_refuses_an_operation_the_agent_surface_does_not_serve() 
 }
 
 #[tokio::test]
+async fn every_call_a_refusal_suggests_is_answered_through_call_operation() {
+    let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+    let mut refused = vec![
+        (
+            "call_operation",
+            json!({ "operation": "no_such_operation" }),
+        ),
+        (
+            "describe_operations",
+            json!({ "operations": ["no_such_operation"] }),
+        ),
+    ];
+    for declaration in streamlib_control_contract::the_operations_served_to_agents() {
+        refused.push((
+            "call_operation",
+            json!({
+                "operation": declaration.method_name,
+                "params": { "a_param_no_operation_takes": true },
+            }),
+        ));
+    }
+    let mut suggestions_followed = 0;
+    for (tool_name, arguments) in refused {
+        let answered = tool_call_outcome_of_the_tool(runtime.clone(), tool_name, arguments)
+            .await
+            .expect("a tool result");
+        let Some(suggested) = the_refusal_of_a_tool_result(&answered).suggested_call else {
+            continue;
+        };
+        let followed = tool_call_outcome_of_the_tool(
+            runtime.clone(),
+            "call_operation",
+            json!({ "operation": suggested.operation, "params": suggested.params }),
+        )
+        .await
+        .expect("a tool result");
+        assert_eq!(
+            followed["isError"], false,
+            "{answered} suggests a call `call_operation` refuses: {followed}"
+        );
+        suggestions_followed += 1;
+    }
+    assert!(
+        suggestions_followed >= 2,
+        "an unknown operation and a params mismatch each suggest a call"
+    );
+}
+
+#[tokio::test]
 async fn params_that_do_not_match_are_refused_naming_where_and_suggesting_their_description() {
     for (tool_name, arguments, refused_action) in [
         (

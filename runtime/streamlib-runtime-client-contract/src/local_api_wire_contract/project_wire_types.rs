@@ -371,7 +371,9 @@ pub struct AssetMediaFactsReadOnTheWire {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectActionRefusalOnTheWire {
-    /// What kind of refusal it is, for a caller to branch on.
+    /// What kind of refusal it is, for a caller to branch on; `refused` when a runtime that
+    /// answers no code sent it.
+    #[serde(default)]
     pub refusal_code: ControlOperationRefusalCode,
     /// The action refused, by the name of the operation or tool it was sent to.
     pub action: String,
@@ -425,14 +427,22 @@ impl ProjectActionRefusalOnTheWire {
             runtime_words: runtime_words.into(),
         }
     }
+
+    /// This refusal as the JSON every door carries.
+    pub fn the_refusal_as_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap_or_else(|why| {
+            unreachable!("a refusal holds only strings, numbers and string-keyed maps: {why}")
+        })
+    }
 }
 
 /// What kind of refusal a refused call is. The set grows: a code a client does not know reads
 /// as `refused`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ControlOperationRefusalCode {
     /// The params do not match the operation's params schema; `refused_params_pointer` names the
     /// value, when one is.
@@ -444,8 +454,9 @@ pub enum ControlOperationRefusalCode {
     /// The runtime could not carry the request out, through no doing of the caller.
     RuntimeFailed,
     /// The request was understood and not done; changing it can help. The runtime's words say
-    /// what to change. It stays the last code, because it reads every code this build does not
-    /// know.
+    /// what to change.
+    // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.
+    #[default]
     #[serde(other)]
     Refused,
 }
