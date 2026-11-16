@@ -1,7 +1,8 @@
-# Code that only builds under test: an item under `#[cfg(test)]`, or a file
-# whose first attribute is `#![cfg(test)]` or `#![cfg(all(test, …))]`. A rule
-# that exempts test code adds `not: { matches: inside-rust-test-code }`; files
-# that are test code by name are left out with the rule's `ignores`.
+# Code that only builds or runs under test: an item under `#[cfg(test)]`, a
+# `#[test]` or `#[tokio::test]` function, or a file whose first attribute is
+# `#![cfg(test)]` or `#![cfg(all(test, …))]`. A rule that exempts test code
+# adds `not: { matches: inside-rust-test-code }`; files that are test code by
+# name are left out with the rule's `ignores`.
 id: inside-rust-test-code
 language: rust
 rule:
@@ -16,7 +17,7 @@ rule:
                 - kind: line_comment
                 - kind: block_comment
           kind: attribute_item
-          regex: '^#\[cfg\((all\()?test\b'
+          regex: '^#\[(cfg\((all\()?test\b|(\w+::)*test[(\]])'
     - inside:
         stopBy: end
         kind: source_file
