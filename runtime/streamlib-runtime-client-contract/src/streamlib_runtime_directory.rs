@@ -5,8 +5,13 @@
 //! gone: the iceoryx2 domain, the surface-sharing socket, the local API socket
 //! and the shared native services' sockets.
 
-// A test build resolves under its machine root; the real resolvers stay compiled for their tests.
-#![cfg_attr(feature = "machine-directories-under-a-test-root", allow(dead_code))]
+#![cfg_attr(
+    feature = "machine-directories-under-a-test-root",
+    allow(
+        dead_code,
+        reason = "a test build resolves under its machine root; the real resolvers stay compiled for their tests"
+    )
+)]
 
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;

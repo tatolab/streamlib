@@ -382,18 +382,6 @@ impl SimpleEncoder {
         }
     }
 
-    /// Returns whether the encoder has been configured.
-    #[allow(dead_code)] // Public API for callers that check state
-    pub(crate) fn is_configured(&self) -> bool {
-        self.configured
-    }
-
-    /// Returns the number of frames encoded so far.
-    #[allow(dead_code)] // Public API for callers that need frame count
-    pub(crate) fn frame_count_value(&self) -> u64 {
-        self.frame_count
-    }
-
     /// Returns a reference to the current configuration, if set.
     pub(crate) fn encode_config(&self) -> Option<&EncodeConfig> {
         self.encode_config.as_ref()
@@ -506,7 +494,7 @@ impl SimpleEncoder {
                 // pattern). Each image has 1 array layer.
                 let mut textures = Vec::with_capacity(count as usize);
 
-                for i in 0..count {
+                for _ in 0..count {
                     let descriptor = VideoDpbImageDescriptor {
                         label: "simple_encoder/dpb-separate",
                         width,
@@ -544,7 +532,6 @@ impl SimpleEncoder {
 
                     slots.push(DpbSlot {
                         view,
-                        array_layer: i,
                         in_use: false,
                         frame_num: 0,
                         poc: 0,
@@ -592,7 +579,6 @@ impl SimpleEncoder {
 
                     slots.push(DpbSlot {
                         view,
-                        array_layer: i,
                         in_use: false,
                         frame_num: 0,
                         poc: 0,

@@ -172,7 +172,10 @@ impl StreamGraphTransactionExecutor<'_> {
     /// documents it changes, each loaded stream it changes taking it once they are written. A
     /// stream of `streams_taking_their_edits_once_the_documents_hold_them` takes each later edit
     /// that way too, so its running stream takes the transaction's edits in order.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate piece of the transaction the caller already holds"
+    )]
     fn apply_one_request(
         &self,
         request: StreamGraphAction,

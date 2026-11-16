@@ -5,7 +5,10 @@
 // runtime: it has no `tracing` subscriber to emit through, and its one line of
 // output tells the operator where the artifact landed. The `no-print-macro`
 // ast-grep rule honours this attribute as its sanctioned allowance.
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a codegen binary: stdout and stderr tell the operator where the spec landed"
+)]
 
 //! Writes the control plane's OpenAPI spec to `dist/schemas/openapi.json`.
 //!

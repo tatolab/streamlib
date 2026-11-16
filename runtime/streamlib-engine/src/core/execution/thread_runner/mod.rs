@@ -248,7 +248,6 @@ fn dispatch_processor_scheduling_callback(
 }
 
 /// The scheduling-loop host of the processor a thread runs.
-#[allow(clippy::too_many_arguments)]
 fn scheduling_loop_host_on_this_thread<'a>(
     id: &'a ProcessorUniqueId,
     processor: &'a Arc<Mutex<ProcessorInstance>>,

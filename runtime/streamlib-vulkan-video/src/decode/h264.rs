@@ -83,7 +83,7 @@ impl SimpleDecoder {
 
     /// Parse width and height from H.264 SPS NALU.
     /// Uses the same logic as pipeline_test.rs parse_sps_info().
-    #[allow(dead_code)] // Utility for external callers
+    #[cfg(test)]
     pub(crate) fn parse_sps_dimensions(sps_nalu: &[u8]) -> (u32, u32) {
         use crate::nv_video_parser::vulkan_h264_decoder::BitstreamReader;
 

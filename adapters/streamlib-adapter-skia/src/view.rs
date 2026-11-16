@@ -23,7 +23,6 @@ use std::sync::{Arc, Mutex};
 use streamlib_adapter_vulkan::VulkanSurfaceAdapter;
 use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_surface_adapter::{ReadGuard, WriteGuard};
-use vulkanalia::vk;
 
 use crate::skia_internal::{
     SyncDirectContext, assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,
@@ -56,7 +55,10 @@ pub struct SkiaWriteView<'g, D: VulkanRhiDevice + 'static> {
     /// (passing the post-flush layout back into the inner adapter
     /// instead of relying on the static `GENERAL` transition the
     /// inner adapter sets).
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "held so the render target drops after the surface that renders into it"
+    )]
     pub(crate) backend_render_target: skia_safe::gpu::BackendRenderTarget,
 }
 
@@ -188,10 +190,3 @@ assert_skia_views_not_cpu_readable!(
     SkiaReadView<'static, streamlib_consumer_rhi::ConsumerVulkanDevice>,
     SkiaWriteView<'static, streamlib_consumer_rhi::ConsumerVulkanDevice>,
 );
-
-/// Helper used by the adapter when we need a `vk::Format` and other
-/// raw vulkanalia values without depending on the trait machinery.
-#[allow(dead_code)]
-pub(crate) const fn vk_format_undefined() -> vk::Format {
-    vk::Format::UNDEFINED
-}

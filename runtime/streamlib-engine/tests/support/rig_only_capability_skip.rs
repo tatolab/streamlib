@@ -10,8 +10,10 @@
 //! reason. The reasons are the Python `rig_only_capability(reason=…)` closed
 //! list, word for word.
 
-// Each test binary compiles its own copy and uses part of it.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 /// What the bundled software device or a CI runner cannot give a test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

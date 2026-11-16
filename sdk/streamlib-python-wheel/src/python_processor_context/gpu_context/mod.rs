@@ -38,7 +38,7 @@ pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
 /// or the next frame of `processor_output_pool`.
 #[cfg_attr(
     not(any(target_os = "linux", target_os = "macos")),
-    allow(unused_variables)
+    allow(unused_variables, reason = "only the Linux and macOS builds read it")
 )]
 fn acquire_texture_through_the_helper_process_exchange(
     helper_process_exchange_client: Option<&Arc<HelperProcessGpuExchangeClient>>,

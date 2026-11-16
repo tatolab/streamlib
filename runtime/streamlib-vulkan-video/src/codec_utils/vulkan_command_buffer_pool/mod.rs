@@ -962,7 +962,10 @@ impl PoolNodeHandle {
     /// The caller must not hold multiple mutable references to the same node.
     /// This is safe in practice because `PoolNodeHandle` has exclusive ownership
     /// of the node index (guaranteed by the bitmask).
-    #[allow(clippy::mut_from_ref)] // interior mutability via UnsafeCell; caller-guaranteed exclusivity
+    #[allow(
+        clippy::mut_from_ref,
+        reason = "interior mutability through UnsafeCell; the caller guarantees exclusive access"
+    )]
     pub unsafe fn node_mut(&self) -> &mut PoolNode {
         unsafe {
             let nodes = &mut *self.pool.pool_nodes.get();

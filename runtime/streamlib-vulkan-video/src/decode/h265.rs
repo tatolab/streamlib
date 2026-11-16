@@ -629,7 +629,7 @@ impl SimpleDecoder {
     ///   [if chroma_format_idc == 3: separate_colour_plane_flag: u(1)]
     ///   pic_width_in_luma_samples: ue(v)
     ///   pic_height_in_luma_samples: ue(v)
-    #[allow(dead_code)] // Utility for external callers
+    #[cfg(test)]
     pub(crate) fn parse_h265_sps_dimensions(sps_nalu: &[u8]) -> (u32, u32) {
         // Skip 2-byte NAL header
         if sps_nalu.len() < 6 {
@@ -735,94 +735,5 @@ impl SimpleDecoder {
         };
 
         (width, height)
-    }
-
-    /// Parse log2_diff_max_min_luma_coding_block_size from an H.265 SPS NALU.
-    ///
-    /// This determines the CTB (Coding Tree Block) size, which varies by
-    /// encoder capability (32 or 64 on NVIDIA GPUs). Default 2 (CTB=32).
-    #[allow(dead_code)] // Utility for external callers
-    pub(crate) fn parse_h265_sps_ctb_log2_diff(sps_nalu: &[u8]) -> u8 {
-        if sps_nalu.len() < 6 {
-            return 2;
-        }
-        let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[2..]);
-        let mut r = RbspBitstreamReader::new(&rbsp);
-
-        // Same parsing as parse_h265_sps_dimensions up to width/height
-        let _ = r.u(4); // vps_id
-        let max_sub = match r.u(3) {
-            Some(v) => v,
-            None => return 2,
-        };
-        let _ = r.u(1); // temporal_id_nesting
-
-        // profile_tier_level
-        r.u(2);
-        r.u(1);
-        r.u(5);
-        r.u(32);
-        r.u(4);
-        r.u(32);
-        r.u(12);
-        r.u(8);
-        // Sub-layer flags
-        let mut slp = [false; 6];
-        let mut sll = [false; 6];
-        for i in 0..max_sub as usize {
-            slp[i] = r.u(1) == Some(1);
-            sll[i] = r.u(1) == Some(1);
-        }
-        if max_sub > 0 {
-            for _ in max_sub..8 {
-                let _ = r.u(2);
-            }
-        }
-        for i in 0..max_sub as usize {
-            if slp[i] {
-                r.u(32);
-                r.u(32);
-                r.u(24);
-            }
-            if sll[i] {
-                r.u(8);
-            }
-        }
-
-        let _ = r.ue(); // sps_id
-        let chroma = r.ue().unwrap_or(1);
-        if chroma == 3 {
-            let _ = r.u(1);
-        }
-        let _ = r.ue(); // width
-        let _ = r.ue(); // height
-        let conf_win = r.u(1).unwrap_or(0);
-        if conf_win != 0 {
-            r.ue();
-            r.ue();
-            r.ue();
-            r.ue();
-        }
-        let _ = r.ue(); // bd_luma
-        let _ = r.ue(); // bd_chroma
-        let _ = r.ue(); // log2_max_poc
-
-        // sps_sub_layer_ordering_info_present_flag
-        let sub_layer_ordering = r.u(1).unwrap_or(0);
-        let loops = if sub_layer_ordering != 0 {
-            max_sub + 1
-        } else {
-            1
-        };
-        for _ in 0..loops {
-            let _ = r.ue(); // max_dec_pic_buffering_minus1
-            let _ = r.ue(); // max_num_reorder_pics
-            let _ = r.ue(); // max_latency_increase_plus1
-        }
-
-        let _log2_min_cb_minus3 = r.ue().unwrap_or(0);
-        let log2_diff = r.ue().unwrap_or(2);
-
-        log2_diff as u8
     }
 }

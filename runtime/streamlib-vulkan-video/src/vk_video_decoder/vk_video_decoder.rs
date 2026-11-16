@@ -803,7 +803,7 @@ impl VkVideoDecoder {
     ///
     /// The resources `submit` names must live on the decoder's device and stay
     /// alive until the decode completes.
-    #[allow(unused_assignments, unused_mut)]
+    #[allow(unused_assignments, unused_mut, reason = "ported C++ control flow")]
     pub unsafe fn decode_frame(
         &mut self,
         submit: &DecodeSubmitInfo,

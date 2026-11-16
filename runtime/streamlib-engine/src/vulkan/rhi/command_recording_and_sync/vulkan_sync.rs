@@ -11,7 +11,6 @@ use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 use crate::core::{Error, Result};
 
 /// Vulkan **timeline** semaphore wrapper.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 ///
 /// Timeline semaphores carry a monotonically-increasing 64-bit counter.
 /// Submitters wait on a value and signal a higher value; the wait

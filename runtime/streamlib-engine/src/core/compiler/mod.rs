@@ -12,7 +12,10 @@
 mod compilation_plan;
 mod compile_phase;
 mod compile_result;
-#[allow(clippy::module_inception)]
+#[allow(
+    clippy::module_inception,
+    reason = "the module holds the `Compiler` type its parent is named for"
+)]
 mod compiler;
 pub mod compiler_ops;
 mod compiler_transaction;

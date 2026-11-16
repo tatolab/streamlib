@@ -67,7 +67,7 @@ pub fn generate_from_parsed_processor_attr(
     let processor_class_import_path_accessor = quote! {
         /// This node type's identity: its class in `tatolab.stream` for a
         /// built-in, else the module path captured where the macro expanded.
-        #[allow(dead_code)]
+        #[allow(dead_code, reason = "the identity function is emitted for every node, and not every crate calls it")]
         pub fn processor_class_import_path()
             -> __streamlib_sdk::descriptors::ProcessorClassImportPath
         {
@@ -88,14 +88,14 @@ pub fn generate_from_parsed_processor_attr(
     };
 
     quote! {
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, reason = "the generated module is named after the author's processor type")]
         pub mod #module_name {
             use super::*;
 
             // Alias the consumer's real SDK crate (streamlib-plugin-sdk for
             // plugins, the streamlib facade for hosts) so the emitted paths
             // below resolve without any `streamlib` aliasing in the consumer.
-            #[allow(unused_imports)]
+            #[allow(unused_imports, reason = "the generated module may name nothing from the SDK root")]
             use #sdk_root as __streamlib_sdk;
 
             #refused_field_attribute_diagnostics
@@ -295,7 +295,7 @@ fn generate_port_marker_module(
     // A marker is named by the author's spelling, `video_in` as often as
     // `VideoIn`, and its span is the author's literal, so rustc would lint it.
     quote! {
-        #[allow(non_camel_case_types)]
+        #[allow(non_camel_case_types, reason = "the generated module is named after the author's port names")]
         pub mod #module_name {
             #(#port_markers)*
         }

@@ -7,8 +7,10 @@
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
 //! description to the CLI's own version. No verb starts a runtime.
 
-// stdout and stderr are this binary's output channel to the user, as they are xtask's.
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "stdout and stderr are this binary's output channel to the user"
+)]
 
 mod cli_and_runtime_version_flag;
 mod local_api_connection;

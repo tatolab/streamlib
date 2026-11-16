@@ -8,7 +8,10 @@
 //! `XDG_STATE_HOME`, which only Linux honours. Integration tests only: it runs the `tatolab`
 //! binary, whose path is known to them alone.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration test binary compiles its own copy and uses part of it"
+)]
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};

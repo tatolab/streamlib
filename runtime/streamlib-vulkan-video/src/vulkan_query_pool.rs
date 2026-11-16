@@ -131,7 +131,6 @@ impl VideoEncodeFeedbackResult {
 /// an `Arc<dyn VulkanVideoCodecDevice>` back-reference, the raw Vulkan
 /// handle, and a `Drop` impl that tears it down.
 pub struct VulkanQueryPool {
-    #[allow(dead_code)] // surfaced via tracing on construction
     label: String,
     vulkan_device: Arc<dyn VulkanVideoCodecDevice>,
     handle: vk::QueryPool,

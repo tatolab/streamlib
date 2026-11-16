@@ -6,7 +6,10 @@
 //! Provides high-precision audio timing using kernel-optimized GCD timers
 //! instead of software timers. This offers better precision and power efficiency.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "the dispatch-timer clock keeps FFI fields and helpers the macOS build does not all use"
+)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
 use crate::core::logging::{
@@ -24,11 +27,20 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 // GCD FFI Bindings
 // =============================================================================
 
-#[allow(non_camel_case_types)]
+#[allow(
+    non_camel_case_types,
+    reason = "named after the C `dispatch_queue_t` it binds"
+)]
 type dispatch_queue_t = *mut c_void;
-#[allow(non_camel_case_types)]
+#[allow(
+    non_camel_case_types,
+    reason = "named after the C `dispatch_source_t` it binds"
+)]
 type dispatch_source_t = *mut c_void;
-#[allow(non_camel_case_types)]
+#[allow(
+    non_camel_case_types,
+    reason = "named after the C `dispatch_time_t` it binds"
+)]
 type dispatch_time_t = u64;
 
 /// DISPATCH_TIME_NOW constant.

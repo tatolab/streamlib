@@ -11,7 +11,10 @@ use crate::core::rhi::{TextureFormat, TextureUsages};
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1."
 )]
 #[test]
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+)]
 fn the_texture_pool_holds_more_than_sixteen_textures_of_one_shape_at_once() {
     let Ok(device) = GpuDevice::new() else {
         println!("no GPU device — skipping");

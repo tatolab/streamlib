@@ -182,8 +182,10 @@ fn a_decode_cap_below_the_picture_is_refused_and_one_at_it_is_not() {
     );
 }
 
-// The measured scores are the run's evidence, printed for whoever ran it.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the measured scores are the run's evidence, printed for whoever ran it"
+)]
 fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream) {
     let mut compression_session =
         VideoToolboxCompressionSession::open(&VideoToolboxCompressionSessionRequest {

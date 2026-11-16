@@ -54,3 +54,6 @@ axum = { workspace = true }
 tokio = { version = "1.48.0", features = ["rt", "time", "net", "sync", "process"] }
 # Each test's socket directory, machine root and scratch files, removed when it ends.
 tempfile = { workspace = true }
+
+[lints.clippy]
+allow_attributes_without_reason = "deny"

@@ -72,7 +72,10 @@ mod linux {
     }
 
     #[test]
-    #[allow(clippy::disallowed_macros)]
+    #[allow(
+        clippy::disallowed_macros,
+        reason = "the test prints its measured numbers or its skip reason for whoever reads the run"
+    )]
     fn emitter_thread_issues_zero_write_syscalls_during_burst() {
         if !strace_available() {
             eprintln!(

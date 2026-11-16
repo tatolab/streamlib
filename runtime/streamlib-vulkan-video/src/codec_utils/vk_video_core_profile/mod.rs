@@ -234,7 +234,7 @@ impl VkVideoCoreProfile {
     }
 
     /// Construct from explicit parameters — mirrors the main C++ constructor.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, reason = "mirrors the C++ constructor")]
     pub fn new(
         video_codec_operation: vk::VideoCodecOperationFlagsKHR,
         chroma_subsampling: vk::VideoChromaSubsamplingFlagsKHR,

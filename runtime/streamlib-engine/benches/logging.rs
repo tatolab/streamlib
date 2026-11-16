@@ -23,7 +23,10 @@
 // stderr as a bench deliverable — criterion's default reporter only
 // surfaces mean bounds, and this data needs to reach the operator
 // running `cargo bench`.
-#![allow(clippy::disallowed_macros)]
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a benchmark prints its numbers for the operator running `cargo bench`"
+)]
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

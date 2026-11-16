@@ -128,7 +128,13 @@ struct LockHeldAndAnsweringAsItsHolder {
 fn take_and_answer_as_its_holder(
     location: &MachineRuntimeLockLocation,
 ) -> LockHeldAndAnsweringAsItsHolder {
-    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            unused_mut,
+            reason = "only the macOS build takes the listener out of the lock"
+        )
+    )]
     let mut held_lock = take_the_machine_runtime_lock_at(location).unwrap();
     LockHeldAndAnsweringAsItsHolder {
         #[cfg(target_os = "macos")]

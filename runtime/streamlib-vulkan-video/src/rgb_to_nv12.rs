@@ -160,7 +160,10 @@ impl RgbToNv12ComputePipeline {
 
     /// Point the set at this dispatch's images, then record the bind, push
     /// constants and dispatch into `command_buffer`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate piece of the dispatch the caller already holds"
+    )]
     unsafe fn record(
         &self,
         device: &vulkanalia::Device,

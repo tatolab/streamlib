@@ -559,7 +559,10 @@ impl HostVulkanDevice {
             .build();
 
         let device_create_info = {
-            #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+            #[cfg_attr(
+                not(target_os = "linux"),
+                allow(unused_mut, reason = "only the Linux build mutates it")
+            )]
             let mut builder = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&queue_create_infos)
                 .enabled_extension_names(&device_extensions)

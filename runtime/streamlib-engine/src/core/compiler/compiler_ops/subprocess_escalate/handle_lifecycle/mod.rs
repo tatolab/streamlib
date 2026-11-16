@@ -48,9 +48,15 @@ use crate::core::rhi::PixelBuffer;
 /// registration so the kernel objects backing the FDs aren't
 /// destroyed.
 pub(crate) enum RegisteredHandle {
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "the handle is held only so dropping the entry releases it"
+    )]
     PixelBuffer(PixelBuffer),
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "the handle is held only so dropping the entry releases it"
+    )]
     Texture {
         texture: PooledTextureHandle,
         #[cfg(target_os = "linux")]
@@ -65,7 +71,10 @@ pub(crate) enum RegisteredHandle {
     /// timelines keep their FDs alive for surface-share consumers, and are
     /// absent on a device that exports no timeline semaphore.
     #[cfg(target_os = "linux")]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "the handle is held only so dropping the entry releases it"
+    )]
     Image {
         texture: crate::core::rhi::Texture,
         produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
@@ -430,7 +439,10 @@ pub(crate) fn release_processor_output_pool_slot(
 /// underlying resource, but the surface-share service still holds the
 /// surface's handle until `release`. Errors are logged, not returned — the
 /// subprocess is not waiting on the service at this point.
-#[allow(unused_variables)]
+#[allow(
+    unused_variables,
+    reason = "only the Linux and macOS builds release through the surface-share service"
+)]
 pub(super) fn release_surface_share_surface(
     sandbox: &GpuContextLimitedAccess,
     handle_id: &str,

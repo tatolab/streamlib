@@ -5,8 +5,10 @@
 //! arm under test is the one the chain chose, which device it will measure,
 //! that the microphone may be used, and where its numbers are printed.
 
-// Each test binary compiles its own copy and uses part of it.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use streamlib_engine::apple_coreaudio_audio_tier::{
     CoreAudioStreamDirection, built_in_audio_device_uid, default_audio_device_uid,
@@ -18,7 +20,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 /// Print a measured number or a cannot-run reason into the test's own output:
 /// evidence for whoever reads the run, not a library log line.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the test prints its measured numbers for whoever reads the run"
+)]
 pub fn print_for_the_evidence_record(line: impl std::fmt::Display) {
     println!("{line}");
 }

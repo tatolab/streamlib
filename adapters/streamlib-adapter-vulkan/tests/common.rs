@@ -5,7 +5,10 @@
 //! Pulled in via `#[path = "common.rs"] mod common;` in each test file.
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
-#![allow(dead_code)] // Each test file uses a different subset.
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 #[path = "support/render_target_texture.rs"]
 pub mod render_target_texture;

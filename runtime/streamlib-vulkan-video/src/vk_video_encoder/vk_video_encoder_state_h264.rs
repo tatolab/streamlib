@@ -13,8 +13,6 @@
 //! when the `ash` video encode extensions are stabilized.
 
 use vulkanalia::vk;
-#[allow(unused_imports)] // Needed for VideoSessionKHR::null()
-use vulkanalia::vk::Handle;
 
 // ---------------------------------------------------------------------------
 // VideoSessionParametersInfo
@@ -179,6 +177,7 @@ pub struct H264HrdParameters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use vulkanalia::vk::Handle;
 
     #[test]
     fn test_encoder_state_default() {

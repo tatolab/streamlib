@@ -100,7 +100,10 @@ impl PythonGpuContextFullAccess {
     /// The pool rotates through `rotation_depth` slots, grows while consumers
     /// hold frames, and at its cap refuses by name — the producer drops its
     /// own frame rather than wait.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "pyo3 maps each Python keyword argument to its own parameter"
+    )]
     #[pyo3(name = "acquire_texture_from_node_output_pool")]
     fn acquire_texture_from_processor_output_pool(
         &self,

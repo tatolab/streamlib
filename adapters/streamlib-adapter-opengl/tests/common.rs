@@ -6,7 +6,10 @@
 //! `#[path = "common.rs"] mod common;`.
 
 #![cfg(target_os = "linux")]
-#![allow(dead_code)] // each test file uses a different subset
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};

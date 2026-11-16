@@ -45,8 +45,13 @@ pub(crate) struct DeviceBackendArm<SharedBackend> {
 impl<SharedBackend> DeviceBackendArm<SharedBackend> {
     /// The only way to build one, so an arm's name always comes from the same
     /// place as the attempt that opens it.
-    // A platform with no real arm for a device class has none to construct.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos")),
+        allow(
+            dead_code,
+            reason = "a platform with no real arm for a device class has none to construct"
+        )
+    )]
     pub(crate) fn named(
         backend_name: &'static str,
         open: impl FnOnce() -> DeviceBackendArmOpenOutcome<SharedBackend> + 'static,

@@ -4,7 +4,10 @@
 //! The `tatolab` binary run as a user runs it. Integration tests only: the binary's path is
 //! known to them alone.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration test binary compiles its own copy and uses part of it"
+)]
 
 use std::process::{Command, Output, Stdio};
 

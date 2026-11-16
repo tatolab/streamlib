@@ -227,7 +227,6 @@ pub(crate) fn release_the_destination_side_of_a_link(
 /// A plain port's subscriber ring and mailbox take the port's own delivery
 /// resolution. A windowed port's subscriber takes the windowed ring and its
 /// mailbox is sized from its contract.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_rust_dest(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
@@ -340,7 +339,6 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 ///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`](super::link_source_side::wire_subprocess_source).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn wire_subprocess_dest(
     graph: &mut Graph,
     link_wiring: &OutOfProcessLinkWiringEnvelope,

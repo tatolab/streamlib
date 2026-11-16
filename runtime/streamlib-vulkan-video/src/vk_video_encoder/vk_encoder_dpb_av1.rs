@@ -19,7 +19,7 @@ pub const REFS_PER_FRAME: usize = 7; // STD_VIDEO_AV1_REFS_PER_FRAME
 pub const ORDER_HINT_BITS: u32 = 8; // Default, may be configured
 
 // Reference frame flags
-#[allow(dead_code)] // AV1 codec stub
+#[allow(dead_code, reason = "the AV1 encoder is a stub")]
 const REFRESH_LAST_FRAME_FLAG: u32 = 1 << 1; // STD_VIDEO_AV1_REFERENCE_NAME_LAST_FRAME
 const REFRESH_GOLDEN_FRAME_FLAG: u32 = 1 << 4;
 const REFRESH_BWD_FRAME_FLAG: u32 = 1 << 5;
@@ -121,12 +121,12 @@ pub struct VkEncDpbAV1 {
 
     num_ref_frames_in_group1: i32,
     num_ref_frames_in_group2: i32,
-    #[allow(dead_code)] // AV1 codec stub
+    #[allow(dead_code, reason = "the AV1 encoder is a stub")]
     ref_names_in_group1: [i32; REFS_PER_FRAME],
-    #[allow(dead_code)] // AV1 codec stub
+    #[allow(dead_code, reason = "the AV1 encoder is a stub")]
     ref_names_in_group2: [i32; REFS_PER_FRAME],
 
-    #[allow(dead_code)] // AV1 codec stub
+    #[allow(dead_code, reason = "the AV1 encoder is a stub")]
     ref_name2_dpb_idx: [i32; REFS_PER_FRAME],
     ref_buf_id_map: [i32; NUM_REF_FRAMES],
     ref_frame_dpb_id_map: [i8; NUM_REF_FRAMES],

@@ -214,7 +214,10 @@ impl ConsumerVulkanDevice {
         // Logical device. Sync2 + timeline semaphore are core in 1.3 but
         // still need their feature flags enabled.
         let queue_priorities = [1.0f32];
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        #[cfg_attr(
+            not(target_os = "linux"),
+            allow(unused_mut, reason = "only the Linux build mutates it")
+        )]
         let mut queue_create_infos = vec![
             vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(queue_family_index)
@@ -267,7 +270,10 @@ impl ConsumerVulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let enabled_physical_device_features = vk::PhysicalDeviceFeatures::default();
 
-        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        #[cfg_attr(
+            not(target_os = "linux"),
+            allow(unused_mut, reason = "only the Linux build mutates it")
+        )]
         let mut device_create_info_builder = vk::DeviceCreateInfo::builder()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)

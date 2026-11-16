@@ -1,1 +1,18 @@
 /.claude/    @tato123
+
+# The lints and what loosens them: the rules, their exception lists, the
+# workspace lint table, and the command that runs them.
+/sgconfig.yml                     @tato123
+/ast-grep-rules/                  @tato123
+/lint-exceptions/                 @tato123
+/clippy.toml                      @tato123
+/Cargo.toml                       @tato123
+/scripts/run-structure-lints.sh   @tato123
+/.github/workflows/ci.yml         @tato123
+/.github/CODEOWNERS               @tato123
+
+# Crates that don't inherit [workspace.lints] write their own lint table.
+/runtime/streamlib-api-server/Cargo.toml  @tato123
+/runtime/tatolab-cli/Cargo.toml           @tato123
+/sdk/streamlib-sdk/Cargo.toml             @tato123
+/xtask/Cargo.toml                         @tato123

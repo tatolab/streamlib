@@ -1,7 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "the clock keeps helpers the Linux build does not all use"
+)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
 use crate::core::media_clock::MediaClock;

@@ -214,17 +214,17 @@ impl GpuContext {
         surface_id: &str,
         #[cfg_attr(
             not(any(target_os = "linux", target_os = "macos")),
-            allow(unused_variables)
+            allow(unused_variables, reason = "only the Linux and macOS builds read it")
         )]
         texture_layout: Option<i32>,
         #[cfg_attr(
             not(any(target_os = "linux", target_os = "macos")),
-            allow(unused_variables)
+            allow(unused_variables, reason = "only the Linux and macOS builds read it")
         )]
         width: u32,
         #[cfg_attr(
             not(any(target_os = "linux", target_os = "macos")),
-            allow(unused_variables)
+            allow(unused_variables, reason = "only the Linux and macOS builds read it")
         )]
         height: u32,
     ) -> Result<TextureRegistration> {

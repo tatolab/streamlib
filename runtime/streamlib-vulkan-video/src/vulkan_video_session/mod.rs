@@ -231,8 +231,6 @@ struct VideoSessionCreateInfoSnapshot {
 /// handle, the VMA allocations the driver demanded, and a `Drop`
 /// impl that tears them down in the right order.
 pub struct VulkanVideoSession {
-    #[allow(dead_code)] // surfaced via tracing on construction; kept for future debug surfaces
-    label: String,
     vulkan_device: Arc<dyn VulkanVideoCodecDevice>,
     handle: vk::VideoSessionKHR,
     allocations: Vec<vma::Allocation>,
@@ -322,7 +320,6 @@ impl VulkanVideoSession {
         };
 
         Ok(Arc::new(Self {
-            label: descriptor.label.to_string(),
             vulkan_device: Arc::clone(vulkan_device),
             handle: raw_session,
             allocations,
@@ -471,8 +468,6 @@ impl Drop for VulkanVideoSession {
 /// outlive any of its parameters objects, and the `Arc` makes that
 /// invariant unbreakable from Rust.
 pub struct VulkanVideoSessionParameters {
-    #[allow(dead_code)]
-    label: String,
     session: Arc<VulkanVideoSession>,
     handle: vk::VideoSessionParametersKHR,
 }
@@ -608,7 +603,6 @@ impl VulkanVideoSessionParameters {
         )))?;
 
         Ok(Arc::new(Self {
-            label: descriptor.label.to_string(),
             session: Arc::clone(session),
             handle,
         }))

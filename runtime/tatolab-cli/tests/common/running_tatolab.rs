@@ -5,7 +5,10 @@
 //! stdout and stderr read line by line as they land, signalled as a terminal signals it, and
 //! killed if a test leaves it running. Integration tests only.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration test binary compiles its own copy and uses part of it"
+)]
 
 use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};

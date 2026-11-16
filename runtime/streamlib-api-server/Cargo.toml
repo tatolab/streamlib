@@ -94,3 +94,6 @@ tracing-subscriber.workspace = true
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # The media facts tests import a real PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
+
+[lints.clippy]
+allow_attributes_without_reason = "deny"

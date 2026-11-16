@@ -303,7 +303,10 @@ pub struct CfgGatedFieldProcessor {
     // `non_minimal_cfg` on the deliberately-degenerate always-true predicate,
     // and it only reaches the generated field at all if the macro forwards lint
     // controls — so this line also exercises that half of the filter in-tree.
-    #[allow(clippy::non_minimal_cfg)]
+    #[allow(
+        clippy::non_minimal_cfg,
+        reason = "the test field exercises the macro forwarding lint controls"
+    )]
     #[cfg(all())]
     always_compiled_state: CfgGatedFieldAlwaysCompiledState,
     #[cfg(target_os = "linux")]

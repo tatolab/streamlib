@@ -6,7 +6,10 @@
 //! sequence number — beside the `/mcp/stdio` upgrade playing a scripted stream, each recording
 //! what it was sent. Shared by the integration tests and, through `#[path]`, the unit tests.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};

@@ -4,9 +4,3 @@
 //! Vulkan GPU backend (Linux, macOS via MoltenVK).
 
 pub mod rhi;
-
-// Re-exports for public API (intentionally exposed for external use)
-#[allow(unused_imports)]
-pub use rhi::{
-    HostVulkanDevice, HostVulkanTexture, VulkanBlitter, VulkanCommandBuffer, VulkanCommandQueue,
-};

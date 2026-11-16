@@ -1,7 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-#![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
+#![allow(
+    clippy::disallowed_macros,
+    reason = "a build script talks to Cargo through `cargo:` lines on stdout"
+)]
 
 //! Compiles the fixtures' shaders to SPIR-V through the Slang compiler the
 //! workspace stages into `OUT_DIR` for `include_bytes!`.

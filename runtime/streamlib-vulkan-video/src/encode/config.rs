@@ -100,9 +100,6 @@ pub(crate) struct EncodeConfig {
     pub(crate) framerate_numerator: u32,
     /// Frames per second (denominator, typically 1).
     pub(crate) framerate_denominator: u32,
-    /// Codec operation flags (e.g. `ENCODE_H264` or `ENCODE_H265`).
-    #[allow(dead_code)] // Stored for future use in multi-codec paths
-    pub(crate) codec: vk::VideoCodecOperationFlagsKHR,
     /// Chroma subsampling (default: 4:2:0).
     pub(crate) chroma_subsampling: vk::VideoChromaSubsamplingFlagsKHR,
     /// Luma bit depth (default: 8).
@@ -147,7 +144,6 @@ impl Default for EncodeConfig {
             height: 0,
             framerate_numerator: 30,
             framerate_denominator: 1,
-            codec: vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
             chroma_subsampling: vk::VideoChromaSubsamplingFlagsKHR::_420,
             luma_bit_depth: vk::VideoComponentBitDepthFlagsKHR::_8,
             chroma_bit_depth: vk::VideoComponentBitDepthFlagsKHR::_8,
@@ -243,9 +239,6 @@ pub struct EncodedOutput {
 pub(crate) struct DpbSlot {
     /// Per-slot image view into one array layer of the shared DPB image.
     pub(crate) view: vk::ImageView,
-    /// Array layer index within the shared DPB image.
-    #[allow(dead_code)] // Stored for multi-layer DPB configurations
-    pub(crate) array_layer: u32,
     pub(crate) in_use: bool,
     pub(crate) frame_num: u64,
     pub(crate) poc: i32,
@@ -261,7 +254,6 @@ impl Default for DpbSlot {
     fn default() -> Self {
         Self {
             view: vk::ImageView::null(),
-            array_layer: 0,
             in_use: false,
             frame_num: 0,
             poc: 0,
@@ -437,11 +429,6 @@ impl SimpleEncoderConfig {
 
     /// Derive the low-level [`EncodeConfig`] from this simple config.
     pub(crate) fn to_encode_config(&self) -> EncodeConfig {
-        let codec_flag = match self.codec {
-            Codec::H264 => vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
-            Codec::H265 => vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
-        };
-
         // Derive rate control and QP from preset / overrides.
         let (rc_mode, avg_br, max_br, qp_i, qp_p, qp_b) = if let Some(br) = self.bitrate_bps {
             (RateControlMode::Vbr, br, br * 2, 0, 0, 0)
@@ -480,7 +467,6 @@ impl SimpleEncoderConfig {
             height: self.height,
             framerate_numerator: self.fps,
             framerate_denominator: 1,
-            codec: codec_flag,
             rate_control_mode: rc_mode,
             average_bitrate: avg_br,
             max_bitrate: max_br,

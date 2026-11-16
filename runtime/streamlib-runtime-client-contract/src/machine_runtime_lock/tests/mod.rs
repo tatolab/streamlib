@@ -276,7 +276,10 @@ mod under_a_test_machine_root {
             assert_eq!(mode_of(state_directory.path()), 0o700);
 
             assert_eq!(holder_of_the_machine_runtime_lock().unwrap(), None);
-            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+            #[cfg_attr(
+                not(target_os = "macos"),
+                allow(unused_mut, reason = "only the macOS build mutates it")
+            )]
             let mut held_lock = MachineRuntimeLock::take().unwrap();
             #[cfg(target_os = "macos")]
             let _holder_route_answered = {

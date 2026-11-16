@@ -37,3 +37,6 @@ serde_json = { workspace = true }
 # The app tests load their stream from a project on disk.
 streamlib-engine = { path = "../../runtime/streamlib-engine", features = ["test-support"] }
 tempfile = { workspace = true }
+
+[lints.clippy]
+allow_attributes_without_reason = "deny"

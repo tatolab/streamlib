@@ -6,8 +6,10 @@
 //! takes — and the checked-in access-unit clips one floor's encoder wrote for
 //! the other floor's decoder to read.
 
-// Each test binary compiles its own copy and uses part of it.
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each test binary compiles its own copy and uses part of it"
+)]
 
 use std::path::{Path, PathBuf};
 

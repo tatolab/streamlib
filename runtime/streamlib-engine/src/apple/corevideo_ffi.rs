@@ -8,7 +8,12 @@
 //! - CVOpenGLTextureCache: Create OpenGL textures from CVPixelBuffers
 //! - CVPixelBufferPool: Efficient pixel buffer allocation/recycling
 
-#![allow(dead_code, non_snake_case, non_upper_case_globals)]
+#![allow(
+    dead_code,
+    non_snake_case,
+    non_upper_case_globals,
+    reason = "CoreVideo FFI bindings keep the C names and declare more than the engine calls"
+)]
 
 use std::ffi::c_void;
 

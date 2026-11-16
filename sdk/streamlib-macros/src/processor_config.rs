@@ -88,7 +88,7 @@ fn config_filled_from_its_default_check(sdk_root: &TokenStream, item: &ItemStruc
                 ProcessorConfig: #sdk_root::descriptors::ProcessorConfigFilledFromItsDefault,
             >() {
             }
-            #[allow(dead_code)]
+            #[allow(dead_code, reason = "the function exists only for its compile-time check; nothing calls it")]
             fn check #impl_generics () #where_clause {
                 processor_config_is_filled_from_its_default::<#struct_name #type_generics>();
             }
@@ -131,7 +131,7 @@ fn refuse_a_struct_that_already_declares_container_serde_default(
 fn description_marker(sdk_root: &TokenStream, marker: &Ident, description: &Expr) -> TokenStream {
     quote! {
         #[doc(hidden)]
-        #[allow(non_camel_case_types)]
+        #[allow(non_camel_case_types, reason = "the marker is named after the author's config key")]
         struct #marker;
 
         impl #sdk_root::descriptors::ProcessorConfigKeyDescription for #marker {

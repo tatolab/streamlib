@@ -65,7 +65,10 @@ use vulkanalia::vk;
 #[cfg(target_os = "linux")]
 #[derive(Debug, serde::Deserialize)]
 struct HelperRequest {
-    #[allow(dead_code)] // role is dispatched on argv[1]; this echoes it for debug
+    #[allow(
+        dead_code,
+        reason = "the role is dispatched on argv[1]; the payload echoes it for debug output only"
+    )]
     role: String,
     width: u32,
     height: u32,
@@ -73,13 +76,9 @@ struct HelperRequest {
     plane_offsets: Vec<u64>,
     plane_strides: Vec<u64>,
     allocation_size: u64,
-    /// Optional wait-target hint kept for compatibility; the helper
-    /// now derives wait targets from the peer timeline's kernel
-    /// `current_value()` per the v1 single-writer-per-edge model so
-    /// this field is effectively ignored. Tests still set it (often
-    /// to `1`) so the JSON payload remains stable across the
-    /// migration.
-    #[allow(dead_code)]
+    /// A wait-target hint the tests send; the helper derives its wait
+    /// targets from the peer timeline's `current_value()` instead.
+    #[allow(dead_code, reason = "the tests still send it; the helper ignores it")]
     #[serde(default)]
     wait_value: u64,
     /// For `write`: 4 bytes of clear color.

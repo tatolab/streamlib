@@ -4,7 +4,10 @@
 //! Running the built `tatolabd` from a runtime unit of its own, with the
 //! machine's directories under a short test root of its own.
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "each integration test binary compiles its own copy and uses part of it"
+)]
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;

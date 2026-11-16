@@ -378,7 +378,10 @@ impl<'target, 'py> PortPayloadReadShape<'target, 'py> {
 /// One message's payload as a `PortPayloadBorrow`, or what `into.from_bytes`
 /// builds from that borrow when `into` names a target — the half every read
 /// shares once the payload is in hand.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate piece of the read the caller already holds"
+)]
 fn payload_borrowed_into_the_read_target_when_named<'py>(
     python: Python<'py>,
     port_name: &str,

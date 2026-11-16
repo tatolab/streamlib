@@ -24,7 +24,10 @@ use crate::python_processor_context::PythonGpuContextLimitedAccess;
 impl PythonProcessorLinkDataAccess {
     /// Publish `samples`, a `[channel][sample]` array, as one Channels block
     /// on `port_name` starting at `start_sample`, at `sample_rate`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate field of the Channels block being written"
+    )]
     pub(crate) fn write_channels_block_to_output_port(
         &self,
         python: Python<'_>,
@@ -81,7 +84,10 @@ impl PythonProcessorLinkDataAccess {
 
     /// Publish `image`, an `ImageFrame` this node read or a GPU surface it
     /// acquired from a pool, as one Image frame on `port_name`.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate field of the Image frame being written"
+    )]
     pub(crate) fn write_image_frame_to_output_port(
         &self,
         python: Python<'_>,
@@ -145,7 +151,10 @@ impl PythonProcessorLinkDataAccess {
     /// Publish `attributes`, a mapping of name to a C-contiguous CPU array or
     /// a tensor surface this node acquired from a pool, as one Array frame on
     /// `port_name`; refused when a name in `declared_names` is missing.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate field of the Array frame being written"
+    )]
     pub(crate) fn write_array_frame_to_output_port(
         &self,
         python: Python<'_>,

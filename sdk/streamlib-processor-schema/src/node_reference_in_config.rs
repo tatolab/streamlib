@@ -372,7 +372,10 @@ mod tests {
     }
 
     #[derive(JsonSchema, Serialize, Deserialize)]
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "the struct exists only for its derived JSON schema"
+    )]
     struct ConfigNamingAGatewayAndAnyNode {
         gateway: NodeReferenceToNodeType<GatewayNodeTypeForTheTest>,
         anything: Option<NodeReferenceInConfig>,

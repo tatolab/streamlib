@@ -8,9 +8,6 @@
 //!
 //! These tests only cover internal parsing and analysis logic.
 
-#[allow(unused_imports)]
-use streamlib_macros::processor;
-
 // Processor macro tests require the full streamlib crate because the generated code
 // references streamlib types. See libs/streamlib/tests/attribute_macro_test.rs for
 // actual integration tests.

@@ -354,7 +354,10 @@ fn hand_off_processor_output_frame(
 /// `surface_id` becomes the handle_id. On other platforms the published frame
 /// id stays as-is: a macOS pool slot is already registered with the
 /// surface-share service under its slot key, so the frame id resolves there.
-#[allow(unused_variables)]
+#[allow(
+    unused_variables,
+    reason = "only the Linux build reads the context and the buffer"
+)]
 pub(super) fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
     published_frame_id: &crate::core::rhi::PublishedPixelBufferFrameId,

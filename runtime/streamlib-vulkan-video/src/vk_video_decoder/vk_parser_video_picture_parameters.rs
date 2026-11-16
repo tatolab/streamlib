@@ -12,10 +12,6 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-// Placeholder import — will be used when codec_utils types are fully integrated.
-#[allow(unused_imports)]
-use crate::codec_utils;
-
 // ---------------------------------------------------------------------------
 // StdVideoPictureParametersSet types (placeholder — lives in codec_utils)
 // These mirror the C++ StdVideoPictureParametersSet enums and trait.

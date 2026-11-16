@@ -66,7 +66,6 @@ pub(super) fn choose_v4l2_capture_buffer_path_to_the_gpu(
 
 /// Create the conversion stage and the input storage buffers, and import
 /// every driver buffer as a DMA-BUF when the path to the GPU allows it.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn set_up_the_camera_gpu_resources(
     full: &GpuContextFullAccess,
     device_fd: RawFd,

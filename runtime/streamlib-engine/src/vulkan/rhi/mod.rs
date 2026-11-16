@@ -29,25 +29,22 @@ pub use device::vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use device::vulkan_device::{HostVulkanDevice, RayTracingPipelineProperties};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "the re-exports are the module's surface; not every one is used inside the crate"
+)]
 pub use command_recording_and_sync::vulkan_sync::HostVulkanTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use memory_and_buffers::vulkan_upload_resources::HostVulkanUploadResources;
-#[allow(unused_imports)]
+#[allow(
+    unused_imports,
+    reason = "the re-exports are the module's surface; not every one is used inside the crate"
+)]
 pub use textures_and_readback::vulkan_texture::HostVulkanTexture;
 
-// Trait machinery + Consumer flavor — re-exported from the canonical
-// home in `streamlib-consumer-rhi`. Some entries appear unused inside
-// streamlib itself (callers reach the trait machinery via streamlib's
-// re-export); the `#[allow(unused_imports)]` keeps the surface
-// available for downstream crates that still pull these names through
-// `streamlib::vulkan::rhi`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-#[allow(unused_imports)]
 pub use streamlib_consumer_rhi::{
-    ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
-    ConsumerVulkanTimelineSemaphore, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice,
-    VulkanTextureLike, VulkanTimelineSemaphoreLike,
+    VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 
 pub use textures_and_readback::vulkan_blitter::VulkanBlitter;

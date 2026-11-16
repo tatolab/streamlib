@@ -11,7 +11,10 @@ pub(crate) use projects_and_their_venv::project_venv_made_with_the_runtime_unit_
 mod machine_state_and_process_end;
 mod processor_interpreters;
 mod projects_and_their_venv;
-#[allow(clippy::module_inception)]
+#[allow(
+    clippy::module_inception,
+    reason = "the module holds the `Runtime` type its parent is named for"
+)]
 mod runtime;
 mod streams_loaded_in_this_runtime;
 

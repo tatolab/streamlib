@@ -236,7 +236,14 @@ impl UnreadMessageAFunctionNodeHandsOn {
 
     /// The message itself, as a state record's deep copy takes it.
     #[pyo3(signature = (memo))]
-    fn __deepcopy__(slf: Py<Self>, #[allow(unused_variables)] memo: &Bound<'_, PyAny>) -> Py<Self> {
+    fn __deepcopy__(
+        slf: Py<Self>,
+        #[allow(
+            unused_variables,
+            reason = "the deep copy shares the message, so it never reads the memo"
+        )]
+        memo: &Bound<'_, PyAny>,
+    ) -> Py<Self> {
         slf
     }
 }

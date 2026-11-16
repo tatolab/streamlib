@@ -48,7 +48,10 @@ fn sentinel_filled_tensor_storage_buffer(
 }
 
 /// The mapped elements of a HOST_VISIBLE float32 tensor.
-#[allow(clippy::mut_from_ref)]
+#[allow(
+    clippy::mut_from_ref,
+    reason = "the tensor's memory is mapped device memory, not borrowed from the buffer"
+)]
 fn tensor_values_mut(buffer: &crate::core::rhi::StorageBuffer) -> &mut [f32] {
     assert!(
         !buffer.mapped_ptr().is_null(),

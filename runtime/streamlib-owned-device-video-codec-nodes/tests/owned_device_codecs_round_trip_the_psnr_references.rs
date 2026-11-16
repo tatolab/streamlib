@@ -177,8 +177,10 @@ fn owned_device_h265_round_trips_every_psnr_reference_inside_the_bands() {
     round_trip_every_psnr_reference_on_owned_devices(Codec::H265);
 }
 
-// The measured scores are the run's evidence, printed for whoever ran it.
-#[allow(clippy::disallowed_macros)]
+#[allow(
+    clippy::disallowed_macros,
+    reason = "the measured scores are the run's evidence, printed for whoever ran it"
+)]
 fn round_trip_every_psnr_reference_on_owned_devices(codec: Codec) {
     let Some(owned_encode_device) =
         owned_device_on_the_runtimes_gpu(VulkanVideoCodecDirection::Encode)
