@@ -8,6 +8,8 @@ valid:
   - "# time.time_ns() is the wall clock"
   - "elapsed = time.monotonic()"
 invalid:
+  - "stamp = time . time()"
+  - "stamp = datetime . now()"
   - |
     import time
 

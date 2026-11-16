@@ -37,6 +37,11 @@ rule:
         kind: token_tree
       follows:
         regex: '^\.$'
+      precedes:
+        any:
+          - kind: token_tree
+            regex: '^\('
+          - regex: '^::$'
   inside:
     stopBy: end
     kind: function_item

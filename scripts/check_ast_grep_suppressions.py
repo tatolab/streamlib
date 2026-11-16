@@ -23,6 +23,12 @@ EXEMPT_PREFIXES = (
 SUPPRESSION_COMMENT = re.compile(
     r"(?://|#|/\*)[^\w\n]*ast-grep-ignore(?P<rules>:[^\n]*)?"
 )
+# ast-grep reads a block comment whole, so a directive that opens a continuation
+# line of one counts though the line carries no comment marker of its own.
+SUPPRESSION_ON_A_BLOCK_COMMENT_LINE = re.compile(
+    r"^[^\w\n]*ast-grep-ignore(?P<rules>:[^\n]*)?"
+)
+BLOCK_COMMENT_DELIMITER = re.compile(r"/\*|\*/")
 
 
 def unsuppressible_rule_ids() -> set[str]:
@@ -35,8 +41,18 @@ def refused_suppressions(
 ) -> list[tuple[int, str]]:
     """Each refused suppression in `text`, as its 1-based line and the reason."""
     refusals = []
+    inside_a_block_comment = False
     for line_number, line in enumerate(text.splitlines(), start=1):
-        for comment in SUPPRESSION_COMMENT.finditer(line):
+        directives = {
+            match.start("rules"): match for match in SUPPRESSION_COMMENT.finditer(line)
+        }
+        if inside_a_block_comment:
+            continuation = SUPPRESSION_ON_A_BLOCK_COMMENT_LINE.match(line)
+            if continuation:
+                directives.setdefault(continuation.start("rules"), continuation)
+        for delimiter in BLOCK_COMMENT_DELIMITER.finditer(line):
+            inside_a_block_comment = delimiter.group() == "/*"
+        for comment in directives.values():
             named_rules = set(
                 re.findall(r"[a-z0-9][a-z0-9-]*", comment.group("rules") or "")
             )

@@ -6,7 +6,13 @@ language: rust
 rule:
   any:
     - kind: scoped_identifier
-      regex: '(^|::)(SystemTime|Utc|Local)::now$'
+      all:
+        - has:
+            field: name
+            regex: '^now$'
+        - has:
+            field: path
+            regex: '(^|:)\s*(SystemTime|Utc|Local)$'
     - kind: identifier
       regex: '^now$'
       inside:
@@ -20,7 +26,7 @@ rule:
       all:
         - has:
             field: value
-            regex: '(^|::)UNIX_EPOCH$'
+            regex: '(^|:)\s*UNIX_EPOCH$'
         - has:
             field: field
             regex: '^elapsed$'

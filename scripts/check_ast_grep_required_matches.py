@@ -28,7 +28,7 @@ def listed_paths(lines: list[str], key: str) -> list[str]:
             in_list = True
         elif in_list and line.startswith("  - "):
             entries.append(line.removeprefix("  - ").strip().strip('"'))
-        elif in_list and not line.startswith("  #"):
+        elif in_list and line.strip() and not line.startswith("  #"):
             in_list = False
     return entries
 
