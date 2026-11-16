@@ -1,9 +1,5 @@
 id: no-iceoryx2-node-outside-the-engine-owned-domain
 valid:
-  - |
-    pub fn create_iceoryx2_node_in_domain(config: &Config) -> Result<Node<ipc::Service>> {
-        NodeBuilder::new().config(config).create::<ipc::Service>()
-    }
   - "let node = Iceoryx2Node::for_this_test_process()?;"
   - "// NodeBuilder::new() reads the ambient configuration"
 invalid:
@@ -14,4 +10,8 @@ invalid:
     #[cfg(test)]
     mod tests {
         fn node() { let _ = NodeBuilder::new().create::<ipc::Service>(); }
+    }
+  - |
+    pub(crate) fn create_iceoryx2_node_in_domain(config: &Config) -> Result<Node<ipc::Service>> {
+        NodeBuilder::new().config(config).create::<ipc::Service>()
     }

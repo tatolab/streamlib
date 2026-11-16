@@ -9,10 +9,13 @@ note: >-
   constructor is `create_iceoryx2_node_in_domain` in
   runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs. Test modules,
   test files and benches are checked too, and the rule takes no ast-grep-ignore.
+  no-iceoryx2-node-outside-the-domain-constructor covers the domain module itself.
 files:
   - runtime/**/*.rs
   - sdk/**/*.rs
   - adapters/**/*.rs
+ignores:
+  - runtime/streamlib-ipc-types/src/engine_owned_iceoryx2_domain.rs
 rule:
   any:
     - kind: call_expression
@@ -30,10 +33,3 @@ rule:
           regex: '^NodeBuilder$'
       precedes:
         kind: token_tree
-  not:
-    inside:
-      stopBy: end
-      kind: function_item
-      has:
-        field: name
-        regex: '^create_iceoryx2_node_in_domain$'
