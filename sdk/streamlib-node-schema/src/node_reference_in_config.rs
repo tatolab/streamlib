@@ -33,6 +33,11 @@ pub const NODE_REFERENCE_SCHEMA_ONE_REFERRER_PER_REFERENCED_NODE_KEY: &str =
 
 /// A config value naming another node of the graph, of any type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "contract-json-schema",
+    derive(schemars_1::JsonSchema),
+    schemars(crate = "schemars_1")
+)]
 #[serde(deny_unknown_fields)]
 pub struct NodeReferenceInConfig {
     /// The referenced node's name, as `add` gave it.
