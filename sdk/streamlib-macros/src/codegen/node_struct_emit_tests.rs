@@ -344,6 +344,7 @@ fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
 fn annotated_field_struct() -> ItemStruct {
     syn::parse_quote! {
         struct AnnotatedFieldProbe {
+            /// Authored doc on a node field.
             #[allow(dead_code)]
             #[expect(unused_parens)]
             #[cfg_attr(target_os = "linux", allow(unused))]

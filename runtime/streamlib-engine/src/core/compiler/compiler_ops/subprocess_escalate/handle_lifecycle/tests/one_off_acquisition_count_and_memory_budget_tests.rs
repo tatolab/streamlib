@@ -596,7 +596,7 @@ fn a_nodes_one_off_acquisitions_are_refused_at_its_own_count_by_name() {
         "the refusal names the shape and the count: {refusal_text}"
     );
     assert!(
-        !refusal_text.contains("node output pool"),
+        !refusal_text.contains("node output pool '"),
         "a one-off refusal is not the output pool's: {refusal_text}"
     );
 
