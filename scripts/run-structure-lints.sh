@@ -20,7 +20,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
 
-LINT_CONFIG_COMMIT=be918bd6af6854fbf8efaedc3877b2418e387422
+LINT_CONFIG_COMMIT=79020cc823c1f21b1c68747fb1bc9f623ba6df54
 
 compared_ref=""
 case "$#" in
@@ -77,10 +77,19 @@ run_lint() {
   fi
 }
 
+# ast-grep skips the hidden directories it walks into, so .github is named. The
+# required-match check scans the same paths, so dropping one fails its keeps-wired rules.
+ast_grep_scan_paths=(. .github)
+ast_grep_scan_path_arguments=()
+for ast_grep_scan_path in "${ast_grep_scan_paths[@]}"; do
+  ast_grep_scan_path_arguments+=(--path "${ast_grep_scan_path}")
+done
+
 # shellcheck disable=SC2046 # compare_arguments_for prints nothing or two words.
 run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
   "${lint_config_directory}/ast-grep/check_ast_grep_scan.py" \
-  --exceptions lint-exceptions/ast-grep.txt $(compare_arguments_for lint-exceptions/ast-grep.txt)
+  --exceptions lint-exceptions/ast-grep.txt "${ast_grep_scan_path_arguments[@]}" \
+  $(compare_arguments_for lint-exceptions/ast-grep.txt)
 run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
   ast-grep test --skip-snapshot-tests
 for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_check_ast_grep_required_matches.py; do
@@ -88,7 +97,7 @@ for script_test in scripts/test_check_ast_grep_suppressions.py scripts/test_chec
 done
 run_lint "ast-grep suppressions" "${python_command[@]}" scripts/check_ast_grep_suppressions.py
 run_lint "ast-grep required matches" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
-  scripts/check_ast_grep_required_matches.py
+  scripts/check_ast_grep_required_matches.py "${ast_grep_scan_paths[@]}"
 # shellcheck disable=SC2046
 run_lint "file size" "${python_command[@]}" "${lint_config_directory}/file-size/check_file_sizes.py" \
   --exceptions lint-exceptions/file-size.txt $(compare_arguments_for lint-exceptions/file-size.txt)

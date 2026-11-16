@@ -1,0 +1,25 @@
+id: bounded-apt-install-step-without-timeout
+language: yaml
+severity: error
+message: >-
+  This step calls the bounded-apt-install action without `timeout-minutes`; a composite
+  action cannot declare one, so this step is the only place the native ceiling can live.
+files:
+  - .github/workflows/**/*.yml
+  - .github/workflows/**/*.yaml
+rule:
+  # Only a key of the step itself counts: a `with:` input named `timeout-minutes` is an
+  # input GitHub ignores, not a ceiling.
+  any:
+    - kind: block_mapping
+    - kind: flow_mapping
+  has:
+    matches: uses-the-bounded-apt-install-action
+  not:
+    has:
+      any:
+        - kind: block_mapping_pair
+        - kind: flow_pair
+      has:
+        field: key
+        regex: '^timeout-minutes$'

@@ -7,7 +7,12 @@ refusing rule its `# required-by: <rule-id>` line names.
 
 A hint rule states what a permitted file must still do, so a refusing rule's
 ignore list can neither grow past the files that need it nor keep a file that
-stopped needing it.
+stopped needing it. A hint rule with `# keeps-wired: <rule-id>` instead only needs
+its findings: it proves the shape that rule keys on still exists, so a rename
+cannot leave the rule matching nothing.
+
+The arguments are the paths to scan, the same ones the ast-grep scan is given, so
+a path dropped from that scan also leaves a keeps-wired rule without its findings.
 """
 
 import json
@@ -45,22 +50,22 @@ def rule_lines_by_id(rule_directory: Path = RULE_DIRECTORY) -> dict[str, list[st
     return rules
 
 
-def required_by_of(lines: list[str]) -> str | None:
-    """The rule a hint rule's `# required-by:` line names."""
+def rule_named_on(lines: list[str], marker: str) -> str | None:
+    """The rule a hint rule's `# <marker>:` line names."""
     return next(
         (
-            line.removeprefix("# required-by:").strip()
+            line.removeprefix(f"# {marker}:").strip()
             for line in lines
-            if line.startswith("# required-by:")
+            if line.startswith(f"# {marker}:")
         ),
         None,
     )
 
 
-def files_with_a_finding_of(rule_id: str) -> set[str] | str:
-    """The files `ast-grep scan` reports `rule_id` in, or why the scan failed."""
+def files_with_a_finding_of(rule_id: str, scan_paths: list[str]) -> set[str] | str:
+    """The files `ast-grep scan` of `scan_paths` reports `rule_id` in, or why the scan failed."""
     scan = subprocess.run(
-        ["ast-grep", "scan", "--json=compact", "--filter", f"^{rule_id}$"],
+        ["ast-grep", "scan", "--json=compact", "--filter", f"^{rule_id}$", *scan_paths],
         capture_output=True,
         text=True,
         check=False,
@@ -81,14 +86,21 @@ def required_match_failures(
         if "severity: hint" not in lines:
             continue
         listed_files = listed_paths(lines, "files")
-        required_by = required_by_of(lines)
+        required_by = rule_named_on(lines, "required-by")
+        keeps_wired = rule_named_on(lines, "keeps-wired")
         if not listed_files:
             failures.append(f"{rule_id} lists no files")
             continue
-        if required_by not in all_rule_lines:
-            failures.append(f"{rule_id} names no `# required-by:` rule that exists")
+        if (required_by or keeps_wired) not in all_rule_lines:
+            failures.append(
+                f"{rule_id} names no `# required-by:` or `# keeps-wired:` rule that exists"
+            )
             continue
-        permitted_files = listed_paths(all_rule_lines[required_by], "ignores")
+        permitted_files = (
+            listed_paths(all_rule_lines[required_by], "ignores")
+            if required_by
+            else listed_files
+        )
         if sorted(permitted_files) != sorted(listed_files):
             failures.append(
                 f"{rule_id} lists {sorted(listed_files)}, but {required_by} ignores "
@@ -102,9 +114,13 @@ def required_match_failures(
             if not file_exists(listed_file):
                 failures.append(f"{rule_id} lists {listed_file}, which does not exist")
             elif listed_file not in found_in:
+                remedy = (
+                    "drop the file from this rule and from the ignores of the rule that permits it"
+                    if required_by
+                    else f"if the shape {keeps_wired} keys on moved, move both rules with it"
+                )
                 failures.append(
-                    f"{rule_id} requires a finding in {listed_file}, and it has none: drop the "
-                    "file from this rule and from the ignores of the rule that permits it"
+                    f"{rule_id} requires a finding in {listed_file}, and it has none: {remedy}"
                 )
     return failures
 
@@ -112,7 +128,7 @@ def required_match_failures(
 def main() -> int:
     failures = required_match_failures(
         rule_lines_by_id(),
-        files_with_a_finding_of,
+        lambda rule_id: files_with_a_finding_of(rule_id, sys.argv[1:] or ["."]),
         lambda listed_file: Path(listed_file).is_file(),
     )
     for failure in failures:

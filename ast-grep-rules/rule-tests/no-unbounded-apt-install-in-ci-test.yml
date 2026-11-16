@@ -1,0 +1,31 @@
+id: no-unbounded-apt-install-in-ci
+valid:
+  - "- name: Install system dependencies with apt"
+  - "- run: ls /var/cache/apt/archives"
+  - "- run: dpkg -l"
+  - "- run: apt-cache policy libvulkan1"
+  - "- run: apt -- install"
+  - |
+    - run: |
+        # sudo apt-get install -y foo
+        echo done
+  - |
+    # - run: sudo apt-get install -y foo
+    - run: echo done
+invalid:
+  - "- run: sudo apt-get install -y libfoo"
+  - "- run: sudo apt update"
+  - "- run: sudo DEBIAN_FRONTEND=noninteractive apt-get -qq update"
+  - "- run: aptitude install foo"
+  - "- run: sudo dpkg -i foo.deb"
+  - '- run: "apt-get upgrade"'
+  - |
+    - run: |
+        echo start
+        sudo apt-get -y install \
+          libfoo
+  - |
+    - run: >
+        apt-get build-dep foo
+  - "- run: sudo apt-get update && sudo apt-get install -y foo"
+  - "- run: sudo apt-get update; echo done"
