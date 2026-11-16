@@ -10,6 +10,9 @@ ignore list can neither grow past the files that need it nor keep a file that
 stopped needing it. A hint rule with `# keeps-wired: <rule-id>` instead only needs
 its findings: it proves the shape that rule keys on still exists, so a rename
 cannot leave the rule matching nothing.
+
+The arguments are the paths to scan, the same ones the ast-grep scan is given, so
+a path dropped from that scan also leaves a keeps-wired rule without its findings.
 """
 
 import json
@@ -59,19 +62,10 @@ def rule_named_on(lines: list[str], marker: str) -> str | None:
     )
 
 
-def files_with_a_finding_of(rule_id: str) -> set[str] | str:
-    """The files `ast-grep scan` reports `rule_id` in, or why the scan failed."""
+def files_with_a_finding_of(rule_id: str, scan_paths: list[str]) -> set[str] | str:
+    """The files `ast-grep scan` of `scan_paths` reports `rule_id` in, or why the scan failed."""
     scan = subprocess.run(
-        # ast-grep skips the hidden directories it walks into, so .github is named.
-        [
-            "ast-grep",
-            "scan",
-            "--json=compact",
-            "--filter",
-            f"^{rule_id}$",
-            ".",
-            ".github",
-        ],
+        ["ast-grep", "scan", "--json=compact", "--filter", f"^{rule_id}$", *scan_paths],
         capture_output=True,
         text=True,
         check=False,
@@ -134,7 +128,7 @@ def required_match_failures(
 def main() -> int:
     failures = required_match_failures(
         rule_lines_by_id(),
-        files_with_a_finding_of,
+        lambda rule_id: files_with_a_finding_of(rule_id, sys.argv[1:] or ["."]),
         lambda listed_file: Path(listed_file).is_file(),
     )
     for failure in failures:

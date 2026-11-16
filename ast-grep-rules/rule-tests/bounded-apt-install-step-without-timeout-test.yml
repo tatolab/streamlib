@@ -13,6 +13,9 @@ valid:
   - |
     steps:
       - uses: ./.github/actions/cache-rust-dependencies
+  - |
+    steps:
+      - {name: flow, uses: ./.github/actions/install-linux-engine-build-dependencies, timeout-minutes: 10}
 invalid:
   - |
     steps:
@@ -28,3 +31,15 @@ invalid:
     steps:
       -   uses: ./.github/actions/install-linux-engine-build-dependencies
           # timeout-minutes: 10
+  - |
+    steps:
+      - uses: "./.github/actions/install-linux-engine-build-dependencies"
+  - |
+    steps:
+      - uses: './.github/actions/install-linux-engine-build-dependencies'
+  - |
+    steps:
+      - uses: ./.github/actions/install-linux-engine-build-dependencies/
+  - |
+    steps:
+      - {name: flow, uses: ./.github/actions/install-linux-engine-build-dependencies}

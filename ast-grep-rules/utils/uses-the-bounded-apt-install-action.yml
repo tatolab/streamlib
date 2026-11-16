@@ -1,0 +1,15 @@
+# A `uses:` key naming the bounded-apt-install action, in a block or flow mapping,
+# quoted or bare, with or without a trailing slash.
+id: uses-the-bounded-apt-install-action
+language: yaml
+rule:
+  any:
+    - kind: block_mapping_pair
+    - kind: flow_pair
+  all:
+    - has:
+        field: key
+        regex: '^uses$'
+    - has:
+        field: value
+        regex: '^["'']?\./\.github/actions/install-linux-engine-build-dependencies/?["'']?$'

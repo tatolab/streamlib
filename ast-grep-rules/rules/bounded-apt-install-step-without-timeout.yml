@@ -10,19 +10,16 @@ files:
 rule:
   # Only a key of the step itself counts: a `with:` input named `timeout-minutes` is an
   # input GitHub ignores, not a ceiling.
-  kind: block_mapping
+  any:
+    - kind: block_mapping
+    - kind: flow_mapping
   has:
-    kind: block_mapping_pair
-    all:
-      - has:
-          field: key
-          regex: '^uses$'
-      - has:
-          field: value
-          regex: '^\./\.github/actions/install-linux-engine-build-dependencies$'
+    matches: uses-the-bounded-apt-install-action
   not:
     has:
-      kind: block_mapping_pair
+      any:
+        - kind: block_mapping_pair
+        - kind: flow_pair
       has:
         field: key
         regex: '^timeout-minutes$'

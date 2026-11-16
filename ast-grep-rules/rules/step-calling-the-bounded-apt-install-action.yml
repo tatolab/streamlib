@@ -10,11 +10,4 @@ files:
   - .github/workflows/ci.yml
   - .github/workflows/control-plane-client.yml
 rule:
-  kind: block_mapping_pair
-  all:
-    - has:
-        field: key
-        regex: '^uses$'
-    - has:
-        field: value
-        regex: '^\./\.github/actions/install-linux-engine-build-dependencies$'
+  matches: uses-the-bounded-apt-install-action
