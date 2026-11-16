@@ -21,7 +21,7 @@ const UNIX_SOCKETS_HELD_BY_LIVE_PROCESSES_TABLE: &str = "/proc/net/unix";
 const UNIX_SOCKET_TABLE_FIELDS_BEFORE_THE_PATH: usize = 7;
 
 /// Remove each surface-sharing socket in `runtime_directory` that no live process holds, returning the paths removed.
-pub fn remove_the_surface_share_sockets_left_by_dead_runtimes(
+pub(crate) fn remove_the_surface_share_sockets_left_by_dead_runtimes(
     runtime_directory: &StreamlibRuntimeDirectory,
 ) -> std::io::Result<Vec<PathBuf>> {
     // Listed before the table is read: a socket bound after the listing is

@@ -117,7 +117,7 @@ struct CoreAudioClockState {
 ///
 /// Uses `dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER)` for kernel-optimized
 /// timing with better precision and power efficiency than software timers.
-pub struct CoreAudioClock {
+pub(crate) struct CoreAudioClock {
     state: Arc<CoreAudioClockState>,
     timer_source: Mutex<Option<dispatch_source_t>>,
     queue: dispatch_queue_t,
@@ -130,7 +130,7 @@ unsafe impl Sync for CoreAudioClock {}
 
 impl CoreAudioClock {
     /// Create a new CoreAudioClock with the given configuration.
-    pub fn new(config: AudioClockConfig) -> Self {
+    pub(crate) fn new(config: AudioClockConfig) -> Self {
         // Create a high-priority serial queue for audio callbacks
         let queue = unsafe {
             let global_queue = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE as isize, 0);
@@ -155,7 +155,7 @@ impl CoreAudioClock {
     }
 
     /// Create a new CoreAudioClock with default configuration (48kHz, 512 samples).
-    pub fn with_defaults() -> Self {
+    pub(crate) fn with_defaults() -> Self {
         Self::new(AudioClockConfig::default())
     }
 }

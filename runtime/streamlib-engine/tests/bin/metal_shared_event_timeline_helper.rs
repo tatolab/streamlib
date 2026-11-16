@@ -125,7 +125,7 @@ mod timeline_helper {
         (connection, produce_done, consume_done)
     }
 
-    pub fn ping_pong(surface_id: &str, rounds: u64) {
+    pub(crate) fn ping_pong(surface_id: &str, rounds: u64) {
         let (_connection, produce_done, consume_done) = import_timeline_pair(surface_id);
         report(&format!(
             "IMPORTED produce_done={} consume_done={}",
@@ -147,7 +147,7 @@ mod timeline_helper {
         ));
     }
 
-    pub fn host_side(surface_id: &str, rounds: u64) {
+    pub(crate) fn host_side(surface_id: &str, rounds: u64) {
         let connection = connect();
         let (answer, ports) = check_out(&connection, surface_id);
         if answer[SURFACE_SHARE_HAS_PRODUCE_DONE_PORT] != false || ports.len() != 1 {
@@ -198,7 +198,7 @@ mod timeline_helper {
         report(&format!("DONE mismatches={mismatches}"));
     }
 
-    pub fn stall(surface_id: &str) {
+    pub(crate) fn stall(surface_id: &str) {
         let (_connection, produce_done, consume_done) = import_timeline_pair(surface_id);
         produce_done
             .submit_device_wait_then_signal(u64::MAX / 2, &consume_done, 1)

@@ -17,7 +17,7 @@
 
 /// What the bundled software device or a CI runner cannot give a test.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RigOnlyCapability {
+pub(crate) enum RigOnlyCapability {
     VulkanVideo,
     DmaBufModifiers,
     Cuda,
@@ -27,7 +27,7 @@ pub enum RigOnlyCapability {
 
 impl RigOnlyCapability {
     /// Every capability, in the order the closed list states them.
-    pub const EVERY_RIG_ONLY_CAPABILITY: [RigOnlyCapability; 5] = [
+    pub(crate) const EVERY_RIG_ONLY_CAPABILITY: [RigOnlyCapability; 5] = [
         RigOnlyCapability::VulkanVideo,
         RigOnlyCapability::DmaBufModifiers,
         RigOnlyCapability::Cuda,
@@ -36,7 +36,7 @@ impl RigOnlyCapability {
     ];
 
     /// The closed-list reason, spelled as `rig_only_capability(reason=…)` spells it.
-    pub const fn closed_list_reason(self) -> &'static str {
+    pub(crate) const fn closed_list_reason(self) -> &'static str {
         match self {
             RigOnlyCapability::VulkanVideo => "Vulkan Video",
             RigOnlyCapability::DmaBufModifiers => "DMA-BUF modifiers",
@@ -49,12 +49,12 @@ impl RigOnlyCapability {
 
 /// What every skip line starts with; the lane's skip-line check matches it
 /// followed by a closed-list reason.
-pub const HARDWARE_TEST_SKIP_LINE_PREFIX: &str = "hardware test skipped, needing ";
+pub(crate) const HARDWARE_TEST_SKIP_LINE_PREFIX: &str = "hardware test skipped, needing ";
 
 /// Prints the skip line naming `capability` and returns `true` when this
 /// machine lacks it, so the caller returns; returns `false` otherwise.
 #[must_use = "the caller returns when this is true"]
-pub fn skip_unless_this_machine_has(
+pub(crate) fn skip_unless_this_machine_has(
     capability: RigOnlyCapability,
     this_machine_has_it: bool,
 ) -> bool {
@@ -66,13 +66,13 @@ pub fn skip_unless_this_machine_has(
 
 /// Prints the skip line naming `capability`, for a caller that has already
 /// found it absent and returns next.
-pub fn skip_because_this_machine_lacks(capability: RigOnlyCapability) {
+pub(crate) fn skip_because_this_machine_lacks(capability: RigOnlyCapability) {
     print_the_skip_line(capability, None);
 }
 
 /// Prints the skip line naming `capability` and, after it, the refusal that
 /// showed it absent, for a caller that returns next.
-pub fn skip_because_this_machine_lacks_naming_the_refusal(
+pub(crate) fn skip_because_this_machine_lacks_naming_the_refusal(
     capability: RigOnlyCapability,
     refusal: impl std::fmt::Display,
 ) {

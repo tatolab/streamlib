@@ -58,7 +58,7 @@ pub(crate) struct DrainWorkerRecordQueue {
 
 impl DrainWorkerRecordQueue {
     /// An empty queue holding `capacity` records, rung through `doorbell`.
-    pub fn holding(capacity: usize, doorbell: Sender<WorkerSignal>) -> Self {
+    pub(super) fn holding(capacity: usize, doorbell: Sender<WorkerSignal>) -> Self {
         Self {
             queue: Arc::new(ArrayQueue::new(capacity)),
             doorbell,
@@ -69,7 +69,7 @@ impl DrainWorkerRecordQueue {
     }
 
     /// Queue `record`, dropping the oldest when the queue is full.
-    pub fn enqueue(&self, record: LogRecord) {
+    pub(super) fn enqueue(&self, record: LogRecord) {
         // `force_push` returns the evicted record (if any); that is one drop,
         // counted against the emitter that emitted it.
         if let Some(evicted) = self.queue.force_push(record) {
@@ -88,14 +88,14 @@ impl DrainWorkerRecordQueue {
     }
 
     /// Send a best-effort flush request to the worker. Does NOT wait.
-    pub fn request_flush(&self) {
+    pub(super) fn request_flush(&self) {
         let _ = self.doorbell.try_send(WorkerSignal::Flush);
     }
 
     /// Block until the worker has written every record queued before this
     /// call, at most `budget`; `false` when it did not answer in time or is
     /// gone.
-    pub fn wait_until_every_queued_record_is_written(&self, budget: Duration) -> bool {
+    pub(super) fn wait_until_every_queued_record_is_written(&self, budget: Duration) -> bool {
         let (answer, answered) = bounded(1);
         if self
             .doorbell
@@ -120,7 +120,7 @@ impl WorkerHandle {
     /// Send the final shutdown signal and join the worker thread. On
     /// return, every queued record is written and every project log it
     /// wrote to is `fdatasync`'d.
-    pub fn shutdown_and_join(&mut self) {
+    pub(super) fn shutdown_and_join(&mut self) {
         let _ = self.record_queue.doorbell.send(WorkerSignal::Shutdown);
         if let Some(join) = self.join.take() {
             let _ = join.join();

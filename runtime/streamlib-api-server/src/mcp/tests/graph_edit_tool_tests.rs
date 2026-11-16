@@ -139,6 +139,10 @@ async fn a_committed_edit_to_a_stream_whose_directory_holds_no_project_is_refuse
 )]
 #[schemars(crate = "streamlib::sdk::schemars")]
 #[serde(deny_unknown_fields)]
+#[allow(
+    unreachable_pub,
+    reason = "the processor macro names the config in a trait impl, which needs it public"
+)]
 pub struct AddNodeTestSourceTakingOneSettingConfig {
     #[serde(default)]
     pub frame_width: Option<u32>,

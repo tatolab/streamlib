@@ -19,7 +19,7 @@
 )]
 
 #[path = "support/render_target_texture.rs"]
-pub mod render_target_texture;
+pub(crate) mod render_target_texture;
 
 use std::sync::{Arc, OnceLock};
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -41,8 +41,8 @@ use streamlib_surface_adapter::{
 
 /// Convenience alias — every host-side test instantiates the adapter
 /// against a real `HostVulkanDevice`.
-pub type HostAdapter = CpuReadbackSurfaceAdapter<HostVulkanDevice>;
-pub type HostContext = CpuReadbackContext<HostVulkanDevice>;
+pub(crate) type HostAdapter = CpuReadbackSurfaceAdapter<HostVulkanDevice>;
+pub(crate) type HostContext = CpuReadbackContext<HostVulkanDevice>;
 
 /// Shared `GpuContext` for every test in this binary. Two `VkDevice`s
 /// in one process race on NVIDIA Linux (see
@@ -51,7 +51,7 @@ pub type HostContext = CpuReadbackContext<HostVulkanDevice>;
 /// execution.
 static SHARED_GPU: OnceLock<Option<Arc<GpuContext>>> = OnceLock::new();
 
-pub fn try_init_gpu() -> Option<Arc<GpuContext>> {
+pub(crate) fn try_init_gpu() -> Option<Arc<GpuContext>> {
     SHARED_GPU
         .get_or_init(|| {
             let _ = tracing_subscriber::fmt()
@@ -63,7 +63,7 @@ pub fn try_init_gpu() -> Option<Arc<GpuContext>> {
         .clone()
 }
 
-pub struct HostFixture {
+pub(crate) struct HostFixture {
     pub gpu: Arc<GpuContext>,
     pub adapter: Arc<HostAdapter>,
     pub ctx: HostContext,
@@ -75,7 +75,7 @@ pub struct HostFixture {
 }
 
 impl HostFixture {
-    pub fn try_new() -> Option<Self> {
+    pub(crate) fn try_new() -> Option<Self> {
         Self::try_new_wrapping_copy_trigger(|in_process| {
             (
                 in_process as Arc<dyn CpuReadbackCopyTrigger<HostMarker>>,
@@ -90,7 +90,7 @@ impl HostFixture {
     /// call passes a decorator, and gets its own handle on it back
     /// alongside the fixture. `self.trigger` stays the inner in-process
     /// trigger either way.
-    pub fn try_new_wrapping_copy_trigger<T>(
+    pub(crate) fn try_new_wrapping_copy_trigger<T>(
         wrap: impl FnOnce(
             Arc<InProcessCpuReadbackCopyTrigger<HostVulkanDevice>>,
         ) -> (Arc<dyn CpuReadbackCopyTrigger<HostMarker>>, T),
@@ -121,7 +121,7 @@ impl HostFixture {
     /// exportable timeline, register them with the adapter under
     /// `surface_id`, and return a [`StreamlibSurface`] descriptor
     /// pointing at the registration.
-    pub fn register_surface(
+    pub(crate) fn register_surface(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -136,7 +136,7 @@ impl HostFixture {
         )
     }
 
-    pub fn register_surface_with_format(
+    pub(crate) fn register_surface_with_format(
         &self,
         surface_id: SurfaceId,
         width: u32,
@@ -159,7 +159,7 @@ impl HostFixture {
     /// this driver (typically NV12 RT modifier missing on the EGL
     /// probe; on macOS the IOSurface-backed image is single-plane).
     /// Multi-plane tests use this to skip cleanly.
-    pub fn try_register_surface_with_format(
+    pub(crate) fn try_register_surface_with_format(
         &self,
         surface_id: SurfaceId,
         width: u32,

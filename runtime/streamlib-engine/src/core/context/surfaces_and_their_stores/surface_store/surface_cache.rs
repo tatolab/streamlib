@@ -10,7 +10,7 @@ const MAX_SURFACE_CACHE_SIZE: usize = 512;
 
 /// Surface metadata stored alongside the cached pixel buffer.
 #[derive(Debug, Clone)]
-pub struct CachedSurface {
+pub(super) struct CachedSurface {
     /// The resolved pixel buffer.
     pub pixel_buffer: PixelBuffer,
     /// Number of times this surface has been checked out.

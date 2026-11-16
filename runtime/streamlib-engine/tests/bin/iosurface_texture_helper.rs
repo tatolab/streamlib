@@ -74,7 +74,7 @@ mod texture_helper {
             .unwrap_or_else(|| fail(&format!("NO_{key} {answer}")))
     }
 
-    pub fn read_back(surface_id: &str) {
+    pub(crate) fn read_back(surface_id: &str) {
         let service_name = std::env::var(SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE)
             .expect("the service name in the environment");
         let connection =

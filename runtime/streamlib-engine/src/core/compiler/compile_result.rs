@@ -5,7 +5,7 @@ use std::fmt;
 
 /// Result of a successful compilation.
 #[derive(Debug, Clone, Default)]
-pub struct CompileResult {
+pub(super) struct CompileResult {
     /// Number of processors created in this compile cycle.
     pub processors_created: usize,
     /// Number of processors removed in this compile cycle.

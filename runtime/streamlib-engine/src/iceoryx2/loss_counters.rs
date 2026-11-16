@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 ///
 /// Called at the site that moved the count, under whatever lock that caller
 /// holds, so a mirror takes no lock but its own.
-pub type LossCountMirror = Box<dyn Fn(u64) + Send + Sync>;
+pub(super) type LossCountMirror = Box<dyn Fn(u64) + Send + Sync>;
 
 /// One cumulative count, and the mirror its every new total is written through
 /// once one is installed.

@@ -34,13 +34,13 @@ mod shim {
     use std::ffi::{c_char, c_int, c_void};
 
     unsafe extern "C" {
-        pub fn streamlib_pipewire_entry_point_count() -> usize;
-        pub fn streamlib_pipewire_entry_point_names() -> *const *const c_char;
-        pub fn streamlib_pipewire_initialize(entry_points: *const *mut c_void);
-        pub fn streamlib_pipewire_loaded_library_version(
+        pub(super) fn streamlib_pipewire_entry_point_count() -> usize;
+        pub(super) fn streamlib_pipewire_entry_point_names() -> *const *const c_char;
+        pub(super) fn streamlib_pipewire_initialize(entry_points: *const *mut c_void);
+        pub(super) fn streamlib_pipewire_loaded_library_version(
             entry_points: *const *mut c_void,
         ) -> *const c_char;
-        pub fn streamlib_pipewire_daemon_answers(
+        pub(super) fn streamlib_pipewire_daemon_answers(
             entry_points: *const *mut c_void,
             failure_text: *mut c_char,
             failure_text_capacity: usize,

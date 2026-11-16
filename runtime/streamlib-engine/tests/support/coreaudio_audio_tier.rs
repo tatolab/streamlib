@@ -24,7 +24,7 @@ use tracing_subscriber::util::SubscriberInitExt;
     clippy::disallowed_macros,
     reason = "the test prints its measured numbers for whoever reads the run"
 )]
-pub fn print_for_the_evidence_record(line: impl std::fmt::Display) {
+pub(crate) fn print_for_the_evidence_record(line: impl std::fmt::Display) {
     println!("{line}");
 }
 
@@ -50,7 +50,7 @@ fn the_engine_logs_into_this_tests_output() {
 
 /// The chain's arm, which must be CoreAudio on a Mac that lists a device the
 /// test can use: any other arm answering would make the test pass vacuously.
-pub fn the_coreaudio_arm() -> SharedAudioDeviceBackend {
+pub(crate) fn the_coreaudio_arm() -> SharedAudioDeviceBackend {
     the_engine_logs_into_this_tests_output();
     let backend = probe_audio_device_backend();
     assert_eq!(
@@ -70,7 +70,7 @@ pub fn the_coreaudio_arm() -> SharedAudioDeviceBackend {
 /// The CoreAudio arm, or `None` — said so — when CoreAudio lists no default
 /// device in `direction`, the one environment these tests cannot ask their
 /// question in.
-pub fn the_coreaudio_arm_with_a_default_device_for(
+pub(crate) fn the_coreaudio_arm_with_a_default_device_for(
     direction: CoreAudioStreamDirection,
 ) -> Option<SharedAudioDeviceBackend> {
     let Some(default_device_uid) = default_audio_device_uid(direction) else {
@@ -90,7 +90,7 @@ pub fn the_coreaudio_arm_with_a_default_device_for(
 
 /// The UID of this Mac's own built-in device in `direction`, or `None` —
 /// said so — when it has none.
-pub fn the_built_in_device_uid_for(direction: CoreAudioStreamDirection) -> Option<String> {
+pub(crate) fn the_built_in_device_uid_for(direction: CoreAudioStreamDirection) -> Option<String> {
     let uid = built_in_audio_device_uid(direction);
     match &uid {
         Some(uid) => print_for_the_evidence_record(format!(
@@ -107,14 +107,14 @@ pub fn the_built_in_device_uid_for(direction: CoreAudioStreamDirection) -> Optio
 
 /// Fail naming what the person at the machine must do when the microphone is
 /// not allowed yet, rather than on a capture deadline.
-pub fn the_microphone_must_be_allowed() {
+pub(crate) fn the_microphone_must_be_allowed() {
     if let Err(instruction) = microphone_access_for_a_capture_hardware_test() {
         panic!("{instruction}");
     }
 }
 
 /// Root-mean-square of `samples`, in dB relative to full scale.
-pub fn rms_dbfs(samples: &[f32]) -> f64 {
+pub(crate) fn rms_dbfs(samples: &[f32]) -> f64 {
     let mean_square = samples
         .iter()
         .map(|&sample| f64::from(sample).powi(2))

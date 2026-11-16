@@ -86,7 +86,7 @@ const SURFACE_HANDLE_TYPE_IOSURFACE: &str = "iosurface";
 /// Who may connect besides this process: the helper processes it spawned,
 /// admitted by pid.
 #[derive(Clone, Default)]
-pub struct SurfaceShareHelperProcessAdmissions {
+pub(crate) struct SurfaceShareHelperProcessAdmissions {
     inner: Arc<SurfaceShareHelperProcessAdmissionsInner>,
 }
 
@@ -129,7 +129,7 @@ enum SurfaceShareConnectionAdmissionVerdict {
 
 impl SurfaceShareHelperProcessAdmissions {
     /// Admit the helper process `pid` this process spawned.
-    pub fn admit_helper_process(&self, pid: u32) -> SurfaceShareHelperProcessAdmission {
+    pub(crate) fn admit_helper_process(&self, pid: u32) -> SurfaceShareHelperProcessAdmission {
         let pid = pid as libc::pid_t;
         self.inner
             .admitted_helper_processes

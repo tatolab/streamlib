@@ -124,7 +124,7 @@ enum RecorderState {
 /// in-flight slot.
 /// Rich data backing a [`RhiCommandRecorder`], reached through the
 /// recorder's opaque handle.
-pub struct RhiCommandRecorderInner {
+pub(crate) struct RhiCommandRecorderInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -231,7 +231,7 @@ impl RhiCommandRecorderInner {
     /// recorder accepts `record_*` calls; the next `begin()` is a
     /// typed error until a `submit_*` closes the recording.
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
-    pub fn begin(&mut self) -> Result<()> {
+    pub(crate) fn begin(&mut self) -> Result<()> {
         let mut state = self.state.lock();
         if *state == RecorderState::Recording {
             return Err(Error::GpuError(format!(
@@ -311,7 +311,7 @@ impl RhiCommandRecorderInner {
     /// that `begin()`'s `reset_command_buffer`. Used when a failed record
     /// abandons a recording, so the recorder is reusable next attempt.
     /// Harmless when nothing is recording.
-    pub fn abort_recording(&mut self) {
+    pub(crate) fn abort_recording(&mut self) {
         *self.state.lock() = RecorderState::Idle;
     }
 

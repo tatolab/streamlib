@@ -131,7 +131,7 @@ impl PixelBufferDescriptor {
 /// Pool for reusable pixel buffers.
 ///
 /// Buffers are automatically recycled when their refcount drops to zero.
-pub struct RhiPixelBufferPool {
+pub(crate) struct RhiPixelBufferPool {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: crate::vulkan::rhi::VulkanPixelBufferPool,
 
@@ -144,7 +144,7 @@ impl RhiPixelBufferPool {
     ///
     /// Returns (id, buffer) where id is the platform-agnostic identifier.
     /// Returns a recycled buffer if available, or allocates a new one.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
+    pub(crate) fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.inner.acquire()
@@ -164,7 +164,9 @@ impl RhiPixelBufferPool {
     /// producer still needs somewhere to write. What comes back must be a
     /// slot no caller has seen before: the manager appends it to its ring,
     /// so a recycled buffer would enter the ring twice under one id.
-    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
+    pub(crate) fn allocate_additional_buffer(
+        &mut self,
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.inner.allocate_additional_buffer()
@@ -179,7 +181,10 @@ impl RhiPixelBufferPool {
 
     /// Let go of the pool's share of the buffer `pool_slot_id` names, for a
     /// slot being freed; answers whether the pool held such a buffer.
-    pub fn forget_the_buffer_of_pool_slot(&mut self, pool_slot_id: &PixelBufferPoolSlotId) -> bool {
+    pub(crate) fn forget_the_buffer_of_pool_slot(
+        &mut self,
+        pool_slot_id: &PixelBufferPoolSlotId,
+    ) -> bool {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.inner.forget_the_buffer_of_pool_slot(pool_slot_id)

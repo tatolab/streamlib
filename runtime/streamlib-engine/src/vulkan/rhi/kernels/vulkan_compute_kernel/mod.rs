@@ -37,7 +37,7 @@ use crate::vulkan::rhi::{HostVulkanDevice, SampledImageReadLayout};
 /// this abstraction targets.
 /// Rich data backing a [`VulkanComputeKernel`], reached through the
 /// kernel's opaque handle.
-pub struct VulkanComputeKernelInner {
+pub(crate) struct VulkanComputeKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -114,7 +114,7 @@ impl VulkanComputeKernelInner {
     /// [`crate::core::rhi::StorageBuffer`] (canonical raw-bytes shape
     /// from
     /// [`crate::core::context::GpuContext::acquire_storage_buffer`]).
-    pub fn set_storage_buffer(
+    pub(crate) fn set_storage_buffer(
         &self,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanStorageBindable + ?Sized),
@@ -167,7 +167,7 @@ impl VulkanComputeKernelInner {
     /// cannot be bound as UBOs because their allocations don't carry
     /// `UNIFORM_BUFFER` usage; this is enforced at compile time via
     /// [`crate::vulkan::rhi::VulkanUniformBindable`].
-    pub fn set_uniform_buffer(
+    pub(crate) fn set_uniform_buffer(
         &self,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanUniformBindable + ?Sized),
@@ -191,7 +191,7 @@ impl VulkanComputeKernelInner {
     /// silently ignore the default sampler in favor of the
     /// layout-baked one, and a caller passing a non-default sampler
     /// in `texture` would not get it applied).
-    pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+    pub(crate) fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::SampledTexture)?;
         if self.immutable_sampler_bindings.contains(&binding) {
             return Err(Error::GpuError(format!(
@@ -214,7 +214,7 @@ impl VulkanComputeKernelInner {
 
     /// Bind a storage image at `binding`. Caller is responsible for ensuring
     /// the texture's `STORAGE_BINDING` usage was set when it was created.
-    pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+    pub(crate) fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageImage)?;
         let view = vk_image_view_for(texture)?;
         self.pending
@@ -262,7 +262,7 @@ impl VulkanComputeKernelInner {
 
     /// Stage push constants for the next dispatch. Size must match the kernel's
     /// declared `push_constant_size` (and be 4-byte aligned per Vulkan).
-    pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
             return Err(Error::GpuError(format!(
                 "Compute kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
@@ -277,19 +277,19 @@ impl VulkanComputeKernelInner {
 
     /// Convenience: stage a `Copy` value as push constants by reinterpreting its
     /// bytes. The value's size in bytes must match `push_constant_size`.
-    pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+    pub(crate) fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
         self.set_push_constants(bytes)
     }
 
     /// Bindings declared at construction time, in declaration order.
-    pub fn bindings(&self) -> &[ComputeBindingSpec] {
+    pub(crate) fn bindings(&self) -> &[ComputeBindingSpec] {
         &self.bindings
     }
 
     /// Push-constant size in bytes (0 if the kernel has none).
-    pub fn push_constant_size(&self) -> u32 {
+    pub(crate) fn push_constant_size(&self) -> u32 {
         self.push_constant_size
     }
 

@@ -36,7 +36,7 @@ static SHUTDOWN_SIGNALS_OWNED: AtomicBool = AtomicBool::new(false);
 /// once for the process's life, because they cannot be uninstalled, and feeds
 /// the same escalation from them — there, drop releases the ownership claim
 /// only.
-pub struct ScopedShutdownSignalOwnership {
+pub(crate) struct ScopedShutdownSignalOwnership {
     #[cfg(all(unix, not(target_os = "macos")))]
     signal_forwarding: Option<UnixSignalForwarding>,
 }
@@ -190,7 +190,7 @@ impl ScopedShutdownSignalOwnership {
     /// Take ownership of the shutdown signals until the returned value drops.
     ///
     /// Fails if another run loop already owns them.
-    pub fn take_until_dropped() -> std::io::Result<Self> {
+    pub(crate) fn take_until_dropped() -> std::io::Result<Self> {
         if SHUTDOWN_SIGNALS_OWNED.swap(true, Ordering::SeqCst) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,

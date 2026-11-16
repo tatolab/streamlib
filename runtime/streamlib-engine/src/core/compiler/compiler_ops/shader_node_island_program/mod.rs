@@ -41,7 +41,7 @@ pub(crate) struct ShaderNodeIslandMember {
 /// The shader nodes one evaluator runs, in evaluation order: each member is
 /// read by exactly one later member, and the last writes the island's output.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ShaderNodeIslandProgram {
+pub(crate) struct ShaderNodeIslandProgram {
     members: Vec<ShaderNodeIslandMember>,
 }
 

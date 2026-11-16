@@ -53,7 +53,7 @@ const QUEUED_RECORDS_WRITTEN_AS_THE_LAST_HOLD_DROPS_BUDGET: Duration = Duration:
 ///
 /// The `DANGEROUSLY_` prefix is there to make the trade-off
 /// unmistakable to anyone reading a runbook or `env | grep`.
-pub const DEFER_LOGGING_TO_HOST_ENV: &str = "STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST";
+pub(super) const DEFER_LOGGING_TO_HOST_ENV: &str = "STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST";
 
 fn host_owns_logging() -> bool {
     matches!(

@@ -15,7 +15,7 @@ impl RhiCommandRecorderInner {
     /// concurrent dispatch/record against the same kernel may be in
     /// flight.
     #[tracing::instrument(level = "trace", skip(self, kernel), fields(label = %self.label, group_x, group_y, group_z))]
-    pub fn record_dispatch(
+    pub(crate) fn record_dispatch(
         &mut self,
         kernel: &VulkanComputeKernel,
         group_x: u32,
@@ -91,7 +91,7 @@ impl RhiCommandRecorderInner {
     /// `signal_value` MUST be strictly greater than the timeline's
     /// current counter — Vulkan disallows monotonic regressions.
     #[tracing::instrument(level = "trace", skip(self, timeline), fields(label = %self.label, signal_value))]
-    pub fn submit_signaling_timeline(
+    pub(crate) fn submit_signaling_timeline(
         &mut self,
         timeline: &HostVulkanTimelineSemaphore,
         signal_value: u64,
@@ -118,7 +118,7 @@ impl RhiCommandRecorderInner {
     /// is needed instead.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(level = "trace", skip(self, wait, signal), fields(label = %self.label))]
-    pub fn submit_waiting_and_signaling_timeline(
+    pub(crate) fn submit_waiting_and_signaling_timeline(
         &mut self,
         wait: Option<(&HostVulkanTimelineSemaphore, u64)>,
         signal: Option<(&HostVulkanTimelineSemaphore, u64)>,
@@ -150,7 +150,7 @@ impl RhiCommandRecorderInner {
     /// recorder's internal completion fence is signaled so the next
     /// `begin()` blocks on completion.
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
-    pub fn submit(&mut self) -> Result<()> {
+    pub(crate) fn submit(&mut self) -> Result<()> {
         self.submit_inner(None)
     }
 
@@ -159,7 +159,7 @@ impl RhiCommandRecorderInner {
     /// should prefer [`Self::submit_signaling_timeline`] and have the
     /// caller wait on the timeline at frame boundaries.
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
-    pub fn submit_and_wait(&mut self) -> Result<()> {
+    pub(crate) fn submit_and_wait(&mut self) -> Result<()> {
         self.submit_inner(None)?;
         self.drain_completion_fence("submit_and_wait")
     }
@@ -171,7 +171,7 @@ impl RhiCommandRecorderInner {
     /// a host-side drain is the only completion guarantee the caller has.
     /// No-op when nothing is in flight (the fence is already signaled).
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
-    pub fn wait_for_completion(&mut self) -> Result<()> {
+    pub(crate) fn wait_for_completion(&mut self) -> Result<()> {
         self.drain_completion_fence("wait_for_completion")
     }
 
@@ -180,7 +180,7 @@ impl RhiCommandRecorderInner {
     /// on the recorder's fence, so the wait needs nothing but this snapshot.
     /// No-op when nothing is in flight.
     #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
-    pub fn wait_for_completion_on_the_queue_completion_timeline(&self) -> Result<()> {
+    pub(crate) fn wait_for_completion_on_the_queue_completion_timeline(&self) -> Result<()> {
         if !self.submission_in_flight {
             return Ok(());
         }

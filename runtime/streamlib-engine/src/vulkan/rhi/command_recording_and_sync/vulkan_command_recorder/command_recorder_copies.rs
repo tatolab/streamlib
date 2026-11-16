@@ -10,7 +10,7 @@ impl RhiCommandRecorderInner {
     /// be in `src_layout` (typically `TRANSFER_SRC_OPTIMAL`); transition
     /// it there via [`Self::record_image_barrier`] first.
     #[tracing::instrument(level = "trace", skip(self, src, dst, region), fields(label = %self.label))]
-    pub fn record_copy_image_to_buffer(
+    pub(crate) fn record_copy_image_to_buffer(
         &mut self,
         src: &Texture,
         src_layout: VulkanLayout,
@@ -44,7 +44,7 @@ impl RhiCommandRecorderInner {
     /// already be in `dst_layout` (typically `TRANSFER_DST_OPTIMAL`);
     /// transition it there via [`Self::record_image_barrier`] first.
     #[tracing::instrument(level = "trace", skip(self, src, dst, region), fields(label = %self.label))]
-    pub fn record_copy_buffer_to_image(
+    pub(crate) fn record_copy_buffer_to_image(
         &mut self,
         src: &(impl VulkanBufferLike + ?Sized),
         dst: &Texture,
@@ -76,7 +76,7 @@ impl RhiCommandRecorderInner {
 
     /// Record `vkCmdCopyBuffer` over the first `byte_size` bytes of both
     /// buffers.
-    pub fn record_copy_buffer_to_buffer(
+    pub(crate) fn record_copy_buffer_to_buffer(
         &mut self,
         src: &(impl VulkanBufferLike + ?Sized),
         dst: &(impl VulkanBufferLike + ?Sized),
@@ -186,7 +186,7 @@ impl RhiCommandRecorderInner {
     /// `TRANSFER_DST_OPTIMAL`; the caller has run
     /// [`Self::refuse_an_image_to_image_copy_it_cannot_record`].
     #[tracing::instrument(level = "trace", skip(self, source, destination), fields(label = %self.label))]
-    pub fn record_copy_image_to_image_in_transfer_layouts(
+    pub(crate) fn record_copy_image_to_image_in_transfer_layouts(
         &mut self,
         source: &Texture,
         destination: &Texture,

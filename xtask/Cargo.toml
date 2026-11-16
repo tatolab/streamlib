@@ -64,6 +64,9 @@ syn = { version = "2", features = ["full"] }
 quote = "1"
 
 
+[lints.rust]
+unreachable_pub = "deny"
+
 # stdout and stderr are the output channel of a development tool.
 [lints.clippy]
 allow_attributes_without_reason = "deny"

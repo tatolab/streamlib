@@ -22,7 +22,7 @@ pub(crate) struct GraphChangeListener {
 }
 
 impl GraphChangeListener {
-    pub fn new(
+    pub(crate) fn new(
         status: Arc<Mutex<RuntimeStatus>>,
         runtime_context: Arc<Mutex<Option<Arc<RuntimeContext>>>>,
         compiler: Arc<Compiler>,

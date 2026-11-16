@@ -60,7 +60,7 @@ use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::iceoryx2::Iceoryx2Node;
 
 /// Compiles graph changes into running processor state.
-pub struct Compiler {
+pub(crate) struct Compiler {
     // Graph ownership (moved from Runtime)
     graph: Arc<RwLock<Graph>>,
     // Transaction accumulates operations until commit
@@ -81,12 +81,12 @@ impl Default for Compiler {
 
 impl Compiler {
     /// Create a new compiler whose graph resolves the natively compiled node types alone.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))
     }
 
     /// Create a new compiler whose graph resolves node types through its stream's lookup.
-    pub fn new_resolving_node_types_through(
+    pub(crate) fn new_resolving_node_types_through(
         node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     ) -> Self {
         Self {
@@ -101,7 +101,9 @@ impl Compiler {
 
     /// The processors whose threads a removal abandoned and that have not
     /// returned since.
-    pub fn processor_threads_abandoned_and_still_running(&self) -> Vec<ProcessorDisplayNameAndId> {
+    pub(crate) fn processor_threads_abandoned_and_still_running(
+        &self,
+    ) -> Vec<ProcessorDisplayNameAndId> {
         let mut abandoned = self.abandoned_processor_threads.lock();
         abandoned.retain(|thread| !thread.join_handle.is_finished());
         abandoned
@@ -115,7 +117,7 @@ impl Compiler {
     // =========================================================================
 
     /// Access graph and transaction for mutations. Callable from any thread.
-    pub fn scope<F, R>(&self, f: F) -> R
+    pub(crate) fn scope<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
     {
@@ -125,7 +127,7 @@ impl Compiler {
     }
 
     /// Read the graph under its read lock, logging nothing.
-    pub fn scope_reading<F, R>(&self, f: F) -> R
+    pub(crate) fn scope_reading<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&Graph) -> R,
     {
@@ -141,7 +143,7 @@ impl Compiler {
 
     /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
     #[tracing::instrument(name = "compiler.commit", skip_all)]
-    pub fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
+    pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
         let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
         let operations = std::mem::take(&mut *self.transaction.lock());
         if operations.is_empty() {

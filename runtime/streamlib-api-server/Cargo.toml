@@ -95,5 +95,8 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 # The media facts tests import a real PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[lints.rust]
+unreachable_pub = "deny"
+
 [lints.clippy]
 allow_attributes_without_reason = "deny"

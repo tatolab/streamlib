@@ -684,4 +684,4 @@ fn render_the_current_value_of_each_graph_input_into(
 
 /// The field of a `GraphInput`'s `graph_interface` component holding the value it carries now:
 /// the last a client wrote, else its `default`.
-pub const GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD: &str = "current_value";
+pub(crate) const GRAPH_INPUT_CURRENT_VALUE_COMPONENT_FIELD: &str = "current_value";

@@ -36,7 +36,7 @@ use pipeline_state_conversions::index_type_to_vk;
 
 /// Rich data backing a [`VulkanGraphicsKernel`], reached through the
 /// kernel's opaque handle.
-pub struct VulkanGraphicsKernelInner {
+pub(crate) struct VulkanGraphicsKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -137,23 +137,23 @@ mod spirv_validation;
 
 impl VulkanGraphicsKernelInner {
     /// Bindings declared at construction time.
-    pub fn bindings(&self) -> &[GraphicsBindingSpec] {
+    pub(crate) fn bindings(&self) -> &[GraphicsBindingSpec] {
         &self.bindings
     }
 
     /// Push-constant size in bytes (0 if the kernel has none).
-    pub fn push_constant_size(&self) -> u32 {
+    pub(crate) fn push_constant_size(&self) -> u32 {
         self.push_constant_size
     }
 
     /// Number of descriptor sets in the ring.
-    pub fn descriptor_sets_in_flight(&self) -> u32 {
+    pub(crate) fn descriptor_sets_in_flight(&self) -> u32 {
         self.descriptor_sets_in_flight
     }
 
     /// Bind a sampled texture at `(frame_index, binding)`. Uses the kernel's
     /// default linear-clamp sampler.
-    pub fn set_sampled_texture(
+    pub(crate) fn set_sampled_texture(
         &self,
         frame_index: u32,
         binding: u32,
@@ -174,7 +174,7 @@ impl VulkanGraphicsKernelInner {
     ///
     /// Accepts either a [`crate::core::rhi::PixelBuffer`] or a
     /// [`crate::core::rhi::StorageBuffer`] via [`crate::vulkan::rhi::VulkanStorageBindable`].
-    pub fn set_storage_buffer(
+    pub(crate) fn set_storage_buffer(
         &self,
         frame_index: u32,
         binding: u32,
@@ -199,7 +199,7 @@ impl VulkanGraphicsKernelInner {
     ///
     /// Accepts only [`crate::core::rhi::UniformBuffer`] via
     /// [`crate::vulkan::rhi::VulkanUniformBindable`].
-    pub fn set_uniform_buffer(
+    pub(crate) fn set_uniform_buffer(
         &self,
         frame_index: u32,
         binding: u32,
@@ -221,7 +221,7 @@ impl VulkanGraphicsKernelInner {
     }
 
     /// Bind a storage image at `(frame_index, binding)`.
-    pub fn set_storage_image(
+    pub(crate) fn set_storage_image(
         &self,
         frame_index: u32,
         binding: u32,
@@ -239,7 +239,7 @@ impl VulkanGraphicsKernelInner {
 
     /// Stage push constants for `frame_index`. Size must match the kernel's
     /// declared `push_constants.size`.
-    pub fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
             return Err(Error::GpuError(format!(
                 "Graphics kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
@@ -257,7 +257,11 @@ impl VulkanGraphicsKernelInner {
     /// Convenience: stage a `Copy` value as push constants by reinterpreting
     /// its bytes. The value's size in bytes must match the declared push
     /// constant size.
-    pub fn set_push_constants_value<T: Copy>(&self, frame_index: u32, value: &T) -> Result<()> {
+    pub(crate) fn set_push_constants_value<T: Copy>(
+        &self,
+        frame_index: u32,
+        value: &T,
+    ) -> Result<()> {
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
         self.set_push_constants(frame_index, bytes)
@@ -271,7 +275,7 @@ impl VulkanGraphicsKernelInner {
     /// [`crate::vulkan::rhi::VulkanVertexBindable`] — pixel buffers can't be bound as
     /// vertex input because their allocations don't carry `VERTEX_BUFFER`
     /// usage.
-    pub fn set_vertex_buffer(
+    pub(crate) fn set_vertex_buffer(
         &self,
         frame_index: u32,
         binding: u32,
@@ -311,7 +315,7 @@ impl VulkanGraphicsKernelInner {
     ///
     /// Accepts only [`crate::core::rhi::IndexBuffer`] via
     /// [`crate::vulkan::rhi::VulkanIndexBindable`].
-    pub fn set_index_buffer(
+    pub(crate) fn set_index_buffer(
         &self,
         frame_index: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanIndexBindable + ?Sized),

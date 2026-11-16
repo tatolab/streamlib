@@ -17,17 +17,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize as _, Serialize};
 
 /// The index of every object written, one JSON line each.
-pub const OBJECT_INDEX_FILE_NAME: &str = "objects.jsonl";
+pub(crate) const OBJECT_INDEX_FILE_NAME: &str = "objects.jsonl";
 
 /// The track's entry in the broadcast's catalog: its section, and that
 /// section's fields for it in hang's layout.
-pub const CATALOG_ENTRY_FILE_NAME: &str = "catalog_entry.json";
+pub(crate) const CATALOG_ENTRY_FILE_NAME: &str = "catalog_entry.json";
 
 /// How a track's objects carry their payload and timestamp, and so how each
 /// object's file holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RelayTrackObjectPayloadForm {
+pub(crate) enum RelayTrackObjectPayloadForm {
     /// hang's legacy container: a QUIC varint timestamp in microseconds, then
     /// the codec's payload. The file holds the codec's payload.
     #[serde(rename = "codec_payload_of_the_hang_legacy_container")]
@@ -40,7 +40,7 @@ pub enum RelayTrackObjectPayloadForm {
 /// A track's entry in a broadcast's catalog: the section that lists it, and
 /// that section's fields for it in hang's layout.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct RelayTrackCatalogEntry {
+pub(crate) struct RelayTrackCatalogEntry {
     /// The catalog key of the section, e.g. `video` or `binary`.
     pub section: String,
     /// The section's fields for the track.
@@ -51,7 +51,10 @@ impl RelayTrackCatalogEntry {
     /// The entry of the track `track_name` in a broadcast's catalog: hang lists
     /// a track's fields under a map of its section, keyed by the track's name.
     /// `None` when no section lists it.
-    pub fn of_the_track_named(catalog: &serde_json::Value, track_name: &str) -> Option<Self> {
+    pub(crate) fn of_the_track_named(
+        catalog: &serde_json::Value,
+        track_name: &str,
+    ) -> Option<Self> {
         catalog
             .as_object()?
             .iter()
@@ -71,7 +74,7 @@ impl RelayTrackCatalogEntry {
     /// where a media entry names it, as sent for any other container or
     /// section. A media entry hang cannot read is refused, since its objects'
     /// form would be a guess.
-    pub fn payload_form(&self) -> Result<RelayTrackObjectPayloadForm> {
+    pub(crate) fn payload_form(&self) -> Result<RelayTrackObjectPayloadForm> {
         let unreadable = |section: &str| {
             format!(
                 "the track's `{section}` catalog entry is not one hang reads, so its objects' \
@@ -101,7 +104,7 @@ impl RelayTrackCatalogEntry {
 
 /// One object as the relay handed it over.
 #[derive(Debug, Clone, Copy)]
-pub struct RelayTrackObjectRead<'payload> {
+pub(crate) struct RelayTrackObjectRead<'payload> {
     /// The sequence number of the group it was read in.
     pub group_sequence: u64,
     /// Whether it opened its group.
@@ -114,7 +117,7 @@ pub struct RelayTrackObjectRead<'payload> {
 
 /// One line of [`OBJECT_INDEX_FILE_NAME`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RelayTrackObjectIndexEntry {
+pub(crate) struct RelayTrackObjectIndexEntry {
     /// The object's place among those written, from 0.
     pub index: u64,
     /// The sequence number of the group it was read in.
@@ -131,7 +134,7 @@ pub struct RelayTrackObjectIndexEntry {
 }
 
 /// Writes one track's objects into a directory.
-pub struct RelayTrackObjectDumpDirectory {
+pub(crate) struct RelayTrackObjectDumpDirectory {
     directory: PathBuf,
     payload_form: RelayTrackObjectPayloadForm,
     object_index: File,
@@ -140,7 +143,10 @@ pub struct RelayTrackObjectDumpDirectory {
 
 impl RelayTrackObjectDumpDirectory {
     /// A dump into `directory`, created when absent, its index begun empty.
-    pub fn create(directory: &Path, payload_form: RelayTrackObjectPayloadForm) -> Result<Self> {
+    pub(crate) fn create(
+        directory: &Path,
+        payload_form: RelayTrackObjectPayloadForm,
+    ) -> Result<Self> {
         std::fs::create_dir_all(directory)
             .with_context(|| format!("cannot create {}", directory.display()))?;
         let object_index_path = directory.join(OBJECT_INDEX_FILE_NAME);
@@ -155,7 +161,10 @@ impl RelayTrackObjectDumpDirectory {
     }
 
     /// Write the track's catalog entry beside the objects.
-    pub fn write_the_catalog_entry(&self, catalog_entry: &RelayTrackCatalogEntry) -> Result<()> {
+    pub(crate) fn write_the_catalog_entry(
+        &self,
+        catalog_entry: &RelayTrackCatalogEntry,
+    ) -> Result<()> {
         let catalog_entry_path = self.directory.join(CATALOG_ENTRY_FILE_NAME);
         std::fs::write(
             &catalog_entry_path,
@@ -165,7 +174,7 @@ impl RelayTrackObjectDumpDirectory {
     }
 
     /// Write `object` as the next file and index it.
-    pub fn write_the_object(&mut self, object: RelayTrackObjectRead<'_>) -> Result<()> {
+    pub(crate) fn write_the_object(&mut self, object: RelayTrackObjectRead<'_>) -> Result<()> {
         let media_frame;
         let (payload, timestamp_ns): (&[u8], Option<u128>) = match self.payload_form {
             RelayTrackObjectPayloadForm::HangLegacyContainer => {
@@ -205,7 +214,7 @@ impl RelayTrackObjectDumpDirectory {
     }
 
     /// How many objects have been written.
-    pub fn objects_written(&self) -> u64 {
+    pub(crate) fn objects_written(&self) -> u64 {
         self.objects_written
     }
 }

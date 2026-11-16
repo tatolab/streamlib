@@ -67,7 +67,7 @@ struct ObservedPlaybackRequest {
 /// whole number of frames means a caller would write partial frames and every
 /// later sample would land in the wrong channel — silently, and only on the
 /// arm that got it wrong.
-pub fn assert_the_device_asks_for_whole_periods_of_its_own_format(
+pub(crate) fn assert_the_device_asks_for_whole_periods_of_its_own_format(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {
@@ -123,7 +123,7 @@ fn byte_count_of(stream_format: AudioStreamFormat, sample_count: u32) -> usize {
 ///
 /// The restart is also where a stream that left its device running would
 /// surface — `snd_pcm_prepare` against a running PCM is `EBUSY`.
-pub fn assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
+pub(crate) fn assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {
@@ -187,7 +187,7 @@ pub fn assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
 
 /// The seam's liveness claim in the playback direction, asserted the same two
 /// ways for the same reason its capture sibling states.
-pub fn assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(
+pub(crate) fn assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(
     backend: &dyn AudioDeviceBackend,
     device_id: Option<String>,
 ) {

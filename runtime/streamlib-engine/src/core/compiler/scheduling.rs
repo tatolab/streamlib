@@ -14,14 +14,14 @@ use crate::core::processors::NodeTypesOneStreamResolves;
 
 /// How a processor should be scheduled at runtime.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchedulingStrategy {
+pub(crate) enum SchedulingStrategy {
     /// Dedicated OS thread with configurable priority.
     DedicatedThread { priority: ThreadPriority },
 }
 
 impl SchedulingStrategy {
     /// Get a human-readable description.
-    pub fn description(&self) -> String {
+    pub(crate) fn description(&self) -> String {
         match self {
             SchedulingStrategy::DedicatedThread { priority } => {
                 format!("dedicated thread ({})", priority.description())

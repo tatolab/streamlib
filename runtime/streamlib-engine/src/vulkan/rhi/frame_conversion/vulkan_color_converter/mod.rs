@@ -28,7 +28,7 @@ use crate::vulkan::rhi::{HostVulkanDevice, VulkanComputeKernel};
 /// workgroups). Exposed so consumers driving the dispatch through
 /// [`crate::vulkan::rhi::RhiCommandRecorder::record_dispatch`] can
 /// compute `(group_x, group_y) = ⌈(width, height) / 16⌉`.
-pub const COLOR_CONVERTER_WORKGROUP_SIZE: u32 = 16;
+pub(crate) const COLOR_CONVERTER_WORKGROUP_SIZE: u32 = 16;
 
 const BUFFER_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_buffer(0), // YCbCr / RGB byte input
@@ -78,7 +78,7 @@ fn kernel_built_once(
 }
 
 /// Vulkan implementation of [`crate::core::rhi::RhiColorConverter`].
-pub struct VulkanColorConverter {
+pub(crate) struct VulkanColorConverter {
     vulkan_device: Arc<HostVulkanDevice>,
     src_format: PixelFormat,
     dst_format: PixelFormat,
@@ -91,7 +91,7 @@ pub struct VulkanColorConverter {
 impl VulkanColorConverter {
     /// Build a converter for the given `(src, dst)` pair. Kernels are
     /// allocated lazily on first dispatch.
-    pub fn new(
+    pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         src_format: PixelFormat,
         dst_format: PixelFormat,
@@ -108,11 +108,11 @@ impl VulkanColorConverter {
         })
     }
 
-    pub fn src_format(&self) -> PixelFormat {
+    pub(crate) fn src_format(&self) -> PixelFormat {
         self.src_format
     }
 
-    pub fn dst_format(&self) -> PixelFormat {
+    pub(crate) fn dst_format(&self) -> PixelFormat {
         self.dst_format
     }
 
@@ -128,7 +128,7 @@ impl VulkanColorConverter {
     /// `Srgb` is the right default for the RGBA8_UNORM displays we
     /// ship today; once display color-space negotiation (#817) lands,
     /// consumers thread the negotiated curve through here.
-    pub fn prepare_buffer_to_image_storage(
+    pub(crate) fn prepare_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
@@ -151,7 +151,7 @@ impl VulkanColorConverter {
     /// camera processors that already hold a [`PixelBuffer`] wrapper
     /// (e.g. V4L2-imported DMA-BUF surfaces wrapped as
     /// [`PixelBuffer`]).
-    pub fn prepare_buffer_to_image_pixel(
+    pub(crate) fn prepare_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
         src_layout: SourceLayoutInfo,
@@ -174,7 +174,7 @@ impl VulkanColorConverter {
     /// command buffer + fence + queue submit. Use this when there's
     /// no surrounding [`crate::vulkan::rhi::RhiCommandRecorder`];
     /// otherwise prefer [`Self::prepare_buffer_to_image_storage`].
-    pub fn convert_buffer_to_image_storage(
+    pub(crate) fn convert_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
         src_layout: SourceLayoutInfo,
@@ -188,7 +188,7 @@ impl VulkanColorConverter {
 
     /// [`PixelBuffer`](crate::core::rhi::PixelBuffer) variant of
     /// [`Self::convert_buffer_to_image_storage`].
-    pub fn convert_buffer_to_image_pixel(
+    pub(crate) fn convert_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
         src_layout: SourceLayoutInfo,
@@ -204,7 +204,7 @@ impl VulkanColorConverter {
     /// the encoding push-constants on the image→buffer kernel, and return
     /// it for the caller to dispatch over `⌈width/2 / 16⌉ × ⌈height / 16⌉`
     /// groups. The destination must hold `dst_stride_bytes × height` bytes.
-    pub fn prepare_image_to_yuyv_buffer(
+    pub(crate) fn prepare_image_to_yuyv_buffer(
         &self,
         src: &Texture,
         dst: &crate::core::rhi::StorageBuffer,
@@ -223,7 +223,7 @@ impl VulkanColorConverter {
     /// [`PixelBuffer`](crate::core::rhi::PixelBuffer)-shape destination
     /// variant of [`Self::prepare_image_to_yuyv_buffer`]: a `yuyv` pixel
     /// buffer the CPU reads the converted picture from.
-    pub fn prepare_image_to_yuyv_pixel_buffer(
+    pub(crate) fn prepare_image_to_yuyv_pixel_buffer(
         &self,
         src: &Texture,
         dst: &crate::core::rhi::PixelBuffer,
@@ -287,7 +287,7 @@ impl VulkanColorConverter {
     /// out as `dst_layout` describes, and the encoding push-constants on the
     /// image→NV12 kernel, and return it for the caller to dispatch over
     /// `image_to_nv12_buffer_dispatch_group_counts` groups.
-    pub fn prepare_image_to_nv12_buffer(
+    pub(crate) fn prepare_image_to_nv12_buffer(
         &self,
         src: &Texture,
         dst: &crate::core::rhi::StorageBuffer,
@@ -323,7 +323,7 @@ impl VulkanColorConverter {
     /// destination of the same extent on the image→image kernel, and return
     /// it for the caller to dispatch over `⌈width / 16⌉ × ⌈height / 16⌉`
     /// groups.
-    pub fn prepare_image_to_image_storage(
+    pub(crate) fn prepare_image_to_image_storage(
         &self,
         src: &Texture,
         dst: &Texture,

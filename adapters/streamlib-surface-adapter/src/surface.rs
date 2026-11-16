@@ -111,7 +111,7 @@ pub enum AccessMode {
 /// Matches `streamlib_surface_client::MAX_DMA_BUF_PLANES`. Kept in sync
 /// here so the descriptor stays a single-translation-unit `#[repr(C)]`
 /// type without dragging that crate as a dep.
-pub const MAX_DMA_BUF_PLANES: usize = 4;
+pub(crate) const MAX_DMA_BUF_PLANES: usize = 4;
 
 /// Adapter-internal: how the surface's backing pixels are transported.
 ///

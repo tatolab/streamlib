@@ -53,7 +53,7 @@ const AGGREGATE_DEVICE_PUBLICATION_POLL_INTERVAL: Duration = Duration::from_mill
 /// capture stream opens it through. Dropping it destroys both, aggregate
 /// first; the process is audible again from then on, so a caller drops every
 /// playback stream before this.
-pub struct MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
+pub(crate) struct MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
     /// Declared before the tap so it is destroyed first: an aggregate must
     /// not outlive a tap it lists.
     aggregate_device_over_the_tap: PrivateAggregateDeviceOverOneProcessTap,
@@ -63,7 +63,7 @@ pub struct MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
 impl MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
     /// Mute this process's audio output into a new private tap, and publish a
     /// private aggregate device carrying only that tap.
-    pub fn create() -> Self {
+    pub(crate) fn create() -> Self {
         let muted_process_tap = MutedPrivateProcessTapOfThisProcess::create();
         let aggregate_device_over_the_tap =
             PrivateAggregateDeviceOverOneProcessTap::create_over(&muted_process_tap);
@@ -74,12 +74,12 @@ impl MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
     }
 
     /// The CoreAudio UID a capture stream names to read the tap.
-    pub fn aggregate_device_uid(&self) -> &str {
+    pub(crate) fn aggregate_device_uid(&self) -> &str {
         &self.aggregate_device_over_the_tap.aggregate_device_uid
     }
 
     /// The format the tap mixes this process's output down to.
-    pub fn tap_stream_format(&self) -> Option<AudioStreamBasicDescription> {
+    pub(crate) fn tap_stream_format(&self) -> Option<AudioStreamBasicDescription> {
         self.muted_process_tap.tap_stream_format()
     }
 }
@@ -295,7 +295,7 @@ struct OutputVolumeControlReading {
 
 /// The default output device's volume, read without changing it: the level a
 /// tap placed after the device's volume would carry this process's output at.
-pub struct DefaultOutputDeviceVolumeControls {
+pub(crate) struct DefaultOutputDeviceVolumeControls {
     default_output_device_object_id: Option<AudioObjectID>,
     /// The device's main control or, where it has none, those of the two
     /// channels macOS plays stereo on. Empty on a device without a volume.
@@ -305,7 +305,7 @@ pub struct DefaultOutputDeviceVolumeControls {
 impl DefaultOutputDeviceVolumeControls {
     /// Read the default output device's volume controls. A property query: it
     /// raises no prompt and changes nothing.
-    pub fn read() -> Self {
+    pub(crate) fn read() -> Self {
         let Some(default_output_device_object_id) = fixed_size_property::<AudioObjectID>(
             kAudioObjectSystemObject as AudioObjectID,
             property_address(

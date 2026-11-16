@@ -22,7 +22,7 @@ impl VulkanGraphicsKernelInner {
     /// the descriptor ring. Owns its own command buffer and fence; submits,
     /// waits, and returns. Convenience for unit tests and one-shot
     /// renderers.
-    pub fn offscreen_render(
+    pub(crate) fn offscreen_render(
         &self,
         frame_index: u32,
         color_targets: &[OffscreenColorTarget<'_>],

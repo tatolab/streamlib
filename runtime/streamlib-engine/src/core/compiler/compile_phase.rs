@@ -5,7 +5,7 @@ use std::fmt;
 
 /// Compilation phase in the 3-phase pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompilePhase {
+pub(super) enum CompilePhase {
     /// Phase 1: Attaching infrastructure components to processor nodes.
     Prepare,
     /// Phase 2: Spawning processor threads (threads create instances).
@@ -16,7 +16,7 @@ pub enum CompilePhase {
 
 impl CompilePhase {
     /// Get the phase number (1-3).
-    pub fn number(self) -> u8 {
+    pub(super) fn number(self) -> u8 {
         match self {
             Self::Prepare => 1,
             Self::Spawn => 2,
@@ -25,7 +25,7 @@ impl CompilePhase {
     }
 
     /// Get a human-readable name.
-    pub fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             Self::Prepare => "PREPARE",
             Self::Spawn => "SPAWN",

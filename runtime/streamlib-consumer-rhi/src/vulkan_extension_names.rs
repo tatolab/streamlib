@@ -71,7 +71,7 @@ pub fn vulkan_extension_names_borrowed_from_properties(
 /// assert_eq!(names.len(), 1);
 /// ```
 #[doc(hidden)]
-pub mod __extension_name_borrow_doctests {}
+pub(crate) mod __extension_name_borrow_doctests {}
 
 #[cfg(test)]
 mod tests {

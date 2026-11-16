@@ -30,7 +30,7 @@ use crate::vulkan::rhi::{
 /// Workgroup tile size. Matches the converter shader so consumers
 /// computing dispatch dims (`⌈(width, height) / 16⌉`) can use a single
 /// constant for both kernels.
-pub const TONE_MAPPER_WORKGROUP_SIZE: u32 = 16;
+pub(crate) const TONE_MAPPER_WORKGROUP_SIZE: u32 = 16;
 
 const IMAGE_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(0), // input  (readonly  in shader)
@@ -38,7 +38,7 @@ const IMAGE_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
 ];
 
 /// Vulkan implementation of [`crate::core::rhi::RhiToneMapper`].
-pub struct VulkanToneMapper {
+pub(crate) struct VulkanToneMapper {
     vulkan_device: Arc<HostVulkanDevice>,
     kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
 }
@@ -46,7 +46,7 @@ pub struct VulkanToneMapper {
 impl VulkanToneMapper {
     /// Build a tone-mapper bound to a device. The kernel is allocated
     /// lazily on first dispatch.
-    pub fn new(vulkan_device: &Arc<HostVulkanDevice>) -> Self {
+    pub(crate) fn new(vulkan_device: &Arc<HostVulkanDevice>) -> Self {
         Self {
             vulkan_device: Arc::clone(vulkan_device),
             kernel: Mutex::new(None),
@@ -58,7 +58,7 @@ impl VulkanToneMapper {
     /// through [`crate::vulkan::rhi::RhiCommandRecorder::record_dispatch`]
     /// so the compute step nests inside their own recorded command
     /// buffer with barriers.
-    pub fn prepare(
+    pub(crate) fn prepare(
         &self,
         src: &Texture,
         dst: &Texture,
@@ -79,7 +79,7 @@ impl VulkanToneMapper {
     ///
     /// For consumers that need layout transitions handled, prefer
     /// [`Self::apply_with_layouts`].
-    pub fn apply(
+    pub(crate) fn apply(
         &self,
         src: &Texture,
         dst: &Texture,
@@ -122,7 +122,7 @@ impl VulkanToneMapper {
     /// For consumers that already drive their own recorder, prefer
     /// [`Self::prepare`] + their recorder's `record_image_barrier` +
     /// `record_dispatch` to avoid the extra submit/wait round-trip.
-    pub fn apply_with_layouts(
+    pub(crate) fn apply_with_layouts(
         &self,
         src: &Texture,
         src_current_layout: VulkanLayout,

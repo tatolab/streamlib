@@ -13,7 +13,7 @@ use crate::core::error::{Error, Result};
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
 /// Events one subscription holds undelivered; a publish past this is dropped and counted.
-pub const EVENTS_QUEUED_PER_SUBSCRIPTION: usize = 1024;
+pub(super) const EVENTS_QUEUED_PER_SUBSCRIPTION: usize = 1024;
 
 /// In-process fan-out of runtime events to the listeners subscribed to their topic.
 pub struct PubSub {

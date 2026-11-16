@@ -105,7 +105,7 @@ mod mach_helper {
             .expect("the port names an IOSurface")
     }
 
-    pub fn read_and_edit(surface_id: &str) {
+    pub(crate) fn read_and_edit(surface_id: &str) {
         let connection = connect_or_exit();
         let iosurface = check_out_or_exit(&connection, surface_id);
         let first_mismatch = with_the_surface_bytes(&iosurface, |bytes| {
@@ -136,7 +136,7 @@ mod mach_helper {
         ));
     }
 
-    pub fn hold(surface_id: &str) {
+    pub(crate) fn hold(surface_id: &str) {
         let connection = connect_or_exit();
         let held = check_out_or_exit(&connection, surface_id);
         held.increment_use_count();
@@ -166,7 +166,7 @@ mod mach_helper {
         }
     }
 
-    pub fn hold_until_the_engine_dies(surface_id: &str) {
+    pub(crate) fn hold_until_the_engine_dies(surface_id: &str) {
         let connection = connect_or_exit();
         let held = check_out_or_exit(&connection, surface_id);
         held.increment_use_count();
@@ -182,7 +182,7 @@ mod mach_helper {
         report("TORE DOWN");
     }
 
-    pub fn engine() {
+    pub(crate) fn engine() {
         let service_name = format!(
             "com.tatolab.streamlib.surface-share-test.engine.{}",
             std::process::id()

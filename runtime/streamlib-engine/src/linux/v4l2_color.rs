@@ -66,7 +66,7 @@ const V4L2_QUANTIZATION_LIM_RANGE: u32 = 2;
 /// reported as `*_DEFAULT` are resolved from the `colorspace` field per the
 /// V4L2 mapping macros; `V4L2_COLORSPACE_DEFAULT` propagates as `None`
 /// across the board.
-pub fn v4l2_color_to_h273_color_vui(
+pub(crate) fn v4l2_color_to_h273_color_vui(
     colorspace: u32,
     xfer_func: u32,
     ycbcr_enc: u32,

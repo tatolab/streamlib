@@ -10,7 +10,7 @@ use super::PendingOperation;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 
 /// Handle for logging operations to the compiler transaction.
-pub struct CompilerTransactionHandle {
+pub(crate) struct CompilerTransactionHandle {
     inner: Arc<Mutex<Vec<PendingOperation>>>,
 }
 
@@ -19,7 +19,7 @@ impl CompilerTransactionHandle {
         Self { inner }
     }
 
-    pub fn log(&self, op: PendingOperation) {
+    pub(crate) fn log(&self, op: PendingOperation) {
         self.inner.lock().push(op);
     }
 

@@ -16,7 +16,7 @@ use super::{BindingResource, PendingState, VulkanRayTracingKernelInner};
 impl VulkanRayTracingKernelInner {
     /// Bind a top-level acceleration structure at `binding`. The slot must
     /// be declared as [`RayTracingBindingKind::AccelerationStructure`].
-    pub fn set_acceleration_structure(
+    pub(crate) fn set_acceleration_structure(
         &self,
         binding: u32,
         tlas: &VulkanAccelerationStructure,
@@ -44,7 +44,7 @@ impl VulkanRayTracingKernelInner {
     /// [`crate::core::rhi::PixelBuffer`] or
     /// [`crate::core::rhi::StorageBuffer`] via
     /// [`crate::vulkan::rhi::VulkanStorageBindable`].
-    pub fn set_storage_buffer(
+    pub(crate) fn set_storage_buffer(
         &self,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanStorageBindable + ?Sized),
@@ -63,7 +63,7 @@ impl VulkanRayTracingKernelInner {
     /// Bind a uniform buffer. Accepts only
     /// [`crate::core::rhi::UniformBuffer`] via
     /// [`crate::vulkan::rhi::VulkanUniformBindable`].
-    pub fn set_uniform_buffer(
+    pub(crate) fn set_uniform_buffer(
         &self,
         binding: u32,
         buffer: &(impl crate::vulkan::rhi::VulkanUniformBindable + ?Sized),
@@ -79,7 +79,7 @@ impl VulkanRayTracingKernelInner {
         Ok(())
     }
 
-    pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
+    pub(crate) fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::SampledTexture)?;
         let view = {
             use crate::host_rhi::HostTextureExt;
@@ -93,7 +93,7 @@ impl VulkanRayTracingKernelInner {
         Ok(())
     }
 
-    pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
+    pub(crate) fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
         self.expect_kind(binding, RayTracingBindingKind::StorageImage)?;
         let view = {
             use crate::host_rhi::HostTextureExt;
@@ -106,7 +106,7 @@ impl VulkanRayTracingKernelInner {
         Ok(())
     }
 
-    pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         if bytes.len() as u32 != self.push_constant_size {
             return Err(Error::GpuError(format!(
                 "Ray-tracing kernel '{}': push-constant size mismatch — got {} bytes, kernel declares {}",
@@ -119,17 +119,17 @@ impl VulkanRayTracingKernelInner {
         Ok(())
     }
 
-    pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
+    pub(crate) fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         let size = std::mem::size_of::<T>();
         let bytes = unsafe { std::slice::from_raw_parts(value as *const T as *const u8, size) };
         self.set_push_constants(bytes)
     }
 
-    pub fn bindings(&self) -> &[RayTracingBindingSpec] {
+    pub(crate) fn bindings(&self) -> &[RayTracingBindingSpec] {
         &self.bindings
     }
 
-    pub fn push_constant_size(&self) -> u32 {
+    pub(crate) fn push_constant_size(&self) -> u32 {
         self.push_constant_size
     }
 

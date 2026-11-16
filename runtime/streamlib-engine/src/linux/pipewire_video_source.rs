@@ -38,18 +38,18 @@ mod video_shim {
 
     /// Mirrors `struct StreamLibPipeWireVideoSource`, which is opaque here.
     #[repr(C)]
-    pub struct VideoSource {
+    pub(super) struct VideoSource {
         _opaque: [u8; 0],
     }
 
     unsafe extern "C" {
-        pub fn streamlib_pipewire_video_source_open(
+        pub(super) fn streamlib_pipewire_video_source_open(
             entry_points: *const *mut c_void,
             camera_name: *const c_char,
             failure_text: *mut c_char,
             failure_text_capacity: usize,
         ) -> *mut VideoSource;
-        pub fn streamlib_pipewire_video_source_set_extent(
+        pub(super) fn streamlib_pipewire_video_source_set_extent(
             video_source: *mut VideoSource,
             width: u32,
             height: u32,
@@ -59,33 +59,35 @@ mod video_shim {
             failure_text: *mut c_char,
             failure_text_capacity: usize,
         ) -> c_int;
-        pub fn streamlib_pipewire_video_source_consumer_negotiated(
+        pub(super) fn streamlib_pipewire_video_source_consumer_negotiated(
             video_source: *mut VideoSource,
         ) -> bool;
-        pub fn streamlib_pipewire_video_source_dequeue_slot(video_source: *mut VideoSource) -> i32;
-        pub fn streamlib_pipewire_video_source_slot_shared_memory(
+        pub(super) fn streamlib_pipewire_video_source_dequeue_slot(
+            video_source: *mut VideoSource,
+        ) -> i32;
+        pub(super) fn streamlib_pipewire_video_source_slot_shared_memory(
             video_source: *mut VideoSource,
             slot: i32,
             stride_bytes_out: *mut u32,
             byte_size_out: *mut u32,
         ) -> *mut u8;
-        pub fn streamlib_pipewire_video_source_queue_slot(
+        pub(super) fn streamlib_pipewire_video_source_queue_slot(
             video_source: *mut VideoSource,
             slot: i32,
             timestamp_ns: i64,
             sequence: u64,
         ) -> c_int;
-        pub fn streamlib_pipewire_video_source_failure(
+        pub(super) fn streamlib_pipewire_video_source_failure(
             video_source: *mut VideoSource,
         ) -> *const c_char;
-        pub fn streamlib_pipewire_video_source_close(video_source: *mut VideoSource);
+        pub(super) fn streamlib_pipewire_video_source_close(video_source: *mut VideoSource);
     }
 
     /// Mirrors `struct StreamLibPipeWireVideoOfferedFormat`.
     #[repr(C)]
     #[derive(Clone, Copy)]
     #[cfg(test)]
-    pub struct OfferedFormat {
+    pub(super) struct OfferedFormat {
         pub width: u32,
         pub height: u32,
         pub framerate_numerator: u32,
@@ -96,7 +98,7 @@ mod video_shim {
     #[repr(C)]
     #[derive(Debug, Clone, Copy)]
     #[cfg(test)]
-    pub struct OfferReport {
+    pub(super) struct OfferReport {
         pub width: u32,
         pub height: u32,
         pub video_format: u32,
@@ -110,16 +112,16 @@ mod video_shim {
     // composition in a test, which is why they are declared there.
     #[cfg(test)]
     unsafe extern "C" {
-        pub fn streamlib_pipewire_video_source_describe_offer(
+        pub(super) fn streamlib_pipewire_video_source_describe_offer(
             offered_format: *const OfferedFormat,
         ) -> OfferReport;
-        pub fn streamlib_pipewire_video_source_offered_video_format() -> u32;
-        pub fn streamlib_pipewire_video_source_node_name(
+        pub(super) fn streamlib_pipewire_video_source_offered_video_format() -> u32;
+        pub(super) fn streamlib_pipewire_video_source_node_name(
             camera_name: *const c_char,
             node_name: *mut c_char,
             node_name_capacity: usize,
         ) -> usize;
-        pub fn streamlib_pipewire_video_source_properties(
+        pub(super) fn streamlib_pipewire_video_source_properties(
             items: *mut StreamProperty,
             item_capacity: u32,
             camera_name: *const c_char,
@@ -132,7 +134,7 @@ mod video_shim {
     #[repr(C)]
     #[derive(Clone, Copy)]
     #[cfg(test)]
-    pub struct StreamProperty {
+    pub(super) struct StreamProperty {
         pub key: *const c_char,
         pub value: *const c_char,
     }

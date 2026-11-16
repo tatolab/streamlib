@@ -29,7 +29,7 @@ use crate::vulkan::rhi::device::vulkan_device::HostVulkanDevice;
 /// resources; `Drop` destroys them.
 ///
 /// Not `Clone` — every instance owns unique Vulkan handles.
-pub struct HostVulkanUploadResources {
+pub(crate) struct HostVulkanUploadResources {
     device: Arc<HostVulkanDevice>,
     pool: vk::CommandPool,
     cb: vk::CommandBuffer,
@@ -41,7 +41,7 @@ impl HostVulkanUploadResources {
     /// graphics queue family. The pool carries
     /// `RESET_COMMAND_BUFFER_BIT` so per-frame
     /// `vkResetCommandBuffer` is legal without affecting other pools.
-    pub fn new(device: &Arc<HostVulkanDevice>) -> Result<Self> {
+    pub(crate) fn new(device: &Arc<HostVulkanDevice>) -> Result<Self> {
         let queue_family = device.queue_family_index();
         let raw_device = device.device();
 
@@ -97,12 +97,12 @@ impl HostVulkanUploadResources {
     }
 
     /// Borrow the command buffer for amortized upload.
-    pub fn command_buffer(&self) -> vk::CommandBuffer {
+    pub(crate) fn command_buffer(&self) -> vk::CommandBuffer {
         self.cb
     }
 
     /// Borrow the fence the amortized upload submits with.
-    pub fn fence(&self) -> vk::Fence {
+    pub(crate) fn fence(&self) -> vk::Fence {
         self.fence
     }
 }

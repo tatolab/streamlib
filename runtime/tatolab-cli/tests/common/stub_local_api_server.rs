@@ -37,11 +37,12 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// What the stub answers a tool call with when the script names no fixed answer.
-pub const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
+pub(crate) const STUB_DEFAULT_TOOL_ANSWER_TEXT: &str = "{}";
 
 /// A local API socket path nothing listens on: its directory does not exist, so a connect fails
 /// at once rather than waiting on a slow answer.
-pub const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str = "/nonexistent-tatolab-test/local-api.sock";
+pub(crate) const NOTHING_LISTENS_LOCAL_API_SOCKET_PATH: &str =
+    "/nonexistent-tatolab-test/local-api.sock";
 
 /// The local API tool that pages a project's log records by cursor.
 const LOGS_TOOL_NAME: &str = "logs";
@@ -62,14 +63,14 @@ const SHORT_SOCKET_DIRECTORY_PARENT: &str = "/tmp";
 /// How the stub answers one `tools/call`: the tool's text, whether the tool ran and failed, and
 /// the re-load of the stream the runtime made before answering, if it made one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StubToolAnswer {
+pub(crate) struct StubToolAnswer {
     pub text: String,
     pub is_error: bool,
 }
 
 impl StubToolAnswer {
     /// A tool that ran and answered `text`.
-    pub fn tool_result(text: &str) -> Self {
+    pub(crate) fn tool_result(text: &str) -> Self {
         Self {
             text: text.to_owned(),
             is_error: false,
@@ -77,7 +78,7 @@ impl StubToolAnswer {
     }
 
     /// A tool that ran and failed, saying `text`.
-    pub fn tool_failure(text: &str) -> Self {
+    pub(crate) fn tool_failure(text: &str) -> Self {
         Self {
             text: text.to_owned(),
             is_error: true,
@@ -87,7 +88,7 @@ impl StubToolAnswer {
 
 /// Which transport carried a `tools/call` to the stub.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StubToolCallTransport {
+pub(crate) enum StubToolCallTransport {
     /// One request over `POST /mcp`.
     StreamableHttpPost,
     /// A `/mcp/stdio` connection's upgraded stream.
@@ -96,7 +97,7 @@ pub enum StubToolCallTransport {
 
 /// One `tools/call` the stub received, as the runtime would have.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RecordedToolCall {
+pub(crate) struct RecordedToolCall {
     pub tool_name: String,
     /// The call's arguments object; empty when it sent none.
     pub tool_arguments: serde_json::Value,
@@ -105,7 +106,7 @@ pub struct RecordedToolCall {
 
 /// How the stub answers `GET /mcp/stdio`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StubMcpStdioUpgradeAnswer {
+pub(crate) enum StubMcpStdioUpgradeAnswer {
     /// Answer `101` and serve the stub's MCP server — the handler `/mcp` serves — over the
     /// upgraded stream until the client closes it, as a runtime does.
     #[default]
@@ -126,7 +127,7 @@ pub enum StubMcpStdioUpgradeAnswer {
 
 /// One request head the stub received, as HTTP parsed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordedHttpRequestHead {
+pub(crate) struct RecordedHttpRequestHead {
     pub method: String,
     pub request_target: String,
     /// Every header line, its name lowercased by the parse, in no promised order.
@@ -138,7 +139,7 @@ pub struct RecordedHttpRequestHead {
 /// Records `first_written_by_a_run` reach the log once a `open_project` or `reload_project` call is answered, as the
 /// load's own writing does.
 #[derive(Debug, Clone)]
-pub struct StubStreamLogRecords {
+pub(crate) struct StubStreamLogRecords {
     pub records: Vec<serde_json::Value>,
     pub page_size: usize,
     pub first_written_by_a_run: bool,
@@ -149,7 +150,7 @@ pub struct StubStreamLogRecords {
 /// drains `queued_tool_answers` in order, then `fixed_tool_answer` answers forever, so a test
 /// names only the rounds it cares about.
 #[derive(Debug, Clone, Default)]
-pub struct StubLocalApiScript {
+pub(crate) struct StubLocalApiScript {
     /// Answers by tool name, in order, the last repeating.
     pub tool_answers_by_name: HashMap<String, Vec<StubToolAnswer>>,
     /// The records `logs` pages through by `after`, when set.
@@ -172,7 +173,7 @@ pub struct StubLocalApiScript {
 
 impl StubLocalApiScript {
     /// A script answering every tool call with `stub_tool_answer`.
-    pub fn answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
+    pub(crate) fn answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
         Self {
             fixed_tool_answer: Some(stub_tool_answer),
             ..Self::default()
@@ -180,7 +181,7 @@ impl StubLocalApiScript {
     }
 
     /// A script whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
-    pub fn answering_the_mcp_stdio_upgrade_with(
+    pub(crate) fn answering_the_mcp_stdio_upgrade_with(
         mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     ) -> Self {
         Self {
@@ -537,7 +538,7 @@ fn stub_local_api_router(stub_state: Arc<StubLocalApiState>) -> axum::Router {
 }
 
 /// A stub local API being served; dropping it stops serving and removes its socket.
-pub struct StubLocalApiServer {
+pub(crate) struct StubLocalApiServer {
     /// The socket the stub answers on.
     pub local_api_socket_path: PathBuf,
     stub_state: Arc<StubLocalApiState>,
@@ -548,7 +549,7 @@ pub struct StubLocalApiServer {
 
 impl StubLocalApiServer {
     /// Serve `stub_local_api_script` on a fresh socket; it accepts connections once this returns.
-    pub fn serve(stub_local_api_script: StubLocalApiScript) -> Self {
+    pub(crate) fn serve(stub_local_api_script: StubLocalApiScript) -> Self {
         let local_api_socket_directory = tempfile::Builder::new()
             .prefix("tl-stub-")
             .tempdir_in(SHORT_SOCKET_DIRECTORY_PARENT)
@@ -563,7 +564,7 @@ impl StubLocalApiServer {
 
     /// Serve `stub_local_api_script` on `local_api_socket_path`, whose directory exists; it
     /// accepts connections once this returns, and the socket is removed when it is dropped.
-    pub fn serve_at(
+    pub(crate) fn serve_at(
         local_api_socket_path: &Path,
         stub_local_api_script: StubLocalApiScript,
     ) -> Self {
@@ -642,19 +643,19 @@ impl StubLocalApiServer {
     }
 
     /// Serve a stub that answers every tool call with `stub_tool_answer`.
-    pub fn serve_answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
+    pub(crate) fn serve_answering_every_tool_call_with(stub_tool_answer: StubToolAnswer) -> Self {
         Self::serve(StubLocalApiScript::answering_every_tool_call_with(
             stub_tool_answer,
         ))
     }
 
     /// Serve a stub that answers every tool call `{}`.
-    pub fn serve_default() -> Self {
+    pub(crate) fn serve_default() -> Self {
         Self::serve(StubLocalApiScript::default())
     }
 
     /// Serve a stub whose `/mcp/stdio` answers as `mcp_stdio_upgrade_answer` says.
-    pub fn serve_answering_the_mcp_stdio_upgrade_with(
+    pub(crate) fn serve_answering_the_mcp_stdio_upgrade_with(
         mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     ) -> Self {
         Self::serve(StubLocalApiScript::answering_the_mcp_stdio_upgrade_with(
@@ -663,19 +664,19 @@ impl StubLocalApiServer {
     }
 
     /// Answer every call held by `tools_answered_once_released`, and each later one at once.
-    pub fn release_the_held_tool_answers(&self) {
+    pub(crate) fn release_the_held_tool_answers(&self) {
         self.stub_state
             .held_tool_answers_released
             .send_replace(true);
     }
 
     /// Every tool call received so far, in arrival order.
-    pub fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
+    pub(crate) fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
         self.stub_state.recorded_tool_calls.lock().unwrap().clone()
     }
 
     /// The transport of every call to `tool_name` received so far, in arrival order.
-    pub fn recorded_transports_of(&self, tool_name: &str) -> Vec<StubToolCallTransport> {
+    pub(crate) fn recorded_transports_of(&self, tool_name: &str) -> Vec<StubToolCallTransport> {
         self.recorded_tool_calls()
             .into_iter()
             .filter(|recorded_tool_call| recorded_tool_call.tool_name == tool_name)
@@ -684,7 +685,7 @@ impl StubLocalApiServer {
     }
 
     /// The arguments of every call to `tool_name` received so far, in arrival order.
-    pub fn recorded_arguments_of(&self, tool_name: &str) -> Vec<serde_json::Value> {
+    pub(crate) fn recorded_arguments_of(&self, tool_name: &str) -> Vec<serde_json::Value> {
         self.recorded_tool_calls()
             .into_iter()
             .filter(|recorded_tool_call| recorded_tool_call.tool_name == tool_name)
@@ -693,7 +694,7 @@ impl StubLocalApiServer {
     }
 
     /// Append `appended_records` to the project log `logs` pages through, after its last record.
-    pub fn append_stream_log_records(&self, appended_records: Vec<serde_json::Value>) {
+    pub(crate) fn append_stream_log_records(&self, appended_records: Vec<serde_json::Value>) {
         self.stub_state
             .stream_log_records
             .lock()
@@ -703,14 +704,14 @@ impl StubLocalApiServer {
 
     /// Close every `/mcp/stdio` connection serving the stub's MCP server, as a runtime that
     /// crashed or was stopped does; the stub keeps accepting new ones.
-    pub fn close_every_mcp_stdio_connection(&self) {
+    pub(crate) fn close_every_mcp_stdio_connection(&self) {
         self.stub_state
             .mcp_stdio_connection_closing_generation
             .send_modify(|closing_generation| *closing_generation += 1);
     }
 
     /// The head of every `/mcp/stdio` request received so far, in arrival order.
-    pub fn recorded_mcp_stdio_request_heads(&self) -> Vec<RecordedHttpRequestHead> {
+    pub(crate) fn recorded_mcp_stdio_request_heads(&self) -> Vec<RecordedHttpRequestHead> {
         self.stub_state
             .recorded_mcp_stdio_request_heads
             .lock()
@@ -719,7 +720,7 @@ impl StubLocalApiServer {
     }
 
     /// Every byte a client sent over an echoing `/mcp/stdio` stream so far, in arrival order.
-    pub fn recorded_mcp_stdio_client_bytes(&self) -> Vec<u8> {
+    pub(crate) fn recorded_mcp_stdio_client_bytes(&self) -> Vec<u8> {
         self.stub_state
             .recorded_mcp_stdio_client_bytes
             .lock()
@@ -742,6 +743,9 @@ impl Drop for StubLocalApiServer {
 
 /// The text a runtime's `open_project` or `reload_project` answers with once it queued the load `action` of the
 /// project in `project_directory`.
-pub fn open_or_reload_project_tool_result_text(action: &str, project_directory: &Path) -> String {
+pub(crate) fn open_or_reload_project_tool_result_text(
+    action: &str,
+    project_directory: &Path,
+) -> String {
     serde_json::json!({ "action": action, "project_directory": project_directory }).to_string()
 }

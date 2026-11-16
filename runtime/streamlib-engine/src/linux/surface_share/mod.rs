@@ -8,11 +8,11 @@
 //! spawned by the runtime receive the socket path through
 //! `STREAMLIB_SURFACE_SOCKET` and exchange DMA-BUF fds via `SCM_RIGHTS`.
 
-pub mod gpu_pool_claimant_process;
-pub mod state;
-pub mod surface_share_sockets_left_by_dead_runtimes;
-pub mod unix_socket_service;
+pub(crate) mod gpu_pool_claimant_process;
+pub(crate) mod state;
+pub(crate) mod surface_share_sockets_left_by_dead_runtimes;
+pub(crate) mod unix_socket_service;
 
-pub use state::{SurfaceShareState, ViewedFrameSource};
-pub use surface_share_sockets_left_by_dead_runtimes::remove_the_surface_share_sockets_left_by_dead_runtimes;
+pub(crate) use state::{SurfaceShareState, ViewedFrameSource};
+pub(crate) use surface_share_sockets_left_by_dead_runtimes::remove_the_surface_share_sockets_left_by_dead_runtimes;
 pub use unix_socket_service::UnixSocketSurfaceService;

@@ -7,82 +7,82 @@
 
 use std::ffi::{c_char, c_void};
 
-pub type SlangInt = i64;
-pub type SlangResult = i32;
+pub(crate) type SlangInt = i64;
+pub(crate) type SlangResult = i32;
 
-pub const SLANG_SPIRV: i32 = 6;
+pub(crate) const SLANG_SPIRV: i32 = 6;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SlangStage(pub u32);
+pub(crate) struct SlangStage(pub u32);
 
 impl SlangStage {
-    pub const VERTEX: Self = Self(1);
-    pub const FRAGMENT: Self = Self(5);
-    pub const COMPUTE: Self = Self(6);
-    pub const RAY_GENERATION: Self = Self(7);
-    pub const INTERSECTION: Self = Self(8);
-    pub const ANY_HIT: Self = Self(9);
-    pub const CLOSEST_HIT: Self = Self(10);
-    pub const MISS: Self = Self(11);
-    pub const CALLABLE: Self = Self(12);
+    pub(crate) const VERTEX: Self = Self(1);
+    pub(crate) const FRAGMENT: Self = Self(5);
+    pub(crate) const COMPUTE: Self = Self(6);
+    pub(crate) const RAY_GENERATION: Self = Self(7);
+    pub(crate) const INTERSECTION: Self = Self(8);
+    pub(crate) const ANY_HIT: Self = Self(9);
+    pub(crate) const CLOSEST_HIT: Self = Self(10);
+    pub(crate) const MISS: Self = Self(11);
+    pub(crate) const CALLABLE: Self = Self(12);
 }
 
-pub const IUNKNOWN_RELEASE: usize = 2;
-pub const IBLOB_GET_BUFFER_POINTER: usize = 3;
-pub const IBLOB_GET_BUFFER_SIZE: usize = 4;
-pub const IGLOBAL_SESSION_CREATE_SESSION: usize = 3;
-pub const IGLOBAL_SESSION_FIND_PROFILE: usize = 4;
-pub const IGLOBAL_SESSION_GET_BUILD_TAG_STRING: usize = 8;
-pub const ISESSION_CREATE_COMPOSITE_COMPONENT_TYPE: usize = 6;
-pub const ISESSION_LOAD_MODULE_FROM_SOURCE_STRING: usize = 20;
-pub const ICOMPONENT_TYPE_GET_ENTRY_POINT_CODE: usize = 6;
-pub const ICOMPONENT_TYPE_LINK: usize = 10;
+pub(crate) const IUNKNOWN_RELEASE: usize = 2;
+pub(crate) const IBLOB_GET_BUFFER_POINTER: usize = 3;
+pub(crate) const IBLOB_GET_BUFFER_SIZE: usize = 4;
+pub(crate) const IGLOBAL_SESSION_CREATE_SESSION: usize = 3;
+pub(crate) const IGLOBAL_SESSION_FIND_PROFILE: usize = 4;
+pub(crate) const IGLOBAL_SESSION_GET_BUILD_TAG_STRING: usize = 8;
+pub(crate) const ISESSION_CREATE_COMPOSITE_COMPONENT_TYPE: usize = 6;
+pub(crate) const ISESSION_LOAD_MODULE_FROM_SOURCE_STRING: usize = 20;
+pub(crate) const ICOMPONENT_TYPE_GET_ENTRY_POINT_CODE: usize = 6;
+pub(crate) const ICOMPONENT_TYPE_LINK: usize = 10;
 const ICOMPONENT_TYPE_METHOD_SLOTS_AFTER_IUNKNOWN: usize = 14;
-pub const IMODULE_FIND_AND_CHECK_ENTRY_POINT: usize =
+pub(crate) const IMODULE_FIND_AND_CHECK_ENTRY_POINT: usize =
     3 + ICOMPONENT_TYPE_METHOD_SLOTS_AFTER_IUNKNOWN + 8;
 
-pub type CreateGlobalSession2 = unsafe extern "C" fn(
+pub(crate) type CreateGlobalSession2 = unsafe extern "C" fn(
     desc: *const SlangGlobalSessionDesc,
     out_global_session: *mut *mut c_void,
 ) -> SlangResult;
-pub type Release = unsafe extern "C" fn(this: *mut c_void) -> u32;
-pub type GetBufferPointer = unsafe extern "C" fn(this: *mut c_void) -> *const c_void;
-pub type GetBufferSize = unsafe extern "C" fn(this: *mut c_void) -> usize;
-pub type CreateSession = unsafe extern "C" fn(
+pub(crate) type Release = unsafe extern "C" fn(this: *mut c_void) -> u32;
+pub(crate) type GetBufferPointer = unsafe extern "C" fn(this: *mut c_void) -> *const c_void;
+pub(crate) type GetBufferSize = unsafe extern "C" fn(this: *mut c_void) -> usize;
+pub(crate) type CreateSession = unsafe extern "C" fn(
     this: *mut c_void,
     desc: *const SessionDesc,
     out_session: *mut *mut c_void,
 ) -> SlangResult;
-pub type FindProfile = unsafe extern "C" fn(this: *mut c_void, name: *const c_char) -> u32;
-pub type GetBuildTagString = unsafe extern "C" fn(this: *mut c_void) -> *const c_char;
-pub type LoadModuleFromSourceString = unsafe extern "C" fn(
+pub(crate) type FindProfile = unsafe extern "C" fn(this: *mut c_void, name: *const c_char) -> u32;
+pub(crate) type GetBuildTagString = unsafe extern "C" fn(this: *mut c_void) -> *const c_char;
+pub(crate) type LoadModuleFromSourceString = unsafe extern "C" fn(
     this: *mut c_void,
     module_name: *const c_char,
     path: *const c_char,
     source: *const c_char,
     out_diagnostics: *mut *mut c_void,
 ) -> *mut c_void;
-pub type FindAndCheckEntryPoint = unsafe extern "C" fn(
+pub(crate) type FindAndCheckEntryPoint = unsafe extern "C" fn(
     this: *mut c_void,
     name: *const c_char,
     stage: SlangStage,
     out_entry_point: *mut *mut c_void,
     out_diagnostics: *mut *mut c_void,
 ) -> SlangResult;
-pub type CreateCompositeComponentType = unsafe extern "C" fn(
+pub(crate) type CreateCompositeComponentType = unsafe extern "C" fn(
     this: *mut c_void,
     component_types: *const *mut c_void,
     component_type_count: SlangInt,
     out_composite: *mut *mut c_void,
     out_diagnostics: *mut *mut c_void,
 ) -> SlangResult;
-pub type Link = unsafe extern "C" fn(
+pub(crate) type Link = unsafe extern "C" fn(
     this: *mut c_void,
     out_linked: *mut *mut c_void,
     out_diagnostics: *mut *mut c_void,
 ) -> SlangResult;
-pub type GetEntryPointCode = unsafe extern "C" fn(
+pub(crate) type GetEntryPointCode = unsafe extern "C" fn(
     this: *mut c_void,
     entry_point_index: SlangInt,
     target_index: SlangInt,
@@ -91,7 +91,7 @@ pub type GetEntryPointCode = unsafe extern "C" fn(
 ) -> SlangResult;
 
 #[repr(C)]
-pub struct SlangGlobalSessionDesc {
+pub(crate) struct SlangGlobalSessionDesc {
     pub structure_size: u32,
     pub api_version: u32,
     pub min_language_version: u32,
@@ -113,14 +113,14 @@ impl Default for SlangGlobalSessionDesc {
 
 #[repr(i32)]
 #[derive(Clone, Copy)]
-pub enum CompilerOptionName {
+pub(crate) enum CompilerOptionName {
     DebugInformation = 44,
     Optimization = 46,
     VulkanUseEntryPointName = 52,
 }
 
 #[repr(C)]
-pub struct CompilerOptionValue {
+pub(crate) struct CompilerOptionValue {
     pub kind: i32,
     pub int_value_0: i32,
     pub int_value_1: i32,
@@ -129,7 +129,7 @@ pub struct CompilerOptionValue {
 }
 
 #[repr(C)]
-pub struct CompilerOptionEntry {
+pub(crate) struct CompilerOptionEntry {
     pub name: CompilerOptionName,
     pub value: CompilerOptionValue,
 }
@@ -153,7 +153,7 @@ const fn integer_option(name: CompilerOptionName, value: i32) -> CompilerOptionE
 /// Slang keeps binding names without debug information, and the engine's
 /// SPIR-V reflection refuses the `NonSemantic.Shader.DebugInfo`
 /// instructions debug information adds.
-pub fn engine_compiler_option_entries() -> [CompilerOptionEntry; 3] {
+pub(crate) fn engine_compiler_option_entries() -> [CompilerOptionEntry; 3] {
     const SLANG_DEBUG_INFO_LEVEL_NONE: i32 = 0;
     const SLANG_OPTIMIZATION_LEVEL_DEFAULT: i32 = 1;
     [
@@ -170,7 +170,7 @@ pub fn engine_compiler_option_entries() -> [CompilerOptionEntry; 3] {
 }
 
 #[repr(C)]
-pub struct TargetDesc {
+pub(crate) struct TargetDesc {
     pub structure_size: usize,
     pub format: i32,
     pub profile: u32,
@@ -200,13 +200,13 @@ impl Default for TargetDesc {
 }
 
 #[repr(C)]
-pub struct PreprocessorMacroDesc {
+pub(crate) struct PreprocessorMacroDesc {
     pub name: *const c_char,
     pub value: *const c_char,
 }
 
 #[repr(C)]
-pub struct SessionDesc {
+pub(crate) struct SessionDesc {
     pub structure_size: usize,
     pub targets: *const TargetDesc,
     pub target_count: SlangInt,

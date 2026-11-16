@@ -431,7 +431,7 @@ impl CoreAudioStreamControlThatFollowsItsDevice for CoreAudioCaptureControl {
 }
 
 /// A capture stream on one CoreAudio input device at a time.
-pub struct CoreAudioCaptureStream {
+pub(crate) struct CoreAudioCaptureStream {
     stream_format: AudioStreamFormat,
     liveness_report: DeviceStreamLivenessReport,
     pub(super) capture_control: Arc<Mutex<CoreAudioCaptureControl>>,

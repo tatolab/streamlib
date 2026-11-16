@@ -10,7 +10,7 @@ use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
 use crate::core::context::{GpuPoolClaimTables, GpuPoolClaimantProcessId};
 
 /// A process handed a claimant column, which the service can stop and wait on.
-pub struct GpuPoolClaimantProcess {
+pub(crate) struct GpuPoolClaimantProcess {
     claimant: GpuPoolClaimantProcessId,
     pidfd_unless_it_is_this_process: Option<OwnedFd>,
 }
@@ -19,7 +19,7 @@ impl GpuPoolClaimantProcess {
     /// Hold the process `pid` names while it runs: by a pidfd, unless it is
     /// this process, which is never stopped. Refused when the process cannot
     /// be held or has already exited, since its column could then never clear.
-    pub fn hold_the_peer(pid: u32) -> Result<Self, String> {
+    pub(crate) fn hold_the_peer(pid: u32) -> Result<Self, String> {
         if pid == std::process::id() {
             return Ok(Self {
                 claimant: GpuPoolClaimantProcessId {
@@ -58,13 +58,13 @@ impl GpuPoolClaimantProcess {
     }
 
     /// The claimant this process claims as.
-    pub fn claimant(&self) -> GpuPoolClaimantProcessId {
+    pub(crate) fn claimant(&self) -> GpuPoolClaimantProcessId {
         self.claimant
     }
 
     /// Stop the process: the service dropped its connection, and a claimant
     /// left running could still read a slot whose column was cleared.
-    pub fn kill(&self) {
+    pub(crate) fn kill(&self) {
         let Some(pidfd) = &self.pidfd_unless_it_is_this_process else {
             return;
         };
@@ -92,7 +92,7 @@ impl GpuPoolClaimantProcess {
     /// Block until the process has exited, answering whether it has; an
     /// exited process runs nothing, so nothing it claimed is still read. This
     /// process never exits under the service, so it answers `false`.
-    pub fn wait_until_it_has_exited(&self) -> bool {
+    pub(crate) fn wait_until_it_has_exited(&self) -> bool {
         self.pidfd_unless_it_is_this_process.is_some() && self.has_exited_within(-1)
     }
 
@@ -128,7 +128,7 @@ impl GpuPoolClaimantProcess {
     /// Once the process has exited, clear its column in every claim table,
     /// stopping it first when the service dropped its connection. A process
     /// not seen to exit keeps its column.
-    pub fn clear_its_columns_once_it_has_exited(
+    pub(crate) fn clear_its_columns_once_it_has_exited(
         self,
         claim_tables: &GpuPoolClaimTables,
         the_service_dropped_its_connection: bool,

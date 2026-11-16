@@ -22,7 +22,7 @@ pub use crate::core::compiler::compiler_ops::project_node_types_listed_from_sour
     ImportedProjectPythonSources, PROJECT_NODE_TYPE_LISTING_ENTRY_MODULE,
     list_a_projects_node_types_and_graph_generators_from_source,
 };
-pub use crate::core::compiler::{
+pub use crate::core::compiler::processor_thread_shutdown::{
     DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
 };
 pub use address_chunk::what_one_address_chunk_may_be;

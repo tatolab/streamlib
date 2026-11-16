@@ -85,7 +85,7 @@ fn allocate_pool_slot_buffer(
 }
 
 /// Reusable pool of [`HostVulkanBuffer`]s for efficient buffer recycling.
-pub struct VulkanPixelBufferPool {
+pub(crate) struct VulkanPixelBufferPool {
     device: Arc<HostVulkanDevice>,
     width: u32,
     height: u32,
@@ -103,7 +103,7 @@ impl VulkanPixelBufferPool {
     /// allocation refused — past the device's memory budget, say — leaves a
     /// smaller pool rather than failing the pipeline. With none allocated,
     /// the first allocation's refusal is the answer.
-    pub fn new(
+    pub(crate) fn new(
         device: Arc<HostVulkanDevice>,
         width: u32,
         height: u32,
@@ -175,7 +175,9 @@ impl VulkanPixelBufferPool {
     /// guaranteed free — [`Self::acquire`] cannot answer here, because a
     /// caller that keeps its own permanent share of every buffer never sees a
     /// strong count of 1 again.
-    pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
+    pub(crate) fn allocate_additional_buffer(
+        &mut self,
+    ) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         let buffer = allocate_pool_slot_buffer(
             &self.device,
             self.width,
@@ -204,7 +206,10 @@ impl VulkanPixelBufferPool {
     /// Let go of the pool's share of the buffer `pool_slot_id` names, for a
     /// slot being freed; the memory goes once its last holder drops it.
     /// Answers whether the pool held such a buffer.
-    pub fn forget_the_buffer_of_pool_slot(&mut self, pool_slot_id: &PixelBufferPoolSlotId) -> bool {
+    pub(crate) fn forget_the_buffer_of_pool_slot(
+        &mut self,
+        pool_slot_id: &PixelBufferPoolSlotId,
+    ) -> bool {
         let Some(forgotten_index) = self
             .buffers_by_pool_id
             .iter()
@@ -220,7 +225,7 @@ impl VulkanPixelBufferPool {
     ///
     /// Skips buffers still held externally (Arc::strong_count > 1).
     /// Returns error if all buffers are in use.
-    pub fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
+    pub(crate) fn acquire(&self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
         let len = self.buffers_by_pool_id.len();
         if len == 0 {
             return Err(Error::BufferError(

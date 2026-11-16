@@ -142,7 +142,7 @@ impl CoreAudioStreamControlThatFollowsItsDevice for CoreAudioPlaybackControl {
 }
 
 /// A playback stream on one CoreAudio output device at a time.
-pub struct CoreAudioPlaybackStream {
+pub(crate) struct CoreAudioPlaybackStream {
     stream_format: AudioStreamFormat,
     /// The device's `BufferFrameSize` in output scope when the stream opened.
     device_period_in_per_channel_samples: Option<u32>,

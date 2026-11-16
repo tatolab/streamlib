@@ -16,20 +16,20 @@ use std::path::{Path, PathBuf};
 use streamlib_video_bitstream::VideoCodecElementaryStream;
 
 /// The bands `xtask psnr score` fails a decode below.
-pub const LUMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
-pub const CHROMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
+pub(crate) const LUMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
+pub(crate) const CHROMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
 
 /// The extent of the checked-in cross-floor clips: 180 lines is a multiple of
 /// neither codec's block, so a clip carries a conformance crop.
-pub const CROSS_FLOOR_CLIP_WIDTH: u32 = 320;
-pub const CROSS_FLOOR_CLIP_HEIGHT: u32 = 180;
+pub(crate) const CROSS_FLOOR_CLIP_WIDTH: u32 = 320;
+pub(crate) const CROSS_FLOOR_CLIP_HEIGHT: u32 = 180;
 
 /// The PSNR reference the cross-floor clips encode, cropped to their extent.
-pub const CROSS_FLOOR_CLIP_REFERENCE: &str = "complex_pattern";
+pub(crate) const CROSS_FLOOR_CLIP_REFERENCE: &str = "complex_pattern";
 
 /// A picture as tightly packed RGBA8.
 #[derive(Debug, Clone)]
-pub struct Rgba8Picture {
+pub(crate) struct Rgba8Picture {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
@@ -37,7 +37,7 @@ pub struct Rgba8Picture {
 
 impl Rgba8Picture {
     /// A PNG's pixels, whatever its colour type.
-    pub fn read_png(path: &Path) -> Self {
+    pub(crate) fn read_png(path: &Path) -> Self {
         let mut decoder = png::Decoder::new(std::fs::File::open(path).expect("the PNG opens"));
         decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
         let mut reader = decoder.read_info().expect("a PNG header");
@@ -72,7 +72,7 @@ impl Rgba8Picture {
     }
 
     /// The top-left `width` × `height` of this picture.
-    pub fn cropped_to(&self, width: u32, height: u32) -> Self {
+    pub(crate) fn cropped_to(&self, width: u32, height: u32) -> Self {
         assert!(width <= self.width && height <= self.height);
         let row_bytes = self.width as usize * 4;
         let rgba = (0..height as usize)
@@ -86,7 +86,7 @@ impl Rgba8Picture {
         }
     }
 
-    pub fn write_png(&self, path: &Path) {
+    pub(crate) fn write_png(&self, path: &Path) {
         let file = std::fs::File::create(path).expect("the PNG is creatable");
         let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), self.width, self.height);
         encoder.set_color(png::ColorType::Rgba);
@@ -105,7 +105,7 @@ fn engine_rig_fixtures_directory() -> PathBuf {
 }
 
 /// Every checked-in PSNR reference, sorted by name.
-pub fn psnr_reference_paths() -> Vec<PathBuf> {
+pub(crate) fn psnr_reference_paths() -> Vec<PathBuf> {
     let directory = engine_rig_fixtures_directory().join("psnr");
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&directory)
         .expect("the checked-in references")
@@ -123,7 +123,7 @@ pub fn psnr_reference_paths() -> Vec<PathBuf> {
 
 /// The reference a cross-floor clip encodes: [`CROSS_FLOOR_CLIP_REFERENCE`]
 /// cropped to the clip's extent.
-pub fn cross_floor_clip_reference_picture() -> Rgba8Picture {
+pub(crate) fn cross_floor_clip_reference_picture() -> Rgba8Picture {
     Rgba8Picture::read_png(
         &engine_rig_fixtures_directory()
             .join("psnr")
@@ -134,7 +134,7 @@ pub fn cross_floor_clip_reference_picture() -> Rgba8Picture {
 
 /// Where the checked-in clip VideoToolbox encoded for `elementary_stream`
 /// lives.
-pub fn videotoolbox_cross_floor_clip_path(
+pub(crate) fn videotoolbox_cross_floor_clip_path(
     elementary_stream: VideoCodecElementaryStream,
 ) -> PathBuf {
     engine_rig_fixtures_directory()
@@ -148,7 +148,7 @@ pub fn videotoolbox_cross_floor_clip_path(
 /// Write access units as a clip: each one's byte count as a big-endian `u32`,
 /// then its Annex-B bytes, so a reader hands a decoder one access unit at a
 /// time exactly as the encoder published them.
-pub fn write_access_unit_clip(path: &Path, access_units: &[Vec<u8>]) {
+pub(crate) fn write_access_unit_clip(path: &Path, access_units: &[Vec<u8>]) {
     let mut clip = Vec::new();
     for access_unit in access_units {
         clip.extend_from_slice(
@@ -162,7 +162,7 @@ pub fn write_access_unit_clip(path: &Path, access_units: &[Vec<u8>]) {
 }
 
 /// The access units a clip [`write_access_unit_clip`] wrote holds, in order.
-pub fn read_access_unit_clip(path: &Path) -> Vec<Vec<u8>> {
+pub(crate) fn read_access_unit_clip(path: &Path) -> Vec<Vec<u8>> {
     let clip = std::fs::read(path).expect("the checked-in clip");
     let mut access_units = Vec::new();
     let mut remaining = clip.as_slice();
@@ -179,14 +179,14 @@ pub fn read_access_unit_clip(path: &Path) -> Vec<Vec<u8>> {
 /// Per-plane PSNR between two RGBA8 pictures of one extent, over their
 /// BT.709 full-range 4:2:0 planes.
 #[derive(Debug)]
-pub struct Yuv420PlanePsnr {
+pub(crate) struct Yuv420PlanePsnr {
     pub luma_db: f64,
     pub blue_difference_db: f64,
     pub red_difference_db: f64,
 }
 
 impl Yuv420PlanePsnr {
-    pub fn between(decoded_rgba: &[u8], reference: &Rgba8Picture) -> Self {
+    pub(crate) fn between(decoded_rgba: &[u8], reference: &Rgba8Picture) -> Self {
         let decoded =
             bt709_full_range_yuv420_planes(decoded_rgba, reference.width, reference.height);
         let reference_planes =
@@ -199,7 +199,7 @@ impl Yuv420PlanePsnr {
     }
 
     /// Whether any plane falls below the band `xtask psnr score` fails.
-    pub fn fails_the_bands(&self) -> bool {
+    pub(crate) fn fails_the_bands(&self) -> bool {
         self.luma_db < LUMA_PSNR_FAIL_FLOOR_DB
             || self.blue_difference_db < CHROMA_PSNR_FAIL_FLOOR_DB
             || self.red_difference_db < CHROMA_PSNR_FAIL_FLOOR_DB

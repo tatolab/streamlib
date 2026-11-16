@@ -3,4 +3,4 @@
 
 //! Vulkan GPU backend (Linux, macOS via MoltenVK).
 
-pub mod rhi;
+pub(crate) mod rhi;

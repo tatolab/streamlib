@@ -177,7 +177,8 @@ pub(crate) mod apple;
 /// service in isolation; production callers go through [`Runner`].
 #[cfg(target_os = "linux")]
 pub mod linux_surface_share {
-    pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+    pub use crate::linux::surface_share::UnixSocketSurfaceService;
+    pub use crate::linux::surface_share::state::SurfaceShareState;
 }
 
 /// Per-runtime surface-share service primitives over raw Mach, the macOS

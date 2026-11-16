@@ -7,12 +7,12 @@
 use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 
 /// The byte the engine writes at `index` of a shared surface.
-pub fn engine_pattern_byte(index: usize) -> u8 {
+pub(crate) fn engine_pattern_byte(index: usize) -> u8 {
     (index.wrapping_mul(31).wrapping_add(7)) as u8
 }
 
 /// Run `touch` over the surface's bytes under its lock.
-pub fn with_the_surface_bytes<R>(
+pub(crate) fn with_the_surface_bytes<R>(
     iosurface: &IOSurfaceRef,
     touch: impl FnOnce(&mut [u8]) -> R,
 ) -> R {

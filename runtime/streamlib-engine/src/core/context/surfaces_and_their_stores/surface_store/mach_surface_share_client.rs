@@ -36,7 +36,7 @@ impl SurfaceStoreInner {
     /// As [`Self::new_reading_check_out_leases`], also sharing the Mach
     /// service's timeline-pair table so a registration with a pair can be
     /// ordered host-side when a helper cannot import it.
-    pub fn new_sharing_the_mach_services_tables(
+    pub(crate) fn new_sharing_the_mach_services_tables(
         service_name: String,
         runtime_id: String,
         check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
@@ -57,7 +57,7 @@ impl SurfaceStoreInner {
     // =========================================================================
 
     /// Connect to the surface-share service's bootstrap name.
-    pub fn connect(&self) -> Result<()> {
+    pub(crate) fn connect(&self) -> Result<()> {
         let connection = streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
             &self.service_name,
             SURFACE_SHARE_MACH_CONNECT_HANDSHAKE_TIMEOUT,
@@ -78,7 +78,7 @@ impl SurfaceStoreInner {
 
     /// Check in a pixel buffer's IOSurface, returning the id the service
     /// minted for it.
-    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
+    pub(crate) fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
         let request = serde_json::json!({
             "op": "check_in",
             "runtime_id": self.runtime_id,
@@ -104,7 +104,7 @@ impl SurfaceStoreInner {
     ///
     /// `lookup`, not `check_out`, for the same reason as on Linux: this store
     /// is the service owner's own process, and the cached clone is its claim.
-    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
+    pub(crate) fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
         if let Some(cached) = self.cache.lock().checked_out_clone(surface_id) {
             return Ok(cached);
         }
@@ -116,7 +116,7 @@ impl SurfaceStoreInner {
     }
 
     /// Register a pool slot's IOSurface under `pool_id`.
-    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
+    pub(crate) fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         self.send_pixel_buffer_registration(pool_id, pixel_buffer, None)?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
         Ok(())
@@ -126,7 +126,7 @@ impl SurfaceStoreInner {
     /// pair. The pair's shared events cross beside the surface; when either
     /// will not export, the registration crosses without them and the pair
     /// orders host-side.
-    pub fn register_pixel_buffer_with_timeline_pair(
+    pub(crate) fn register_pixel_buffer_with_timeline_pair(
         &self,
         surface_id: &str,
         pixel_buffer: &PixelBuffer,
@@ -179,7 +179,7 @@ impl SurfaceStoreInner {
     /// as a `storage_buffer` surface carrying `shape` and `dtype`. No timeline
     /// pair crosses: a tensor's writes are ordered by its writer's queue
     /// drain, as on Linux.
-    pub fn register_storage_buffer(
+    pub(crate) fn register_storage_buffer(
         &self,
         surface_id: &str,
         buffer: &crate::core::rhi::StorageBuffer,
@@ -200,7 +200,7 @@ impl SurfaceStoreInner {
     /// surface, its image recipe, the layout it is in, and its timeline pair.
     /// Refused when the pair will not export: a helper imports a texture only
     /// with both edges, since a reader outside the pair is unsynchronised.
-    pub fn register_texture_with_timeline_pair(
+    pub(crate) fn register_texture_with_timeline_pair(
         &self,
         surface_id: &str,
         texture: &crate::core::rhi::Texture,
@@ -293,7 +293,7 @@ impl SurfaceStoreInner {
 
     /// Resolve a texture another runtime registered to an image over its
     /// IOSurface, with the layout it was last published in.
-    pub fn lookup_texture(
+    pub(crate) fn lookup_texture(
         &self,
         surface_id: &str,
     ) -> Result<(
@@ -367,7 +367,7 @@ impl SurfaceStoreInner {
 
     /// Publish the layout a registered texture was left in, so the next
     /// holder transitions out of the layout the image is actually in.
-    pub fn update_image_layout(
+    pub(crate) fn update_image_layout(
         &self,
         surface_id: &str,
         layout: streamlib_consumer_rhi::VulkanLayout,
@@ -388,7 +388,7 @@ impl SurfaceStoreInner {
     }
 
     /// Resolve a registered pool slot to a pixel buffer over its IOSurface.
-    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
+    pub(crate) fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
         if let Some(cached) = self.cache.lock().cached_clone(pool_id) {
             return Ok(cached);
         }

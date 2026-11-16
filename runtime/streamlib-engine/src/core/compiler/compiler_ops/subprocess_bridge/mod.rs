@@ -89,7 +89,7 @@ pub const ENGINE_BUILD_ID: &str = env!("STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCR
 /// directory, so the ids match by construction; the check is the backstop for
 /// a helper that imported another build anyway, which would otherwise surface
 /// as every service open failing on a corrupted service.
-pub const ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENGINE_BUILD_ID";
+pub(crate) const ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENGINE_BUILD_ID";
 
 /// Env var advertising the inherited child-end fd number of the native
 /// escalate socketpair: the channel a helper's native code sends escalate
@@ -99,7 +99,7 @@ pub(crate) const NATIVE_ESCALATE_FD_ENV: &str = "STREAMLIB_NATIVE_ESCALATE_FD";
 /// Socketpair-backed escalate IPC transport: the bridge socket the subprocess
 /// inherits via [`ESCALATE_FD_ENV`], and the native escalate socket it
 /// inherits via [`NATIVE_ESCALATE_FD_ENV`].
-pub struct EscalateTransport {
+pub(crate) struct EscalateTransport {
     parent_end: UnixStream,
     native_escalate_parent_end: UnixStream,
     /// Kept alive so the child fds stay open across `Command::spawn`. The
@@ -109,7 +109,7 @@ pub struct EscalateTransport {
 }
 
 /// The parent's halves of an [`EscalateTransport`].
-pub struct EscalateTransportParentEnds {
+pub(crate) struct EscalateTransportParentEnds {
     /// Lifecycle commands, log records and the helper's Python escalates.
     pub bridge: UnixStream,
     /// Escalate requests from the helper's native code.
@@ -123,7 +123,7 @@ impl EscalateTransport {
     ///
     /// After `command.spawn()`, call [`Self::release_child_end`] so only
     /// the subprocess retains the child-side fds.
-    pub fn attach(command: &mut Command) -> Result<Self> {
+    pub(crate) fn attach(command: &mut Command) -> Result<Self> {
         let (parent_end, child_end) = UnixStream::pair()
             .map_err(|e| Error::Runtime(format!("failed to create escalate socketpair: {e}")))?;
         let (native_escalate_parent_end, native_escalate_child_end) =
@@ -164,12 +164,12 @@ impl EscalateTransport {
 
     /// Drop the parent's references to the child-end fds. Call this after
     /// `command.spawn()` succeeds so only the subprocess keeps them open.
-    pub fn release_child_end(&mut self) {
+    pub(crate) fn release_child_end(&mut self) {
         self.child_ends.take();
     }
 
     /// Consume the transport and return the parent-side sockets.
-    pub fn into_parent_ends(mut self) -> EscalateTransportParentEnds {
+    pub(crate) fn into_parent_ends(mut self) -> EscalateTransportParentEnds {
         self.child_ends.take();
         EscalateTransportParentEnds {
             bridge: self.parent_end,
@@ -179,7 +179,7 @@ impl EscalateTransport {
 }
 
 /// The lifecycle command that runs a helper's `setup()`.
-pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
+pub(crate) const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 /// A shutdown command the parent sends a helper, paired with the reply tag the
 /// helper answers it with.
@@ -188,7 +188,7 @@ pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 /// the protocol this module's doc enumerates, so the two halves of one exchange
 /// cannot drift apart between the spawn host and the processor interpreter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HelperProcessShutdownCommand {
+pub(crate) enum HelperProcessShutdownCommand {
     /// Leave the execution loop and run the processor's `stop()`.
     Stop,
     /// Run the processor's `teardown()` and leave.
@@ -199,10 +199,11 @@ impl HelperProcessShutdownCommand {
     /// Both commands, in the order the shutdown ladder sends them.
     ///
     /// `stop` and `teardown` are sent together.
-    pub const BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM: [Self; 2] = [Self::Stop, Self::Teardown];
+    pub(crate) const BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM: [Self; 2] =
+        [Self::Stop, Self::Teardown];
 
     /// What the parent writes as the frame's `cmd`.
-    pub fn command_tag(self) -> &'static str {
+    pub(crate) fn command_tag(self) -> &'static str {
         match self {
             Self::Stop => "stop",
             Self::Teardown => "teardown",
@@ -210,7 +211,7 @@ impl HelperProcessShutdownCommand {
     }
 
     /// What the helper writes as the answering frame's `rpc`.
-    pub fn reply_tag(self) -> &'static str {
+    pub(crate) fn reply_tag(self) -> &'static str {
         match self {
             Self::Stop => "stopped",
             Self::Teardown => "done",
@@ -220,11 +221,11 @@ impl HelperProcessShutdownCommand {
 
 /// The rpc tag a subprocess answers a late `wire_link` with once it has opened
 /// its own port for the link. Carries `link_id`.
-pub const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
+pub(crate) const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
 
 /// The rpc tag a subprocess answers a late `wire_link` with when it could not
 /// open its port. Carries `link_id` and `reason`.
-pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
+pub(crate) const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
 
 /// How many escalate requests one helper may have queued for its worker before
 /// the next is refused.
@@ -300,7 +301,7 @@ fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSub
 }
 
 /// What a link wired into a helper process that has failed is refused with.
-pub fn refusal_of_a_link_into_a_helper_process_that_failed(
+pub(crate) fn refusal_of_a_link_into_a_helper_process_that_failed(
     processor_display_name: &str,
     processor_id: &str,
 ) -> String {
@@ -589,7 +590,7 @@ impl Drop for SubprocessBridge {
 /// thread-local for `init_for_tests`), and carries the caller's stream log
 /// route, so each line lands in the log of the stream whose helper wrote it —
 /// the stream's log stays open until the reader reaches the pipe's end.
-pub fn spawn_fd_line_reader<R>(
+pub(crate) fn spawn_fd_line_reader<R>(
     reader: R,
     thread_prefix: &str,
     channel: &'static str,

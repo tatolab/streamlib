@@ -49,7 +49,7 @@ use spirv_binding_and_push_constant_validation::{
 
 /// Rich data backing a [`VulkanRayTracingKernel`], reached through the
 /// kernel's opaque handle.
-pub struct VulkanRayTracingKernelInner {
+pub(crate) struct VulkanRayTracingKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
     device: vulkanalia::Device,
@@ -113,7 +113,7 @@ enum BindingResource {
 impl VulkanRayTracingKernelInner {
     /// Create a new ray-tracing kernel from a shader-stage list, group
     /// layout, and binding declaration.
-    pub fn new(
+    pub(crate) fn new(
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &RayTracingKernelDescriptor<'_>,
     ) -> Result<Self> {

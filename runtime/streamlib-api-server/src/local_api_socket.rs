@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use crate::axum_router_served_until_stopped::AxumRouterServedUntilStopped;
 
 /// Owner read-write only: the socket's file mode is what keeps every other user out.
-pub const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
+pub(crate) const LOCAL_API_SOCKET_FILE_MODE: u32 = 0o600;
 
 /// The local API's socket file, removed when this drops.
 #[derive(Debug)]

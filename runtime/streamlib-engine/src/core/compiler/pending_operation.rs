@@ -10,7 +10,7 @@ use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 /// processor/link no longer exists or is in an invalid state, the operation
 /// is skipped or returns an error.
 #[derive(Debug, Clone)]
-pub enum PendingOperation {
+pub(crate) enum PendingOperation {
     /// Add a processor that exists in the Graph but isn't running yet.
     AddProcessor(ProcessorUniqueId),
 

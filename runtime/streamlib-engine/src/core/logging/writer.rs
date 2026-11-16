@@ -29,7 +29,7 @@ pub(crate) struct JsonlSegmentRotationPolicy {
 #[cfg(test)]
 impl JsonlSegmentRotationPolicy {
     /// A policy that never rotates, so the one segment grows for the runtime's life.
-    pub const NEVER_ROTATE: Self = Self {
+    pub(super) const NEVER_ROTATE: Self = Self {
         rotate_at_segment_bytes: None,
         retained_segment_count: None,
     };
@@ -47,7 +47,7 @@ pub(crate) struct JsonlBatchedWriter {
 }
 
 impl JsonlBatchedWriter {
-    pub fn open(
+    pub(super) fn open(
         path: &Path,
         batch_bytes: usize,
         fsync_on_every_batch: bool,
@@ -81,7 +81,7 @@ impl JsonlBatchedWriter {
     /// Append one JSONL record to the buffer. `bytes` must be the
     /// serialized JSON without the trailing newline; this method adds the
     /// newline. Triggers a flush when the buffer exceeds `batch_bytes`.
-    pub fn append_record(&mut self, bytes: &[u8]) -> io::Result<()> {
+    pub(super) fn append_record(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.buffer.extend_from_slice(bytes);
         self.buffer.push(b'\n');
         if self.buffer.len() >= self.batch_bytes {
@@ -92,7 +92,7 @@ impl JsonlBatchedWriter {
 
     /// Flush buffered records to the OS if any are pending. Time-triggered
     /// callers use this between flushes.
-    pub fn flush_if_pending(&mut self) -> io::Result<()> {
+    pub(super) fn flush_if_pending(&mut self) -> io::Result<()> {
         if self.buffer.is_empty() {
             return Ok(());
         }
@@ -106,7 +106,7 @@ impl JsonlBatchedWriter {
     /// the last records landed in.
     ///
     /// [`flush_if_pending`]: Self::flush_if_pending
-    pub fn flush_and_fsync(&mut self) -> io::Result<()> {
+    pub(super) fn flush_and_fsync(&mut self) -> io::Result<()> {
         self.write_buffer_to_active_segment()?;
         self.active_segment_file.sync_data()
     }

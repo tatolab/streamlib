@@ -75,7 +75,7 @@ use link_source_side::{
     skip(graph, iceoryx2_node),
     fields(link_id = %link_id)
 )]
-pub fn open_iceoryx2_service(
+pub(crate) fn open_iceoryx2_service(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
@@ -350,7 +350,7 @@ fn open_iceoryx2_service_read_at(
     Ok(())
 }
 
-pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
+pub(crate) fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
     let island_links_reading_it: Vec<LinkUniqueId> = graph

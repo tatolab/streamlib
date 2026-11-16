@@ -21,7 +21,7 @@ use vulkanalia::vk;
 /// # Safety
 ///
 /// Every handle passed in must belong to `device`, which must be live.
-pub unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
+pub(crate) unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
     device: &vulkanalia::Device,
     queue: vk::Queue,
     queue_family_index: u32,
@@ -80,7 +80,7 @@ pub unsafe fn submit_one_shot<F: FnOnce(vk::CommandBuffer)>(
 /// # Safety
 ///
 /// `cmd` must be recording, and every handle passed in must belong to `device`.
-pub unsafe fn record_pattern_upload_to_image(
+pub(crate) unsafe fn record_pattern_upload_to_image(
     device: &vulkanalia::Device,
     cmd: vk::CommandBuffer,
     source_buffer: vk::Buffer,
@@ -179,7 +179,7 @@ pub unsafe fn record_pattern_upload_to_image(
 /// # Safety
 ///
 /// `cmd` must be recording, and every handle passed in must belong to `device`.
-pub unsafe fn record_image_readback_to_buffer(
+pub(crate) unsafe fn record_image_readback_to_buffer(
     device: &vulkanalia::Device,
     cmd: vk::CommandBuffer,
     image: vk::Image,
