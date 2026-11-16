@@ -96,6 +96,7 @@ pub use kernels::vulkan_acceleration_structure::geometry_instance_flags_from_raw
 pub use kernels::vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
 };
+pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
 // the host's clone/drop callbacks in `core::plugin::host_services`
 // need to reference it for `Arc::increment_strong_count` /

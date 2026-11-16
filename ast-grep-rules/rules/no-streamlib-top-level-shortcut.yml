@@ -1,0 +1,59 @@
+id: no-streamlib-top-level-shortcut
+language: rust
+severity: error
+message: >-
+  Name the tier: streamlib::sdk::*, or streamlib::sdk::engine::* and
+  streamlib::engine_internal::* for engine-side access. A top-level streamlib::Foo
+  hides which boundary tier the code is in.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - vendor/**/*.rs
+  - examples/**/*.rs
+  - packages/**/*.rs
+ignores:
+  # The engine aliases itself as streamlib (extern crate self as streamlib) for
+  # proc-macro path resolution, and reaches its own items through the alias.
+  - runtime/streamlib-engine/**
+  # The SDK facade defines the streamlib::sdk::* and engine_internal::* tree.
+  - sdk/streamlib-sdk/src/lib.rs
+  # Proc-macro emit paths for downstream consumers.
+  - sdk/streamlib-macros/**
+rule:
+  any:
+    # The path's first step below streamlib, in an expression, a type, a trait, a
+    # struct literal or a use, with or without a leading `::`.
+    - any:
+        - kind: scoped_identifier
+        - kind: scoped_type_identifier
+      all:
+        - has:
+            field: path
+            regex: '^(::)?\s*streamlib$'
+        - not:
+            has:
+              field: name
+              regex: '^(sdk|engine_internal)$'
+    - kind: scoped_use_list
+      all:
+        - has:
+            field: path
+            regex: '^(::)?\s*streamlib$'
+        - has:
+            field: list
+            has:
+              not:
+                any:
+                  - regex: '^(sdk|engine_internal)(::|\s|$)'
+                  - regex: '^[{},]$'
+    - kind: identifier
+      not:
+        regex: '^(sdk|engine_internal)$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          kind: identifier
+          regex: '^streamlib$'

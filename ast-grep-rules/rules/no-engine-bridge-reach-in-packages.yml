@@ -1,0 +1,41 @@
+id: no-engine-bridge-reach-in-packages
+language: rust
+severity: error
+message: >-
+  Package source does not reach the engine bridge (streamlib::sdk::engine::*) or the
+  raw host device (host_vulkan_device_arc); package GPU code goes through the FullAccess
+  primitives.
+note: >-
+  A separately built package whose GPU code hand-rolls RHI on the raw host device
+  corrupts the driver.
+files:
+  - packages/**/*.rs
+ignores:
+  # Runs host-side and exercises the engine bridge by design.
+  - packages/test-fixtures/**
+  # A package's own top-level test and bench targets may be engine-backed; a nested
+  # tests/ helper directory or a cfg(test) module stays strict.
+  - packages/*/tests/**
+  - packages/*/benches/**
+rule:
+  any:
+    # The engine module's own path, wherever it is written: alone, or as the path of a
+    # longer one, a type or a use list.
+    - kind: scoped_identifier
+      regex: '^(::)?\s*streamlib\s*::\s*sdk\s*::\s*engine$'
+    - kind: identifier
+      regex: '^engine$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^::$'
+        follows:
+          regex: '^sdk$'
+          follows:
+            regex: '^::$'
+            follows:
+              regex: '^streamlib$'
+    - any:
+        - kind: identifier
+        - kind: field_identifier
+      regex: '^host_vulkan_device_arc$'

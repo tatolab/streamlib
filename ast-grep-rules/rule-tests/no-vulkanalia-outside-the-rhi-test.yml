@@ -1,0 +1,11 @@
+id: no-vulkanalia-outside-the-rhi
+valid:
+  - "use streamlib_consumer_rhi::ConsumerVulkanDevice;"
+  - "// use vulkanalia::vk;"
+  - 'const NAME: &str = "vulkanalia";'
+invalid:
+  - "use vulkanalia::vk;"
+  - "pub use vulkanalia::vk::GeometryInstanceFlagsKHR;"
+  - "use vulkanalia;"
+  - "fn f(size: vulkanalia::vk::DeviceSize) {}"
+  - "fn f() { let x = some_macro!(vulkanalia::vk::Format::R8_UNORM); }"

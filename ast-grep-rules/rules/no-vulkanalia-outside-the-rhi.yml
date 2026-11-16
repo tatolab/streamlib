@@ -1,0 +1,31 @@
+id: no-vulkanalia-outside-the-rhi
+language: rust
+severity: error
+message: >-
+  Raw vulkanalia stays inside the RHI, the consumer RHI, the adapter crates and the
+  Vulkan Video codec tier; reach Vulkan through the RHI's primitives.
+files:
+  - runtime/**/*.rs
+  - sdk/**/*.rs
+  - adapters/**/*.rs
+  - vendor/**/*.rs
+  - examples/**/*.rs
+  - packages/**/*.rs
+ignores:
+  - runtime/streamlib-engine/src/vulkan/**
+  - runtime/streamlib-consumer-rhi/**
+  - adapters/streamlib-adapter-*/**
+  - runtime/streamlib-vulkan-video/**
+  # The wrapper layer between processors and the RHI wires a few Vulkan handles into pools.
+  - runtime/streamlib-engine/src/core/context/gpu_context/**
+  # Tests bring up real Vulkan devices for end-to-end validation.
+  - "**/tests/**"
+  # The vendored fork is the Vulkan surface the RHI rides; only these three crates.
+  - vendor/tatolab-vulkanalia/**
+  - vendor/tatolab-vulkanalia-sys/**
+  - vendor/tatolab-vulkanalia-vma/**
+rule:
+  # Every mention of the crate in code: a use, an extern crate, a qualified path, or a
+  # path inside a macro's arguments.
+  kind: identifier
+  regex: '^vulkanalia$'

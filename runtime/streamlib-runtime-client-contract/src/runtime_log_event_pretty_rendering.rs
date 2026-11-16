@@ -92,9 +92,6 @@ mod tests {
 
     /// A replayed record must render to the same bytes the runtime's mirror wrote
     /// live, or one record reads as two different records.
-    ///
-    /// The `target` names a module outside the engine: `check-boundaries` reads an
-    /// engine module path in this crate's source as an engine import.
     #[test]
     fn the_pretty_rendering_matches_the_golden() {
         let event = a_rust_info_record_of_runtime_rabc("tatolabd", "Creating Runner");

@@ -300,11 +300,11 @@ impl RhiPixelBufferImport for super::PixelBuffer {
             ));
         }
 
-        let mut plane_sizes: Vec<vulkanalia::vk::DeviceSize> = Vec::with_capacity(handles.len());
+        let mut plane_sizes: Vec<u64> = Vec::with_capacity(handles.len());
         for (idx, handle) in handles.iter().enumerate() {
             let size = handle.stated_size();
             let effective = if size > 0 {
-                size as vulkanalia::vk::DeviceSize
+                size as u64
             } else if idx == 0 && width > 0 && height > 0 {
                 // Plane 0 falls back to width*height*bpp (back-compat with
                 // legacy single-plane callers that don't pass a size).

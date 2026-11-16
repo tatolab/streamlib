@@ -1,0 +1,10 @@
+id: no-privileged-vulkan-call-outside-the-rhi
+valid:
+  - "fn f() { gpu.acquire_pixel_buffer(1); }"
+  - "fn allocate_memory() {}"
+  - "// device.allocate_memory(&info, None)"
+invalid:
+  - "fn f() { unsafe { device.allocate_memory(&info, None) }; }"
+  - "fn f() { device.get_memory_fd_khr(&info); }"
+  - "fn f() { device.create_compute_pipelines(cache, &infos, None); }"
+  - "fn f() { let m = check!(device.allocate_memory(&info, None)); }"
