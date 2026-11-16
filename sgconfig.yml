@@ -1,5 +1,11 @@
 # ast-grep's project configuration. scripts/run-structure-lints.sh fetches
 # tatolab/lint-config at its pinned commit to target/lint-config/pinned before it
-# scans; findings not fixed yet are listed in lint-exceptions/ast-grep.txt.
+# scans; findings not fixed yet are listed in lint-exceptions/ast-grep.txt. The
+# rules only this repository holds are in ast-grep-rules/, each with its tests.
 ruleDirs:
   - target/lint-config/pinned/ast-grep/rust/rules
+  - ast-grep-rules/rules
+utilDirs:
+  - ast-grep-rules/utils
+testConfigs:
+  - testDir: ast-grep-rules/rule-tests

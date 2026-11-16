@@ -14,12 +14,12 @@ use vulkanalia::vk;
 /// reported `apiVersion` is not a capability report: MoltenVK clamps it to
 /// whatever the instance asked for, so it answers 1.0.x to an instance that
 /// asked for 1.0 and 1.4.x to one that asked for 1.4, on the same hardware.
-/// `cargo xtask check-no-device-api-version-branch` keeps the tree off that
+/// The `no-device-api-version-read` ast-grep rule keeps the tree off that
 /// probe.
 ///
 /// It lives in this crate because a host and a subprocess consumer that
 /// disagree on the floor resolve different entry points across the same IPC
-/// seam. `cargo xtask check-no-device-api-version-branch` cannot catch that —
-/// it bans reads of a device's report, not divergent requests — so the two
-/// share the constant instead.
+/// seam. The `no-device-api-version-read` rule cannot catch that — it bans
+/// reads of a device's report, not divergent requests — so the two share the
+/// constant instead.
 pub const REQUESTED_VULKAN_INSTANCE_API_VERSION: u32 = vk::make_version(1, 4, 0);

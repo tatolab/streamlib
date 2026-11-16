@@ -1,0 +1,45 @@
+id: no-device-api-version-read
+language: rust
+severity: error
+message: A device's reported `apiVersion` is not a capability report; the requested instance version is the floor for promoted entry points, so assert on that constant.
+note: >-
+  `vk::make_version(1, 4, 0)` at instance creation is what makes
+  cmd_pipeline_barrier2, cmd_begin_rendering, queue_submit2 and wait_semaphores
+  resolve. MoltenVK clamps a device's apiVersion to whatever the instance
+  requested, so a probe of it reads the engine's own request back. Test code is
+  checked too: a test asserting a floor on the reported version passes for the
+  wrong reason. The builder setter `.api_version(…)` sets the request and is
+  allowed. A read that only reports the value takes
+  `// ast-grep-ignore: no-device-api-version-read` on the line above.
+files:
+  - runtime/**/*.rs
+  - adapters/**/*.rs
+  - sdk/**/*.rs
+rule:
+  any:
+    - kind: field_expression
+      has:
+        field: field
+        regex: '^api_version$'
+      not:
+        inside:
+          kind: call_expression
+          field: function
+    - kind: identifier
+      regex: '^api_version$'
+      inside:
+        kind: token_tree
+      follows:
+        regex: '^\.$'
+      not:
+        precedes:
+          kind: token_tree
+    - kind: field_pattern
+      has:
+        field: name
+        regex: '^api_version$'
+      inside:
+        kind: struct_pattern
+        has:
+          field: type
+          regex: '(^|::)PhysicalDeviceProperties$'

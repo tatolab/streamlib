@@ -405,15 +405,12 @@
 1 no-inline-test-module xtask/src/check_boundaries.rs
 1 no-inline-test-module xtask/src/check_clock_usage.rs
 1 no-inline-test-module xtask/src/check_control_contract_compatibility.rs
-1 no-inline-test-module xtask/src/check_device_wait_idle.rs
 1 no-inline-test-module xtask/src/check_graph_document_node_types.rs
 1 no-inline-test-module xtask/src/check_iceoryx2_construction.rs
 1 no-inline-test-module xtask/src/check_module_host_table_surface.rs
-1 no-inline-test-module xtask/src/check_no_device_api_version_branch.rs
 1 no-inline-test-module xtask/src/check_no_escalate_in_lifecycle.rs
 1 no-inline-test-module xtask/src/check_no_inheritable_descriptor.rs
 1 no-inline-test-module xtask/src/check_no_tatolab_namespace_package_init.rs
-1 no-inline-test-module xtask/src/check_no_unbounded_cstr_from_ptr.rs
 1 no-inline-test-module xtask/src/check_vendored_trees.rs
 1 no-inline-test-module xtask/src/check_workspace_version_pins.rs
 1 no-inline-test-module xtask/src/generate_module_host_table_c_header.rs

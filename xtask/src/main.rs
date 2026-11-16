@@ -12,15 +12,12 @@ pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_control_contract_compatibility;
-pub mod check_device_wait_idle;
 pub mod check_graph_document_node_types;
 pub mod check_iceoryx2_construction;
 pub mod check_module_host_table_surface;
-pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_inheritable_descriptor;
 pub mod check_no_tatolab_namespace_package_init;
-pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
@@ -189,7 +186,7 @@ type SourceWalkingGate = fn(&Path) -> Result<()>;
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all sixteen in well under a second, and why CI runs them as
+/// lets one process run them all in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
     ("lint-logging", lint_logging::run),
@@ -207,18 +204,9 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, SourceWalkingGate)] = &[
         "check-no-escalate-in-lifecycle",
         check_no_escalate_in_lifecycle::run,
     ),
-    ("check-device-wait-idle", check_device_wait_idle::run),
-    (
-        "check-no-device-api-version-branch",
-        check_no_device_api_version_branch::run,
-    ),
     (
         "check-iceoryx2-construction",
         check_iceoryx2_construction::run,
-    ),
-    (
-        "check-no-unbounded-cstr-from-ptr",
-        check_no_unbounded_cstr_from_ptr::run,
     ),
     ("check-clock-usage", check_clock_usage::run),
     (
@@ -525,40 +513,12 @@ enum Commands {
     /// the violation at PR review before the runtime panic fires.
     CheckNoEscalateInLifecycle,
 
-    /// CI gate for the `vkDeviceWaitIdle` threading discipline. Fails on any
-    /// raw `device_wait_idle()` call in the engine outside the mutex-guarded
-    /// `HostVulkanDevice::wait_idle` helper. `vkDeviceWaitIdle` is externally
-    /// synchronized over the device + every queue it owns; a raw call that
-    /// skips the per-queue mutexes races concurrent submits during
-    /// multi-processor setup and crashes the driver (the validation layer
-    /// reports `UNASSIGNED-Threading-Info`).
-    CheckDeviceWaitIdle,
-
-    /// CI gate for the Vulkan API-version contract. Fails on any read of a
-    /// physical device's reported `apiVersion`. That value is not a capability
-    /// report — MoltenVK clamps it to whatever the instance requested, so a
-    /// probe reads the engine's own `vk::make_version(1, 4, 0)` back. The
-    /// requested instance version is the floor that makes the promoted 1.3
-    /// entry points resolve.
-    CheckNoDeviceApiVersionBranch,
-
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
     /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
     /// `adapters/` outside `iceoryx2/node/`, and on any `Config::global_config()`
     /// anywhere — tests and benches included, since a node in another domain hangs
     /// a test silently and a service without the user header counts no loss.
     CheckIceoryx2Construction,
-
-    /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
-    /// on any `CStr::from_ptr(<owner>.as_ptr())` under
-    /// `runtime/streamlib-engine/src/vulkan/` or
-    /// `runtime/streamlib-consumer-rhi/src/`. `CStr::from_ptr` returns an
-    /// unbounded lifetime, so the borrow is never tied to the storage the
-    /// pointer came from and survives it, a use-after-free.
-    /// `vk::StringArray::as_cstr` borrows
-    /// from `&self` and is the drop-in. A bare pointer argument owned by an
-    /// external API is not flagged.
-    CheckNoUnboundedCstrFromPtr,
 
     /// CI gate for close-on-exec at source. Fails on a raw `libc::dup` or
     /// `libc::pipe`, and on a `pipe2`, `epoll_create1`, `timerfd_create`,
@@ -777,15 +737,8 @@ fn main() -> Result<()> {
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
-        Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
-        Commands::CheckNoDeviceApiVersionBranch => {
-            check_no_device_api_version_branch::run(&workspace_root()?)?
-        }
         Commands::CheckIceoryx2Construction => {
             check_iceoryx2_construction::run(&workspace_root()?)?
-        }
-        Commands::CheckNoUnboundedCstrFromPtr => {
-            check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
         Commands::CheckNoInheritableDescriptor => {

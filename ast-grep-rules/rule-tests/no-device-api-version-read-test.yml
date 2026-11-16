@@ -1,0 +1,18 @@
+id: no-device-api-version-read
+valid:
+  - "let application_info = vk::ApplicationInfo::builder().api_version(vk::make_version(1, 4, 0));"
+  - "let vk::PhysicalDeviceProperties { device_name, .. } = properties;"
+  - "let OtherStruct { api_version, .. } = other;"
+  - "// props.api_version is not read here"
+  - "let info = build!(vk::ApplicationInfo::builder().api_version(FLOOR));"
+invalid:
+  - "if properties.api_version >= vk::make_version(1, 3, 0) { use_promoted(); }"
+  - "let reported = instance.get_physical_device_properties(device).api_version;"
+  - "let vk::PhysicalDeviceProperties { api_version, .. } = properties;"
+  - "let PhysicalDeviceProperties { api_version: reported, .. } = properties;"
+  - |
+    #[cfg(test)]
+    mod tests {
+        fn floor() { assert!(properties.api_version >= FLOOR); }
+    }
+  - "tracing::info!(reported = properties.api_version, \"device\");"

@@ -2,15 +2,17 @@
 # Copyright (c) 2025 Tatolab LLC
 # SPDX-License-Identifier: GPL-3.0-only
 #
-# The structure lints from tatolab/lint-config, pinned at LINT_CONFIG_COMMIT: its
-# ast-grep rules (through sgconfig.yml), the 1,000-line file-size limit, the
-# module-file convention and the workspace lint table. Findings not fixed yet are
+# The structure lints from tatolab/lint-config, pinned at LINT_CONFIG_COMMIT, and
+# this repository's own: the ast-grep rules (through sgconfig.yml) and their
+# tests, the 1,000-line file-size limit, the module-file convention and the
+# workspace lint table. Findings not fixed yet are
 # listed under lint-exceptions/, and each list may only shrink from the one at the
 # compared ref: `--compare-to <git-ref>`, or origin/main when none is given and it
 # exists. A list the ref doesn't have yet is not compared. Run by
 # `.github/workflows/ci.yml`'s lint job and by `cargo xtask run-local-ci-gates`;
 # `bash scripts/run-structure-lints.sh` is the entry point, not a bare
-# `ast-grep scan`. The rules' own tests run in lint-config's CI.
+# `ast-grep scan`. lint-config's rules are tested in its CI; the rules in
+# ast-grep-rules/ are tested here.
 #
 # Needs curl, tar, unzip, and Python 3.11 or newer as python3 or through uv.
 
@@ -78,6 +80,8 @@ run_lint() {
 run_lint "ast-grep rules" env PATH="${ast_grep_directory}:${PATH}" "${python_command[@]}" \
   "${lint_config_directory}/ast-grep/check_ast_grep_scan.py" \
   --exceptions lint-exceptions/ast-grep.txt $(compare_arguments_for lint-exceptions/ast-grep.txt)
+run_lint "ast-grep rule tests" env PATH="${ast_grep_directory}:${PATH}" \
+  ast-grep test --skip-snapshot-tests
 # shellcheck disable=SC2046
 run_lint "file size" "${python_command[@]}" "${lint_config_directory}/file-size/check_file_sizes.py" \
   --exceptions lint-exceptions/file-size.txt $(compare_arguments_for lint-exceptions/file-size.txt)
