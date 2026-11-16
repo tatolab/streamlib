@@ -402,7 +402,6 @@
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_processor_context/link_data_access/mod.rs
 1 no-inline-test-module sdk/streamlib-python-wheel/src/python_processor_declaration.rs
 1 no-inline-test-module sdk/tatolab-module-sdk/src/module_host_payload_descriptor.rs
-1 no-inline-test-module xtask/src/check_boundaries.rs
 1 no-inline-test-module xtask/src/check_control_contract_compatibility.rs
 1 no-inline-test-module xtask/src/check_graph_document_node_types.rs
 1 no-inline-test-module xtask/src/check_module_host_table_surface.rs
