@@ -36,13 +36,23 @@ pytestmark = pytest.mark.requires_gpu
 def run_scenario(
     start_tatolabd_running_stream: "Callable[..., RuntimeProcessUnderTest]",
     scenario: str,
-    awaited_reports: int,
+    awaited_reports: "int | None" = None,
+    *,
+    awaited_probe: "str | None" = None,
 ) -> dict:
-    """Run one scenario to completion, and return its reports by probe name."""
+    """Run one scenario to completion, and return its reports by probe name.
+
+    It is complete after `awaited_reports` reports, or at the first report from
+    `awaited_probe`.
+    """
     tatolabd = start_tatolabd_running_stream(texture_ring_producer_streams.STREAM_BY_SCENARIO[scenario])
-    for report_number in range(awaited_reports):
-        report = tatolabd.await_marker("PROBE_RESULT", occurrence=report_number + 1)
+    report_number = 0
+    while awaited_reports is None or report_number < awaited_reports:
+        report_number += 1
+        report = tatolabd.await_marker("PROBE_RESULT", occurrence=report_number)
         if isinstance(report, dict) and "failure" in report:
+            break
+        if isinstance(report, dict) and report.get("probe") == awaited_probe:
             break
     tatolabd.interrupt()
     tatolabd.await_clean_exit()
@@ -75,8 +85,15 @@ def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     publish from one more distinct slot here.
     """
     rotated_slots = SLOTS_THE_RING_ROTATES_THROUGH_FOR_ONE_ORDERED_LINK
-    # The sink reports once per frame it reads; the producer once at its quota.
-    reports = run_scenario(start_tatolabd_running_stream, "ring_rotation", (rotated_slots + 1) + 1)
+    # Done when the producer reports at its quota. Its sink reads in another
+    # node interpreter that may subscribe after the first publishes, and a
+    # channel keeps no history for a late reader, so the sink's count of frames
+    # read is no measure of the run.
+    reports = run_scenario(
+        start_tatolabd_running_stream,
+        "ring_rotation",
+        awaited_probe="TextureRingPublishingVideoSource",
+    )
     published = reports["TextureRingPublishingVideoSource"][0][
         "surface_ids_published"
     ]
