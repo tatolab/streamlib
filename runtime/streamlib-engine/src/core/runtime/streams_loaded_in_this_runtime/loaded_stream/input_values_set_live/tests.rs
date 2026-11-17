@@ -64,21 +64,33 @@ fn the_values_set_live(
     )
 }
 
+/// A set on two helpers, the second refusing it, leaves every live value as it was: the first
+/// helper, which took its value, is handed back the one it held, and the refusing one keeps its
+/// own.
+///
 /// Mental-revert: writing the live values and returning the helper's refusal with `?` leaves
-/// the refused value live, unannounced and out of what the set made, so nothing reverses it;
-/// putting the values back without handing them back leaves the helper holding nothing new.
+/// the refused values live, unannounced and out of what the set made, so nothing reverses them;
+/// putting the values back without handing them back leaves the first helper on 0.75.
 #[test]
 fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_nothing() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
     let (level_meter, delivery) = a_level_meter_past_its_setup(&mut graph);
+    let (refusing_meter, refusing_delivery) = a_level_meter_past_its_setup(&mut graph);
     let node = the_uuid_of(&graph, &level_meter);
+    let refusing_node = the_uuid_of(&graph, &refusing_meter);
     let graph = RwLock::new(graph);
-    the_values_set_live(&graph, &[a_set(node, "level", Some(json!(0.25)))])
-        .unwrap()
-        .expect("held live");
+    the_values_set_live(
+        &graph,
+        &[
+            a_set(node, "level", Some(json!(0.25))),
+            a_set(refusing_node, "level", Some(json!(0.25))),
+        ],
+    )
+    .unwrap()
+    .expect("held live");
 
     let handed_over_before_the_refusal = delivery.input_values_handed_over.lock().len();
-    delivery
+    refusing_delivery
         .refuses_input_values_once
         .store(true, Ordering::SeqCst);
     let refused = the_values_set_live(
@@ -86,6 +98,7 @@ fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_
         &[
             a_set(node, "level", Some(json!(0.75))),
             a_set(node, "gain", Some(json!(2.0))),
+            a_set(refusing_node, "level", Some(json!(0.75))),
         ],
     );
 
@@ -98,11 +111,30 @@ fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_
     let live_values = graph.live_input_values();
     assert_eq!(live_values.value_of(node, "level"), Some(json!(0.25)));
     assert_eq!(live_values.value_of(node, "gain"), None);
+    assert_eq!(
+        live_values.value_of(refusing_node, "level"),
+        Some(json!(0.25))
+    );
     let handed_over = delivery.input_values_handed_over.lock();
     assert_eq!(
         handed_over[handed_over_before_the_refusal..],
-        [json!({ "level": 0.25 }).as_object().unwrap().clone()],
-        "the helper is handed back the value it held, once, after the refusal"
+        [
+            json!({ "level": 0.75, "gain": 2.0 })
+                .as_object()
+                .unwrap()
+                .clone(),
+            json!({ "level": 0.25 }).as_object().unwrap().clone()
+        ],
+        "the helper that took its values is handed back the one it held, after the refusal"
+    );
+    assert_eq!(
+        refusing_delivery
+            .input_values_handed_over
+            .lock()
+            .last()
+            .unwrap()["level"],
+        json!(0.25),
+        "the refusing helper is handed nothing new"
     );
 }
 
@@ -398,13 +430,15 @@ fn the_saved_values_of(node_run_id: &NodeRunId, pins: Value) -> SavedValuesOfAKe
 }
 
 /// The saved values a reconcile sets on the nodes it keeps reach each: the island evaluating a
-/// function node, and a node's helper. A helper refusing them leaves the graph holding the
-/// document's values, the next kept node is still handed its own, and the refusal is answered
-/// once every node is set.
+/// function node, and a node's helper. A helper refusing them has its former values put back,
+/// the next kept node is still handed its own, and the refusal is answered once every node is
+/// set; the same document reconciled again hands the refusing helper its values.
 ///
 /// Mental-revert: leaving the island to a compile hands the reader no island with 0.25; handing
 /// the helper nothing leaves it on its default; returning at the refusal leaves the second meter
-/// unset; logging the refusal and answering `Ok` reports it as done.
+/// unset; logging the refusal and answering `Ok` reports it as done; leaving the document's pins
+/// on the refused node makes a reconcile of the same document skip it; recording the refused
+/// values as held leaves the retry unhanded.
 #[test]
 fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_after_the_last() {
     let (graph, remap, island_delivery) = a_function_node_read_inside_an_island();
@@ -428,15 +462,18 @@ fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_af
     let (level_meter, delivery) = a_level_meter_past_its_setup(&mut graph);
     let helper_graph = RwLock::new(graph);
     refusing_delivery
-        .refuses_input_values
+        .refuses_input_values_once
         .store(true, Ordering::SeqCst);
-
-    let refused = set_the_saved_values_of_each_kept_node_and_hand_them_over(
-        &helper_graph,
+    let the_document_sets_on_the_helpers = || {
         vec![
             the_saved_values_of(&refusing_meter, json!({ "level": 0.1 })),
             the_saved_values_of(&level_meter, json!({ "level": 0.75 })),
-        ],
+        ]
+    };
+
+    let refused = set_the_saved_values_of_each_kept_node_and_hand_them_over(
+        &helper_graph,
+        the_document_sets_on_the_helpers(),
     );
 
     let refusal = refused.expect_err("the refusal is answered").to_string();
@@ -449,14 +486,39 @@ fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_af
             .v(node_run_id)
             .first()
             .unwrap()
-            .pins["level"]
+            .pins
             .clone()
     };
-    assert_eq!(the_pins_of(&refusing_meter), json!(0.1));
-    assert_eq!(the_pins_of(&level_meter), json!(0.75));
+    assert_eq!(
+        the_pins_of(&refusing_meter),
+        serde_json::Map::new(),
+        "the refused node holds its former values"
+    );
+    assert_eq!(the_pins_of(&level_meter)["level"], json!(0.75));
     assert_eq!(
         delivery.input_values_handed_over.lock().last().unwrap()["level"],
         json!(0.75)
+    );
+
+    let kept_nodes_whose_saved_values_change: Vec<SavedValuesOfAKeptNode> =
+        the_document_sets_on_the_helpers()
+            .into_iter()
+            .filter(|kept_node| the_pins_of(&kept_node.node_run_id) != kept_node.pins)
+            .collect();
+    assert_eq!(kept_nodes_whose_saved_values_change.len(), 1);
+    set_the_saved_values_of_each_kept_node_and_hand_them_over(
+        &helper_graph,
+        kept_nodes_whose_saved_values_change,
+    )
+    .unwrap();
+    assert_eq!(
+        refusing_delivery
+            .input_values_handed_over
+            .lock()
+            .last()
+            .unwrap()["level"],
+        json!(0.1),
+        "the same document reconciled again hands the refused node its values"
     );
 }
 
@@ -489,8 +551,7 @@ fn an_island_refusing_its_values_leaves_every_live_value_as_it_was() {
 
 /// Mental-revert: writing the pin and dropping the live value, then returning the helper's
 /// refusal with `?`, leaves the graph holding a saved value no helper was handed and the live
-/// value gone; putting the values back without handing them back leaves the helper holding
-/// nothing new.
+/// value gone; recording the refused value as held leaves the same value set again unhanded.
 #[test]
 fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
@@ -509,17 +570,24 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
         set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", Some(json!(0.75)));
 
     assert!(refused.is_err());
-    let graph = graph.read();
-    assert!(graph.node_by_uuid(node).unwrap().pins.is_empty());
+    {
+        let graph = graph.read();
+        assert!(graph.node_by_uuid(node).unwrap().pins.is_empty());
+        assert_eq!(
+            graph.live_input_values().value_of(node, "level"),
+            Some(json!(0.25))
+        );
+    }
     assert_eq!(
-        graph.live_input_values().value_of(node, "level"),
-        Some(json!(0.25))
+        delivery.input_values_handed_over.lock().len(),
+        handed_over_before_the_refusal,
+        "the helper, which refused the value, is handed nothing back"
     );
-    let handed_over = delivery.input_values_handed_over.lock();
+    set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", Some(json!(0.75))).unwrap();
     assert_eq!(
-        handed_over[handed_over_before_the_refusal..],
-        [json!({ "level": 0.25 }).as_object().unwrap().clone()],
-        "the helper is handed back the value it held, once, after the refusal"
+        delivery.input_values_handed_over.lock().last().unwrap()["level"],
+        json!(0.75),
+        "the same value set again is handed over, the refused one not recorded as held"
     );
 }
 

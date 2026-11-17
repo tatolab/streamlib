@@ -12,10 +12,7 @@ use super::input_values_set_live::{
     hand_back_each, hand_each_island_again_or_put_the_values_back, is_held_on_the_graph,
 };
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compiler_ops::function_node_island::{
-    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
-    runs_inside_the_read_of_each_node_it_feeds,
-};
+use crate::core::compiler::compiler_ops::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
@@ -537,25 +534,75 @@ pub(in crate::core::runtime) fn set_the_saved_values_of_each_kept_node_and_hand_
     )))
 }
 
+/// Set the saved values and the studio fields of `kept_node` and hand them over, as
+/// [`set_the_saved_values_of_each_kept_node_and_hand_them_over`] does for each; a node or island
+/// not handed them has its former values put back and handed back, so the graph holds what the
+/// node reads and a reconcile of the same document hands them again.
 fn set_the_saved_values_of_a_kept_node_and_hand_them_over(
     graph: &RwLock<Graph>,
     kept_node: SavedValuesOfAKeptNode,
 ) -> Result<()> {
     let node_run_id = &kept_node.node_run_id;
-    {
-        let mut graph = graph.write();
-        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
-            node.pins = kept_node.pins;
-            node.studio = kept_node.studio;
-        }
-        if runs_inside_the_read_of_each_node_it_feeds(&graph, node_run_id) {
-            hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
-                &mut graph,
-                std::slice::from_ref(node_run_id),
-            )?;
-        }
+    let mut graph_written = graph.write();
+    let Some((former_pins, former_studio)) = set_the_pins_and_studio_fields(
+        &mut graph_written,
+        node_run_id,
+        kept_node.pins,
+        kept_node.studio,
+    ) else {
+        return Ok(());
+    };
+    let put_the_former_values_back = |graph: &mut Graph| {
+        set_the_pins_and_studio_fields(
+            graph,
+            node_run_id,
+            former_pins.clone(),
+            former_studio.clone(),
+        );
+    };
+    if runs_inside_the_read_of_each_node_it_feeds(&graph_written, node_run_id) {
+        return hand_each_island_again_or_put_the_values_back(
+            &mut graph_written,
+            std::slice::from_ref(node_run_id),
+            put_the_former_values_back,
+        )
+        .map_err(|(not_handed_over, ())| not_handed_over);
     }
-    deliver_the_unlinked_input_values_of_each_node(graph, std::slice::from_ref(node_run_id))
+    drop(graph_written);
+    let Err(not_handed_over) =
+        deliver_the_unlinked_input_values_of_each_node(graph, std::slice::from_ref(node_run_id))
+    else {
+        return Ok(());
+    };
+    put_the_former_values_back(&mut graph.write());
+    if let Err(not_handed_back) =
+        deliver_the_unlinked_input_values_of_each_node(graph, std::slice::from_ref(node_run_id))
+    {
+        tracing::error!(
+            %not_handed_back,
+            %node_run_id,
+            "a node the reconcile kept was not handed back the values it held"
+        );
+    }
+    Err(not_handed_over)
+}
+
+/// Set the saved values `pins` and the studio fields `studio` on the node `node_run_id` of
+/// `graph`; answers those it held, none when the graph no longer holds the node.
+fn set_the_pins_and_studio_fields(
+    graph: &mut Graph,
+    node_run_id: &NodeRunId,
+    pins: serde_json::Map<String, serde_json::Value>,
+    studio: serde_json::Map<String, serde_json::Value>,
+) -> Option<(
+    serde_json::Map<String, serde_json::Value>,
+    serde_json::Map<String, serde_json::Value>,
+)> {
+    let node = graph.traversal_mut().v(node_run_id).first_mut()?;
+    Some((
+        std::mem::replace(&mut node.pins, pins),
+        std::mem::replace(&mut node.studio, studio),
+    ))
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, as

@@ -122,7 +122,7 @@ pub(crate) fn the_host_input_port_a_member_input_is_read_at(
 }
 
 /// Each member of the shader node island `host_id` hosts: the host, then each shader node fused
-/// into it, each after the member that calls it.
+/// into it, each once and after the member that calls it.
 pub(crate) fn the_members_of_the_shader_node_island_hosted_by(
     graph: &Graph,
     host_id: &NodeRunId,
@@ -138,7 +138,9 @@ pub(crate) fn the_members_of_the_shader_node_island_hosted_by(
                 .in_e()
                 .iter()
                 .filter(|link| is_a_call_inside_a_shader_node_island(graph, link))
-                .map(|link| link.source().node_run_id().clone()),
+                .map(|link| link.source().node_run_id().clone())
+                .filter(|source| !members.contains(source))
+                .collect::<Vec<_>>(),
         );
     }
     members

@@ -650,7 +650,7 @@ impl OutOfProcessLinkWiringEnvelope {
 
     /// Record the value each of its inputs reads while no link feeds it, and
     /// hand them to a far side past its setup command when they differ from
-    /// those it holds.
+    /// those it holds; values a far side refuses are not recorded.
     pub(crate) fn record_the_unlinked_input_values_and_hand_them_to_a_far_side_past_its_setup_command(
         &self,
         input_values: serde_json::Map<String, JsonValue>,
@@ -661,19 +661,18 @@ impl OutOfProcessLinkWiringEnvelope {
         if recorded.unlinked_input_values == input_values {
             return Ok(());
         }
-        recorded.unlinked_input_values = input_values;
-        match &recorded.how_a_link_reaches_the_far_side {
-            HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
-                delivery.hand_over_the_unlinked_input_values(&recorded.unlinked_input_values)
-            }
-            HowALinkReachesTheFarSide::RidesTheSetupCommand
-            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
-            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
+        if let HowALinkReachesTheFarSide::HandedOverTo(delivery) =
+            &recorded.how_a_link_reaches_the_far_side
+        {
+            delivery.hand_over_the_unlinked_input_values(&input_values)?;
         }
+        recorded.unlinked_input_values = input_values;
+        Ok(())
     }
 
     /// Record the config fields its node takes as inputs, and hand them to a
-    /// far side past its setup command when they differ from those it holds.
+    /// far side past its setup command when they differ from those it holds;
+    /// fields a far side refuses are not recorded.
     pub(crate) fn record_the_exposed_config_fields_and_hand_them_to_a_far_side_past_its_setup_command(
         &self,
         exposed_config_fields: Vec<String>,
@@ -684,16 +683,14 @@ impl OutOfProcessLinkWiringEnvelope {
         if recorded.config_fields_its_node_exposes_as_inputs == exposed_config_fields {
             return Ok(());
         }
-        recorded.config_fields_its_node_exposes_as_inputs = exposed_config_fields;
-        match &recorded.how_a_link_reaches_the_far_side {
-            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
-                .hand_over_the_config_fields_its_node_exposes_as_inputs(
-                    &recorded.config_fields_its_node_exposes_as_inputs,
-                ),
-            HowALinkReachesTheFarSide::RidesTheSetupCommand
-            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
-            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
+        if let HowALinkReachesTheFarSide::HandedOverTo(delivery) =
+            &recorded.how_a_link_reaches_the_far_side
+        {
+            delivery
+                .hand_over_the_config_fields_its_node_exposes_as_inputs(&exposed_config_fields)?;
         }
+        recorded.config_fields_its_node_exposes_as_inputs = exposed_config_fields;
+        Ok(())
     }
 
     /// The function node island recorded under `link_id`, as it was recorded
