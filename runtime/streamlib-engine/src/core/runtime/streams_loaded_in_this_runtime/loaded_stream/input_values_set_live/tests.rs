@@ -62,7 +62,8 @@ fn the_values_set_live(
 }
 
 /// Mental-revert: writing the live values and returning the helper's refusal with `?` leaves
-/// the refused value live, unannounced and out of what the set made, so nothing reverses it.
+/// the refused value live, unannounced and out of what the set made, so nothing reverses it;
+/// putting the values back without handing them back leaves the helper holding nothing new.
 #[test]
 fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_nothing() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
@@ -73,7 +74,10 @@ fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_
         .unwrap()
         .expect("held live");
 
-    delivery.refuses_input_values.store(true, Ordering::SeqCst);
+    let handed_over_before_the_refusal = delivery.input_values_handed_over.lock().len();
+    delivery
+        .refuses_input_values_once
+        .store(true, Ordering::SeqCst);
     let refused = the_values_set_live(
         &graph,
         &[
@@ -91,10 +95,11 @@ fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_
     let live_values = graph.live_input_values();
     assert_eq!(live_values.value_of(node, "level"), Some(json!(0.25)));
     assert_eq!(live_values.value_of(node, "gain"), None);
+    let handed_over = delivery.input_values_handed_over.lock();
     assert_eq!(
-        delivery.input_values_handed_over.lock().last(),
-        json!({ "level": 0.25 }).as_object(),
-        "the helper is handed back the value it held"
+        handed_over[handed_over_before_the_refusal..],
+        [json!({ "level": 0.25 }).as_object().unwrap().clone()],
+        "the helper is handed back the value it held, once, after the refusal"
     );
 }
 
@@ -347,14 +352,14 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
     );
     assert!(
         matches!(
-            committed,
-            Some(RuntimeEvent::InputValueDidChange {
+            committed.as_slice(),
+            [RuntimeEvent::InputValueDidChange {
                 value_read: Some(InputValueRead {
                     value_comes_from: Some(InputValueComesFrom::Saved),
                     ..
                 }),
                 ..
-            })
+            }]
         ),
         "{committed:?}"
     );
@@ -410,7 +415,8 @@ fn an_island_refusing_its_values_leaves_every_live_value_as_it_was() {
 
 /// Mental-revert: writing the pin and dropping the live value, then returning the helper's
 /// refusal with `?`, leaves the graph holding a saved value no helper was handed and the live
-/// value gone.
+/// value gone; putting the values back without handing them back leaves the helper holding
+/// nothing new.
 #[test]
 fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
@@ -421,7 +427,10 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
         .unwrap()
         .expect("held live");
 
-    delivery.refuses_input_values.store(true, Ordering::SeqCst);
+    let handed_over_before_the_refusal = delivery.input_values_handed_over.lock().len();
+    delivery
+        .refuses_input_values_once
+        .store(true, Ordering::SeqCst);
     let refused =
         set_the_saved_value_and_hand_it_over(&graph, &level_meter, "level", Some(json!(0.75)));
 
@@ -431,6 +440,12 @@ fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
     assert_eq!(
         graph.live_input_values().value_of(node, "level"),
         Some(json!(0.25))
+    );
+    let handed_over = delivery.input_values_handed_over.lock();
+    assert_eq!(
+        handed_over[handed_over_before_the_refusal..],
+        [json!({ "level": 0.25 }).as_object().unwrap().clone()],
+        "the helper is handed back the value it held, once, after the refusal"
     );
 }
 
@@ -613,35 +628,44 @@ fn islands_each_read_by_a_reader_of_its_own(
 const SETS_MEASURED: usize = 600;
 const ISLANDS_MEASURED: usize = 32;
 
-/// A value set live on a function node read inside an island feeds that one island again, and
-/// no other; 600 sets, as a fader sends in ten seconds at 60 a second, are timed against the
-/// whole-graph comparison of every island the hand-over made before, and the numbers printed.
+/// A value saved on a function node read inside an island feeds the island evaluating it again,
+/// and compares no other: another island left behind its graph is not handed its island. 600
+/// saved sets, as a fader sends in ten seconds at 60 a second, are timed against setting the pin
+/// and comparing every island the graph holds, as a compile does, and the two times printed.
 ///
-/// Mental-revert: handing every island the graph holds builds and compares each of the 32
-/// islands on every set, and its time grows with the islands the graph holds.
+/// Mental-revert: comparing every island the graph holds on a saved set hands the island left
+/// behind its graph its island, and its time grows with the islands the graph holds.
 #[test]
-fn a_value_set_on_one_island_member_feeds_one_island_and_its_cost_is_measured() {
-    let (graph, remaps, deliveries) = islands_each_read_by_a_reader_of_its_own(ISLANDS_MEASURED);
+fn a_value_saved_on_one_island_member_feeds_one_island_and_its_cost_is_measured() {
+    let (mut graph, remaps, deliveries) =
+        islands_each_read_by_a_reader_of_its_own(ISLANDS_MEASURED);
     let the_islands_fed = |deliveries: &[RecordingOutOfProcessFarSideLinkDelivery]| -> Vec<usize> {
         deliveries
             .iter()
             .map(|delivery| delivery.late_fed_function_node_islands.lock().len())
             .collect()
     };
-    let set_on = the_uuid_of(&graph, &remaps[0]);
+    graph
+        .traversal_mut()
+        .v(&remaps[1])
+        .first_mut()
+        .unwrap()
+        .pins
+        .insert("x".to_owned(), json!(0.5));
     let graph = RwLock::new(graph);
     let islands_fed_as_wired = the_islands_fed(&deliveries);
 
-    let one_island_fed_each_set = std::time::Instant::now();
+    let the_island_evaluating_it_fed = std::time::Instant::now();
     for set_index in 0..SETS_MEASURED {
-        the_values_set_live(
+        set_the_saved_value_and_hand_it_over(
             &graph,
-            &[a_set(set_on, "x", Some(json!(set_index as f64 / 1000.0)))],
+            &remaps[0],
+            "x",
+            Some(json!(set_index as f64 / 1000.0)),
         )
-        .unwrap()
-        .expect("held live");
+        .unwrap();
     }
-    let one_island_fed_each_set = one_island_fed_each_set.elapsed();
+    let the_island_evaluating_it_fed = the_island_evaluating_it_fed.elapsed();
 
     let islands_fed: Vec<usize> = the_islands_fed(&deliveries)
         .into_iter()
@@ -651,30 +675,31 @@ fn a_value_set_on_one_island_member_feeds_one_island_and_its_cost_is_measured() 
     assert_eq!(islands_fed[0], SETS_MEASURED, "each set feeds its island");
     assert!(
         islands_fed[1..].iter().all(|fed| *fed == 0),
-        "no other island is fed: {islands_fed:?}"
+        "no other island is compared, the one left behind its graph included: {islands_fed:?}"
     );
 
-    let every_island_compared_each_set = std::time::Instant::now();
+    let every_island_compared = std::time::Instant::now();
     for set_index in 0..SETS_MEASURED {
         let mut graph = graph.write();
-        graph.live_input_values().set(
-            set_on,
-            "x",
-            Some(json!(1.0 + set_index as f64 / 1000.0)),
-            NodeValueLifetime::Kept,
-        );
+        graph
+            .traversal_mut()
+            .v(&remaps[0])
+            .first_mut()
+            .unwrap()
+            .pins
+            .insert("x".to_owned(), json!(1.0 + set_index as f64 / 1000.0));
         hand_each_reader_the_island_a_compile_changed(&mut graph, &[]).unwrap();
     }
-    let every_island_compared_each_set = every_island_compared_each_set.elapsed();
+    let every_island_compared = every_island_compared.elapsed();
 
     eprintln!(
-        "{SETS_MEASURED} live sets on one member of {ISLANDS_MEASURED} islands: one island fed \
-         each set {:?} ({:?} a set); every island compared each set, as before, {:?} ({:?} a \
-         set)",
-        one_island_fed_each_set,
-        one_island_fed_each_set / SETS_MEASURED as u32,
-        every_island_compared_each_set,
-        every_island_compared_each_set / SETS_MEASURED as u32,
+        "{SETS_MEASURED} saved sets on one member of {ISLANDS_MEASURED} islands: the saved set \
+         feeding the island evaluating it, {:?} ({:?} a set); the pin set and every island \
+         compared as a compile compares them, {:?} ({:?} a set)",
+        the_island_evaluating_it_fed,
+        the_island_evaluating_it_fed / SETS_MEASURED as u32,
+        every_island_compared,
+        every_island_compared / SETS_MEASURED as u32,
     );
 }
 
@@ -682,8 +707,8 @@ fn a_value_set_on_one_island_member_feeds_one_island_and_its_cost_is_measured() 
 /// graph and handed to the evaluator its island runs in this process, so the running shader takes
 /// it without a rebuild; the saved one leaves no value live.
 ///
-/// Mental-revert: holding a shader node's value on the graph, as before, answers `None` here and
-/// leaves the built evaluator on 0, the value it was built with.
+/// Mental-revert: holding a shader node's value on the graph answers `None` here and leaves the
+/// built evaluator on 0, the value it was built with.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_running_shader_node_takes_a_value_set_live_and_one_saved_on_it() {

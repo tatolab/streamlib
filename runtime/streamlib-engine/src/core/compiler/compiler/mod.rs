@@ -128,7 +128,9 @@ impl Compiler {
         f(&mut graph, &tx)
     }
 
-    /// The graph, for a step that takes its lock only as long as it reads or edits it.
+    /// The graph's lock, for a change that edits the graph under it and then hands nodes what
+    /// they read with it released, as a set of an input's value does; every other read or edit
+    /// goes through [`Self::scope`] or [`Self::scope_reading`].
     pub(crate) fn graph_lock(&self) -> &RwLock<Graph> {
         &self.graph
     }

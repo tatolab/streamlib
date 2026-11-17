@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use super::GeneratedNode;
+use super::generated_node::land_the_unlinked_input_values_in_the_input_mailboxes;
 use super::generated_node_impl::{
     FunctionNodePromotionAwaitedBeforeTheReaderRestarts, OutOfProcessLinkWiringEnvelope,
 };
@@ -109,10 +110,10 @@ pub trait DynGeneratedNode: Send + 'static {
         &mut self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
-        if let Some(input_mailboxes) = self.iceoryx2_input_mailboxes_inner() {
-            input_mailboxes.read_each_unlinked_input_as_its_value(input_values);
-        }
-        Ok(())
+        land_the_unlinked_input_values_in_the_input_mailboxes(
+            self.iceoryx2_input_mailboxes_inner(),
+            input_values,
+        )
     }
 
     fn to_runtime_json(&self) -> serde_json::Value;

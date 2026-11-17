@@ -8,7 +8,6 @@
 
 use serde_json::{Map, Value};
 
-use crate::core::compiler::compiler_ops::input_port_pin_values::the_control_value_of_a_pin;
 use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange};
 use crate::core::graph::PortInfo;
 use crate::core::graph::legacy_config_of_a_node::{
@@ -29,6 +28,15 @@ pub(crate) use live_input_values::{
     the_value_an_input_reads,
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
+
+/// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
+pub(crate) fn the_control_value_of_a_pin(pin_value: &Value) -> Option<f64> {
+    match pin_value {
+        Value::Bool(pin_is_on) => Some(if *pin_is_on { 1.0 } else { 0.0 }),
+        Value::Number(number) => number.as_f64(),
+        _ => None,
+    }
+}
 
 /// What kind of value a refused set sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -8,6 +8,10 @@ use serde_json::{Map, Value};
 use streamlib_project_repository::STREAM_DOCUMENT_ASSET_KEY;
 use uuid::Uuid;
 
+use crate::core::compiler::compiler_ops::function_node_island::{
+    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
+    runs_inside_the_read_of_each_node_it_feeds,
+};
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
@@ -248,20 +252,11 @@ impl LoadedStreamInThisRuntime {
                 )?;
             }
             if live_node.pins != document_pins || live_node.studio != document_node.studio {
-                self.compiler.scope(|this_streams_graph, _tx| {
-                    if let Some(node) = this_streams_graph
-                        .traversal_mut()
-                        .v(&live_node.node_run_id)
-                        .first_mut()
-                    {
-                        node.pins = document_pins.clone();
-                        node.studio = document_node.studio.clone();
-                    }
-                });
-                deliver_the_unlinked_input_values_of_each_node(
-                    self.compiler.graph_lock(),
-                    std::slice::from_ref(&live_node.node_run_id),
-                )?;
+                self.set_the_saved_values_and_studio_fields_on_a_kept_node(
+                    &live_node.node_run_id,
+                    document_pins,
+                    document_node.studio.clone(),
+                );
             }
         }
 
@@ -394,6 +389,51 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Each node the live graph holds as it was given, as a reconcile compares it.
+    /// Set the saved values `pins` and the studio fields `studio` on the kept node
+    /// `node_run_id`, while no other input value of the stream changes, then hand the node what
+    /// its inputs read now: each island evaluating it under the graph's write lock, its helper
+    /// or itself with the lock released. A node or island not handed its values is logged and
+    /// the reconcile goes on, the graph holding the values the document does.
+    fn set_the_saved_values_and_studio_fields_on_a_kept_node(
+        &self,
+        node_run_id: &NodeRunId,
+        pins: Map<String, Value>,
+        studio: Map<String, Value>,
+    ) {
+        self.with_no_other_input_value_change(|| {
+            let handed_to_each_island = self.compiler.scope(|this_streams_graph, _tx| {
+                if let Some(node) = this_streams_graph
+                    .traversal_mut()
+                    .v(node_run_id)
+                    .first_mut()
+                {
+                    node.pins = pins;
+                    node.studio = studio;
+                }
+                if !runs_inside_the_read_of_each_node_it_feeds(this_streams_graph, node_run_id) {
+                    return Ok(());
+                }
+                hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
+                    this_streams_graph,
+                    std::slice::from_ref(node_run_id),
+                )
+            });
+            let handed_over = handed_to_each_island.and_then(|()| {
+                deliver_the_unlinked_input_values_of_each_node(
+                    self.compiler.graph_lock(),
+                    std::slice::from_ref(node_run_id),
+                )
+            });
+            if let Err(not_handed_over) = handed_over {
+                tracing::error!(
+                    %not_handed_over,
+                    %node_run_id,
+                    "a node the reconcile kept was not handed the values the graph document sets"
+                );
+            }
+        });
+    }
+
     pub(in crate::core::runtime) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
         self.compiler
             .scope(|this_streams_graph, _tx| the_live_nodes_as_given_of(this_streams_graph))

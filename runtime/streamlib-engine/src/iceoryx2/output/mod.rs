@@ -15,10 +15,9 @@ use super::{
     ChannelDataServiceLoanedSample, ChannelDataServicePublisher, DataChannelPayloadDescriptor,
     DataChannelSampleUserHeader, Iceoryx2Service, MessageGroupBoundary,
 };
-use crate::core::context::StreamClock;
+use crate::core::context::{StreamClock, stream_time_now_ns_on};
 use crate::core::descriptors::PortStreamFacts;
 use crate::core::error::{Error, Result};
-use crate::core::media_clock::MediaClock;
 use crate::core::output_port_stream_facts::StreamFactsOfOutputPorts;
 
 mod channel_egress;
@@ -177,10 +176,7 @@ impl OutputWriterInner {
     }
 
     fn implicit_stamp_now_ns(&self) -> i64 {
-        match self.stream_clock.get() {
-            Some(stream_clock) => stream_clock.now_ns(),
-            None => MediaClock::now().as_nanos() as i64,
-        }
+        stream_time_now_ns_on(self.stream_clock.get().map(Arc::as_ref))
     }
 
     pub(crate) fn reach_stream_facts_of_output_ports(

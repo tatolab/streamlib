@@ -11,13 +11,14 @@ use parking_lot::RwLock;
 use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
+use crate::core::Error;
 use crate::core::compiler::compiler_ops::function_node_island::{
     hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
     runs_inside_the_read_of_each_node_it_feeds,
 };
-use crate::core::compiler::compiler_ops::input_port_pin_values::the_control_value_of_a_pin;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
+use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
@@ -61,7 +62,10 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Run `change`, a change of one of this stream's input values, while no other is made.
-    pub(super) fn with_no_other_input_value_change<T>(&self, change: impl FnOnce() -> T) -> T {
+    pub(in crate::core::runtime) fn with_no_other_input_value_change<T>(
+        &self,
+        change: impl FnOnce() -> T,
+    ) -> T {
         let _one_change_at_a_time = self.one_input_value_change_at_a_time.lock();
         change()
     }
@@ -105,16 +109,21 @@ pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
         .into_iter()
         .try_for_each(UnlinkedInputValuesDelivery::hand_over);
     if let Err(not_handed_over) = handed_over {
-        hand_back_each(put_back_the_live_set(&graph.read(), sets, &held_live.made));
+        let handed_back = put_back_the_live_set(&graph.read(), sets, &held_live.made);
+        hand_back_each(handed_back);
         return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
     }
-    if !held_live.function_nodes_read_inside_an_island.is_empty() {
-        let handed_to_each_island =
-            hand_each_island_the_live_set_or_put_it_back(&mut graph.write(), sets, &held_live);
-        if let Err((not_handed_over, handed_back)) = handed_to_each_island {
-            hand_back_each(handed_back);
-            return Err(not_handed_over);
-        }
+    if held_live.function_nodes_read_inside_an_island.is_empty() {
+        return Ok(Some(held_live));
+    }
+    let handed_to_each_island = hand_each_island_again_or_put_the_values_back(
+        &mut graph.write(),
+        &held_live.function_nodes_read_inside_an_island,
+        |graph| put_back_the_live_set(graph, sets, &held_live.made),
+    );
+    if let Err((not_handed_over, handed_back)) = handed_to_each_island {
+        hand_back_each(handed_back);
+        return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
     }
     Ok(Some(held_live))
 }
@@ -205,42 +214,37 @@ fn set_the_input_values_live(
     }))
 }
 
-/// Hand each reader of an island evaluating a function node `held_live` set on that island
-/// again; when one is not handed it, put every value of `sets` back as it was, hand each island
-/// back what it held, and answer how each node set on is handed back its values.
-fn hand_each_island_the_live_set_or_put_it_back(
+/// Hand each reader of an island evaluating one of `function_nodes` that island again; when one
+/// is not handed it, put the values set back with `put_back`, hand each of those islands back
+/// what it reads then, logging one not handed it, and answer the refusal with what `put_back`
+/// answered.
+pub(super) fn hand_each_island_again_or_put_the_values_back<PutBack>(
     graph: &mut Graph,
-    sets: &[InputValueToSetLive],
-    held_live: &InputValuesHeldLive,
-) -> std::result::Result<(), (LiveInputValueSetRefusal, Vec<UnlinkedInputValuesDelivery>)> {
+    function_nodes: &[NodeRunId],
+    put_back: impl FnOnce(&mut Graph) -> PutBack,
+) -> std::result::Result<(), (Error, PutBack)> {
     let Err(not_handed_over) =
         hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
             graph,
-            &held_live.function_nodes_read_inside_an_island,
+            function_nodes,
         )
     else {
         return Ok(());
     };
-    let handed_back = put_back_the_live_set(graph, sets, &held_live.made);
+    let put_back = put_back(graph);
     if let Err(not_handed_back) =
-        hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
-            graph,
-            &held_live.function_nodes_read_inside_an_island,
-        )
+        hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(graph, function_nodes)
     {
         tracing::error!(
             %not_handed_back,
-            "an island was not handed back the values a refused live set replaced"
+            "an island was not handed back the values a refused set replaced"
         );
     }
-    Err((
-        LiveInputValueSetRefusal::NotHandedOver(not_handed_over),
-        handed_back,
-    ))
+    Err((not_handed_over, put_back))
 }
 
 /// Hand each node of `handed_back` back the values it reads, logging one not handed them.
-pub(crate) fn hand_back_each(handed_back: Vec<UnlinkedInputValuesDelivery>) {
+pub(crate) fn hand_back_each(handed_back: impl IntoIterator<Item = UnlinkedInputValuesDelivery>) {
     for delivery in handed_back {
         if let Err(not_handed_back) = delivery.hand_over() {
             tracing::error!(

@@ -76,6 +76,7 @@ pub use capture_and_playback_devices::video_device_backend::{
     VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
     VideoDeviceStreamRequest, probe_video_device_backend,
 };
+pub(crate) use clocks::stream_clock::stream_time_now_ns_on;
 pub use clocks::stream_clock::{
     DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClock, StreamClockReading, StreamClockSpec,
     machine_time_ns_a_published_clock_reaches, stream_clock_reading_of_a_published_clock,

@@ -528,6 +528,12 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
     /// Whether the far side refuses the input values handed over, as a helper that died does.
     pub(crate) refuses_input_values: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the far side refuses the next input values handed over, and takes those after.
+    pub(crate) refuses_input_values_once: Arc<std::sync::atomic::AtomicBool>,
+    /// Run once, as the next input values are handed over: how a test changes a value while a
+    /// node is handed its values.
+    pub(crate) while_input_values_are_handed_over:
+        Arc<parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>>,
     /// Whether the far side refuses the function node islands handed over, as a helper that died
     /// does.
     pub(crate) refuses_function_node_islands: Arc<std::sync::atomic::AtomicBool>,
@@ -601,6 +607,9 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         if self
             .refuses_input_values
             .load(std::sync::atomic::Ordering::SeqCst)
+            || self
+                .refuses_input_values_once
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
         {
             return Err(crate::core::Error::Configuration(
                 "the far side refuses input values in this test".to_string(),
@@ -609,6 +618,10 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         self.input_values_handed_over
             .lock()
             .push(input_values.clone());
+        let while_handed_over = self.while_input_values_are_handed_over.lock().take();
+        if let Some(while_handed_over) = while_handed_over {
+            while_handed_over();
+        }
         Ok(())
     }
 

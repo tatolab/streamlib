@@ -37,15 +37,6 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
     Ok(())
 }
 
-/// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
-pub(crate) fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
-    match pin_value {
-        JsonValue::Bool(pin_is_on) => Some(if *pin_is_on { 1.0 } else { 0.0 }),
-        JsonValue::Number(number) => number.as_f64(),
-        _ => None,
-    }
-}
-
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
 /// no pin value and that declare no default, so the node has no value to
 /// evaluate them with; none for a node of any other kind.

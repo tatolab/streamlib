@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::input_port_pin_values::the_control_value_of_a_pin;
 use super::shader_node_island::{
     ShaderNodeIslandHostedHereComponent, pin_value_of_a_shader_node_input,
 };
@@ -33,6 +32,7 @@ use crate::core::context::{
 use crate::core::descriptors::NodeDescriptor;
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::core::graph::{GraphNode, GraphNodeWithComponents, ShaderNodeFusedGroupOfAnIsland};
 use crate::core::nodes::DynGeneratedNode;
 use crate::core::rhi::{ShaderCompilationTargetStage, StorageBuffer, TextureFormat};
@@ -731,25 +731,24 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
         )))
     }
 
-    /// Take each value of `input_values` on a float input of the island no link feeds, by the
-    /// input port it is read at; a linked input goes on reading its link.
+    /// Read each float input of the island no link feeds as its number in `input_values`, keyed
+    /// by the input port it is read at, and one `input_values` holds no number for as 0, as a
+    /// freshly built island reads it; a linked input goes on reading its link.
     fn set_unlinked_input_values(
         &mut self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
-        for (input_port, value) in input_values {
-            let fed_by_a_link = self
-                .input_mailboxes
-                .as_ref()
-                .is_some_and(|input_mailboxes| {
-                    !input_mailboxes.inbound_link_names(input_port).is_empty()
-                });
-            let Some(float_input) = self.value_by_float_input_port.get_mut(input_port) else {
+        let input_mailboxes = self.input_mailboxes.as_ref();
+        for (input_port, float_input) in &mut self.value_by_float_input_port {
+            if input_mailboxes
+                .is_some_and(|input_mailboxes| input_mailboxes.is_fed_by_a_link(input_port))
+            {
                 continue;
-            };
-            if let (false, Some(number)) = (fed_by_a_link, the_control_value_of_a_pin(value)) {
-                *float_input = number as f32;
             }
+            *float_input = input_values
+                .get(input_port)
+                .and_then(the_control_value_of_a_pin)
+                .unwrap_or(0.0) as f32;
         }
         Ok(())
     }

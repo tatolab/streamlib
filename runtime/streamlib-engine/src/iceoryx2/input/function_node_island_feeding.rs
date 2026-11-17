@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::context::stream_time_now_ns_on;
+use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::iceoryx2::function_node_island_input_port::{
     FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
     PinValueReadByAnUnlinkedInputPort,
@@ -123,27 +125,17 @@ impl InputMailboxesInner {
     ) {
         let numbers = input_values
             .iter()
-            .filter_map(|(input, value)| {
-                let number = match value {
-                    serde_json::Value::Bool(on) => f64::from(u8::from(*on)),
-                    serde_json::Value::Number(number) => number.as_f64()?,
-                    _ => return None,
-                };
-                Some((input.clone(), number))
-            })
+            .filter_map(|(input, value)| Some((input.clone(), the_control_value_of_a_pin(value)?)))
             .collect();
-        let stream_clock = self.stream_clock.get().cloned();
+        let stream_clock = Arc::clone(&self.stream_clock);
         self.read_each_unlinked_input_port_as_its_pin_value(
             numbers,
-            Arc::new(move || match &stream_clock {
-                Some(stream_clock) => stream_clock.now_ns(),
-                None => crate::core::media_clock::MediaClock::now().as_nanos() as i64,
-            }),
+            Arc::new(move || stream_time_now_ns_on(stream_clock.get().map(Arc::as_ref))),
         );
     }
 
     /// Whether a link feeds `port`.
-    fn is_fed_by_a_link(&self, port: &str) -> bool {
+    pub(super) fn is_fed_by_a_link(&self, port: &str) -> bool {
         self.inbound_link_subscribers_and_listener
             .lock()
             .bound_to_local_port(port)

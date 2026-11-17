@@ -70,6 +70,38 @@ fn a_helpers_setup_carries_each_input_value_and_a_change_after_it_is_handed_over
     );
 }
 
+/// A value set while a node is handed its values is the one it is left with: the values are read
+/// again once handed, and handed again when they changed.
+///
+/// Mental-revert: handing the values read once leaves the helper on the value the set replaced.
+#[test]
+fn a_value_set_while_a_node_is_handed_its_values_is_the_one_it_is_left_with() {
+    let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
+    let level_meter = a_level_meter_in_a_helper(&mut graph);
+    let graph = Arc::new(RwLock::new(graph));
+    let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
+    the_link_wiring_of(&graph.read(), &level_meter)
+        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+        .unwrap();
+    let node = the_uuid_of(&graph.read(), &level_meter);
+    let graph_set_on_meanwhile = Arc::clone(&graph);
+    *delivery.while_input_values_are_handed_over.lock() = Some(Box::new(move || {
+        graph_set_on_meanwhile.read().live_input_values().set(
+            node,
+            "level",
+            Some(json!(0.25)),
+            NodeValueLifetime::Kept,
+        );
+    }));
+
+    hold_live_and_deliver(&graph, &level_meter, "level", json!(0.75));
+
+    let handed_over = delivery.input_values_handed_over.lock();
+    assert_eq!(handed_over.len(), 2, "{handed_over:?}");
+    assert_eq!(handed_over[0]["level"], json!(0.75));
+    assert_eq!(handed_over[1]["level"], json!(0.25));
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod a_shader_node_in_this_process {
     use super::*;
@@ -210,11 +242,14 @@ pub(crate) mod a_shader_node_in_this_process {
     }
 
     /// The value a running shader node's input reads, and one fused into its island, is handed
-    /// to the evaluator built in this process, at the input each is read at.
+    /// to the evaluator built in this process, at the input each is read at; an input no value
+    /// reaches any more reads what a freshly built island reads, and the other members keep
+    /// theirs.
     ///
     /// Mental-revert: keying the fused node's value by its own input name hands the host's
-    /// `amount` 0.25 and leaves the fused input at 0; handing the host only its own values
-    /// leaves the fused input at 0.
+    /// `amount` 0.25 and leaves the fused input at 0; handing the host only the values of the
+    /// node set on resets the fused input to 0; leaving an input no value reaches as it was
+    /// keeps the host's `amount` at 0.75.
     #[test]
     fn each_value_reaches_the_evaluator_of_the_running_island_at_the_input_it_is_read_at() {
         let (graph, fused, host) =
@@ -241,8 +276,13 @@ pub(crate) mod a_shader_node_in_this_process {
             .unwrap();
         assert_eq!(
             the_value_the_host_reads(&graph, &host, "amount"),
-            0.75,
-            "an input no value reaches keeps the value it last read"
+            0.0,
+            "an input no value reaches reads what a freshly built island reads"
+        );
+        assert_eq!(
+            the_value_the_host_reads(&graph, &host, &fused_input),
+            0.25,
+            "a member not set on keeps its value when another member of its island is set on"
         );
     }
 }

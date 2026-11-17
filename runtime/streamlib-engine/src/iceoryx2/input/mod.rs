@@ -338,7 +338,7 @@ pub struct InputMailboxesInner {
         parking_lot::RwLock<HashMap<String, Arc<InputPortFedByAFunctionNodeIsland>>>,
     /// The clock of its stream, which stamps each read of an unlinked input's value; media time
     /// until it is reached.
-    stream_clock: std::sync::OnceLock<Arc<crate::core::context::StreamClock>>,
+    stream_clock: Arc<std::sync::OnceLock<Arc<crate::core::context::StreamClock>>>,
 }
 
 impl InputMailboxesInner {
@@ -356,7 +356,7 @@ impl InputMailboxesInner {
             upstream_stream_facts_by_inbound_link: std::sync::OnceLock::new(),
             input_ports_fed_by_function_node_islands: parking_lot::RwLock::default(),
             input_ports_read_as_their_pin_value_while_unlinked: parking_lot::RwLock::default(),
-            stream_clock: std::sync::OnceLock::new(),
+            stream_clock: Arc::default(),
         }
     }
 
@@ -793,6 +793,14 @@ impl InputMailboxes {
         match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
             (Some(inner), Ok(port)) => inner.inbound_link_names(&port),
             _ => Vec::new(),
+        }
+    }
+
+    /// Whether a link feeds `port`.
+    pub(crate) fn is_fed_by_a_link(&self, port: &str) -> bool {
+        match (self.host_inner(), cast_exposed_name_to_url_safe(port)) {
+            (Some(inner), Ok(port)) => inner.is_fed_by_a_link(&port),
+            _ => false,
         }
     }
 
