@@ -28,14 +28,14 @@ SAMPLE_NAME = "every-pin-kind"
 #: The sample's first load makes its venv.
 PROJECT_LOAD_TIMEOUT_SECONDS = 900.0
 
-TALLIES_WRITTEN_TIMEOUT_SECONDS = 120.0
+PICTURES_WRITTEN_TIMEOUT_SECONDS = 120.0
 
 SAVED_DOCUMENT_TIMEOUT_SECONDS = 30.0
 
 POLL_INTERVAL_SECONDS = 0.5
 
-#: More than the first tally: the picture keeps reaching the node not yet typed.
-TALLIES_SHOWING_THE_STREAM_PLAYS = 2
+#: More than the first picture: pictures keep reaching the node not yet typed.
+PICTURES_SHOWING_THE_STREAM_PLAYS = 2
 
 #: Each port of each node by name, and the pin type `graph` names on it: the `type` of a typed
 #: pin, `None` on a pin that is not typed.
@@ -118,31 +118,33 @@ def values_the_node_holds(node: dict[str, Any]) -> dict[str, Any]:
     return {**(node.get("config") or {}), **node["pins"]}
 
 
-def tallies_written(graph: dict[str, Any]) -> int:
+def pictures_glow_wrote(graph: dict[str, Any]) -> int:
+    """The pictures `glow` wrote on `result`, which links into the tally: the runtime counts
+    the writes of a linked output only."""
     written = (
-        node_named(graph, "tally")
+        node_named(graph, "glow")
         .get("components", {})
         .get("metrics", {})
         .get("written_bags_by_output_port", {})
     )
-    return int(written.get("tally", 0))
+    return int(written.get("result", 0))
 
 
-def await_tallies_written(
+def await_pictures_through_glow(
     tatolabd: TatolabdUnderTest, local_api: LocalApiClient, stream_id: str
 ) -> dict[str, Any]:
-    """Poll the live graph until the node not yet typed has written tallies, so pictures pass
-    from the test pattern through the shader node driven by the function nodes; answer that
-    graph."""
-    deadline = time.monotonic() + TALLIES_WRITTEN_TIMEOUT_SECONDS
+    """Poll the live graph until the shader node has written pictures into the node not yet
+    typed; answer that graph. Glow writes on its defaults too, so whether the function nodes
+    drive it is asserted from the graph this answers."""
+    deadline = time.monotonic() + PICTURES_WRITTEN_TIMEOUT_SECONDS
     while True:
         graph = local_api.graph(stream=stream_id)
-        if tallies_written(graph) >= TALLIES_SHOWING_THE_STREAM_PLAYS:
+        if pictures_glow_wrote(graph) >= PICTURES_SHOWING_THE_STREAM_PLAYS:
             return graph
         if time.monotonic() >= deadline:
             raise AssertionError(
-                f"the tally wrote fewer than {TALLIES_SHOWING_THE_STREAM_PLAYS} records within "
-                f"{TALLIES_WRITTEN_TIMEOUT_SECONDS}s: {json.dumps(graph)[:4000]}\n"
+                f"glow wrote fewer than {PICTURES_SHOWING_THE_STREAM_PLAYS} pictures within "
+                f"{PICTURES_WRITTEN_TIMEOUT_SECONDS}s: {json.dumps(graph)[:4000]}\n"
                 f"{tatolabd.recent_stderr()}"
             )
         time.sleep(POLL_INTERVAL_SECONDS)
@@ -207,7 +209,7 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
     assert opened["state"] == "done", opened
 
     play(local_api, project_directory, stream_id)
-    graph = await_tallies_written(tatolabd, local_api, stream_id)
+    graph = await_pictures_through_glow(tatolabd, local_api, stream_id)
     assert {
         node_name: {
             port: pin_type
@@ -249,7 +251,7 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
     )
     assert reopened["state"] == "done", reopened
     play(local_api, project_directory, stream_id)
-    graph_after_the_reopen = await_tallies_written(tatolabd, local_api, stream_id)
+    graph_after_the_reopen = await_pictures_through_glow(tatolabd, local_api, stream_id)
     assert_the_stream_runs_cleanly_through_its_links(graph_after_the_reopen)
     for (node_name, input_name), value in SAVED_VALUE_BY_NODE_AND_INPUT.items():
         assert (
