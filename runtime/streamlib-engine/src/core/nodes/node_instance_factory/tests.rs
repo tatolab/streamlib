@@ -255,6 +255,65 @@ fn a_descriptor_declaring_one_port_name_twice_is_refused_by_name() {
     );
 }
 
+/// `port_named(name)` typed a Float, which was named each of `former_names` before.
+fn a_float_port_once_named(name: &str, former_names: &[&str]) -> PortDescriptor {
+    port_named(name).with_pin_declaration(crate::core::descriptors::PinDeclaration {
+        former_names: former_names
+            .iter()
+            .map(|former| former.to_string())
+            .collect(),
+        ..crate::core::descriptors::PinDeclaration::exactly(
+            crate::core::descriptors::PinType::Float { exact_size: None },
+        )
+    })
+}
+
+/// A name a port had finds that port alone: one that is another port's current name, one two
+/// ports list, and one not in cast form are each refused by name, by both registrations.
+///
+/// Mental-revert: drop the former-name check and each descriptor registers, a name finding the
+/// port that holds it now or whichever port lists it first.
+#[test]
+fn a_former_port_name_that_would_not_find_one_port_is_refused_by_name() {
+    let path = "my_app.filters:MixNode";
+    let refused_saying = |expected: &'static str| {
+        move |refusal: &Error| {
+            matches!(refusal, Error::Configuration(words)
+                if words.contains(path) && words.contains(expected))
+        }
+    };
+    assert_refused_by_either_registration(
+        descriptor_for(path)
+            .with_input(a_float_port_once_named("gain", &["level"]))
+            .with_input(a_float_port_once_named("level", &[])),
+        refused_saying("port `gain` lists `level` as a name it had, and port `level` is named"),
+    );
+    assert_refused_by_either_registration(
+        descriptor_for(path)
+            .with_input(a_float_port_once_named("gain", &["amount"]))
+            .with_output(a_float_port_once_named("out", &["amount"])),
+        refused_saying("ports `gain` and `out` both list `amount`"),
+    );
+    assert_refused_by_either_registration(
+        descriptor_for(path).with_input(a_float_port_once_named("gain", &["Level"])),
+        refused_saying("lists `Level` as a name it had, which is not in the cast form"),
+    );
+}
+
+/// Only an input may be unset; an output that says it may is refused by name.
+#[test]
+fn an_output_that_may_be_unset_is_refused_by_name() {
+    let path = "my_app.filters:MixNode";
+    let mut output = a_float_port_once_named("out", &[]);
+    if let Some(declared) = output.pin_declaration.as_mut() {
+        declared.may_be_unset = true;
+    }
+    assert_refused_by_either_registration(descriptor_for(path).with_output(output), |refusal| {
+        matches!(refusal, Error::Configuration(words)
+            if words.contains("output `out` declares it may be unset"))
+    });
+}
+
 /// The port marker names the port in the author's spelling and resolves to
 /// the cast the descriptor registered.
 #[test]

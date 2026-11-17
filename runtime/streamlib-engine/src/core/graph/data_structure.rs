@@ -138,6 +138,27 @@ impl Graph {
         })
     }
 
+    /// `from` and `to`, the ends of a link, each under its port's current name; an end whose
+    /// node or port the graph does not hold is left as given, for its refusal to name.
+    pub fn link_ends_under_their_current_port_names(
+        &self,
+        from: super::OutputLinkPortRef,
+        to: super::InputLinkPortRef,
+    ) -> (super::OutputLinkPortRef, super::InputLinkPortRef) {
+        let node_of = |node_run_id: &NodeRunId| {
+            self.digraph
+                .node_weights()
+                .find(|node| &node.id == node_run_id)
+        };
+        let from = node_of(from.node_run_id())
+            .and_then(|node| node.try_output(from.port_name()))
+            .unwrap_or(from);
+        let to = node_of(to.node_run_id())
+            .and_then(|node| node.try_input(to.port_name()))
+            .unwrap_or(to);
+        (from, to)
+    }
+
     /// Drop the node `node_run_id` and the links into and out of it, then forget the values set
     /// live on its inputs as `why` it leaves says; whether it was dropped.
     #[must_use]

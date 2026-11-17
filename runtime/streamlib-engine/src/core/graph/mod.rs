@@ -24,6 +24,8 @@ mod validation;
 
 #[cfg(test)]
 mod graph_tests;
+#[cfg(test)]
+mod renamed_port_tests;
 
 // top level
 pub(crate) use config_node_reference_edges::{

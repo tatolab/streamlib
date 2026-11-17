@@ -27,10 +27,13 @@ use crate::core::runtime::operations_runtime::{
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
+    /// Apply `graph_operation` to the live graph, each port it names under its current name,
+    /// answering it as applied.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
+        let graph_operation = self.the_operation_under_the_current_port_names(graph_operation);
         if self.the_operation_touches_a_node_no_node_runs_as(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)

@@ -74,6 +74,8 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         pin_default: None,
         pin: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+        former_names: Vec::new(),
+        may_be_unset: false,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -108,6 +110,8 @@ fn a_node_whose_output_is(
             pin_default: None,
             pin: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+            former_names: Vec::new(),
+            may_be_unset: false,
             family: crate::core::descriptors::PortFamilyDeclaration {
                 frame_rate,
                 ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -284,6 +288,8 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         pin_default: None,
         pin: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+        former_names: Vec::new(),
+        may_be_unset: false,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -335,6 +341,8 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         pin_default: None,
         pin: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+        former_names: Vec::new(),
+        may_be_unset: false,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -378,6 +386,8 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
         pin_default: None,
         pin: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+        former_names: Vec::new(),
+        may_be_unset: false,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -409,6 +419,8 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         pin_default: None,
         pin: None,
         lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+        former_names: Vec::new(),
+        may_be_unset: false,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -443,6 +455,8 @@ fn a_node_declaring_the_sentinel(
             pin_default: None,
             pin: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+            former_names: Vec::new(),
+            may_be_unset: false,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),

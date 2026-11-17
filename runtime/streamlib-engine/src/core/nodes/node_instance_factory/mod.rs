@@ -514,10 +514,13 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 /// `descriptor` as its node type is registered: each input with a pin that
 /// states no delivery profile reads by its pin's default. Refuses a port not in
 /// cast form under a name of its own — every lookup casts its argument, so a
-/// port registered under an uncast name could never be reached — and a flow a
-/// port's pin type does not take.
+/// port registered under an uncast name could never be reached — a name a port
+/// had that would not find that port alone, an output that may be unset, and a
+/// flow a port's pin type does not take.
 pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
     refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+    refuse_former_port_names_that_do_not_find_one_port(&descriptor)?;
+    refuse_an_output_that_may_be_unset(&descriptor)?;
     descriptor
         .with_input_deliveries_defaulted_by_pin()
         .map_err(Error::Configuration)
@@ -540,6 +543,68 @@ fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> 
         }
     }
     Ok(())
+}
+
+/// Refuse a name a port of `descriptor` had that would not find that port alone: one not in
+/// cast form, one that is the current name of a port of the type, and one two of its ports list.
+fn refuse_former_port_names_that_do_not_find_one_port(descriptor: &NodeDescriptor) -> Result<()> {
+    let node_type = &descriptor.node_class_import_path;
+    let ports: Vec<_> = descriptor
+        .inputs
+        .iter()
+        .chain(&descriptor.outputs)
+        .collect();
+    let mut port_of_each_former_name: HashMap<String, &str> = HashMap::new();
+    for port in &ports {
+        let Some(declared) = port.declared_pin() else {
+            continue;
+        };
+        for former_name in declared.former_names {
+            let refusal = if !is_in_exposed_name_cast_form(&former_name) {
+                Some(format!(
+                    "port `{}` lists `{former_name}` as a name it had, which is not in the cast \
+                     form every port name takes",
+                    port.name
+                ))
+            } else if let Some(holder) = ports.iter().find(|held| held.name == former_name) {
+                Some(format!(
+                    "port `{}` lists `{former_name}` as a name it had, and port `{}` is named \
+                     that now",
+                    port.name, holder.name
+                ))
+            } else if let Some(other) = port_of_each_former_name.get(&former_name) {
+                Some(format!(
+                    "ports `{other}` and `{}` both list `{former_name}` as a name they had",
+                    port.name
+                ))
+            } else {
+                port_of_each_former_name.insert(former_name.clone(), &port.name);
+                None
+            };
+            if let Some(refusal) = refusal {
+                return Err(Error::Configuration(format!(
+                    "`{node_type}`: {refusal}, so the name would not find one port"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse an output of `descriptor` that declares it may be unset, which only an input may.
+fn refuse_an_output_that_may_be_unset(descriptor: &NodeDescriptor) -> Result<()> {
+    match descriptor.outputs.iter().find(|output| {
+        output
+            .declared_pin()
+            .is_some_and(|declared| declared.may_be_unset)
+    }) {
+        Some(output) => Err(Error::Configuration(format!(
+            "`{}`: output `{}` declares it may be unset, which only an input may: an output \
+             holds no value",
+            descriptor.node_class_import_path, output.name
+        ))),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]

@@ -89,9 +89,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     let config_schema = descriptor
         .as_ref()
         .and_then(|descriptor| descriptor.config_schema.clone());
-    let the_input_port = input_ports
-        .iter()
-        .find(|port| port.name == input)
+    let the_input_port = PortInfo::the_one_a_name_finds(&input_ports, input)
         .filter(|_| !legacy_config.is_a_config_field(input));
     if let Some(port) = the_input_port {
         let Some(value) = value else {
@@ -109,13 +107,13 @@ pub fn refuse_an_input_value_its_input_does_not_take(
                 descriptor
                     .inputs
                     .iter()
-                    .find(|declared| declared.name == input)
+                    .find(|declared| declared.name == port.name)
             })
             .and_then(|declared| declared.declared_pin())
             .and_then(|declaration| declaration.annotations.range);
         return match (declared_range, value.as_f64()) {
             (Some(range), Some(number)) => {
-                refuse_a_number_outside_the_range(node.name, input, number, range)
+                refuse_a_number_outside_the_range(node.name, &port.name, number, range)
             }
             _ => Ok(()),
         };
@@ -165,7 +163,8 @@ pub fn refuse_an_input_value_its_input_does_not_take(
 /// Refuse `value` set on `port`, an input port of the node named `node_name` that runs as
 /// `node_kind`, when the port does not take it: what its pin type takes and, on a node that is
 /// no function or shader node, a number or a bool on a Channels input, which is all such a
-/// node's read carries; on a port that names no pin type, a function node takes any value.
+/// node's read carries; `null` on an input that may be unset, which reads as nothing; on a port
+/// that names no pin type, a function node takes any value.
 pub(crate) fn refuse_a_value_the_input_port_does_not_take(
     node_name: &str,
     node_kind: Option<NodeKind>,
@@ -189,8 +188,8 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
             words,
         ));
     }
-    if let Some(pin) = &port.pin {
-        pin.pin_type.check_value(value).map_err(|not_taken| {
+    if let Some(checked) = port.check_value(value) {
+        checked.map_err(|not_taken| {
             InputValueRefusal::of(
                 InputValueRefusalCode::InputValueNotValid,
                 format!(
@@ -200,10 +199,12 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
                 ),
             )
         })?;
-        if matches!(
-            node_kind,
-            Some(NodeKind::Function { .. } | NodeKind::Shader)
-        ) {
+        if value.is_null()
+            || matches!(
+                node_kind,
+                Some(NodeKind::Function { .. } | NodeKind::Shader)
+            )
+        {
             return Ok(());
         }
     } else if matches!(node_kind, Some(NodeKind::Function { .. })) {

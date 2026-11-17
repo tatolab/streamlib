@@ -7,7 +7,8 @@
 //! one map.
 //!
 //! A name the type's config schema lists is a config field. Any other name that is one of the
-//! type's input ports is that input's value, and every name left is a config field, so the
+//! type's input ports, or a name one of them had, is that input's value, and every name left is
+//! a config field, so the
 //! type's config schema refuses a misspelled setting, and a type the runtime does not have keeps
 //! every value it was saved with.
 
@@ -21,6 +22,7 @@ use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 /// How one node type splits its nodes' input values into a config and the values on its inputs.
 pub(crate) struct LegacyConfigOfANodeType {
     fields_its_config_schema_lists: HashSet<String>,
+    /// The name of each input port of the type, and each name one of them had.
     its_input_ports: HashSet<String>,
 }
 
@@ -52,7 +54,12 @@ impl LegacyConfigOfANodeType {
             fields_its_config_schema_lists,
             its_input_ports: node_types
                 .port_info(node_type)
-                .map(|(inputs, _)| inputs.into_iter().map(|input| input.name).collect())
+                .map(|(inputs, _)| {
+                    inputs
+                        .into_iter()
+                        .flat_map(|input| std::iter::once(input.name).chain(input.former_names))
+                        .collect()
+                })
                 .unwrap_or_default(),
         }
     }

@@ -407,8 +407,11 @@ pub(super) async fn connect_impl(
         live,
         stream,
     } = live_graph_change;
-    let from = from.with_its_port_name_cast()?;
-    let to = to.with_its_port_name_cast()?;
+    let (from, to) = {
+        let from = from.with_its_port_name_cast()?;
+        let to = to.with_its_port_name_cast()?;
+        compiler.scope(|graph, _tx| graph.link_ends_under_their_current_port_names(from, to))
+    };
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
         from: from.clone(),
@@ -753,6 +756,20 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         names_at_the_level: &std::collections::HashSet<String>,
     ) -> Result<String> {
         self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
+    }
+
+    fn the_current_name_a_former_port_name_finds(
+        &self,
+        node_type: &str,
+        direction: crate::core::PortDirection,
+        name: &str,
+    ) -> Option<String> {
+        self.node_types_this_stream_resolves()
+            .the_current_name_a_former_port_name_finds(
+                &NodeClassImportPath::new(node_type).ok()?,
+                direction,
+                name,
+            )
     }
 
     fn the_config_a_node_holding_the_input_values_takes(

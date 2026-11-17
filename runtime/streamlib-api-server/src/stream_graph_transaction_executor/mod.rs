@@ -47,6 +47,7 @@ use crate::control_operations_on_project_assets::{
 };
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
+mod former_port_names;
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
@@ -54,6 +55,9 @@ mod request_application;
 mod request_to_graph_operation;
 mod transaction_answers;
 
+use former_port_names::{
+    the_operations_moving_each_former_port_name, the_request_under_the_current_port_names,
+};
 use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;

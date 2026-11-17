@@ -90,7 +90,7 @@ impl<'a> TraversalSourceMut<'a> {
         if let Some(node_uuid) = spec.node_uuid {
             node.node_uuid = node_uuid;
         }
-        node.pins = spec.pins;
+        node.pins = node.ports.input_values_under_the_current_names(spec.pins);
         node.exposed_config_fields = spec.exposed_config_fields;
         node.studio = spec.studio;
 

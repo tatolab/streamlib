@@ -86,6 +86,16 @@ pub trait RuntimeOperations: Send + Sync {
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<serde_json::Value>;
 
+    /// The name the port of a node of type `node_type` that `name` finds on its `direction`
+    /// side has now, when `name` is one that port had; `None` for a current name and for one
+    /// that finds no port, as this stream resolves the type.
+    fn the_current_name_a_former_port_name_finds(
+        &self,
+        node_type: &str,
+        direction: crate::core::PortDirection,
+        name: &str,
+    ) -> Option<String>;
+
     /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
     /// with `None` taking it off, when the input does not take it, as this stream resolves the
     /// type; `input_values_after_the_set` are every input value the node holds once it is made.

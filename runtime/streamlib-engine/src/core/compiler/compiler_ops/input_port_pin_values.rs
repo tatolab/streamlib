@@ -95,8 +95,8 @@ pub(crate) fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
 }
 
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
-/// no pin value and that declare no default, so the node has no value to
-/// evaluate them with; none for a node of any other kind.
+/// no pin value, that declare no default and that may not be unset, so the node
+/// has no value to evaluate them with; none for a node of any other kind.
 pub(crate) fn the_inputs_a_function_node_has_no_value_for(
     graph: &Graph,
     node: &GraphNode,
@@ -120,6 +120,7 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
+                && !port.may_be_unset
                 && !node.is_an_exposed_config_field_input(&port.name)
                 && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)

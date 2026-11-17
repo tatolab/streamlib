@@ -10,7 +10,9 @@ use serde_json::{Value, json};
 use super::stored_pin_values::{
     AssetPinValue, ColorPinValue, RectanglePinValue, TransformPinValue, VectorPinValue,
 };
-use super::{FloatSize, IntegerSize, PinType, VectorComponentCount};
+use super::{
+    DeclaredPinType, FloatSize, IntegerSize, PinDeclaration, PinType, VectorComponentCount,
+};
 use crate::node_reference_in_config::NodeReferenceInConfig;
 
 /// The largest whole number a JSON number holds exactly, 2^53.
@@ -23,6 +25,42 @@ pub struct PinValueNotTaken {
     pub takes: String,
     /// One value the type takes, as a caller would send it.
     pub example: Value,
+}
+
+impl PinDeclaration {
+    /// `value` taken as a stored value of a port of this declaration, or what it takes instead:
+    /// `null` on an input that may be unset, which then reads as nothing; else a value of the
+    /// type it declares, or of one of the types it takes. A type found with the graph, as the
+    /// type of a link or the one an input chooses, is checked once the graph resolves it.
+    pub fn check_value(&self, value: &Value) -> Result<(), PinValueNotTaken> {
+        if self.may_be_unset && value.is_null() {
+            return Ok(());
+        }
+        match &self.pin_type {
+            DeclaredPinType::Is { pin_type } => pin_type.check_value(value),
+            DeclaredPinType::OneOf { pin_types } => {
+                if pin_types
+                    .iter()
+                    .any(|pin_type| pin_type.is_a_stored_value(value))
+                {
+                    return Ok(());
+                }
+                Err(PinValueNotTaken {
+                    takes: pin_types
+                        .iter()
+                        .map(PinType::what_it_takes)
+                        .collect::<Vec<_>>()
+                        .join(", or "),
+                    example: pin_types
+                        .first()
+                        .map_or(Value::Null, PinType::an_example_value),
+                })
+            }
+            DeclaredPinType::Any
+            | DeclaredPinType::SameAsInput { .. }
+            | DeclaredPinType::SetByInput { .. } => Ok(()),
+        }
+    }
 }
 
 impl PinType {

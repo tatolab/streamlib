@@ -28,6 +28,7 @@ impl StreamGraphTransactionExecutor<'_> {
         }
 
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
+        let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
         for stream_id in &stream_ids_in_order {
             let stream_operations = self
                 .operations_on_the_loaded_streams
@@ -50,7 +51,23 @@ impl StreamGraphTransactionExecutor<'_> {
                             project_repository.project_file().project
                         )));
                     }
-                    project_repository.stream_graph_document(stream_location.stream_asset)?
+                    let mut staged_graph =
+                        project_repository.stream_graph_document(stream_location.stream_asset)?;
+                    for moved in the_operations_moving_each_former_port_name(
+                        &staged_graph,
+                        stream_operations.as_ref(),
+                    ) {
+                        staged_graph
+                            .apply(&moved)
+                            .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
+                        former_port_names_moved.push(ProjectOperation::StreamGraph(
+                            StreamGraphOperationOnAStream {
+                                stream: stream_location.stream_asset,
+                                graph_operation: moved,
+                            },
+                        ));
+                    }
+                    staged_graph
                 }
                 _ => StreamGraphDocument::from_value(
                     self.async_runtime
@@ -123,6 +140,9 @@ impl StreamGraphTransactionExecutor<'_> {
             labels_of_added_nodes,
             ..
         } = staged;
+        if !project_operations.is_empty() {
+            project_operations.splice(0..0, former_port_names_moved);
+        }
         let (transaction, commit) = match project_repository_held {
             None => (None, None),
             Some(_) if project_operations.is_empty() => (None, None),
@@ -255,6 +275,12 @@ impl StreamGraphTransactionExecutor<'_> {
             project_repository,
         )?;
         let level_as_drawn = reached.the_document_as_drawn()?;
+        let request = the_request_under_the_current_port_names(
+            request,
+            &level_as_drawn,
+            node_by_label,
+            stream_operations.as_ref(),
+        );
 
         let run_the_graph_generator =
             |generator: &str,

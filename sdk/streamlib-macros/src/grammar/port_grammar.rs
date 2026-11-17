@@ -21,7 +21,8 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType>,
-/// lifetime = kept | reset, flow = <PinFlow>, <family key> = …]`.
+/// lifetime = kept | reset, flow = <PinFlow>, former_names = ["…"], may_be_unset = true,
+/// <family key> = …]`.
 ///
 /// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
 /// type serves the family its messages belong to, and its family keys apply to that family.
@@ -34,6 +35,9 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// `audio_window` is likewise consumer-side and likewise rejected on an output — a producer
 /// publishes what it has, and only a consumer states what it needs. `lifetime` is the input's too:
 /// whether a value set live on it is kept across Stop or reset there, kept when it is not stated.
+/// `former_names` lists the names a renamed port had, each of which still finds it, and
+/// `may_be_unset` lets an input hold no value; both are stated on a port with a pin, and
+/// `may_be_unset` on an input only.
 pub(super) fn parse_port(
     input: ParseStream<'_>,
     direction: PortDirection,
@@ -75,6 +79,8 @@ pub(super) fn parse_port(
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
+    let mut former_names: Option<(proc_macro2::Span, Vec<String>)> = None;
+    let mut may_be_unset: Option<proc_macro2::Span> = None;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
     let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
@@ -161,6 +167,27 @@ pub(super) fn parse_port(
                 let flow_ident: Ident = content.parse()?;
                 flow = Some((flow_ident.span(), parse_pin_flow(&flow_ident, &name)?));
             }
+            "former_names" => {
+                former_names = Some((
+                    key_span,
+                    parse_former_names(&content, &name, &cast_name, key_span)?,
+                ));
+            }
+            "may_be_unset" => {
+                let stated: syn::LitBool = content.parse()?;
+                if direction == PortDirection::Output {
+                    return Err(syn::Error::new(
+                        key_span,
+                        format!(
+                            "`may_be_unset` is declared by an input, not `output(\"{name}\", \
+                             ...)` — it says the input may hold no value"
+                        ),
+                    ));
+                }
+                if stated.value {
+                    may_be_unset = Some(key_span);
+                }
+            }
             family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate"
             | "frame_rate" | "dtype" | "formats" | "residency") => {
                 first_family_key_span.get_or_insert(key_span);
@@ -172,7 +199,7 @@ pub(super) fn parse_port(
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
-                         `lifetime`, `flow`, or one of \
+                         `lifetime`, `flow`, `former_names`, `may_be_unset`, or one of \
                          the family keys `names`, `requires`, `codec`, `requires_codec`, \
                          `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
                     ),
@@ -235,8 +262,28 @@ pub(super) fn parse_port(
     };
     let family = family_keys;
     let pin = declared_pin(pin_type.as_ref(), &family, flow, &name)?;
-    // A picture port that states a flow states its Texture with it, so the flow is emitted.
-    let pin_type = match (&flow, &pin) {
+    let stated_beside_the_pin = flow
+        .map(|(span, _)| span)
+        .or(former_names.as_ref().map(|(span, _)| *span))
+        .or(may_be_unset);
+    if pin.is_none()
+        && let Some(stated_span) = former_names
+            .as_ref()
+            .map(|(span, _)| *span)
+            .or(may_be_unset)
+    {
+        return Err(syn::Error::new(
+            stated_span,
+            format!(
+                "port `{name}` states `former_names` or `may_be_unset` and has no pin type to \
+                 state them on — add `pin_type = …`, one of {}",
+                rendered_rust_declared_pin_type_names()
+            ),
+        ));
+    }
+    // A picture port that states a flow, a former name or that it may be unset states its
+    // Texture with it, so what it states is emitted.
+    let pin_type = match (stated_beside_the_pin, &pin) {
         (Some(_), Some(pin)) => pin.clone().into_resolved().map(|pin| pin.pin_type),
         _ => pin_type,
     };
@@ -277,7 +324,40 @@ pub(super) fn parse_port(
         pin_type,
         lifetime,
         flow: flow.map(|(_, flow)| flow),
+        former_names: former_names.map(|(_, names)| names).unwrap_or_default(),
+        may_be_unset: may_be_unset.is_some(),
     })
+}
+
+/// Parse `former_names = ["…"]` on port `name`, whose cast name is `cast_name`: each name cast as
+/// every exposed name is, refusing one that casts to the port's own name or to another of the
+/// list.
+fn parse_former_names(
+    content: ParseStream<'_>,
+    name: &str,
+    cast_name: &str,
+    key_span: proc_macro2::Span,
+) -> syn::Result<Vec<String>> {
+    let mut cast_former_names: Vec<String> = Vec::new();
+    for former_name in parse_string_literal_list(content, "former_names")? {
+        let cast = cast_exposed_name_to_url_safe(&former_name)
+            .map_err(|casts_to_nothing| syn::Error::new(key_span, casts_to_nothing))?
+            .into_owned();
+        if cast == cast_name {
+            return Err(syn::Error::new(
+                key_span,
+                format!("port `{name}` lists its own name `{former_name}` as a name it had"),
+            ));
+        }
+        if cast_former_names.contains(&cast) {
+            return Err(syn::Error::new(
+                key_span,
+                format!("port `{name}` lists the name `{former_name}` it had twice"),
+            ));
+        }
+        cast_former_names.push(cast);
+    }
+    Ok(cast_former_names)
 }
 
 /// The lifetime `lifetime_ident` names on port `name`, which only an input declares.

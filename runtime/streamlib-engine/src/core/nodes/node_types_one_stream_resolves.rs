@@ -331,6 +331,24 @@ impl NodeTypesOneStreamResolves {
             })
     }
 
+    /// The current name of the `direction` port of `node_type` that `name` finds, when `name` is
+    /// a name the port had; `None` when `name` is its current name or finds no port.
+    pub fn the_current_name_a_former_port_name_finds(
+        &self,
+        node_type: &NodeClassImportPath,
+        direction: crate::core::PortDirection,
+        name: &str,
+    ) -> Option<String> {
+        let (inputs, outputs) = self.port_info(node_type)?;
+        let ports = match direction {
+            crate::core::PortDirection::Input => inputs,
+            crate::core::PortDirection::Output => outputs,
+        };
+        PortInfo::the_one_a_name_finds(&ports, name)
+            .filter(|port| port.name != name)
+            .map(|port| port.name.clone())
+    }
+
     /// Hold every node type a graph names as a placeholder from here on, reading none of its
     /// node code, for `why_none_of_it_is_read`.
     pub(crate) fn hold_every_node_type_as_a_placeholder_reading_no_node_code(
