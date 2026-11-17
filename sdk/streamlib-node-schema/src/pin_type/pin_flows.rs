@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::{DeclaredPinType, PinDeclaration, PinFlow, PinType, built_in_pin_type};
+use crate::{NEWEST_DELIVERY_PROFILE, ORDERED_DELIVERY_PROFILE};
 
 impl PinFlow {
+    /// Every flow, in declaration order.
+    pub const EVERY_FLOW: [Self; 3] = [Self::Value, Self::Stream, Self::Trigger];
+
     /// Its name as a declaration and a client write it: `value`, `stream` or `trigger`.
     pub fn name(self) -> &'static str {
         match self {
@@ -12,25 +16,44 @@ impl PinFlow {
             Self::Trigger => "trigger",
         }
     }
+
+    /// Its variant's name, as a Rust port declares it: `Value`, `Stream` or `Trigger`.
+    pub fn declaration_name(self) -> &'static str {
+        match self {
+            Self::Value => "Value",
+            Self::Stream => "Stream",
+            Self::Trigger => "Trigger",
+        }
+    }
 }
 
 impl PinType {
+    /// The types a List or a bundle holds: a List's element type, a bundle's member types.
+    /// Empty for every other type.
+    fn member_types(&self) -> impl Iterator<Item = &PinType> {
+        let (element_type, members) = match self {
+            Self::ListOf { element_type } => (Some(element_type.as_ref()), &[][..]),
+            Self::Bundle { members } => (None, members.as_slice()),
+            _ => (None, &[][..]),
+        };
+        element_type
+            .into_iter()
+            .chain(members.iter().map(|member| &member.member_type))
+    }
+
+    /// The types a List or a bundle holds that stream by default.
+    fn streaming_member_types(&self) -> impl Iterator<Item = &PinType> {
+        self.member_types()
+            .filter(|member_type| member_type.default_flow() == PinFlow::Stream)
+    }
+
     /// The flows a pin of this type may state, its default first. A List or a bundle is one
-    /// message, so one holding a member that streams takes the flows of the member that allows
-    /// least: a member that never travels as a value, else one that streams by default.
+    /// message, so one holding a member that streams by default takes the flows of the member
+    /// that allows least: a member that never travels as a value, else one that may.
     pub fn flows(&self) -> &'static [PinFlow] {
         let own_flows = built_in_pin_type(self.built_in_name()).flows;
-        let streaming_member_flows = match self {
-            Self::ListOf { element_type } => vec![element_type.flows()],
-            Self::Bundle { members } => members
-                .iter()
-                .map(|member| member.member_type.flows())
-                .collect(),
-            _ => return own_flows,
-        }
-        .into_iter()
-        .filter(|member_flows| member_flows[0] != PinFlow::Value);
-        streaming_member_flows
+        self.streaming_member_types()
+            .map(PinType::flows)
             .min_by_key(|member_flows| member_flows.contains(&PinFlow::Value))
             .unwrap_or(own_flows)
     }
@@ -41,18 +64,27 @@ impl PinType {
     }
 
     /// The delivery profile a Stream input of this type reads by when its author states none:
-    /// `newest` for a picture or a tensor, and for a List or a bundle whose streaming members
-    /// all are, where a stale message has no use once a fresher one exists; `ordered` for every
-    /// other type, whose messages each carry something.
+    /// `newest` for a picture or a tensor, and for a List or a bundle holding a member that
+    /// streams whose members that stream all read `newest`, where a stale message has no use
+    /// once a fresher one exists; `ordered` for every other type, whose messages each carry
+    /// something.
     pub fn default_stream_delivery_profile(&self) -> &'static str {
         let read_newest = match self {
             Self::Texture { .. } | Self::Tensor {} => true,
             Self::ListOf { .. } | Self::Bundle { .. } => {
-                self.flows() == [PinFlow::Stream, PinFlow::Value]
+                let mut streaming_member_types = self.streaming_member_types().peekable();
+                streaming_member_types.peek().is_some()
+                    && streaming_member_types.all(|member_type| {
+                        member_type.default_stream_delivery_profile() == NEWEST_DELIVERY_PROFILE
+                    })
             }
             _ => false,
         };
-        if read_newest { "newest" } else { "ordered" }
+        if read_newest {
+            NEWEST_DELIVERY_PROFILE
+        } else {
+            ORDERED_DELIVERY_PROFILE
+        }
     }
 }
 
@@ -63,8 +95,8 @@ impl PinDeclaration {
     /// exact type, which states its delivery.
     pub fn default_input_delivery_profile(&self) -> Option<&'static str> {
         match self.flow {
-            PinFlow::Value => Some("newest"),
-            PinFlow::Trigger => Some("ordered"),
+            PinFlow::Value => Some(NEWEST_DELIVERY_PROFILE),
+            PinFlow::Trigger => Some(ORDERED_DELIVERY_PROFILE),
             PinFlow::Stream => match &self.pin_type {
                 DeclaredPinType::Is { pin_type } => {
                     Some(pin_type.default_stream_delivery_profile())
@@ -87,11 +119,11 @@ impl PinDeclaration {
             | DeclaredPinType::SameAsInput { .. }
             | DeclaredPinType::SetByInput { .. } => &[],
         };
-        let refusing_type = pin_types_it_may_carry
+        let (refusing_type, flows_it_allows) = pin_types_it_may_carry
             .iter()
-            .find(|pin_type| !pin_type.flows().contains(&self.flow))?;
-        let flows_it_allows = refusing_type
-            .flows()
+            .map(|pin_type| (pin_type, pin_type.flows()))
+            .find(|(_, flows)| !flows.contains(&self.flow))?;
+        let flows_it_allows = flows_it_allows
             .iter()
             .map(|flow| format!("`{}`", flow.name()))
             .collect::<Vec<_>>()

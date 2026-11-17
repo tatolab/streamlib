@@ -308,23 +308,23 @@ fn declared_pin(
 
 /// Parse `flow = <PinFlow>`'s value: `Value`, `Stream` or `Trigger`.
 fn parse_pin_flow(flow_ident: &Ident, port_name: &str) -> syn::Result<PinFlow> {
-    [
-        ("Value", PinFlow::Value),
-        ("Stream", PinFlow::Stream),
-        ("Trigger", PinFlow::Trigger),
-    ]
-    .into_iter()
-    .find(|(name, _)| flow_ident == name)
-    .map(|(_, flow)| flow)
-    .ok_or_else(|| {
-        syn::Error::new(
-            flow_ident.span(),
-            format!(
-                "port `{port_name}` declares `flow = {flow_ident}` — a flow is one of `Value`, \
-                 `Stream`, `Trigger`"
-            ),
-        )
-    })
+    PinFlow::EVERY_FLOW
+        .into_iter()
+        .find(|flow| flow_ident == flow.declaration_name())
+        .ok_or_else(|| {
+            let flow_names = PinFlow::EVERY_FLOW
+                .iter()
+                .map(|flow| format!("`{}`", flow.declaration_name()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            syn::Error::new(
+                flow_ident.span(),
+                format!(
+                    "port `{port_name}` declares `flow = {flow_ident}` — a flow is one of \
+                     {flow_names}"
+                ),
+            )
+        })
 }
 
 fn rendered_port_family_names() -> String {

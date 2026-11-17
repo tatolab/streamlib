@@ -15,6 +15,18 @@ fn float() -> PinType {
     PinType::Float { exact_size: None }
 }
 
+fn list_of(element_type: PinType) -> PinType {
+    PinType::ListOf {
+        element_type: Box::new(element_type),
+    }
+}
+
+fn named() -> PinType {
+    PinType::Named {
+        named_pin_type: NamedPinTypeImportPath::new("module:Detections").unwrap(),
+    }
+}
+
 fn bundle_of(member_types: Vec<PinType>) -> PinType {
     PinType::Bundle {
         members: member_types
@@ -39,9 +51,6 @@ fn declared_with_flow(pin_type: PinType, flow: PinFlow) -> PinDeclaration {
 
 #[test]
 fn a_list_or_bundle_takes_the_flows_of_its_member_that_allows_least() {
-    let list_of = |element_type| PinType::ListOf {
-        element_type: Box::new(element_type),
-    };
     let value_then_stream: &[PinFlow] = &[PinFlow::Value, PinFlow::Stream];
     let stream_then_value: &[PinFlow] = &[PinFlow::Stream, PinFlow::Value];
     let stream_only: &[PinFlow] = &[PinFlow::Stream];
@@ -67,11 +76,25 @@ fn a_list_or_bundle_takes_the_flows_of_its_member_that_allows_least() {
 }
 
 #[test]
+fn a_list_or_bundle_of_triggers_flows_as_its_own_type_does() {
+    let value_then_stream: &[PinFlow] = &[PinFlow::Value, PinFlow::Stream];
+    for pin_type in [
+        list_of(PinType::Trigger {}),
+        bundle_of(vec![float(), PinType::Trigger {}]),
+    ] {
+        assert_eq!(pin_type.flows(), value_then_stream, "{pin_type:?}");
+        assert_eq!(pin_type.default_flow(), PinFlow::Value, "{pin_type:?}");
+    }
+}
+
+#[test]
 fn a_stream_input_reads_newest_only_for_a_picture_a_tensor_or_a_bundle_of_them() {
     let newest = [
         texture(),
         PinType::Tensor {},
         bundle_of(vec![texture(), PinType::Tensor {}]),
+        bundle_of(vec![float(), texture()]),
+        list_of(list_of(texture())),
     ];
     for pin_type in newest {
         assert_eq!(
@@ -85,12 +108,13 @@ fn a_stream_input_reads_newest_only_for_a_picture_a_tensor_or_a_bundle_of_them()
         PinType::Boolean {},
         PinType::Audio {},
         PinType::EncodedAudio { codecs: vec![] },
-        PinType::Named {
-            named_pin_type: NamedPinTypeImportPath::new("module:Detections").unwrap(),
-        },
+        named(),
         PinType::Trigger {},
         bundle_of(vec![float(), PinType::String {}]),
         bundle_of(vec![texture(), PinType::Audio {}]),
+        list_of(named()),
+        bundle_of(vec![texture(), named()]),
+        bundle_of(vec![float(), named()]),
     ];
     for pin_type in ordered {
         assert_eq!(

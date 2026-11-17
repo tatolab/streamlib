@@ -54,9 +54,9 @@ pub use node_reference_in_config::{
 };
 pub use node_schema::{
     DEFAULT_INPUT_PORT_BORROW_QUOTA, DELIVERY_PROFILE_DECLARATION_VALUES,
-    MAX_INPUT_PORT_BORROW_QUOTA, NodeConfigSchema, NodeLanguage, NodePortSchema, NodeScheduling,
-    NodeSchema, NodeSchemaExecution, NodeStateField, RuntimeConfig, RuntimeOptions, to_pascal_case,
-    to_snake_case,
+    MAX_INPUT_PORT_BORROW_QUOTA, NEWEST_DELIVERY_PROFILE, NodeConfigSchema, NodeLanguage,
+    NodePortSchema, NodeScheduling, NodeSchema, NodeSchemaExecution, NodeStateField,
+    ORDERED_DELIVERY_PROFILE, RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
 };
 pub use node_value_lifetime::NodeValueLifetime;
 pub use port_family::{

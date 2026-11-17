@@ -368,7 +368,14 @@ pub const DEFAULT_INPUT_PORT_BORROW_QUOTA: usize = 2;
 /// limit when the first opener creates it.
 pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
 
-pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] = ["newest", "ordered"];
+/// The delivery profile that reads only the newest message an input has received.
+pub const NEWEST_DELIVERY_PROFILE: &str = "newest";
+
+/// The delivery profile that reads every message an input receives, in order.
+pub const ORDERED_DELIVERY_PROFILE: &str = "ordered";
+
+pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] =
+    [NEWEST_DELIVERY_PROFILE, ORDERED_DELIVERY_PROFILE];
 
 /// A port definition within a node schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
