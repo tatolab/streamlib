@@ -99,6 +99,7 @@ fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
                 "x-may-grow": true
             },
             "Closed": { "enum": ["a", "b"] },
+            "NodeUiManifest": { "type": "object" },
             "Refusal": {
                 "type": "object",
                 "properties": {

@@ -365,3 +365,29 @@ impl BuiltInPinTypeName {
         }
     }
 }
+
+/// A closed set of names, as the contract writes one: a `oneOf` of string `const`s, each
+/// described by its row's documentation.
+#[cfg(feature = "contract-json-schema")]
+impl schemars_1::JsonSchema for BuiltInPinTypeName {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "BuiltInPinTypeName".into()
+    }
+
+    fn json_schema(_generator: &mut schemars_1::SchemaGenerator) -> schemars_1::Schema {
+        let names: Vec<serde_json::Value> = Self::EVERY_NAME
+            .iter()
+            .map(|name| {
+                serde_json::json!({
+                    "type": "string",
+                    "const": name,
+                    "description": built_in_pin_type(*name).documentation,
+                })
+            })
+            .collect();
+        schemars_1::json_schema!({
+            "oneOf": names,
+            "description": "The name of a built-in pin type: the `type` tag of its pin type.",
+        })
+    }
+}

@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
+use streamlib_project_repository::NodeUiManifest;
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
@@ -87,6 +88,7 @@ pub fn control_contract_document() -> Value {
         .map(|row| the_pin_type_entry_of(row, &mut schema_generator))
         .collect();
     the_pin_type_components_added_to(&mut schema_generator);
+    the_node_ui_manifest_component_added_to(&mut schema_generator);
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -182,6 +184,12 @@ fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGener
     schema_generator.subschema_for::<PinType>();
     schema_generator.subschema_for::<PinDeclaration>();
     schema_generator.subschema_for::<NodeInputMode>();
+}
+
+/// Adds the node UI manifest's shape, which no operation names, so the runtime client generates
+/// its type and the JSON Schema an author's editor reads from the file.
+fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::SchemaGenerator) {
+    schema_generator.subschema_for::<NodeUiManifest>();
 }
 
 fn the_errors_of(
@@ -389,6 +397,40 @@ mod tests {
                 .get("default_value")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_pin_type() {
+        let document = control_contract_document();
+        let schemas = &document["components"]["schemas"];
+        let manifest = &schemas["NodeUiManifest"];
+        assert_eq!(manifest["additionalProperties"], json!(false));
+        assert_eq!(manifest["required"], json!(["contract"]));
+        assert_eq!(
+            manifest["properties"]["controls"]["items"],
+            json!({ "$ref": "#/components/schemas/NodeUiManifestControl" })
+        );
+        let control = &schemas["NodeUiManifestControl"];
+        assert_eq!(control["additionalProperties"], json!(false));
+        assert_eq!(control["required"], json!(["type", "script"]));
+        assert_eq!(
+            control["properties"]["type"]["$ref"],
+            json!("#/components/schemas/BuiltInPinTypeName")
+        );
+        assert_eq!(control["properties"]["control"]["type"], json!("string"));
+        let listed_names: Vec<Value> = schemas["BuiltInPinTypeName"]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`BuiltInPinTypeName` is a `oneOf`"))
+            .iter()
+            .map(|alternative| alternative["const"].clone())
+            .collect();
+        let row_names: Vec<Value> = document["x-pin-types"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`x-pin-types` is an array"))
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect();
+        assert_eq!(listed_names, row_names);
     }
 
     #[test]

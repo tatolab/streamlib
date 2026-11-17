@@ -188,22 +188,3 @@ fn a_settings_declaration_whose_setting_gives_no_default_does_not_open() {
         "`settings.properties.gain.default`: every setting gives its `default`."
     );
 }
-
-#[test]
-fn a_path_inside_the_views_folder_has_no_scheme_root_or_parent_step() {
-    for inside in ["index.html", "assets/icon.svg", "a..b/c"] {
-        assert!(is_a_path_inside_the_views_folder(inside), "{inside}");
-    }
-    for outside in [
-        "",
-        "/index.html",
-        "../index.html",
-        "a/./b",
-        "a//b",
-        "a\\b",
-        "https://example.com/x",
-        "data:text/html,x",
-    ] {
-        assert!(!is_a_path_inside_the_views_folder(outside), "{outside}");
-    }
-}

@@ -13277,6 +13277,188 @@
           }
         ],
         "description": "When a node reads a setting-only input."
+      },
+      "NodeUiManifest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "type": "string",
+            "description": "The view contract the elements were built for, as `\"1.1\"`."
+          },
+          "controls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeUiManifestControl"
+            },
+            "description": "Each control the module registers, which edits or shows an input of one pin type.",
+            "default": []
+          },
+          "node_bodies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeUiManifestNodeBody"
+            },
+            "description": "Each node body the module registers, which draws the inside of one node type's node.",
+            "default": []
+          }
+        },
+        "required": [
+          "contract"
+        ],
+        "description": "What a module's `node_ui/tatolab_node_ui.json` registers."
+      },
+      "NodeUiManifestControl": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/BuiltInPinTypeName",
+            "description": "The pin type whose inputs the control edits or shows."
+          },
+          "control": {
+            "type": "string",
+            "description": "The control's name, which a pin's `control` annotation picks it by. Left out, the control\nis its pin type's default."
+          },
+          "script": {
+            "type": "string",
+            "description": "The script that default-exports the control's element class, inside the node UI folder."
+          }
+        },
+        "required": [
+          "type",
+          "script"
+        ],
+        "description": "A control a module registers for one pin type."
+      },
+      "BuiltInPinTypeName": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "boolean",
+            "description": "True or false."
+          },
+          {
+            "type": "string",
+            "const": "integer",
+            "description": "A whole number, exact to 2^53, or within the exact size the type states."
+          },
+          {
+            "type": "string",
+            "const": "float",
+            "description": "A number, held as a 64-bit float unless the type states a size."
+          },
+          {
+            "type": "string",
+            "const": "string",
+            "description": "Text."
+          },
+          {
+            "type": "string",
+            "const": "menu",
+            "description": "One of a fixed list of option names."
+          },
+          {
+            "type": "string",
+            "const": "color",
+            "description": "An sRGB colour with alpha, four numbers from 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "vector",
+            "description": "Two, three or four numbers, named x, y, z and w."
+          },
+          {
+            "type": "string",
+            "const": "rectangle",
+            "description": "A rectangle by its left and top edges, width and height."
+          },
+          {
+            "type": "string",
+            "const": "transform",
+            "description": "A 4 by 4 matrix, row by row."
+          },
+          {
+            "type": "string",
+            "const": "texture",
+            "description": "A GPU picture, in one of the pixel formats the type states."
+          },
+          {
+            "type": "string",
+            "const": "audio",
+            "description": "A stream of audio samples."
+          },
+          {
+            "type": "string",
+            "const": "encoded_video",
+            "description": "Encoded video, one access unit per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "encoded_audio",
+            "description": "Encoded audio, one packet per message, in one of the codecs the type states."
+          },
+          {
+            "type": "string",
+            "const": "tensor",
+            "description": "An array of numbers with a shape."
+          },
+          {
+            "type": "string",
+            "const": "asset",
+            "description": "One of the project's assets, of the media the type states."
+          },
+          {
+            "type": "string",
+            "const": "trigger",
+            "description": "An event with no payload; its message's timestamp is the event."
+          },
+          {
+            "type": "string",
+            "const": "list_of",
+            "description": "A list of values of the one type it names."
+          },
+          {
+            "type": "string",
+            "const": "bundle",
+            "description": "Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type."
+          },
+          {
+            "type": "string",
+            "const": "named",
+            "description": "A type a module declares by its class, carried as the bytes that class packs."
+          },
+          {
+            "type": "string",
+            "const": "node_reference",
+            "description": "A setting naming another node of the graph. It never takes a wire."
+          },
+          {
+            "type": "string",
+            "const": "pin_type_choice",
+            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes a wire."
+          }
+        ],
+        "description": "The name of a built-in pin type: the `type` tag of its pin type."
+      },
+      "NodeUiManifestNodeBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "node_type": {
+            "type": "string",
+            "description": "The node type whose node it draws, as `acme:Crossfade`."
+          },
+          "script": {
+            "type": "string",
+            "description": "The script that default-exports the node body's element class, inside the node UI folder."
+          }
+        },
+        "required": [
+          "node_type",
+          "script"
+        ],
+        "description": "A node body a module registers for one node type."
       }
     }
   }

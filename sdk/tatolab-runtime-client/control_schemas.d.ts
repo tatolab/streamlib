@@ -225,6 +225,10 @@ export interface ControlSchemasOfTheContract {
     readonly ArrayOutputPortResidency: z.ZodType<ControlContract.ArrayOutputPortResidency>;
     readonly NodeInputMode: z.ZodType<ControlContract.NodeInputMode>;
     readonly SettingReadTime: z.ZodType<ControlContract.SettingReadTime>;
+    readonly NodeUiManifest: z.ZodType<ControlContract.NodeUiManifest>;
+    readonly NodeUiManifestControl: z.ZodType<ControlContract.NodeUiManifestControl>;
+    readonly BuiltInPinTypeName: z.ZodType<ControlContract.BuiltInPinTypeName>;
+    readonly NodeUiManifestNodeBody: z.ZodType<ControlContract.NodeUiManifestNodeBody>;
   };
   readonly operations: {
     readonly [Method in ControlContract.ControlOperationMethodName]: {
