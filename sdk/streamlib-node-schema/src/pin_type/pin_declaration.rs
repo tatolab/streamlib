@@ -45,16 +45,36 @@ impl PinDeclaration {
         }
     }
 
-    /// The type, when the port declares exactly one; `None` when it is found another way.
-    pub fn exact_pin_type(&self) -> Option<&PinType> {
-        match &self.pin_type {
-            DeclaredPinType::Is { pin_type } => Some(pin_type),
+    /// The type and flow a port of this declaration resolves to without its graph: the ones
+    /// it declares, when it declares exactly one type; `None` when its type is found another way.
+    pub fn into_resolved(self) -> Option<ResolvedPin> {
+        match self.pin_type {
+            DeclaredPinType::Is { pin_type } => Some(ResolvedPin {
+                pin_type,
+                flow: self.flow,
+            }),
             DeclaredPinType::OneOf { .. }
             | DeclaredPinType::Any
             | DeclaredPinType::SameAsInput { .. }
             | DeclaredPinType::SetByInput { .. } => None,
         }
     }
+}
+
+/// The pin type a port of a graph carries, resolved, and how its messages are read.
+// `Eq` because a graph's port info, which holds one, is compared whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct ResolvedPin {
+    /// The type it carries. Its schema here is open JSON: only the control contract's schemars
+    /// renders pin types.
+    #[schemars(with = "serde_json::Value")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
+    pub pin_type: PinType,
+    /// How its messages are read: `value`, `stream` or `trigger`.
+    #[schemars(with = "String")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String))]
+    pub flow: PinFlow,
 }
 
 impl PinType {

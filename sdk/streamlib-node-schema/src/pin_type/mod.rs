@@ -16,7 +16,7 @@ pub use built_in_pin_types::{
 };
 pub use pin_declaration::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,
-    SettingReadTime,
+    ResolvedPin, SettingReadTime,
 };
 pub use pin_type_variants::{
     BundleMember, FloatSize, IntegerSize, NamedPinTypeImportPath, PinType, ProjectAssetMedia,

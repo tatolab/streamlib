@@ -6,7 +6,8 @@ use streamlib_node_schema::{
     ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
     OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    cast_exposed_name_to_url_safe, pin_type::PinType,
+    cast_exposed_name_to_url_safe,
+    pin_type::{PinType, TexturePixelFormat},
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
@@ -230,11 +231,14 @@ pub(super) fn parse_port(
     if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
         return Err(syn::Error::new(name_lit.span(), refusal));
     }
-    // A Texture's pixel formats are the `formats` its family keys state, checked above.
-    let pin_type = pin_type.map(|(_, pin_type)| match pin_type {
-        PinType::Texture { .. } => family_keys.exact_pin_type().unwrap_or(pin_type),
-        other => other,
-    });
+    let pin_type = match pin_type {
+        Some((pin_type_span, PinType::Texture { .. })) => Some(texture_of_the_formats_stated(
+            &family_keys,
+            &name,
+            pin_type_span,
+        )?),
+        other => other.map(|(_, pin_type)| pin_type),
+    };
     let family = family_keys;
 
     Ok(ParsedPort {
@@ -255,6 +259,28 @@ fn rendered_port_family_names() -> String {
         .map(|family| format!("`{family}`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The Texture a port declaring `pin_type = Texture` carries: of the pixel formats its
+/// `formats` key states, any when it states none.
+fn texture_of_the_formats_stated(
+    family_keys: &PortFamilyDeclaration,
+    port_name: &str,
+    pin_type_span: proc_macro2::Span,
+) -> syn::Result<PinType> {
+    let pixel_formats = family_keys
+        .formats
+        .iter()
+        .map(|format| {
+            TexturePixelFormat::from_wire_name(format).ok_or_else(|| {
+                syn::Error::new(
+                    pin_type_span,
+                    format!("port `{port_name}` states format {format:?}, which no texture has"),
+                )
+            })
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    Ok(PinType::Texture { pixel_formats })
 }
 
 /// Each pin type a Rust port declares by name alone, taking any size, format or layout: the

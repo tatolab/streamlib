@@ -6,7 +6,7 @@
 
 use crate::core::descriptors::{NodeClassImportPath, PortFamily, PortFamilyDeclaration};
 use crate::core::error::{Error, Result};
-use crate::core::graph::{PortInfo, PortKind};
+use crate::core::graph::PortInfo;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
 /// The input port each field of `exposed_config_fields` takes on node `node_name` of type
@@ -67,16 +67,12 @@ pub(crate) fn the_input_ports_of_the_exposed_config_fields(
             )));
         }
         input_ports.push(PortInfo {
-            name: field.clone(),
-            description: field_description.clone(),
-            port_kind: PortKind::default(),
             delivery_profile: Some("newest".to_string()),
-            borrow_quota: None,
-            audio_window: None,
-            pin_default: None,
-            pin_type: None,
-            flow: None,
-            family: PortFamilyDeclaration::of_family(PortFamily::Channels),
+            ..PortInfo::declaring_only_a_family(
+                field.clone(),
+                field_description.clone(),
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            )
         });
     }
     Ok(input_ports)

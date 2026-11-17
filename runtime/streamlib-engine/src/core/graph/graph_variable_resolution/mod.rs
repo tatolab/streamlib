@@ -221,8 +221,7 @@ impl GraphVariablesAsDrawn {
                 values_checked: None,
                 family: None,
                 pin_default: None,
-                pin_type: None,
-                flow: None,
+                pin: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let position = (*drawn_position).min(graph_response.nodes.len());

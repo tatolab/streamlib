@@ -361,7 +361,6 @@ impl NodeTypesOneStreamResolves {
             .why_every_node_type_is_held_as_a_placeholder()
             .is_some();
         use crate::core::descriptors::{PortFamily, PortFamilyDeclaration};
-        use crate::core::graph::PortKind;
         let node_type_of_each_node: HashMap<&str, &NodeClassImportPath> = graph
             .nodes
             .iter()
@@ -396,16 +395,8 @@ impl NodeTypesOneStreamResolves {
                 .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
         };
         let a_port = |name: &str, family: PortFamilyDeclaration, is_input: bool| PortInfo {
-            name: name.to_string(),
-            description: String::new(),
-            port_kind: PortKind::default(),
             delivery_profile: is_input.then(|| "newest".to_string()),
-            borrow_quota: None,
-            audio_window: None,
-            family,
-            pin_default: None,
-            pin_type: None,
-            flow: None,
+            ..PortInfo::declaring_only_a_family(name, String::new(), family)
         };
         let mut placeholders: HashMap<NodeClassImportPath, PlaceholderOfANodeTypeNotDescribed> =
             HashMap::new();

@@ -204,20 +204,11 @@ pub struct PortInfoOutput {
     /// declares none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_default: Option<serde_json::Value>,
-    /// The pin type this port carries, resolved. Absent from the rendering on a
-    /// port whose type the code does not state exactly, which links by its
-    /// family alone. Its schema here is open JSON: only the control contract's
-    /// schemars renders pin types.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<serde_json::Value>")]
-    #[schema(value_type = Option<Object>)]
-    pub pin_type: Option<crate::core::descriptors::PinType>,
-    /// How this port's messages are read: `value`, `stream` or `trigger`.
-    /// Absent exactly when `pin_type` is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
-    #[schema(value_type = Option<String>)]
-    pub flow: Option<crate::core::descriptors::PinFlow>,
+    /// The pin type this port carries, resolved, as `pin_type`, and its flow,
+    /// as `flow`. Both are absent from the rendering on a port whose type the
+    /// code does not state exactly, which links by its family alone.
+    #[serde(flatten)]
+    pub pin: Option<crate::core::descriptors::ResolvedPin>,
 }
 
 /// The kind of port - determines how data flows.
@@ -542,20 +533,25 @@ pub struct PortDescriptorOutput {
     pub values_checked: Option<bool>,
     /// The port family this port declares and its family's keys.
     pub family: crate::core::descriptors::PortFamilyDeclaration,
-    /// The pin type this port declares, or how it is found. Absent from the
-    /// rendering on a port whose type the code does not state exactly, which
-    /// links by its family alone. Its schema here is open JSON: only the
-    /// control contract's schemars renders pin types.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<serde_json::Value>")]
-    #[schema(value_type = Option<Object>)]
-    pub pin_type: Option<crate::core::descriptors::DeclaredPinType>,
-    /// How this port's messages are read: `value`, `stream` or `trigger`.
-    /// Absent exactly when `pin_type` is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
-    #[schema(value_type = Option<String>)]
-    pub flow: Option<crate::core::descriptors::PinFlow>,
+    /// The pin type this port declares, or how it is found, as `pin_type`, and
+    /// its flow, as `flow`. Both are absent from the rendering on a port whose
+    /// type the code does not state exactly, which links by its family alone.
+    #[serde(flatten)]
+    pub pin: Option<PortDeclaredPinOutput>,
+}
+
+/// The pin type a catalog port declares, and its flow.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct PortDeclaredPinOutput {
+    /// The type it carries, or how that type is found. Its schema here is open
+    /// JSON: only the control contract's schemars renders pin types.
+    #[schemars(with = "serde_json::Value")]
+    #[schema(value_type = Object)]
+    pub pin_type: crate::core::descriptors::DeclaredPinType,
+    /// How its messages are read: `value`, `stream` or `trigger`.
+    #[schemars(with = "String")]
+    #[schema(value_type = String)]
+    pub flow: crate::core::descriptors::PinFlow,
 }
 
 /// Code examples for a node in different languages.
@@ -674,8 +670,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             values_checked: values_checked_of(&port.family),
             family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
-            pin_type: port.pin_type.clone(),
-            flow: port.flow,
+            pin: port.pin.clone(),
         }
     }
 }
@@ -869,10 +864,6 @@ impl From<&crate::core::NodeRuntime> for NodeRuntimeOutput {
 
 impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
     fn from(port: &crate::core::PortDescriptor) -> Self {
-        let (pin_type, flow) = port
-            .declared_pin()
-            .map(|declared| (declared.pin_type, declared.flow))
-            .unzip();
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -882,8 +873,10 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             audio_window: port.audio_window.clone(),
             values_checked: values_checked_of(&port.family),
             family: port.family.clone(),
-            pin_type,
-            flow,
+            pin: port.declared_pin().map(|declared| PortDeclaredPinOutput {
+                pin_type: declared.pin_type,
+                flow: declared.flow,
+            }),
         }
     }
 }

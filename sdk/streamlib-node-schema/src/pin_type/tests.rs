@@ -433,33 +433,36 @@ fn a_type_flows_by_its_rows_first_flow_and_a_list_or_bundle_streams_when_a_membe
 }
 
 #[test]
-fn a_port_of_exactly_one_type_is_read_in_its_default_flow_and_states_nothing_else() {
+fn a_port_of_exactly_one_type_is_read_in_its_default_flow_and_resolves_to_it_alone() {
     let declaration = PinDeclaration::exactly(PinType::Float { exact_size: None });
 
     assert_eq!(
         serde_json::to_value(&declaration).unwrap(),
         json!({"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"})
     );
-    assert_eq!(
-        declaration.exact_pin_type(),
-        Some(&PinType::Float { exact_size: None })
-    );
     let followed = PinDeclaration {
         pin_type: DeclaredPinType::SameAsInput {
             input_port_name: "value".into(),
         },
-        ..declaration
+        ..declaration.clone()
     };
-    assert_eq!(followed.exact_pin_type(), None);
+    assert_eq!(
+        declaration.into_resolved(),
+        Some(ResolvedPin {
+            pin_type: PinType::Float { exact_size: None },
+            flow: PinFlow::Value
+        })
+    );
+    assert_eq!(followed.into_resolved(), None);
 }
 
 #[test]
 fn a_texture_pixel_format_is_found_by_its_wire_name_and_no_other() {
     for format in TexturePixelFormat::EVERY_FORMAT {
         assert_eq!(
-            TexturePixelFormat::of_wire_name(format.wire_name()),
+            TexturePixelFormat::from_wire_name(format.wire_name()),
             Some(format)
         );
     }
-    assert_eq!(TexturePixelFormat::of_wire_name("yuv420"), None);
+    assert_eq!(TexturePixelFormat::from_wire_name("yuv420"), None);
 }

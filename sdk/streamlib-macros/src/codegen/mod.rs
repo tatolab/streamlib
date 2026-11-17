@@ -923,3 +923,6 @@ fn audio_window_contract_tokens(
 
 #[cfg(test)]
 mod node_struct_emit_tests;
+
+#[cfg(test)]
+mod pin_declaration_tokens_tests;

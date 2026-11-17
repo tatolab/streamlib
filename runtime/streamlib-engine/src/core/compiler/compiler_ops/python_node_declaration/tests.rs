@@ -262,10 +262,11 @@ fn a_shaders_float_input_is_a_float_and_its_pictures_are_textures() {
 }
 
 #[test]
-fn a_function_nodes_float_int_and_bool_values_are_typed_and_its_other_values_are_not() {
+fn a_function_nodes_number_and_bool_values_are_typed_an_optional_one_may_be_unset() {
     let mut described = described_node_type_with_input_ports(serde_json::json!([
         {"name": "level", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
         {"name": "count", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
+        {"name": "threshold", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest", "pin_default": null},
         {"name": "fields", "family": {"family": "records"}, "description": "", "delivery_profile": "newest"},
         {"name": "anything", "family": {"family": "image", "also_takes_families": ["records"]}, "description": "", "delivery_profile": "newest"},
     ]));
@@ -281,6 +282,7 @@ fn a_function_nodes_float_int_and_bool_values_are_typed_and_its_other_values_are
         "inputs": [
             {"parameter": "level", "port": "level", "value_type": "float", "optional": false},
             {"parameter": "count", "port": "count", "value_type": "int", "optional": false},
+            {"parameter": "threshold", "port": "threshold", "value_type": "float", "optional": true, "default": null},
             {"parameter": "fields", "port": "fields", "value_type": "records", "optional": false},
             {"parameter": "anything", "port": "anything", "value_type": "unread_message", "optional": false},
         ],
@@ -303,6 +305,13 @@ fn a_function_nodes_float_int_and_bool_values_are_typed_and_its_other_values_are
     assert_eq!(
         declared_pin_of(&function, "open"),
         exactly(PinType::Boolean {})
+    );
+    assert_eq!(
+        declared_pin_of(&function, "threshold"),
+        Some(crate::core::descriptors::PinDeclaration {
+            may_be_unset: true,
+            ..crate::core::descriptors::PinDeclaration::exactly(PinType::Float { exact_size: None })
+        })
     );
     for untyped in ["fields", "anything", "same"] {
         assert_eq!(declared_pin_of(&function, untyped), None, "{untyped}");

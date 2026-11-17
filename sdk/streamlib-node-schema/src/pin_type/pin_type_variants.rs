@@ -210,7 +210,7 @@ macro_rules! texture_pixel_formats {
             }
 
             /// The format the escalate wire spells `wire_name`; `None` for a name no format has.
-            pub fn of_wire_name(wire_name: &str) -> Option<Self> {
+            pub fn from_wire_name(wire_name: &str) -> Option<Self> {
                 match wire_name {
                     $($wire_name => Some(Self::$format),)+
                     _ => None,

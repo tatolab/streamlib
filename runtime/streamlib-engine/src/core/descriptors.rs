@@ -13,7 +13,8 @@ pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
 pub use streamlib_node_schema::pin_type::{
-    DeclaredPinType, PinDeclaration, PinFlow, PinType, TexturePixelFormat,
+    DeclaredPinType, FloatSize, IntegerSize, PinDeclaration, PinFlow, PinType, ResolvedPin,
+    TexturePixelFormat,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

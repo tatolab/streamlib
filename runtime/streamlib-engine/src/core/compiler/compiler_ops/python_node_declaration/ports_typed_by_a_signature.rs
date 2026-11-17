@@ -22,11 +22,12 @@ fn exact_pin_type_of_a_function_node_value_type(value_type: &str) -> Option<PinT
     }
 }
 
-/// Each port a described function node's signature types exactly, by name. None when the
-/// describe states no signature.
+/// Each port a described function node's signature types exactly, by name, with its
+/// declaration: exactly that type in its default flow, and an optional input, which reads
+/// nothing while unwired, may be unset. None when the describe states no signature.
 pub(super) fn ports_a_function_node_signature_types(
     described_node_type: &serde_json::Value,
-) -> std::result::Result<Vec<(String, PinType)>, String> {
+) -> std::result::Result<Vec<(String, PinDeclaration)>, String> {
     let Some(signature) = described_node_type
         .get(DESCRIBED_FUNCTION_SIGNATURE_KEY)
         .filter(|signature| !signature.is_null())
@@ -52,33 +53,52 @@ pub(super) fn ports_a_function_node_signature_types(
                     })
             };
             let port = field("port")?;
+            let may_be_unset = match entry.get("optional") {
+                None | Some(serde_json::Value::Null) => false,
+                Some(optional) => optional.as_bool().ok_or_else(|| {
+                    format!(
+                        "each of {DESCRIBED_FUNCTION_SIGNATURE_KEY}.{side} states `optional` as \
+                         a bool"
+                    )
+                })?,
+            };
             if let Some(pin_type) =
                 exact_pin_type_of_a_function_node_value_type(field("value_type")?)
             {
-                typed_ports.push((port.to_string(), pin_type));
+                let declaration = PinDeclaration {
+                    may_be_unset,
+                    ..PinDeclaration::exactly(pin_type)
+                };
+                typed_ports.push((port.to_string(), declaration));
             }
         }
     }
     Ok(typed_ports)
 }
 
-/// Each port a shader node's program types exactly, by name: its float inputs.
+/// Each port a shader node's program types exactly, by name, with its declaration: its float
+/// inputs, each exactly a Float.
 pub(super) fn ports_a_shader_node_program_types(
     program: &ShaderNodeProgram,
-) -> Vec<(String, PinType)> {
+) -> Vec<(String, PinDeclaration)> {
     program
         .float_input_ports()
-        .map(|port| (port.to_string(), PinType::Float { exact_size: None }))
+        .map(|port| {
+            (
+                port.to_string(),
+                PinDeclaration::exactly(PinType::Float { exact_size: None }),
+            )
+        })
         .collect()
 }
 
-/// Declare each of `typed_ports` on the port of its name: exactly that type, in its default
-/// flow. A name the node has no port of is refused.
+/// Declare each of `typed_ports` on the port of its name. A name the node has no port of is
+/// refused.
 pub(super) fn declare_each_typed_port(
     descriptor: &mut NodeDescriptor,
-    typed_ports: Vec<(String, PinType)>,
+    typed_ports: Vec<(String, PinDeclaration)>,
 ) -> std::result::Result<(), String> {
-    for (port_name, pin_type) in typed_ports {
+    for (port_name, pin_declaration) in typed_ports {
         let port = descriptor
             .inputs
             .iter_mut()
@@ -87,7 +107,7 @@ pub(super) fn declare_each_typed_port(
             .ok_or_else(|| {
                 format!("the signature types port {port_name:?}, which the node does not declare")
             })?;
-        port.pin_declaration = Some(PinDeclaration::exactly(pin_type));
+        port.pin_declaration = Some(pin_declaration);
     }
     Ok(())
 }

@@ -1,16 +1,16 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The two ways between a family declaration and a pin type, while a port may carry either: the
-//! pin type a family declaration states exactly, and the family a typed port still serves.
+//! The two ways between a family declaration and a pin type: the pin type a family declaration
+//! states exactly, and the family a typed port serves.
 
 use super::{PortFamily, PortFamilyDeclaration};
 use crate::pin_type::{PinType, TexturePixelFormat};
 
 impl PortFamilyDeclaration {
     /// The pin type this declaration states exactly: a Texture of the formats it states, for an
-    /// Image port whose family follows nothing else. `None` for every other port, because a
-    /// guessed type could refuse a link that works today.
+    /// Image port whose family follows nothing else. `None` for every other port: no other
+    /// family declaration names one type.
     pub fn exact_pin_type(&self) -> Option<PinType> {
         let family_is_fixed = self.also_takes_families.is_empty()
             && self.family_from_config_key.is_none()
@@ -21,16 +21,16 @@ impl PortFamilyDeclaration {
         let pixel_formats = self
             .formats
             .iter()
-            .map(|format| TexturePixelFormat::of_wire_name(format))
+            .map(|format| TexturePixelFormat::from_wire_name(format))
             .collect::<Option<Vec<_>>>()?;
         Some(PinType::Texture { pixel_formats })
     }
 }
 
 impl PortFamily {
-    /// The family whose messages carry a pin of `pin_type`, which a typed port still serves as
-    /// its `family`. `None` for a type that takes no wire, a named type, whose bytes belong to no
-    /// family, and a List or a bundle, whose packing is not settled yet.
+    /// The family whose messages carry a pin of `pin_type`, which a typed port serves as its
+    /// `family`. `None` for a type that takes no wire, a named type, whose bytes belong to no
+    /// family, and a List or a bundle, which no family's message carries.
     pub fn carrying(pin_type: &PinType) -> Option<Self> {
         match pin_type {
             PinType::Boolean {}

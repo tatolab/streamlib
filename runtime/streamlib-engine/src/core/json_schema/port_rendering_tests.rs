@@ -73,8 +73,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         borrow_quota: None,
         audio_window: None,
         pin_default: None,
-        pin_type: None,
-        flow: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -108,8 +107,7 @@ fn a_node_whose_output_is(
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
-            pin_type: None,
-            flow: None,
+            pin: None,
             family: crate::core::descriptors::PortFamilyDeclaration {
                 frame_rate,
                 ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -285,8 +283,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         borrow_quota: None,
         audio_window: None,
         pin_default: None,
-        pin_type: None,
-        flow: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -296,7 +293,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
 }
 
 #[test]
-fn port_descriptor_output_carries_no_type_key() {
+fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_key() {
     let pd = crate::core::PortDescriptor::new(
         "video",
         "Video output",
@@ -337,8 +334,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         borrow_quota: None,
         audio_window: Some(declared_window_contract()),
         pin_default: None,
-        pin_type: None,
-        flow: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -381,8 +377,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
             },
         )),
         pin_default: None,
-        pin_type: None,
-        flow: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -413,8 +408,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         borrow_quota: None,
         audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
         pin_default: None,
-        pin_type: None,
-        flow: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -448,8 +442,7 @@ fn a_node_declaring_the_sentinel(
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             pin_default: None,
-            pin_type: None,
-            flow: None,
+            pin: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
