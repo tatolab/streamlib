@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::contract_component_references::COMPONENT_SCHEMA_REFERENCE_PREFIX;
 use crate::runtime_client_node_ui_manifest::{
     NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
     node_ui_manifest_declarations, node_ui_manifest_json_schema,
@@ -115,8 +116,6 @@ const CLIENT_MEMBER_NAMES_NO_METHOD_MAY_TAKE: &[&str] = &[
 
 /// What a notification's listener method is named with before the notification's name.
 const NOTIFICATION_LISTENER_METHOD_PREFIX: &str = "on_";
-
-pub(crate) const COMPONENT_SCHEMA_REFERENCE_PREFIX: &str = "#/components/schemas/";
 
 pub(crate) const GENERATED_SOURCE_HEADER: &str = "// Copyright (c) 2025 Tatolab LLC\n\
 // SPDX-License-Identifier: GPL-3.0-only\n\

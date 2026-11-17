@@ -5,13 +5,15 @@
 //! component: `node_ui_manifest.d.ts`, which names its types, and
 //! `node_ui_manifest.schema.json`, the self-contained JSON Schema an author's editor reads.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
-use crate::generate_runtime_client::{COMPONENT_SCHEMA_REFERENCE_PREFIX, GENERATED_SOURCE_HEADER};
+use crate::contract_component_references::{
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_reached_from,
+};
+use crate::generate_runtime_client::GENERATED_SOURCE_HEADER;
 
 pub(crate) const NODE_UI_MANIFEST_TYPES_FILE_NAME: &str = "node_ui_manifest.d.ts";
 pub(crate) const NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME: &str = "node_ui_manifest.schema.json";
@@ -50,12 +52,12 @@ pub(crate) fn node_ui_manifest_json_schema(
     let names = the_manifest_and_every_component_it_names(component_schemas)?;
     let mut definitions = Map::new();
     for name in names
-        .iter()
+        .into_iter()
         .filter(|name| *name != NODE_UI_MANIFEST_COMPONENT_NAME)
     {
         definitions.insert(
-            name.clone(),
-            with_references_into_the_definitions(&component_schemas[name.as_str()]),
+            name.to_owned(),
+            with_references_into_the_definitions(&component_schemas[name]),
         );
     }
     let mut schema = Map::new();
@@ -79,53 +81,8 @@ pub(crate) fn node_ui_manifest_json_schema(
 /// `NodeUiManifest` and every component its schema reaches, in the contract's order.
 fn the_manifest_and_every_component_it_names(
     component_schemas: &Map<String, Value>,
-) -> Result<Vec<String>> {
-    if !component_schemas.contains_key(NODE_UI_MANIFEST_COMPONENT_NAME) {
-        bail!("the contract file has no `{NODE_UI_MANIFEST_COMPONENT_NAME}` component schema");
-    }
-    let mut reached = BTreeSet::from([NODE_UI_MANIFEST_COMPONENT_NAME.to_owned()]);
-    let mut to_visit = vec![NODE_UI_MANIFEST_COMPONENT_NAME.to_owned()];
-    while let Some(name) = to_visit.pop() {
-        let mut named = Vec::new();
-        every_component_named_in(&component_schemas[name.as_str()], &mut named);
-        for named_name in named {
-            if !component_schemas.contains_key(&named_name) {
-                bail!("`{name}` names `{named_name}`, which the contract file has no schema for");
-            }
-            if reached.insert(named_name.clone()) {
-                to_visit.push(named_name);
-            }
-        }
-    }
-    Ok(component_schemas
-        .keys()
-        .filter(|name| reached.contains(*name))
-        .cloned()
-        .collect())
-}
-
-fn every_component_named_in(schema: &Value, named: &mut Vec<String>) {
-    match schema {
-        Value::Object(object) => {
-            for (keyword, inner) in object {
-                match (keyword.as_str(), inner) {
-                    ("$ref", Value::String(reference)) => {
-                        if let Some(name) =
-                            reference.strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
-                        {
-                            named.push(name.to_owned());
-                        }
-                    }
-                    ("const" | "default", _) => {}
-                    _ => every_component_named_in(inner, named),
-                }
-            }
-        }
-        Value::Array(items) => items
-            .iter()
-            .for_each(|item| every_component_named_in(item, named)),
-        _ => {}
-    }
+) -> Result<Vec<&str>> {
+    component_names_reached_from(component_schemas, &[NODE_UI_MANIFEST_COMPONENT_NAME])
 }
 
 fn with_references_into_the_definitions(schema: &Value) -> Value {

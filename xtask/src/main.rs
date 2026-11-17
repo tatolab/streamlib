@@ -16,6 +16,7 @@ pub mod check_no_tatolab_namespace_package_init;
 pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
+pub mod contract_component_references;
 pub mod generate_built_in_node_classes;
 pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;

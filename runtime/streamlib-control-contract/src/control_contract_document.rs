@@ -180,8 +180,8 @@ fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGener
     schema_generator.subschema_for::<NodeInputMode>();
 }
 
-/// Adds the node UI manifest's shape, which no operation names yet, so the runtime client
-/// generates its type and the JSON Schema an author's editor reads from the file.
+/// Adds the node UI manifest's shape, which no operation names, so the runtime client generates
+/// its type and the JSON Schema an author's editor reads from the file.
 fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::SchemaGenerator) {
     schema_generator.subschema_for::<NodeUiManifest>();
 }

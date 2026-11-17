@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::pin_type::BuiltInPinTypeName;
 
-use crate::tatolab_view_manifest::{
+use crate::manifest_fields::{
     a_value_never_written_as_null, is_a_contract_version,
-    is_a_contract_version_of_major_up_to_minor, is_a_path_inside_the_views_folder,
+    is_a_contract_version_of_major_up_to_minor, is_a_path_inside_its_own_folder,
     the_field_a_serde_refusal_names,
 };
+use crate::tatolab_view_manifest::VIEW_CONTRACT_READ_MAJOR;
 
 /// The folder of a module that holds its node UI elements.
 pub const NODE_UI_DIRECTORY: &str = "node_ui";
@@ -21,10 +22,8 @@ pub const NODE_UI_DIRECTORY: &str = "node_ui";
 /// The manifest the node UI folder holds.
 pub const NODE_UI_MANIFEST_FILE_NAME: &str = "tatolab_node_ui.json";
 
-/// The view contract a node UI manifest is read against: another major does not open.
-pub const NODE_UI_CONTRACT_READ_MAJOR: u64 = 1;
-/// The highest minor of [`NODE_UI_CONTRACT_READ_MAJOR`] a node UI manifest is read against; node
-/// UI elements arrive in this minor.
+/// The highest minor of [`VIEW_CONTRACT_READ_MAJOR`] a node UI manifest is read against: a
+/// manifest that names a later minor, or another major, does not open.
 pub const NODE_UI_CONTRACT_READ_MINOR: u64 = 1;
 
 /// What a module's `node_ui/tatolab_node_ui.json` registers.
@@ -96,7 +95,7 @@ fn every_issue_of_a_node_ui_manifest(manifest: &NodeUiManifest) -> Vec<String> {
     if !is_a_contract_version_a_node_ui_manifest_is_read_against(&manifest.contract) {
         issues.push(format!(
             "`contract`: it names the view contract the elements were built for, and this runtime \
-             reads node UI elements of view contract {NODE_UI_CONTRACT_READ_MAJOR}.\
+             reads node UI elements of view contract {VIEW_CONTRACT_READ_MAJOR}.\
              {NODE_UI_CONTRACT_READ_MINOR}."
         ));
     }
@@ -114,7 +113,7 @@ fn every_issue_of_a_node_ui_manifest(manifest: &NodeUiManifest) -> Vec<String> {
                 .map(|(index, body)| (format!("node_bodies[{index}].script"), &body.script)),
         );
     for (field_path, script) in scripts {
-        if !is_a_path_inside_the_views_folder(script) {
+        if !is_a_path_inside_its_own_folder(script) {
             issues.push(format!(
                 "`{field_path}`: it is a path inside the node UI folder, with no `..` step, scheme \
                  or backslash."
@@ -128,7 +127,7 @@ fn is_a_contract_version_a_node_ui_manifest_is_read_against(contract: &str) -> b
     is_a_contract_version(contract)
         && is_a_contract_version_of_major_up_to_minor(
             contract,
-            NODE_UI_CONTRACT_READ_MAJOR,
+            VIEW_CONTRACT_READ_MAJOR,
             NODE_UI_CONTRACT_READ_MINOR,
         )
 }

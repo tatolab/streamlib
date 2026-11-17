@@ -11,9 +11,11 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
+use crate::contract_component_references::{
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names,
+};
 use crate::generate_runtime_client::{
-    COMPONENT_SCHEMA_REFERENCE_PREFIX, GENERATED_SOURCE_HEADER, is_a_wide_integer_format,
-    property_key,
+    GENERATED_SOURCE_HEADER, is_a_wide_integer_format, property_key,
 };
 
 /// One method or notification whose schemas `ControlSchemas` holds.
@@ -108,9 +110,7 @@ fn component_names_each_after_the_ones_it_names(
             return;
         }
         if let Some(schema) = component_schemas.get(name) {
-            let mut named_components = Vec::new();
-            component_names_a_schema_names(schema, &mut named_components);
-            for named_component in named_components {
+            for named_component in component_names_a_schema_names(schema) {
                 if let Some((key, _)) = component_schemas.get_key_value(named_component) {
                     visit(key, component_schemas, visited, declaration_order);
                 }
@@ -129,27 +129,6 @@ fn component_names_each_after_the_ones_it_names(
         );
     }
     declaration_order
-}
-
-fn component_names_a_schema_names<'schema>(schema: &'schema Value, named: &mut Vec<&'schema str>) {
-    match schema {
-        Value::Object(members) => {
-            if let Some(reference) = members.get("$ref").and_then(Value::as_str)
-                && let Some(name) = reference.strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
-            {
-                named.push(name);
-            }
-            for member in members.values() {
-                component_names_a_schema_names(member, named);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                component_names_a_schema_names(item, named);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Writes the zod expression of a JSON Schema, naming a component it refers to by its
