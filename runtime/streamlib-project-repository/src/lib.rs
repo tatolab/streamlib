@@ -5,6 +5,8 @@
 
 mod canonical_project_json;
 mod core_project_import;
+mod manifest_fields;
+mod node_ui_manifest;
 mod project_asset;
 #[cfg(feature = "history")]
 mod project_asset_file_bytes;
@@ -17,7 +19,6 @@ mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
-mod project_nodes_moved_off_tatolab_ops;
 mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
@@ -30,6 +31,7 @@ mod project_stream_document;
 mod project_transaction;
 mod project_views;
 mod sample_project;
+mod stream_document_upgrade;
 mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_default_port_and_variable_names;
@@ -44,6 +46,11 @@ pub use core_project_import::{
     CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
     link_the_core_project_into_each_import_of, the_core_project_link_in,
     the_core_project_linked_into,
+};
+pub use manifest_fields::is_a_path_inside_its_own_folder;
+pub use node_ui_manifest::{
+    NODE_UI_CONTRACT_READ_MINOR, NODE_UI_DIRECTORY, NODE_UI_MANIFEST_FILE_NAME, NodeUiManifest,
+    NodeUiManifestControl, NodeUiManifestNodeBody, read_node_ui_manifest,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,
@@ -66,9 +73,6 @@ pub use project_history_repository::{
     ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
-pub use project_nodes_moved_off_tatolab_ops::{
-    TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY, the_type_that_replaced_a_tatolab_ops_type,
-};
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,
@@ -115,6 +119,10 @@ pub use sample_project::{
     SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH, SampleProjectListed,
     SampleProjectTheRuntimeUnitCarries, every_sample_project_in, the_sample_project_named,
 };
+pub use stream_document_upgrade::{
+    NODE_INPUT_VALUES_KEY, NODE_KEYS_FOLDED_INTO_INPUT_VALUES, fold_into_input_values,
+    stream_document_in_the_current_shape, upgrade_stream_document_in_place,
+};
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
@@ -145,7 +153,7 @@ pub use stream_graph_document::{
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
-    assets_a_node_config_references, fragment_with_each_node_uuid_kept_by_its_name,
+    assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
     is_a_graph_interface_node_type,
 };
 pub use stream_graph_fragment_fold::{
@@ -164,5 +172,5 @@ pub const PROJECT_RUNTIME_DIRECTORY: &str = ".tatolab";
 pub use tatolab_view_manifest::{
     TatolabViewAcceptedFiles, TatolabViewCapability, TatolabViewDeclaredPort, TatolabViewManifest,
     TatolabViewPlacement, VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR,
-    is_a_path_inside_the_views_folder, read_tatolab_view_manifest,
+    read_tatolab_view_manifest,
 };

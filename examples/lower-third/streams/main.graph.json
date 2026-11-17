@@ -44,45 +44,45 @@
   ],
   "nodes": [
     {
-      "config": {
+      "id": "23f53615-9e59-4438-b89c-3ffb7384bbe2",
+      "input_values": {
         "max_height": 1080,
         "max_width": 1920
       },
-      "id": "23f53615-9e59-4438-b89c-3ffb7384bbe2",
       "name": "camerasource",
       "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
-      "config": {
+      "id": "b5b82154-7559-4988-b38b-5d81e7b41157",
+      "input_values": {
         "frame_rate": 60,
         "height": 220,
         "transparent_background": true,
         "url": "templates/lower_third.html",
         "width": 1280
       },
-      "id": "b5b82154-7559-4988-b38b-5d81e7b41157",
       "name": "browsersource",
       "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
-      "config": {},
       "id": "9a2ee2a2-a79a-48e9-898c-f1adb4a188a0",
       "name": "lowerthirdrundown",
       "type": "lower_third.nodes.lower_third_rundown:LowerThirdRundown"
     },
     {
-      "config": {
+      "id": "d160909f-7e7b-45b1-9bf7-dfef70c02ec6",
+      "input_values": {
         "frame_rate": 60,
         "height": 200,
         "riv_path": "templates/station_bug.riv",
         "width": 200
       },
-      "id": "d160909f-7e7b-45b1-9bf7-dfef70c02ec6",
       "name": "rivesource",
       "type": "tatolab.rive.rive_source:RiveSource"
     },
     {
-      "config": {
+      "id": "0490bf78-9f52-4959-ad93-c02afbc3e661",
+      "input_values": {
         "height": 1080,
         "layers": [
           {},
@@ -97,7 +97,6 @@
         ],
         "width": 1920
       },
-      "id": "0490bf78-9f52-4959-ad93-c02afbc3e661",
       "name": "alphaovercompositor",
       "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
     }

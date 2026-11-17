@@ -24,30 +24,30 @@
   ],
   "nodes": [
     {
-      "config": {
+      "id": "4d0392b8-f2fb-4425-ab82-dbc798e9f97e",
+      "input_values": {
         "max_height": 720,
         "max_width": 1280
       },
-      "id": "4d0392b8-f2fb-4425-ab82-dbc798e9f97e",
       "name": "camerasource",
       "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
-      "config": {
+      "id": "4dc0b988-aba8-4bbb-b1b3-5ced65a955d4",
+      "input_values": {
         "radial_distortion_k1": -0.25,
         "radial_distortion_k2": 0.0
       },
-      "id": "4dc0b988-aba8-4bbb-b1b3-5ced65a955d4",
       "name": "syntheticfisheyelens",
       "type": "nodes.synthetic_fisheye_lens:SyntheticFisheyeLens"
     },
     {
-      "config": {
+      "id": "2da3e043-330b-4935-a732-09048e8fbaa2",
+      "input_values": {
         "detection_confidence_threshold": 0.35,
         "radial_distortion_k1": -0.25,
         "radial_distortion_k2": 0.0
       },
-      "id": "2da3e043-330b-4935-a732-09048e8fbaa2",
       "name": "undistortingobjectdetector",
       "type": "nodes.undistorting_object_detector:UndistortingObjectDetector"
     }

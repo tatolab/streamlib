@@ -90,7 +90,7 @@ fn the_stream_asset_placed_by(document: &Value, placing_node: &str) -> String {
         .into_iter()
         .flatten()
         .find(|node| node["id"] == placing_node)
-        .and_then(|node| node["config"]["stream"]["asset"].as_str())
+        .and_then(|node| node["input_values"]["stream"]["asset"].as_str())
         .unwrap_or_else(|| panic!("node {placing_node} places no stream: {document}"))
         .to_owned()
 }
@@ -390,7 +390,7 @@ async fn an_edit_inside_a_stream_placed_twice_reaches_both_placements_and_undoes
         );
     }
 
-    let mut renamed_port_config = graph_input["config"].clone();
+    let mut renamed_port_config = graph_input["input_values"].clone();
     renamed_port_config["port"] = json!("video_in");
     engine
         .the_answer_of_the_tool(
@@ -566,7 +566,7 @@ async fn a_port_renamed_inside_a_placed_stream_is_carried_in_a_stream_the_same_t
         .unwrap()
         .to_owned();
     let graph_input = the_node_named(&project.the_graph_document_of("sub"), "pass-sink-video");
-    let mut renamed_port_config = graph_input["config"].clone();
+    let mut renamed_port_config = graph_input["input_values"].clone();
     renamed_port_config["port"] = json!("video_in");
 
     engine
@@ -659,7 +659,7 @@ async fn an_unlocked_placement_of_an_imports_stream_keeps_each_stream_it_places_
     let unlocked = cell.the_graph_document_of("main");
     assert_eq!(sorted_node_names_in(&unlocked), ["grain", "source"]);
     assert_eq!(
-        the_node_named(&unlocked, "grain")["config"],
+        the_node_named(&unlocked, "grain")["input_values"],
         json!({ "stream": { "asset": grain_asset, "from": arm.project } })
     );
     assert_eq!(

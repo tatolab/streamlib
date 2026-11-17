@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::control_operation::{
     ControlOperation, ControlOperationDeclaration, ControlOperationExposure,
 };
+use crate::control_operation_refusals::{ParamsThatDoNotMatchTheirSchema, the_params_read_as};
 use crate::control_operation_requests::{
     AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest, CloseViewerRequest,
     CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
@@ -340,6 +341,9 @@ pub enum ControlOperationCallParseRefusal {
         method_name: &'static str,
         /// What the request's parse said.
         why: String,
+        /// The JSON pointer of the value the parse stopped at; absent when it stopped at the
+        /// params as a whole.
+        params_pointer: Option<String>,
     },
 }
 
@@ -352,7 +356,9 @@ impl std::fmt::Display for ControlOperationCallParseRefusal {
                     "the runtime serves no operation named `{method_name}`"
                 )
             }
-            Self::InvalidParams { method_name, why } => {
+            Self::InvalidParams {
+                method_name, why, ..
+            } => {
                 write!(
                     formatter,
                     "`{method_name}`'s params do not match its request: {why}"
@@ -666,10 +672,11 @@ impl ControlOperationCall {
 fn the_request_of<Operation: ControlOperation>(
     params: Value,
 ) -> Result<Operation::Request, ControlOperationCallParseRefusal> {
-    serde_json::from_value(params).map_err(|parse_failure| {
+    the_params_read_as(params).map_err(|ParamsThatDoNotMatchTheirSchema { pointer, why }| {
         ControlOperationCallParseRefusal::InvalidParams {
             method_name: Operation::METHOD_NAME,
-            why: parse_failure.to_string(),
+            why,
+            params_pointer: pointer,
         }
     })
 }

@@ -31,7 +31,8 @@ impl ControlOperationDispatcher {
         &self,
         client_contract_version: Option<u32>,
     ) -> Result<DiscoverResult, ControlOperationRefusal> {
-        refuse_another_contract_version(client_contract_version)?;
+        refuse_another_contract_version(client_contract_version)
+            .map_err(ControlOperationRefusal::ContractVersionMismatch)?;
         let this_runtime = self
             .operations_on_the_loaded_streams
             .describe_this_runtime();
@@ -53,11 +54,9 @@ impl ControlOperationDispatcher {
         let listings =
             tokio::task::spawn_blocking(move || operations_on_the_loaded_streams.list_streams())
                 .await
-                .map_err(|join_failure| {
-                    ControlOperationRefusal::Failed(format!(
-                        "the stream action did not finish: {join_failure}"
-                    ))
-                })?;
+                .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                    "the stream action",
+                ))?;
         Ok(ListStreamsToolResult {
             streams: listings
                 .into_iter()
@@ -241,11 +240,9 @@ impl ControlOperationDispatcher {
                 })
         })
         .await
-        .map_err(|not_run| {
-            ControlOperationRefusal::Failed(format!(
-                "subscribe_stream_graph_changes failed: {not_run}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "subscribe_stream_graph_changes failed: the subscription",
+        ))?
     }
 
     pub(super) async fn subscribe_to_stream_action_changes(
@@ -266,10 +263,8 @@ impl ControlOperationDispatcher {
                 .collect(),
         })
         .await
-        .map_err(|not_run| {
-            ControlOperationRefusal::Failed(format!(
-                "subscribe_stream_action_changes failed: {not_run}"
-            ))
-        })
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "subscribe_stream_action_changes failed: the subscription",
+        ))
     }
 }

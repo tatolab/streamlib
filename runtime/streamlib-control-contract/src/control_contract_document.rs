@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use streamlib_node_schema::pin_type::{
     NodeInputMode, PinDeclaration, PinType, PinTypeDescription, built_in_pin_types,
 };
+use streamlib_project_repository::NodeUiManifest;
 use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire;
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
@@ -30,8 +31,14 @@ pub const CONTROL_CONTRACT_FILE_WORKSPACE_PATH: &str =
 pub const CONTROL_OPERATION_REFUSED_ERROR_CODE: i64 = 1;
 
 /// The JSON-RPC error code of an operation that could not be carried out, its message the
-/// runtime's own words.
+/// runtime's own words and its `data` the refusal.
 pub const CONTROL_OPERATION_FAILED_ERROR_CODE: i64 = 2;
+
+/// JSON-RPC's error code of a method no operation has, its `data` the refusal.
+pub const JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE: i64 = -32601;
+
+/// JSON-RPC's error code of params that do not match the operation's, its `data` the refusal.
+pub const JSON_RPC_INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
 /// The JSON-RPC error code of a `discover` from a client built against another contract version,
 /// its `data` both versions.
@@ -81,6 +88,7 @@ pub fn control_contract_document() -> Value {
         .map(|row| the_pin_type_entry_of(row, &mut schema_generator))
         .collect();
     the_pin_type_components_added_to(&mut schema_generator);
+    the_node_ui_manifest_component_added_to(&mut schema_generator);
     let component_schemas: Map<String, Value> = schema_generator.take_definitions(true);
     json!({
         "openrpc": OPENRPC_DOCUMENT_VERSION,
@@ -178,6 +186,12 @@ fn the_pin_type_components_added_to(schema_generator: &mut schemars::SchemaGener
     schema_generator.subschema_for::<NodeInputMode>();
 }
 
+/// Adds the node UI manifest's shape, which no operation names, so the runtime client generates
+/// its type and the JSON Schema an author's editor reads from the file.
+fn the_node_ui_manifest_component_added_to(schema_generator: &mut schemars::SchemaGenerator) {
+    schema_generator.subschema_for::<NodeUiManifest>();
+}
+
 fn the_errors_of(
     declaration: &ControlOperationDeclaration,
     refusal_schema: &schemars::Schema,
@@ -192,6 +206,12 @@ fn the_errors_of(
         json!({
             "code": CONTROL_OPERATION_FAILED_ERROR_CODE,
             "message": "failed",
+            "data": refusal_schema,
+        }),
+        json!({
+            "code": JSON_RPC_INVALID_PARAMS_ERROR_CODE,
+            "message": "params do not match",
+            "data": refusal_schema,
         }),
     ];
     if declaration.method_name == Discover::METHOD_NAME {
@@ -380,8 +400,42 @@ mod tests {
     }
 
     #[test]
+    fn the_node_ui_manifest_is_a_component_whose_control_type_names_a_built_in_pin_type() {
+        let document = control_contract_document();
+        let schemas = &document["components"]["schemas"];
+        let manifest = &schemas["NodeUiManifest"];
+        assert_eq!(manifest["additionalProperties"], json!(false));
+        assert_eq!(manifest["required"], json!(["contract"]));
+        assert_eq!(
+            manifest["properties"]["controls"]["items"],
+            json!({ "$ref": "#/components/schemas/NodeUiManifestControl" })
+        );
+        let control = &schemas["NodeUiManifestControl"];
+        assert_eq!(control["additionalProperties"], json!(false));
+        assert_eq!(control["required"], json!(["type", "script"]));
+        assert_eq!(
+            control["properties"]["type"]["$ref"],
+            json!("#/components/schemas/BuiltInPinTypeName")
+        );
+        assert_eq!(control["properties"]["control"]["type"], json!("string"));
+        let listed_names: Vec<Value> = schemas["BuiltInPinTypeName"]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`BuiltInPinTypeName` is a `oneOf`"))
+            .iter()
+            .map(|alternative| alternative["const"].clone())
+            .collect();
+        let row_names: Vec<Value> = document["x-pin-types"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`x-pin-types` is an array"))
+            .iter()
+            .map(|row| row["name"].clone())
+            .collect();
+        assert_eq!(listed_names, row_names);
+    }
+
+    #[test]
     fn every_component_schema_uses_only_the_keywords_the_contract_uses() {
-        const KEYWORDS: [&str; 15] = [
+        const KEYWORDS: [&str; 16] = [
             "type",
             "properties",
             "required",
@@ -397,6 +451,7 @@ mod tests {
             "minimum",
             "description",
             "default",
+            "x-may-grow",
         ];
         let document = control_contract_document();
         let mut keywords = std::collections::BTreeSet::new();

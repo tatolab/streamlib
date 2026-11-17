@@ -24,19 +24,16 @@
   ],
   "nodes": [
     {
-      "config": {},
       "id": "777c0dab-ae92-4df3-9d8f-bb1c4d4e98b6",
       "name": "testpatternsource",
       "type": "tatolab.testpattern:TestPatternSource"
     },
     {
-      "config": {},
       "id": "02a2b427-bbc4-4d9f-a376-854af4fa8755",
       "name": "halftonelenseffect",
       "type": "nodes.halftone_lens_effect:HalftoneLensEffect"
     },
     {
-      "config": {},
       "id": "cc82bb1b-e53b-43c4-938b-60be47f48da1",
       "name": "brightnessmeter",
       "type": "nodes.brightness_meter:BrightnessMeter"

@@ -48,7 +48,7 @@ struct OneImportReadForItsNodeTypeListing {
 async fn the_node_type_sources_the_projects_interpreter_lists(
     project_directory: PathBuf,
     import_sources: Vec<ImportedProjectPythonSources>,
-) -> Result<Vec<NodeTypeSourceReadWithoutRunningIt>, String> {
+) -> Result<Vec<NodeTypeSourceReadWithoutRunningIt>, ControlOperationRefusal> {
     tokio::task::spawn_blocking(move || {
         list_a_projects_node_types_and_graph_generators_from_source(
             &project_directory,
@@ -56,19 +56,19 @@ async fn the_node_type_sources_the_projects_interpreter_lists(
         )
     })
     .await
-    .map_err(|join_failure| {
-        format!("list_project_node_types failed: the listing did not finish: {join_failure}")
-    })?
+    .map_err(ControlOperationRefusal::the_task_did_not_finish(
+        "list_project_node_types failed: the listing",
+    ))?
     .map_err(|refusal| format!("list_project_node_types failed: {refusal}"))?
     .into_iter()
     .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
     .collect::<Result<Vec<_>, _>>()
     .map_err(|not_a_source| {
-        format!(
+        ControlOperationRefusal::Failed(format!(
             "list_project_node_types failed: the project's interpreter listed a source this \
              runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
              the runtime's"
-        )
+        ))
     })
 }
 

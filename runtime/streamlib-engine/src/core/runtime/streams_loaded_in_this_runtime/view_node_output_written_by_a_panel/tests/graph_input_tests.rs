@@ -579,3 +579,87 @@ fn a_value_written_to_a_stopped_reset_graph_input_is_refused_saying_the_project_
     );
     stream.stop().expect("the stream ends");
 }
+
+/// A published Studio reads a node's values from the keys `graph` rendered before a node held
+/// one map of input values, so a stream saved in the one map still renders them.
+#[test]
+#[serial]
+fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_studio_reads() {
+    let project_directory = a_temporary_directory_at_owner_only_mode().unwrap();
+    std::fs::write(
+        project_directory.path().join(PROJECT_FILE_NAME),
+        TatolabProjectFile::of_a_new_project("acme-show")
+            .canonical_bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    let source_type =
+        crate::core::test_support::MockSourceTakingOneSetting::node_class_import_path();
+    let sink_type = crate::core::test_support::MockInputOnlyNode::node_class_import_path();
+    let graph = crate::core::graph::graph_snapshot::GraphSnapshot::from_graph_document(json!({
+        "nodes": [
+            {"name": "front", "type": source_type.as_str(),
+             "input_values": {"frame_width": 640}},
+            {"name": "sink", "type": sink_type.as_str(), "input_values": {"in1": {"level": 1}}},
+            {"name": "lights",
+             "type": crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE,
+             "input_values": {"port": "lights", "family": "records",
+                              "default": {"level": 0.0}}},
+        ]
+    }))
+    .unwrap();
+    stream
+        .load_graph_snapshot_into_this_stream(&graph, None)
+        .expect("the graph loads");
+
+    let rendered = stream.to_json().unwrap();
+    let node_named = |name: &str| {
+        rendered["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|node| node["name"] == name)
+            .unwrap_or_else(|| panic!("`graph` renders {name}: {rendered}"))
+            .clone()
+    };
+    let front = node_named("front");
+    assert_eq!(front["config"], json!({"frame_width": 640}));
+    assert_eq!(node_named("sink")["pins"], json!({"in1": {"level": 1}}));
+    let lights = node_named("lights");
+    assert_eq!(
+        lights["config"],
+        json!({"port": "lights", "family": "records", "default": {"level": 0.0}})
+    );
+    assert_eq!(
+        lights["components"]["graph_interface"]["current_value"],
+        json!({"level": 0.0})
+    );
+    for node in rendered["nodes"].as_array().unwrap() {
+        assert!(node.get("input_values").is_none(), "{node}");
+    }
+    let render_schema = serde_json::to_value(schemars::schema_for!(
+        crate::core::json_schema::GraphResponse
+    ))
+    .unwrap();
+    let node_render_schema = render_schema
+        .get("definitions")
+        .or_else(|| render_schema.get("$defs"))
+        .map(|definitions| definitions["GraphNodeOutput"]["properties"].clone())
+        .unwrap();
+    for key in ["config", "pins", "exposed_config_fields", "components"] {
+        assert!(
+            node_render_schema.get(key).is_some(),
+            "`graph` renders `{key}` on a node"
+        );
+    }
+    let catalog = serde_json::to_value(schemars::schema_for!(
+        crate::core::json_schema::NodeDescriptorOutput
+    ))
+    .unwrap();
+    assert!(
+        catalog["properties"].get("config_schema").is_some(),
+        "the catalog renders each type's `config_schema`: {catalog}"
+    );
+    stream.stop().expect("the stream ends");
+}

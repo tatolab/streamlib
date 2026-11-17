@@ -1,7 +1,6 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { CONTROL_OPERATION_REFUSED_ERROR_CODE } from "./control_contract.js";
 import { ControlSchemas } from "./control_schemas.js";
 
 const WRITTEN_INTEGER_PATTERN = /^-?\d+$/;
@@ -16,9 +15,6 @@ export class ControlOperationError extends Error {
   }
 
   get refusal() {
-    if (this.code !== CONTROL_OPERATION_REFUSED_ERROR_CODE) {
-      return undefined;
-    }
     const checkedRefusal = ControlSchemas.components.ProjectActionRefusalOnTheWire.safeParse(this.data);
     return checkedRefusal.success ? checkedRefusal.data : undefined;
   }

@@ -10,5 +10,9 @@
     "allowJs": true,
     "checkJs": true
   },
-  "files": ["a_client_calling_the_runtime.ts", "../control_schemas.js"]
+  "files": [
+    "a_client_calling_the_runtime.ts",
+    "a_node_ui_manifest_an_author_writes.ts",
+    "../control_schemas.js"
+  ]
 }

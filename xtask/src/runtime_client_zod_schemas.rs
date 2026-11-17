@@ -11,9 +11,11 @@ use std::fmt::Write as _;
 
 use serde_json::{Map, Value};
 
+use crate::contract_component_references::{
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names,
+};
 use crate::generate_runtime_client::{
-    COMPONENT_SCHEMA_REFERENCE_PREFIX, GENERATED_SOURCE_HEADER, is_a_wide_integer_format,
-    property_key,
+    GENERATED_SOURCE_HEADER, READS_ITS_DEFAULT_MARK, is_a_wide_integer_format, property_key,
 };
 
 /// One method or notification whose schemas `ControlSchemas` holds.
@@ -108,9 +110,7 @@ fn component_names_each_after_the_ones_it_names(
             return;
         }
         if let Some(schema) = component_schemas.get(name) {
-            let mut named_components = Vec::new();
-            component_names_a_schema_names(schema, &mut named_components);
-            for named_component in named_components {
+            for named_component in component_names_a_schema_names(schema) {
                 if let Some((key, _)) = component_schemas.get_key_value(named_component) {
                     visit(key, component_schemas, visited, declaration_order);
                 }
@@ -129,27 +129,6 @@ fn component_names_each_after_the_ones_it_names(
         );
     }
     declaration_order
-}
-
-fn component_names_a_schema_names<'schema>(schema: &'schema Value, named: &mut Vec<&'schema str>) {
-    match schema {
-        Value::Object(members) => {
-            if let Some(reference) = members.get("$ref").and_then(Value::as_str)
-                && let Some(name) = reference.strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
-            {
-                named.push(name);
-            }
-            for member in members.values() {
-                component_names_a_schema_names(member, named);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                component_names_a_schema_names(item, named);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Writes the zod expression of a JSON Schema, naming a component it refers to by its
@@ -184,6 +163,19 @@ impl ZodSourceWriter<'_> {
                 name.to_owned()
             } else {
                 format!("z.lazy(() => {name})")
+            };
+        }
+        if let Some((closed, fallback)) = the_closed_set_and_fallback_of_a_set_that_may_grow(schema)
+        {
+            let with_fallback = format!(
+                "{}.catch({})",
+                self.expression_of(&closed, indent_level),
+                json_text_of(fallback)
+            );
+            return match fallback {
+                Value::String(_) => format!("z.string().pipe({with_fallback})"),
+                Value::Number(_) => format!("z.number().pipe({with_fallback})"),
+                _ => with_fallback,
             };
         }
         if let Some(constant) = schema.get("const") {
@@ -344,9 +336,11 @@ impl ZodSourceWriter<'_> {
         let mut shape = String::from("{\n");
         for (property_name, property_schema) in properties.into_iter().flatten() {
             let optional = if required.contains(&property_name.as_str()) {
-                ""
+                String::new()
+            } else if property_schema[READS_ITS_DEFAULT_MARK] == Value::Bool(true) {
+                format!(".default({})", json_text_of(&property_schema["default"]))
             } else {
-                ".optional()"
+                ".optional()".to_owned()
             };
             let _ = writeln!(
                 shape,
@@ -365,6 +359,23 @@ impl ZodSourceWriter<'_> {
             ),
         }
     }
+}
+
+/// A set marked `x-may-grow`, without the mark, and the member a value it does not name reads
+/// as: its last, as the runtime's `#[serde(other)]` reads one. Only a value of the members' own
+/// JSON type falls back; any other is refused. `None` for any other schema.
+fn the_closed_set_and_fallback_of_a_set_that_may_grow(schema: &Value) -> Option<(Value, &Value)> {
+    if schema.get("x-may-grow") != Some(&Value::Bool(true)) {
+        return None;
+    }
+    let fallback = match (schema["enum"].as_array(), schema["oneOf"].as_array()) {
+        (Some(members), _) => members.last()?,
+        (None, Some(variants)) => variants.last()?.get("const")?,
+        (None, None) => return None,
+    };
+    let mut closed = schema.clone();
+    closed.as_object_mut()?.remove("x-may-grow");
+    Some((closed, fallback))
 }
 
 fn literal_expression_of(constant: &Value) -> String {
@@ -414,6 +425,28 @@ mod tests {
             position_being_declared: None,
         }
         .expression_of(schema, 0)
+    }
+
+    #[test]
+    fn a_set_that_may_grow_reads_a_member_it_does_not_name_as_its_last() {
+        assert_eq!(
+            expression_outside_any_component(&json!({
+                "oneOf": [
+                    { "type": "string", "const": "operation_not_found" },
+                    { "type": "string", "const": "refused" },
+                ],
+                "x-may-grow": true,
+            })),
+            "z.string().pipe(z.union([z.literal(\"operation_not_found\"), z.literal(\"refused\")]).catch(\"refused\"))"
+        );
+        assert_eq!(
+            expression_outside_any_component(&json!({ "enum": ["a", "b"], "x-may-grow": true })),
+            "z.string().pipe(z.enum([\"a\", \"b\"]).catch(\"b\"))"
+        );
+        assert_eq!(
+            expression_outside_any_component(&json!({ "enum": ["a", "b"] })),
+            "z.enum([\"a\", \"b\"])"
+        );
     }
 
     #[test]

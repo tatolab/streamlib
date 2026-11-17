@@ -3,9 +3,10 @@
 
 //! The compatibility record of graph documents: every golden document in
 //! `golden_graph_documents/` reads on this build, holds a UUID for its stream
-//! asset and each node, is written in the canonical form this build writes, and
-//! loads once its module nodes are taken out by UUID. A golden is never edited;
-//! a change to the document's shape adds one beside it.
+//! asset and each node, is written in the canonical form this build writes of it
+//! once upgraded to the current shape, and loads once its module nodes are taken
+//! out by UUID. A golden is never edited; a change to the document's shape adds
+//! one beside it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,14 @@ const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
     (
         "0002-a-labelled-group-of-nodes.graph.json",
         "26d953f39e76c4d76e34194bb5e6779a6e6c5594f2662eae84423e29e3d19d40",
+    ),
+    (
+        "0003-every-value-of-a-node-in-its-input-values.graph.json",
+        "ac6aee4e2959aaedbecc8ede1c09203f4c319d81f3ec8385fafc1a98196389c7",
+    ),
+    (
+        "0004-an-exposed-config-field-and-a-fragment-holding-input-values.graph.json",
+        "41ba25ac58f53aa28dade98a5ea048f6577a366159d0f9cf3e5b21215f42589f",
     ),
 ];
 
@@ -94,8 +103,9 @@ fn module_node_uuids_in(graph_document: &serde_json::Value) -> BTreeSet<String> 
 }
 
 /// A golden reads whole with a UUID on its asset and every node, is the canonical
-/// document this build writes of it, and with its module nodes taken out by UUID, the
-/// built-ins left load on a runtime with no interpreter.
+/// document this build writes of it once upgraded to the current shape, and with its
+/// module nodes taken out by UUID, the built-ins left load on a runtime with no
+/// interpreter.
 #[test]
 fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
     register_media_builtin_node_types();
@@ -111,13 +121,23 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
             graph.nodes.iter().all(|node| node.id.is_some()),
             "{path:?} holds a node with no UUID"
         );
+        let recorded_graph_document = golden_graph_document(&path);
+        let mut upgraded_graph_document = recorded_graph_document.clone();
+        let document_in_the_current_shape =
+            if streamlib_project_repository::upgrade_stream_document_in_place(
+                &mut upgraded_graph_document,
+            ) {
+                streamlib_project_repository::canonical_project_json_bytes(&upgraded_graph_document)
+                    .expect("an upgraded golden serializes")
+            } else {
+                document_bytes
+            };
         assert_eq!(
             String::from_utf8(graph.graph_document_bytes().expect("the graph writes")).unwrap(),
-            String::from_utf8(document_bytes).unwrap(),
+            String::from_utf8(document_in_the_current_shape).unwrap(),
             "{path:?} is not the canonical document this build writes of it"
         );
 
-        let recorded_graph_document = golden_graph_document(&path);
         let built_ins_only = GraphSnapshot::from_graph_document(without_the_nodes_of_the_uuids(
             &recorded_graph_document,
             &module_node_uuids_in(&recorded_graph_document),

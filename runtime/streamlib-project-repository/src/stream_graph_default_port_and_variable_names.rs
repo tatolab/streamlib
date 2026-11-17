@@ -101,7 +101,7 @@ fn the_names_nodes_of_the_type_hold(
         .into_iter()
         .filter(|node| node.node_type == node_type)
         .filter_map(|node| {
-            node.config
+            node.input_values
                 .get(name_key)
                 .and_then(Value::as_str)
                 .filter(|name| !name.is_empty())

@@ -224,21 +224,59 @@ impl LocalApiMcpToolClient {
         tool_arguments: serde_json::Map<String, serde_json::Value>,
         call_timeout: Duration,
     ) -> Result<String, LocalApiMcpToolClientFailure> {
-        let request = CallToolRequestParams::new(CALL_OPERATION_TOOL_NAME).with_arguments(
-            serde_json::Map::from_iter([
-                (
-                    "operation".to_owned(),
-                    serde_json::Value::String(tool_name.to_owned()),
-                ),
-                (
-                    "params".to_owned(),
-                    serde_json::Value::Object(tool_arguments),
-                ),
-            ]),
-        );
+        let tool_result = self
+            .tool_result_of(
+                tool_name,
+                call_operation_request(tool_name, tool_arguments),
+                call_timeout,
+            )
+            .await?;
+        first_text_block_of_tool_result(tool_name, tool_result)
+    }
+
+    /// Run `operation` with `params`: by its own name when the runtime lists a tool under it, and
+    /// through `call_operation` otherwise. Answers what it answered, a refusal included.
+    pub(crate) async fn call_operation_by_name(
+        &self,
+        operation: &str,
+        params: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<OperationAnswered, LocalApiMcpToolClientFailure> {
+        let listed_tools = tokio::time::timeout(
+            self.request_timeout,
+            self.connected_mcp_client.list_all_tools(),
+        )
+        .await
+        .map_err(|_elapsed| {
+            LocalApiMcpToolClientFailure::local_api_unreachable(format!(
+                "the runtime at {} did not list its tools within {:?}",
+                self.local_api_socket_path.display(),
+                self.request_timeout
+            ))
+        })?
+        .map_err(|service_failure| {
+            self.failure_for_a_tool_call_without_a_result("tools/list", service_failure)
+        })?;
+        let request = if listed_tools.iter().any(|tool| tool.name == operation) {
+            CallToolRequestParams::new(operation.to_owned()).with_arguments(params)
+        } else {
+            call_operation_request(operation, params)
+        };
+        let tool_result = self
+            .tool_result_of(operation, request, self.request_timeout)
+            .await?;
+        operation_answered_by(operation, tool_result)
+    }
+
+    /// The result `request` for `tool_name` came back with, waiting at most `call_timeout`.
+    async fn tool_result_of(
+        &self,
+        tool_name: &str,
+        request: CallToolRequestParams,
+        call_timeout: Duration,
+    ) -> Result<CallToolResult, LocalApiMcpToolClientFailure> {
         match tokio::time::timeout(call_timeout, self.connected_mcp_client.call_tool(request)).await
         {
-            Ok(Ok(tool_result)) => first_text_block_of_tool_result(tool_name, tool_result),
+            Ok(Ok(tool_result)) => Ok(tool_result),
             Ok(Err(service_failure)) => {
                 Err(self.failure_for_a_tool_call_without_a_result(tool_name, service_failure))
             }
@@ -345,30 +383,90 @@ fn connected_mcp_client_or_failure(
     }
 }
 
-/// The first text block of a tool's result, or the failure it reported.
+/// What an operation run by name answered: the text of its result, or of its refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OperationAnswered {
+    /// The operation's result, as JSON text.
+    Answered(String),
+    /// The runtime's refusal, as JSON text.
+    Refused(String),
+}
+
+/// The `call_operation` request that runs `operation` with `params`.
+fn call_operation_request(
+    operation: &str,
+    params: serde_json::Map<String, serde_json::Value>,
+) -> CallToolRequestParams {
+    CallToolRequestParams::new(CALL_OPERATION_TOOL_NAME).with_arguments(serde_json::Map::from_iter(
+        [
+            (
+                "operation".to_owned(),
+                serde_json::Value::String(operation.to_owned()),
+            ),
+            ("params".to_owned(), serde_json::Value::Object(params)),
+        ],
+    ))
+}
+
+/// What `operation` answered in `tool_result`: its first text block, as a result or a refusal.
+fn operation_answered_by(
+    operation: &str,
+    tool_result: CallToolResult,
+) -> Result<OperationAnswered, LocalApiMcpToolClientFailure> {
+    let refused = tool_result.is_error.unwrap_or(false);
+    let first_text = first_text_of(tool_result).ok_or_else(|| {
+        LocalApiMcpToolClientFailure::tool_call_failed(format!(
+            "{operation} returned no text content"
+        ))
+    })?;
+    Ok(if refused {
+        OperationAnswered::Refused(first_text)
+    } else {
+        OperationAnswered::Answered(first_text)
+    })
+}
+
+/// The first text block of a tool's result, or the failure it reported in the runtime's words.
 fn first_text_block_of_tool_result(
     tool_name: &str,
     tool_result: CallToolResult,
 ) -> Result<String, LocalApiMcpToolClientFailure> {
     let tool_reported_a_failure = tool_result.is_error.unwrap_or(false);
-    let first_text =
-        tool_result
-            .content
-            .into_iter()
-            .find_map(|content_block| match content_block {
-                ContentBlock::Text(text_block) => Some(text_block.text),
-                _ => None,
-            });
-    match (tool_reported_a_failure, first_text) {
+    match (tool_reported_a_failure, first_text_of(tool_result)) {
         (false, Some(first_text)) => Ok(first_text),
         (true, failure_text) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
             "{tool_name} failed: {}",
-            failure_text.as_deref().unwrap_or("no detail given")
+            failure_text.map_or_else(
+                || "no detail given".to_owned(),
+                the_runtime_words_of_a_refusal
+            )
         ))),
         (false, None) => Err(LocalApiMcpToolClientFailure::tool_call_failed(format!(
             "{tool_name} returned no text content"
         ))),
     }
+}
+
+/// The text of a tool's first text block.
+fn first_text_of(tool_result: CallToolResult) -> Option<String> {
+    tool_result
+        .content
+        .into_iter()
+        .find_map(|content_block| match content_block {
+            ContentBlock::Text(text_block) => Some(text_block.text),
+            _ => None,
+        })
+}
+
+/// The `runtime_words` of the refusal a failed tool's text is the JSON of, or the text itself
+/// from a runtime that answers a sentence.
+fn the_runtime_words_of_a_refusal(failure_text: String) -> String {
+    #[derive(serde::Deserialize)]
+    struct RefusalWords {
+        runtime_words: String,
+    }
+    serde_json::from_str::<RefusalWords>(&failure_text)
+        .map_or(failure_text, |RefusalWords { runtime_words }| runtime_words)
 }
 
 /// Connect, call `tool_name` once with `tool_arguments` waiting at most `call_timeout` for its
@@ -697,6 +795,37 @@ mod tests {
                 "no runtime answers MCP at {NOTHING_LISTENS_LOCAL_API_SOCKET_PATH} ("
             )),
             "{unreachable_message}"
+        );
+    }
+
+    #[test]
+    fn a_failed_tool_reports_its_refusals_words_on_one_line() {
+        let refusal = serde_json::json!({
+            "refusal_code": "refused",
+            "action": "graph",
+            "suggested_call": { "operation": "list_streams", "params": {} },
+            "runtime_words": "no stream named \"nope\" is loaded",
+        });
+        assert_eq!(
+            first_text_block_of_tool_result(
+                "graph",
+                CallToolResult::error(vec![ContentBlock::text(
+                    serde_json::to_string_pretty(&refusal).unwrap()
+                )])
+            ),
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph failed: no stream named \"nope\" is loaded".to_owned()
+            ))
+        );
+        assert_eq!(
+            first_text_block_of_tool_result(
+                "graph",
+                CallToolResult::error(vec![ContentBlock::text("a sentence")])
+            ),
+            Err(LocalApiMcpToolClientFailure::tool_call_failed(
+                "graph failed: a sentence".to_owned()
+            )),
+            "a runtime that answers a sentence"
         );
     }
 

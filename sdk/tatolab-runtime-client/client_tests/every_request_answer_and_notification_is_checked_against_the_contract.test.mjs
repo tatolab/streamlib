@@ -71,13 +71,42 @@ test("an answer that does not match the contract rejects naming what does not", 
   }
 });
 
+test("params that do not match reject with the refusal naming where", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/srv/project" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = {
+      refusal_code: "params_do_not_match_schema",
+      action: "open_project",
+      refused_params_pointer: "/project_directory",
+      suggested_call: { operation: "describe_operations", params: { operations: ["open_project"] } },
+      runtime_words: "`open_project`'s params do not match its request: invalid type",
+    };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: -32602, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.equal(rejection.code, -32602);
+      assert.equal(rejection.message, refusal.runtime_words);
+      assert.deepEqual(rejection.refusal, refusal);
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
 test("the runtime's refusal rejects in its own words with the structured refusal", async () => {
   const localApi = await startALocalApiThatAnswersOnlyWhenTold();
   try {
     const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
     const opened = client.open_project({ project_directory: "relative" });
     await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
-    const refusal = { action: "open_project", runtime_words: "`relative` is not an absolute directory" };
+    const refusal = { refusal_code: "refused", action: "open_project", runtime_words: "`relative` is not an absolute directory" };
     localApi.writeOnTheConnection(
       JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
     );
@@ -85,6 +114,75 @@ test("the runtime's refusal rejects in its own words with the structured refusal
       assert.ok(rejection instanceof ControlOperationError);
       assert.equal(rejection.message, refusal.runtime_words);
       assert.deepEqual(rejection.refusal, refusal);
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("a refusal code this client does not know reads as refused and keeps the refusal's other fields", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = {
+      refusal_code: "a_code_added_after_this_client",
+      action: "open_project",
+      refused_params_pointer: "/project_directory",
+      suggested_call: { operation: "list_streams", params: {} },
+      runtime_words: "the runtime refused it",
+    };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.deepEqual(rejection.refusal, { ...refusal, refusal_code: "refused" });
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("a refusal from a runtime that sends no code reads as refused", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = { action: "open_project", refused_operation_index: 0, runtime_words: "the runtime refused it" };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.deepEqual(rejection.refusal, { ...refusal, refusal_code: "refused" });
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("a refusal code that is not a string is not read as a refusal", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const notARefusal = { refusal_code: 42, action: "open_project", runtime_words: "the runtime refused it" };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: notARefusal.runtime_words, data: notARefusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.equal(rejection.refusal, undefined);
       return true;
     });
     await client.close();

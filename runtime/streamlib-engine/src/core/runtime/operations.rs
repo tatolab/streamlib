@@ -64,15 +64,23 @@ pub trait RuntimeOperations: Send + Sync {
         names_at_the_level: &std::collections::HashSet<String>,
     ) -> Result<String>;
 
-    /// Refuse a node of type `node_type` named `node_name` holding `config` that a live add to
-    /// this stream would refuse: a type it does not resolve once described, or a config the
-    /// type's config schema refuses.
+    /// Refuse a node of type `node_type` named `node_name` holding `input_values` that a live
+    /// add to this stream would refuse: a type it does not resolve once described, or a config
+    /// the type's config schema refuses.
     fn refuse_a_node_a_live_add_would_refuse(
         &self,
         node_type: &str,
         node_name: &str,
-        config: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'_, Result<()>>;
+
+    /// The config a node of type `node_type` holding `input_values` takes whole, as this stream
+    /// resolves the type: the input values its config schema lists.
+    fn the_config_a_node_holding_the_input_values_takes(
+        &self,
+        node_type: &str,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value>;
 
     /// Bring each stream fragment of this stream's live graph to the stream it references, as
     /// that stream's graph document, or its import's, is on disk now.

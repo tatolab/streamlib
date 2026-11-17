@@ -94,11 +94,7 @@ impl AssetToolsServedOverAProject {
 }
 
 fn the_error_text_of(tool_result: &Value) -> String {
-    assert_eq!(tool_result["isError"], true, "{tool_result}");
-    tool_result["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .to_string()
+    crate::mcp::tests::the_refusal_of_a_tool_result(tool_result).runtime_words
 }
 
 fn exists_under(project_directory: &Path, path: &str) -> bool {

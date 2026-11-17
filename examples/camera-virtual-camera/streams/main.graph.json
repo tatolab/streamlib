@@ -34,32 +34,30 @@
   ],
   "nodes": [
     {
-      "config": {},
       "id": "d011f6e5-a692-4745-b718-990fe6d365d2",
       "name": "camerasource",
       "type": "tatolab.camera.camera_source:CameraSource"
     },
     {
-      "config": {},
       "id": "95fbd17b-011a-41fd-9e08-7764f6eb76a7",
       "name": "invertingeffect",
       "type": "nodes.inverting_effect:InvertingEffect"
     },
     {
-      "config": {
+      "id": "26da8196-10ba-4e63-ac2c-f3070909ab2e",
+      "input_values": {
         "door": "auto",
         "name": "Tatolab Camera"
       },
-      "id": "26da8196-10ba-4e63-ac2c-f3070909ab2e",
       "name": "passthrough-virtual-camera",
       "type": "tatolab.virtualcamera:VirtualCameraSink"
     },
     {
-      "config": {
+      "id": "6ebff331-7290-4aae-bd52-b24ef7135967",
+      "input_values": {
         "door": "auto",
         "name": "Tatolab Camera Inverted"
       },
-      "id": "6ebff331-7290-4aae-bd52-b24ef7135967",
       "name": "inverted-virtual-camera",
       "type": "tatolab.virtualcamera:VirtualCameraSink"
     }

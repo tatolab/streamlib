@@ -28,8 +28,7 @@ fn a_node(name: &str) -> StreamGraphDocumentNode {
         id: Uuid::new_v4(),
         name: name.to_owned(),
         node_type: "nodes.effect:Effect".to_owned(),
-        config: json!({}),
-        pins: Map::new(),
+        input_values: Map::new(),
         exposed_config_fields: Vec::new(),
         studio: Default::default(),
         fragment: None,
@@ -193,7 +192,7 @@ fn a_rerun_keeps_the_uuid_of_each_node_whose_name_is_unchanged_at_every_level() 
         );
     }
     assert_eq!(
-        second_run["nodes"][1]["fragment"]["nodes"][0]["config"]["radius"],
+        second_run["nodes"][1]["fragment"]["nodes"][0]["input_values"]["radius"],
         8
     );
     let tint = uuid_of_the_node_at(&second_run, &["tint"]);
@@ -234,12 +233,12 @@ fn a_fragment_refreshed_and_refreshed_back_is_the_document_it_was() {
         node: look.id,
         from: StreamGraphFragmentPlacement {
             generator: look.node_type.clone(),
-            config: json!({}),
+            input_values: Map::new(),
             fragment: first_run.clone(),
         },
         to: StreamGraphFragmentPlacement {
             generator: look.node_type.clone(),
-            config: json!({"radius": 8}),
+            input_values: Map::from_iter([("radius".to_owned(), json!(8))]),
             fragment: fragment_with_each_node_uuid_kept_by_its_name(
                 &a_look_fragment_run(8, true),
                 Some(&first_run),
@@ -251,7 +250,10 @@ fn a_fragment_refreshed_and_refreshed_back_is_the_document_it_was() {
     let before = document.canonical_bytes().unwrap();
 
     document.apply(&refresh).unwrap();
-    assert_eq!(document.node(look.id).unwrap().config, json!({"radius": 8}));
+    assert_eq!(
+        document.node(look.id).unwrap().input_values,
+        Map::from_iter([("radius".to_owned(), json!(8))])
+    );
     document.apply(&refresh.inverse()).unwrap();
 
     assert_eq!(document.canonical_bytes().unwrap(), before);
@@ -269,7 +271,7 @@ fn a_refresh_of_a_node_holding_no_fragment_is_refused_naming_it() {
         .unwrap();
     let placement = StreamGraphFragmentPlacement {
         generator: "generators.look:look".to_owned(),
-        config: json!({}),
+        input_values: Map::new(),
         fragment: json!({"nodes": [], "links": []}),
     };
 
@@ -344,16 +346,22 @@ fn a_link_end_naming_its_node_by_name_reads_as_its_uuid() {
 }
 
 #[test]
-fn a_config_references_its_projects_assets_and_leaves_another_projects_to_it() {
+fn input_values_reference_their_projects_assets_at_any_depth_and_leave_another_projects_to_it() {
     let image = Uuid::new_v4();
     let lut = Uuid::new_v4();
-    let config = json!({
+    let input_values = json!({
         "image": {"asset": image},
         "grading": [{"lut": {"asset": lut}}],
         "font": {"asset": Uuid::new_v4(), "from": Uuid::new_v4()},
         "label": "asset",
     });
-    assert_eq!(assets_a_node_config_references(&config), [image, lut]);
+    let Value::Object(input_values) = input_values else {
+        unreachable!()
+    };
+    assert_eq!(
+        assets_a_nodes_input_values_reference(&input_values),
+        [image, lut]
+    );
 }
 
 #[test]
@@ -602,4 +610,175 @@ fn a_generators_group_naming_a_node_the_fragment_does_not_hold_is_refused_naming
 
     assert!(refusal.contains("`soften`"), "{refusal}");
     assert!(refusal.contains("`glow`"), "{refusal}");
+}
+
+#[test]
+fn a_node_holding_its_config_or_pins_as_no_object_is_refused_naming_it_and_the_key() {
+    for key in ["config", "pins"] {
+        let node = Uuid::new_v4();
+        let mut recorded = json!({"id": node, "name": "tone", "type": "nodes.tone:Tone"});
+        recorded[key] = json!([1]);
+        let refusal = serde_json::from_value::<StreamGraphDocumentNode>(recorded.clone())
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            refusal.contains(&format!("node {node} `tone`"))
+                && refusal.contains(&format!("`{key}`")),
+            "{refusal}"
+        );
+        let document = StreamGraphDocument::from_value(json!({"nodes": [recorded]})).unwrap();
+        let refusal = document.node(node).expect_err("refused");
+        assert!(refusal.contains(&format!("`{key}`")), "{refusal}");
+    }
+}
+
+/// A node holds one map of input values, so a `set_node_config` naming one of the node's inputs
+/// in `to` sets that input's value, and each field `from` names that `to` does not is taken out.
+#[test]
+fn a_set_node_config_naming_an_input_in_to_sets_the_value_of_that_input() {
+    let mut document = an_empty_document();
+    let mut tone = a_node("tone");
+    tone.input_values = Map::from_iter([
+        ("gain".to_owned(), json!(1)),
+        ("pitch".to_owned(), json!(220)),
+    ]);
+    document
+        .apply(&StreamGraphOperation::AddNode {
+            node: tone.clone(),
+            links: Vec::new(),
+        })
+        .unwrap();
+
+    let set_node_config = StreamGraphOperation::set_node_config_of(
+        &tone,
+        json!({"gain": 1}),
+        Map::from_iter([
+            ("pitch".to_owned(), json!(440)),
+            ("waveform".to_owned(), json!("saw")),
+        ]),
+    );
+    assert_eq!(
+        set_node_config,
+        StreamGraphOperation::SetNodeConfig {
+            node: tone.id,
+            from: json!({"gain": 1, "pitch": 220}),
+            to: json!({"pitch": 440, "waveform": "saw"}),
+        }
+    );
+
+    document.apply(&set_node_config).unwrap();
+    assert_eq!(
+        document.node(tone.id).unwrap().input_values,
+        Map::from_iter([
+            ("pitch".to_owned(), json!(440)),
+            ("waveform".to_owned(), json!("saw")),
+        ])
+    );
+    document.apply(&set_node_config.inverse()).unwrap();
+    assert_eq!(
+        document.node(tone.id).unwrap().input_values,
+        tone.input_values
+    );
+}
+
+#[test]
+fn a_clear_of_an_exposed_config_fields_input_is_refused_and_any_other_set() {
+    let mut tone = a_node("tone");
+    tone.input_values = Map::from_iter([
+        ("gain".to_owned(), json!(1)),
+        ("pitch".to_owned(), json!(220)),
+    ]);
+    tone.exposed_config_fields = vec!["gain".to_owned()];
+
+    let refusal = StreamGraphOperation::set_pin_value_of(&tone, "gain".to_owned(), None)
+        .expect_err("a clear of an exposed config field is refused");
+    assert!(
+        refusal.contains("`gain`") && refusal.contains("set_node_config"),
+        "{refusal}"
+    );
+    assert_eq!(
+        StreamGraphOperation::set_pin_value_of(&tone, "pitch".to_owned(), Some(Value::Null)),
+        Ok(StreamGraphOperation::SetPinValue {
+            node: tone.id,
+            input: "pitch".to_owned(),
+            from: Some(json!(220)),
+            to: None,
+        })
+    );
+    assert!(
+        StreamGraphOperation::set_pin_value_of(&tone, "gain".to_owned(), Some(json!(2))).is_ok()
+    );
+}
+
+#[test]
+fn the_input_values_an_edit_sets_include_a_value_on_one_input_and_a_retired_shape_upgraded() {
+    let node = Uuid::new_v4();
+    let lut = Uuid::new_v4();
+    let set_pin_value = StreamGraphOperation::SetPinValue {
+        node,
+        input: "lut".to_owned(),
+        from: None,
+        to: Some(json!({"asset": lut})),
+    };
+    assert_eq!(
+        set_pin_value.input_values_it_sets(),
+        [(
+            node,
+            Map::from_iter([("lut".to_owned(), json!({"asset": lut}))])
+        )]
+    );
+
+    let inner = Uuid::new_v4();
+    let mut add_node = a_node("look");
+    add_node.fragment = Some(Box::new(json!({
+        "nodes": [{"id": inner, "name": "grade", "type": "nodes.grade:Grade",
+                   "config": {"lut": {"asset": lut}}}],
+        "links": [],
+    })));
+    let add_node = StreamGraphOperation::AddNode {
+        node: add_node.clone(),
+        links: Vec::new(),
+    };
+    assert_eq!(
+        add_node.input_values_it_sets()[1],
+        (
+            inner,
+            Map::from_iter([("lut".to_owned(), json!({"asset": lut}))])
+        )
+    );
+}
+
+/// An edit recorded before a node held one map of input values still reads and applies, so it
+/// undoes and redoes: what it places takes the current shape, at every level of a fragment.
+#[test]
+fn an_add_node_recorded_before_input_values_places_its_node_in_the_current_shape() {
+    let node = Uuid::new_v4();
+    let recorded = json!({
+        "operation": "add_node",
+        "node": {
+            "id": node, "name": "look", "type": "generators.look:look",
+            "config": {"radius": 3, "amount": 1}, "pins": {"amount": 2},
+            "fragment": {
+                "nodes": [{"id": Uuid::new_v4(), "name": "lfo", "type": "tatolab.ops:Lfo",
+                           "config": {"rate_hz": 2}}],
+                "links": [],
+            },
+        },
+        "links": [],
+    });
+    let mut document = an_empty_document();
+
+    document
+        .apply(&serde_json::from_value(recorded).expect("an old edit reads"))
+        .unwrap();
+
+    let placed = &document.to_value()["nodes"][0];
+    assert_eq!(placed["input_values"], json!({"radius": 3, "amount": 2}));
+    assert!(placed.get("config").is_none() && placed.get("pins").is_none());
+    assert_eq!(
+        placed["fragment"]["nodes"][0],
+        json!({"id": placed["fragment"]["nodes"][0]["id"], "name": "lfo",
+               "type": "imports/core-nodes/core_nodes.animation:Lfo",
+               "input_values": {"rate_hz": 2}})
+    );
 }
