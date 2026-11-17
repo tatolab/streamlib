@@ -45,8 +45,12 @@ class FrameTally:
     )
 
     def __init__(self, config: FrameTallyConfig) -> None:
-        self.report_every_frames = max(1, int(config.report_every_frames))
         self.frames_seen = 0
+        self.configure(config)
+
+    def configure(self, config: FrameTallyConfig) -> None:
+        """Take `report_every_frames` while it runs, keeping the count it has seen."""
+        self.report_every_frames = max(1, int(config.report_every_frames))
 
     def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
         frame = runtime_context.inputs.read(self.picture)
