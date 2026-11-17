@@ -11,20 +11,16 @@ pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
 }
 
 impl StreamGraphTransactionExecutor<'_> {
-    /// The answer of `applied_before`, the transaction of the project `project_repository`
-    /// holds that an action sent again under its key first applied, each edit of a loaded
-    /// stream under its stream id, and each input value it set that a link of the graph
-    /// documents overrides.
+    /// The answer of `applied_before`, the transaction of the project `project` an action sent
+    /// again under its key first applied: each edit of a loaded stream under its stream id, and
+    /// each input value set that a link overrode, as its first answer named them.
     pub(super) fn the_answer_of_a_graph_transaction_applied_before(
         &self,
-        project_repository: &ProjectRepository,
+        project: Uuid,
         applied_before: AppliedProjectTransaction,
     ) -> GraphTransactionToolResult {
-        let stream_id_of_each_stream_asset = self
-            .the_stream_id_of_each_loaded_stream_asset(project_repository.project_file().project);
-        let mut graph_document_of_each_stream: HashMap<Uuid, Option<StreamGraphDocument>> =
-            HashMap::new();
-        let mut overridden_by_links = Vec::new();
+        let stream_id_of_each_stream_asset =
+            self.the_stream_id_of_each_loaded_stream_asset(project);
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         for operation in applied_before.transaction.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
@@ -38,20 +34,6 @@ impl StreamGraphTransactionExecutor<'_> {
                 .get(&stream)
                 .cloned()
                 .unwrap_or_else(|| stream.to_string());
-            if let StreamGraphOperation::SetNodeInputValue {
-                node,
-                input,
-                to: Some(_),
-                ..
-            } = &graph_operation
-                && let Some(document) = graph_document_of_each_stream
-                    .entry(stream)
-                    .or_insert_with(|| project_repository.stream_graph_document(stream).ok())
-                && let Some(overridden) =
-                    the_link_overriding_the_input(document, &stream_id, *node, input)
-            {
-                overridden_by_links.push(overridden);
-            }
             applied_live.push((stream_id, graph_operation));
         }
         self.the_answer_of_a_graph_transaction(
@@ -66,7 +48,7 @@ impl StreamGraphTransactionExecutor<'_> {
             applied_live,
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
-                overridden_by_links,
+                overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
             },
         )
     }

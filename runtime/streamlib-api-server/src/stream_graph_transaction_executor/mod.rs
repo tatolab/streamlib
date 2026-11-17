@@ -20,13 +20,13 @@ use streamlib_project_repository::{
     PREVIOUS_VALUE_NODE_OUTPUT_PORT, PREVIOUS_VALUE_NODE_TYPE, ProjectAction,
     ProjectActionIdempotencyKey, ProjectAssetKind, ProjectOperation, ProjectRelativeAssetPath,
     ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectStreamDocumentOperation, ProjectTransactionAuthor, ProjectTransactionLineage,
-    ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
-    StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument, StreamGraphDocumentGroup,
-    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
-    StreamGraphDocumentNote, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
-    StreamGraphOperation, StreamGraphOperationOnAStream,
+    ProjectStreamDocumentOperation, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
+    ProjectTransactionLineage, ProjectTransactionReversal, STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY,
+    STREAM_FRAGMENT_NODE_TYPE, StreamGraphAction, StreamGraphActionLinkEnd, StreamGraphDocument,
+    StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
+    StreamGraphDocumentNode, StreamGraphDocumentNote, StreamGraphFragmentPlacement,
+    StreamGraphGroupFields, StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields,
+    StreamGraphNoteFields, StreamGraphOperation, StreamGraphOperationOnAStream,
     asset_references_made_references_into_the_import,
     config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
@@ -412,7 +412,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
         {
             return Ok(self.the_answer_of_a_graph_transaction_applied_before(
-                project_repository_held,
+                project_repository_held.project_file().project,
                 applied_before,
             ));
         }

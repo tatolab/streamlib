@@ -4,7 +4,7 @@
 //! The input values of a function node and a shader node, each of a type its stream's node
 //! interpreter describes, are checked as a process node's are: a typed input takes what its pin
 //! type takes within its declared range, an input that takes only a link refuses a value, and a
-//! name that is none of its inputs is not found.
+//! name that is none of its inputs is not found; a value set live reaches each node.
 
 use serde_json::json;
 
@@ -26,6 +26,12 @@ const TINT: &str = "test_shaders:tint";
 /// type, and `tint`, a shader node type taking an Image `image` and a Float `amount` from 0 to 1.
 fn node_types_resolving_a_function_and_a_shader_node_type() -> NodeTypesOneStreamResolves {
     let node_types = NodeTypesOneStreamResolves::new();
+    register_a_function_and_a_shader_node_type(&node_types);
+    node_types
+}
+
+/// Register `scale` and `tint` in `node_types`.
+fn register_a_function_and_a_shader_node_type(node_types: &NodeTypesOneStreamResolves) {
     let mut scale = a_function_node_type(SCALE, &["y"], &["result"]);
     scale = scale.with_input(
         PortDescriptor::new(
@@ -107,7 +113,6 @@ fn node_types_resolving_a_function_and_a_shader_node_type() -> NodeTypesOneStrea
             },
         )
         .unwrap();
-    node_types
 }
 
 /// The refusal, if any, of `value` set on input `input` of a node of `node_type` named `node`.
@@ -203,4 +208,77 @@ fn a_shader_nodes_input_values_are_checked() {
         )),
         InputValueRefusalCode::PortNotFound
     );
+}
+
+/// A value set live on a function node and on a shader node of a loaded stream not started is
+/// the pin value each node holds; taken off, the node holds none.
+#[test]
+#[serial_test::serial]
+fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_holds() {
+    use crate::core::nodes::NodeSpec;
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+    use crate::core::runtime::{Runner, RuntimeOperations};
+    use streamlib_project_repository::StreamGraphOperation;
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    register_a_function_and_a_shader_node_type(stream.node_types_this_stream_resolves());
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a current-thread runtime");
+    let the_pins_of = |node: uuid::Uuid| {
+        let graph = stream.to_json().expect("the graph serializes");
+        graph["nodes"]
+            .as_array()
+            .and_then(|nodes| {
+                nodes
+                    .iter()
+                    .find(|rendered| rendered["id"] == node.to_string())
+            })
+            .map(|rendered| rendered["pins"].clone())
+            .unwrap_or_else(|| panic!("the graph holds node {node}: {graph}"))
+    };
+
+    for (node_type, input, value) in [(SCALE, "x", json!(0.5)), (TINT, "amount", json!(0.25))] {
+        let node = uuid::Uuid::new_v4();
+        stream
+            .add_node(
+                NodeSpec::new(NodeClassImportPath::new(node_type).unwrap(), Value::Null)
+                    .with_node_uuid(node),
+            )
+            .unwrap_or_else(|refusal| panic!("a `{node_type}` node is added: {refusal}"));
+        tokio_runtime
+            .block_on(stream.apply_a_stream_graph_operation_live(
+                StreamGraphOperation::SetNodeInputValue {
+                    node,
+                    input: input.to_owned(),
+                    from: None,
+                    to: Some(value.clone()),
+                },
+            ))
+            .unwrap_or_else(|refusal| panic!("`{input}` of `{node_type}` is set: {refusal}"));
+        assert_eq!(the_pins_of(node)[input], value, "{node_type}");
+        tokio_runtime
+            .block_on(stream.apply_a_stream_graph_operation_live(
+                StreamGraphOperation::SetNodeInputValue {
+                    node,
+                    input: input.to_owned(),
+                    from: Some(value),
+                    to: None,
+                },
+            ))
+            .unwrap_or_else(|refusal| panic!("`{input}` of `{node_type}` is taken off: {refusal}"));
+        assert!(
+            the_pins_of(node).get(input).is_none(),
+            "{node_type}: {}",
+            the_pins_of(node)
+        );
+    }
 }

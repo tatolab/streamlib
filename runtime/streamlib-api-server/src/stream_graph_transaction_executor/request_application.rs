@@ -126,10 +126,13 @@ impl StreamGraphTransactionExecutor<'_> {
             None => (None, None),
             Some(_) if project_operations.is_empty() => (None, None),
             Some(project_repository) => {
-                match project_repository.apply_project_operations(
+                match project_repository.apply_project_operations_answered(
                     author,
                     idempotency_key,
-                    actions_as_sent,
+                    ProjectTransactionAsSentAndAnswered {
+                        actions_as_sent,
+                        inputs_overridden_by_links: overridden_by_links.clone(),
+                    },
                     project_operations,
                     ProjectTransactionLineage::NewEdit,
                 ) {

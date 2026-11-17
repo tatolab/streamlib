@@ -1,33 +1,45 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
 use super::PendingOperation;
-use crate::core::graph::{LinkUniqueId, NodeRunId};
+use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
+
+/// The config each node holds once the commit in progress applies the config update it took
+/// for the node, by node; empty while no commit is in progress.
+pub(crate) type ConfigsACommitIsApplying = Arc<Mutex<HashMap<NodeRunId, serde_json::Value>>>;
 
 /// Handle for logging operations to the compiler transaction.
 pub(crate) struct CompilerTransactionHandle {
     inner: Arc<Mutex<Vec<PendingOperation>>>,
+    configs_a_commit_is_applying: ConfigsACommitIsApplying,
 }
 
 impl CompilerTransactionHandle {
-    pub(crate) fn new(inner: Arc<Mutex<Vec<PendingOperation>>>) -> Self {
-        Self { inner }
+    pub(crate) fn new(
+        inner: Arc<Mutex<Vec<PendingOperation>>>,
+        configs_a_commit_is_applying: ConfigsACommitIsApplying,
+    ) -> Self {
+        Self {
+            inner,
+            configs_a_commit_is_applying,
+        }
     }
 
-    pub(crate) fn log(&self, op: PendingOperation) {
-        self.inner.lock().push(op);
-    }
-
-    /// The config the last config update logged for `node` hands it, which it holds once the
-    /// updates logged for it are applied; `None` when none is logged.
-    pub(crate) fn the_config_last_logged_for(&self, node: &NodeRunId) -> Option<serde_json::Value> {
-        self.inner
-            .lock()
+    /// The config `node` of `graph` holds once every config update logged or taken by the
+    /// commit in progress is applied: the one last logged, else the one the commit in progress
+    /// applies, else the one it holds; `None` for a node holding none.
+    pub(crate) fn the_config_the_node_will_hold(
+        &self,
+        graph: &Graph,
+        node: &NodeRunId,
+    ) -> Option<serde_json::Value> {
+        let transaction = self.inner.lock();
+        transaction
             .iter()
             .rev()
             .find_map(|operation| match operation {
@@ -37,6 +49,18 @@ impl CompilerTransactionHandle {
                 } if node_run_id == node => Some(config_to_apply.clone()),
                 _ => None,
             })
+            .or_else(|| self.configs_a_commit_is_applying.lock().get(node).cloned())
+            .or_else(|| {
+                graph
+                    .traversal()
+                    .v(node)
+                    .first()
+                    .and_then(|held| held.config.clone())
+            })
+    }
+
+    pub(crate) fn log(&self, op: PendingOperation) {
+        self.inner.lock().push(op);
     }
 
     /// Take out each config update logged for a node of `nodes`, in the order logged.

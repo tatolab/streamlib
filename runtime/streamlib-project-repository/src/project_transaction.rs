@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use streamlib_runtime_client_contract::local_api_wire_contract::GraphTransactionInputOverriddenByALink;
 use uuid::Uuid;
 
 use crate::project_asset::{ProjectAsset, ProjectAssetKind, ProjectRelativeAssetPath};
@@ -750,6 +751,20 @@ pub struct ProjectTransaction {
     /// runtime made itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<ProjectAction>,
+    /// Each input value its actions set that a link overrode as it applied, as their answer
+    /// named it; an action sent again under its key is answered with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+}
+
+/// What the caller of a transaction sent, and what the answer it was sent named beside the
+/// operations it applied.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectTransactionAsSentAndAnswered {
+    /// The actions, exactly as sent.
+    pub actions_as_sent: Vec<ProjectAction>,
+    /// Each input value they set that a link overrides.
+    pub inputs_overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }
 
 impl ProjectTransaction {

@@ -308,7 +308,8 @@ async fn a_value_the_input_does_not_take_is_refused_with_its_code_and_place() {
 /// Inside `transact`, every value is checked before the first operation is applied, so a
 /// value refused after an operation that is refused only as it is applied is the one named:
 /// a value of `set_node_input_value`, of `set_node_config`, and one set on a node an earlier
-/// `add_node` names by its `as`. Nothing is saved or set.
+/// `add_node` names by its `as`, and one on a node inside a placed stream. Nothing is saved or
+/// set.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_of_input_values_is_checked_whole_before_any_is_applied() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -395,10 +396,48 @@ async fn a_transaction_of_input_values_is_checked_whole_before_any_is_applied() 
         the_input_values_of(&project.the_graph_document_of("main"), MIXER_NODE_UUID),
         json!({ "frame_width": 800, "gain": 0.75 })
     );
+
+    let collapsed = engine
+        .the_answer_or_the_refusal_of(
+            "collapse_selection_into_subgraph",
+            json!({ "stream": stream_asset, "nodes": [MIXER_NODE_UUID], "name": "sub",
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the mixer collapses into `sub`");
+    let subgraph = collapsed["added_nodes"][0]["node"]
+        .as_str()
+        .expect("the subgraph node")
+        .to_owned();
+    let mixer_inside = the_node_named(&project.the_graph_document_of("sub"), "mixer");
+    let mixer_drawn =
+        the_uuid_a_held_node_takes_under(&subgraph, mixer_inside["id"].as_str().unwrap());
+    let main_before = project.the_graph_document_of("main");
+    let sub_before = project.the_graph_document_of("sub");
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                renaming_a_node_the_stream_does_not_hold,
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "level": [subgraph], "node": mixer_drawn, "input": "gain",
+                  "value": "loud" },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("a value inside a placed stream is refused before any operation applies");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::InputValueNotValid,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert_eq!(project.the_graph_document_of("main"), main_before);
+    assert_eq!(project.the_graph_document_of("sub"), sub_before);
 }
 
 /// A value set on an input a link feeds is accepted and kept, and the answer names the link
-/// that overrides it.
+/// that overrides it; the set sent again under its key answers so even once the link is gone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_value_set_on_a_linked_input_is_kept_and_named_overridden_by_its_link() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -432,6 +471,16 @@ async fn a_value_set_on_a_linked_input_is_kept_and_named_overridden_by_its_link(
     let overridden = json!([{ "stream": stream_id, "node": MIXER_NODE_UUID, "input": "gain",
                               "from_node": feeder["id"], "from_output": "level" }]);
     assert_eq!(applied["overridden_by_links"], overridden, "{applied}");
+    engine
+        .the_answer_or_the_refusal_of(
+            "disconnect",
+            json!({ "stream": stream_asset,
+                    "source": { "node": feeder["id"], "port": "level" },
+                    "target": { "node": MIXER_NODE_UUID, "port": "gain" },
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the link is taken off");
     let answered_again = engine
         .the_answer_or_the_refusal_of(
             "set_node_input_value",

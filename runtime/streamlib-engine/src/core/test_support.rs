@@ -289,6 +289,35 @@ impl crate::core::ManualNode for MockSourceTakingOneSetting::Node {
     }
 }
 
+/// The two settings [`MockSourceTakingAFrameSize`] takes.
+#[derive(
+    Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MockSourceTakingAFrameSizeConfig {
+    #[serde(default)]
+    pub frame_width: Option<u32>,
+    #[serde(default)]
+    pub frame_height: Option<u32>,
+}
+
+/// Mock source whose config takes `frame_width` and `frame_height`.
+#[crate::node(
+    execution = manual,
+    config = crate::core::test_support::MockSourceTakingAFrameSizeConfig,
+    output("video", family = Image),
+)]
+pub(crate) struct MockSourceTakingAFrameSize;
+
+impl crate::core::ManualNode for MockSourceTakingAFrameSize::Node {
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// The one setting [`MockSourceReadingAnImageAsset`] takes: the image, by asset reference.
 #[derive(
     Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
@@ -372,6 +401,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         NODE_REGISTRY.register::<MockReactiveInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockNodeWithACamelCaseOutputPort::Node>();
         NODE_REGISTRY.register::<MockSourceTakingOneSetting::Node>();
+        NODE_REGISTRY.register::<MockSourceTakingAFrameSize::Node>();
         NODE_REGISTRY.register::<MockSourceReadingAnImageAsset::Node>();
         NODE_REGISTRY.register::<MockSourceRefusingAnAccessNobodyAskedFor::Node>();
     });
