@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::nodes::NodeSpec;
@@ -87,19 +88,23 @@ pub trait RuntimeOperations: Send + Sync {
     /// type; `input_values_after_the_set` are every input value the node holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
-        node_type: &str,
+        node_type: &NodeClassImportPath,
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
         input: &str,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
 
+    /// Whether a node of type `node_type` still takes a config, as this stream resolves the
+    /// type: its config schema lists a field, or the stream does not describe it.
+    fn node_type_takes_a_config(&self, node_type: &NodeClassImportPath) -> bool;
+
     /// Whether an exposure of `exposed_config_fields` on a node of type `node_type` is recorded:
     /// true for a type that still takes a config; false for one that takes none, on which each
     /// name must be one of its inputs, refused by name otherwise.
     fn an_exposure_of_config_fields_is_recorded_on(
         &self,
-        node_type: &str,
+        node_type: &NodeClassImportPath,
         exposed_config_fields: &[String],
     ) -> Result<bool>;
 

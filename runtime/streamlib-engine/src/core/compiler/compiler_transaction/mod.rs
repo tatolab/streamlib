@@ -23,6 +23,22 @@ impl CompilerTransactionHandle {
         self.inner.lock().push(op);
     }
 
+    /// The config the last config update logged for `node` hands it, which it holds once the
+    /// updates logged for it are applied; `None` when none is logged.
+    pub(crate) fn the_config_last_logged_for(&self, node: &NodeRunId) -> Option<serde_json::Value> {
+        self.inner
+            .lock()
+            .iter()
+            .rev()
+            .find_map(|operation| match operation {
+                PendingOperation::UpdateNodeConfig {
+                    node_run_id,
+                    config_to_apply,
+                } if node_run_id == node => Some(config_to_apply.clone()),
+                _ => None,
+            })
+    }
+
     /// Take out each config update logged for a node of `nodes`, in the order logged.
     pub(crate) fn take_each_config_update_of(
         &self,
@@ -69,3 +85,6 @@ impl CompilerTransactionHandle {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

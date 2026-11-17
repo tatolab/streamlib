@@ -47,12 +47,15 @@ use crate::control_operations_on_project_assets::{
 };
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
+mod input_value_sets;
 mod live_application_and_reversal;
 mod request_application;
 mod request_to_graph_operation;
 mod transaction_answers;
 
+use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
+use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
 /// The node, link and field `action` names, as its caller named them.
 fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationNames {
@@ -343,7 +346,7 @@ impl GraphTransactionRefusal {
             refused_params_pointer,
         } = self.refusal;
         let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
-            (Some(pointer), Some(index)) if tool_name == "transact" => {
+            (Some(pointer), Some(index)) if tool_name == <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME => {
                 Some(format!("/operations/{index}{pointer}"))
             }
             (pointer, _) => pointer,
@@ -409,7 +412,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
         {
             return Ok(self.the_answer_of_a_graph_transaction_applied_before(
-                project_repository_held.project_file().project,
+                project_repository_held,
                 applied_before,
             ));
         }

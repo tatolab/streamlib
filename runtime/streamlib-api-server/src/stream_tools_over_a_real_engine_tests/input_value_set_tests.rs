@@ -193,10 +193,10 @@ async fn a_committed_input_value_is_saved_applied_recorded_and_undone() {
     assert_eq!(mixer["config"], json!({}), "{mixer}");
 }
 
-/// A live set reaches the running node and leaves the document and the history as they were;
-/// a live set with no value takes the live value off.
+/// A live set on a loaded stream that is not started reaches its node and leaves the document
+/// and the history as they were; a live set with no value takes the live value off.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_live_input_value_reaches_the_running_node_and_is_not_saved() {
+async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_saved() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_mixer();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
@@ -305,47 +305,87 @@ async fn a_value_the_input_does_not_take_is_refused_with_its_code_and_place() {
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
-/// Inside `transact`, every value is checked before the first is applied: one the input does
-/// not take refuses the whole transaction, naming its operation and its place in the params.
+/// Inside `transact`, every value is checked before the first operation is applied, so a
+/// value refused after an operation that is refused only as it is applied is the one named:
+/// a value of `set_node_input_value`, of `set_node_config`, and one set on a node an earlier
+/// `add_node` names by its `as`. Nothing is saved or set.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_of_input_values_is_checked_whole_before_any_is_applied() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = a_project_whose_main_stream_holds_a_mixer();
     let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
     let stream_asset = project.stream_asset_of("main");
-    let set = |input: &str, value: Value| {
+    let set = |node: &str, input: &str, value: Value| {
         json!({ "operation": "set_node_input_value", "stream": stream_asset,
-                "node": MIXER_NODE_UUID, "input": input, "value": value })
+                "node": node, "input": input, "value": value })
     };
+    let renaming_a_node_the_stream_does_not_hold = json!({ "operation": "rename_node",
+        "stream": stream_asset, "node": "00000000-0000-4000-8000-000000000000", "name": "nobody" });
+    let saved_before = project.the_graph_document_of("main");
 
-    let refusal = engine
-        .the_answer_or_the_refusal_of(
-            "transact",
-            json!({ "operations": [set("frame_width", json!(800)), set("gain", json!(0.75)),
-                                   set("gain", json!(true))],
-                    "author": an_agent_named("alice") }),
-        )
-        .await
-        .expect_err("the third value is refused");
-    assert_eq!(
-        refusal.refusal_code,
-        ControlOperationRefusalCode::InputValueNotValid,
-        "{refusal:?}"
-    );
-    assert_eq!(refusal.refused_operation_index, Some(2), "{refusal:?}");
-    assert_eq!(
-        refusal.refused_params_pointer.as_deref(),
-        Some("/operations/2/value"),
-        "{refusal:?}"
-    );
-    let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-    assert_eq!(mixer["config"], json!({}), "{mixer}");
-    assert_eq!(the_pin_values_of(&mixer), json!({}), "{mixer}");
+    for (operations, refused_index, refused_params_pointer) in [
+        (
+            json!([
+                renaming_a_node_the_stream_does_not_hold,
+                set(MIXER_NODE_UUID, "frame_width", json!(800)),
+                set(MIXER_NODE_UUID, "gain", json!(true)),
+            ]),
+            2,
+            "/operations/2/value",
+        ),
+        (
+            json!([
+                renaming_a_node_the_stream_does_not_hold,
+                { "operation": "set_node_config", "stream": stream_asset,
+                  "node": MIXER_NODE_UUID, "config": { "frame_width": "wide" } },
+            ]),
+            1,
+            "/operations/1/config/frame_width",
+        ),
+        (
+            json!([
+                renaming_a_node_the_stream_does_not_hold,
+                { "operation": "add_node", "stream": stream_asset, "name": "second",
+                  "type": InputValueTestNode::node_class_import_path().as_str(), "as": "second" },
+                set("second", "gain", json!("loud")),
+            ]),
+            2,
+            "/operations/2/value",
+        ),
+    ] {
+        let refusal = engine
+            .the_answer_or_the_refusal_of(
+                "transact",
+                json!({ "operations": operations, "author": an_agent_named("alice") }),
+            )
+            .await
+            .expect_err("a value is refused");
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::InputValueNotValid,
+            "{operations}: {refusal:?}"
+        );
+        assert_eq!(
+            refusal.refused_operation_index,
+            Some(refused_index),
+            "{operations}: {refusal:?}"
+        );
+        assert_eq!(
+            refusal.refused_params_pointer.as_deref(),
+            Some(refused_params_pointer),
+            "{operations}: {refusal:?}"
+        );
+        assert_eq!(project.the_graph_document_of("main"), saved_before);
+        let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+        assert_eq!(mixer["config"], json!({}), "{mixer}");
+        assert_eq!(the_pin_values_of(&mixer), json!({}), "{mixer}");
+    }
 
     let applied = engine
         .the_answer_or_the_refusal_of(
             "transact",
-            json!({ "operations": [set("frame_width", json!(800)), set("gain", json!(0.75))],
+            json!({ "operations": [set(MIXER_NODE_UUID, "frame_width", json!(800)),
+                                   set(MIXER_NODE_UUID, "gain", json!(0.75))],
                     "author": an_agent_named("alice") }),
         )
         .await
@@ -384,15 +424,27 @@ async fn a_value_set_on_a_linked_input_is_kept_and_named_overridden_by_its_link(
         .the_answer_or_the_refusal_of(
             "set_node_input_value",
             json!({ "stream": stream_asset, "node": MIXER_NODE_UUID, "input": "gain",
-                    "value": 0.5, "author": an_agent_named("alice") }),
+                    "value": 0.5, "author": an_agent_named("alice"),
+                    "idempotency_key": "set-gain-under-its-link" }),
         )
         .await
         .expect("a value under a link is accepted");
+    let overridden = json!([{ "stream": stream_id, "node": MIXER_NODE_UUID, "input": "gain",
+                              "from_node": feeder["id"], "from_output": "level" }]);
+    assert_eq!(applied["overridden_by_links"], overridden, "{applied}");
+    let answered_again = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "node": MIXER_NODE_UUID, "input": "gain",
+                    "value": 0.5, "author": an_agent_named("alice"),
+                    "idempotency_key": "set-gain-under-its-link" }),
+        )
+        .await
+        .expect("the set sent again answers as it first did");
+    assert_eq!(answered_again["transaction"], applied["transaction"]);
     assert_eq!(
-        applied["overridden_by_links"],
-        json!([{ "stream": stream_id, "node": MIXER_NODE_UUID, "input": "gain",
-                 "from_node": feeder["id"], "from_output": "level" }]),
-        "{applied}"
+        answered_again["overridden_by_links"], overridden,
+        "{answered_again}"
     );
     assert_eq!(
         the_input_values_of(&project.the_graph_document_of("main"), MIXER_NODE_UUID),
@@ -425,6 +477,31 @@ async fn the_operations_it_replaces_record_what_it_records() {
                  "input": "frame_width", "from": null, "to": 640 })
         ]
     );
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": stream_asset, "node": MIXER_NODE_UUID, "input": "frame_width",
+                    "value": 800, "mode": "live" }),
+        )
+        .await
+        .expect("the running node is set apart from its document");
+    let answered = engine
+        .the_answer_or_the_refusal_of(
+            "set_node_config",
+            json!({ "stream": stream_asset, "node": MIXER_NODE_UUID,
+                    "config": { "frame_width": 640 }, "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the setting the document already holds is set again");
+    assert_eq!(
+        the_operations_answered(&answered),
+        [
+            json!({ "operation": "set_node_input_value", "node": MIXER_NODE_UUID,
+                 "input": "frame_width", "from": 640, "to": 640 })
+        ]
+    );
+    let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    assert_eq!(mixer["config"], json!({ "frame_width": 640 }), "{mixer}");
     let answered = engine
         .the_answer_or_the_refusal_of(
             "set_node_config",

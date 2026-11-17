@@ -92,7 +92,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   set_studio_fields(params: ControlOperations["set_studio_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_studio_fields"]["result"]>;
   /**
-   * Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.
+   * Replace the config fields a node takes as inputs, as one transaction.
    */
   set_exposed_config_fields(params: ControlOperations["set_exposed_config_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_exposed_config_fields"]["result"]>;
   /**

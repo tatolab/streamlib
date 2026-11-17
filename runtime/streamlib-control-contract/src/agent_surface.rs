@@ -518,11 +518,7 @@ mod tests {
 
     #[test]
     fn a_replaced_operation_is_not_listed_and_is_still_described_and_reached_by_name() {
-        let replaced = [
-            "set_node_config",
-            "set_pin_value",
-            "set_exposed_config_fields",
-        ];
+        let replaced = ["set_node_config", "set_pin_value"];
         let listed = the_operation_groups_served_to_agents();
         let listed_names: Vec<&str> = listed
             .groups

@@ -142,3 +142,75 @@ fn an_exposure_is_recorded_only_on_a_node_type_that_takes_a_config() {
         .expect_err("`volume` is none of its inputs");
     assert!(refusal.to_string().contains("`volume`"), "{refusal}");
 }
+
+/// A Channels input typed `pin_type`, named `label`.
+fn a_channels_input_typed(pin_type: crate::core::descriptors::PinType) -> PortInfo {
+    PortInfo {
+        name: "label".to_owned(),
+        description: String::new(),
+        port_kind: crate::core::graph::PortKind::Data,
+        delivery_profile: Some("newest".to_owned()),
+        borrow_quota: None,
+        audio_window: None,
+        pin_default: None,
+        pin: crate::core::descriptors::PinDeclaration::exactly(pin_type).into_resolved(),
+        family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Channels),
+    }
+}
+
+#[test]
+fn a_typed_value_a_process_nodes_read_cannot_carry_is_refused_and_a_function_or_shader_node_takes_it()
+ {
+    use crate::core::descriptors::{FunctionNodeLanguage, PinType};
+    let text_input = a_channels_input_typed(PinType::String {});
+    let refusal = refuse_a_value_the_input_port_does_not_take(
+        "mixer",
+        Some(NodeKind::Process),
+        &text_input,
+        &json!("loud"),
+    )
+    .expect_err("a process node's read carries no text");
+    assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
+    assert!(refusal.words.contains("`label`"), "{refusal}");
+    for reads_typed_values in [
+        NodeKind::Shader,
+        NodeKind::Function {
+            language: FunctionNodeLanguage::Python,
+        },
+    ] {
+        assert_eq!(
+            refuse_a_value_the_input_port_does_not_take(
+                "mixer",
+                Some(reads_typed_values),
+                &text_input,
+                &json!("loud"),
+            ),
+            Ok(()),
+            "{reads_typed_values:?}"
+        );
+    }
+    assert_eq!(
+        refuse_a_value_the_input_port_does_not_take(
+            "mixer",
+            Some(NodeKind::Process),
+            &a_channels_input_typed(PinType::Float { exact_size: None }),
+            &json!(0.5),
+        ),
+        Ok(()),
+        "a number reaches a process node"
+    );
+}
+
+/// A setting taken off a node is a config field taken off, which the config path makes, so a
+/// setting a node also exposes as an input is taken off as any other is.
+#[test]
+fn a_setting_is_taken_off_as_a_config_field() {
+    assert_eq!(
+        the_refusal_of(
+            &MockSourceTakingOneSetting::node_class_import_path(),
+            "frame_width",
+            None
+        ),
+        Ok(())
+    );
+}

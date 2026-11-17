@@ -142,7 +142,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn refuse_an_input_value_its_input_does_not_take(
             &self,
-            _node_type: &str,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
@@ -150,9 +150,15 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn node_type_takes_a_config(
+            &self,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
+        ) -> bool {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn an_exposure_of_config_fields_is_recorded_on(
             &self,
-            _node_type: &str,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _exposed_config_fields: &[String],
         ) -> ::streamlib::sdk::error::Result<bool> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
@@ -680,7 +686,7 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn refuse_an_input_value_its_input_does_not_take(
             &self,
-            _node_type: &str,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _node_name: &str,
             _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
             _input: &str,
@@ -688,9 +694,15 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
         }
+        fn node_type_takes_a_config(
+            &self,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
+        ) -> bool {
+            true
+        }
         fn an_exposure_of_config_fields_is_recorded_on(
             &self,
-            _node_type: &str,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
             _exposed_config_fields: &[String],
         ) -> ::streamlib::sdk::error::Result<bool> {
             Ok(true)

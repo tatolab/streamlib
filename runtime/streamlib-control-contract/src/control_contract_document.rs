@@ -287,18 +287,16 @@ mod tests {
                 .get("x-replaced-by")
                 .cloned()
         };
-        for replaced in [
-            "set_node_config",
-            "set_pin_value",
-            "set_exposed_config_fields",
-        ] {
+        for replaced in ["set_node_config", "set_pin_value"] {
             assert_eq!(
                 replaced_by_of(replaced),
                 Some(serde_json::json!("set_node_input_value")),
                 "{replaced}"
             );
         }
-        assert_eq!(replaced_by_of("set_node_input_value"), None);
+        for kept in ["set_node_input_value", "set_exposed_config_fields"] {
+            assert_eq!(replaced_by_of(kept), None, "{kept}");
+        }
     }
 
     #[test]

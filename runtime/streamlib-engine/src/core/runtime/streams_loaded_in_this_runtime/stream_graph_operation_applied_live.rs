@@ -344,7 +344,8 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Set the input value `input` of `node` to `value`, `None` taking it off: a setting its
-    /// type holds in its config is set in the running node's config, any other on its input.
+    /// type holds in its config is set in the config the node holds once each config update
+    /// already logged for it is applied, any other on its input.
     async fn set_one_input_value_of_the_node(
         &self,
         node: Uuid,
@@ -352,17 +353,12 @@ impl LoadedStreamInThisRuntime {
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         let node_run_id = self.the_node_of_the_node(node)?;
-        let (node_type, config) = self.compiler.scope(|graph, _tx| {
+        let node_type = self.compiler.scope(|graph, _tx| {
             graph
                 .traversal()
                 .v(&node_run_id)
                 .first()
-                .map(|running| {
-                    (
-                        running.node_type.clone(),
-                        running.config.clone().unwrap_or_default(),
-                    )
-                })
+                .map(|running| running.node_type.clone())
                 .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))
         })?;
         let legacy_config =
@@ -370,18 +366,23 @@ impl LoadedStreamInThisRuntime {
         if !legacy_config.is_a_config_field(input) {
             return self.set_pin_value(&node_run_id, input, value);
         }
-        let mut config = match config {
-            serde_json::Value::Object(config) => config,
-            _ => serde_json::Map::new(),
-        };
-        match value {
-            Some(value) => config.insert(input.to_owned(), value),
-            None => config.remove(input),
-        };
-        self.update_node_config_compiled_right_away(
-            &node_run_id,
-            &serde_json::Value::Object(config),
-        )
+        self.update_node_config_built_from_the_one_it_holds(&node_run_id, |config_held| {
+            let mut config = match config_held.unwrap_or_default() {
+                serde_json::Value::Object(config) => config,
+                serde_json::Value::Null => serde_json::Map::new(),
+                other => {
+                    return Err(Error::Configuration(format!(
+                        "node {node} holds the config {other}, which is no object, so its \
+                         setting `{input}` cannot be set"
+                    )));
+                }
+            };
+            match value {
+                Some(value) => config.insert(input.to_owned(), value),
+                None => config.remove(input),
+            };
+            Ok(serde_json::Value::Object(config))
+        })
         .await
     }
 

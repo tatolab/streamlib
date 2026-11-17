@@ -72,13 +72,15 @@ pub fn refuse_an_input_value_its_input_does_not_take(
         return Ok(());
     };
     let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
-    let config_schema = node_types
-        .descriptor(node_type)
-        .and_then(|descriptor| descriptor.config_schema);
-    if !legacy_config.is_a_config_field(input) {
-        let Some(port) = input_ports.iter().find(|port| port.name == input) else {
-            return Ok(());
-        };
+    let descriptor = node_types.descriptor(node_type);
+    let config_schema = descriptor
+        .as_ref()
+        .and_then(|descriptor| descriptor.config_schema.clone());
+    let the_input_port = input_ports
+        .iter()
+        .find(|port| port.name == input)
+        .filter(|_| !legacy_config.is_a_config_field(input));
+    if let Some(port) = the_input_port {
         let Some(value) = value else {
             return Ok(());
         };
@@ -88,12 +90,12 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             port,
             value,
         )?;
-        let declared_range = node_types
-            .descriptor(node_type)
+        let declared_range = descriptor
+            .as_ref()
             .and_then(|descriptor| {
                 descriptor
                     .inputs
-                    .into_iter()
+                    .iter()
                     .find(|declared| declared.name == input)
             })
             .and_then(|declared| declared.declared_pin())
@@ -148,9 +150,9 @@ pub fn refuse_an_input_value_its_input_does_not_take(
 }
 
 /// Refuse `value` set on `port`, an input port of the node named `node_name` that runs as
-/// `node_kind`, when the port does not take it: what its pin type takes, or, on a port that
-/// names no pin type, a number or a bool on a Channels input of a node that is no function node,
-/// which is all such a node's read carries.
+/// `node_kind`, when the port does not take it: what its pin type takes and, on a node that is
+/// no function or shader node, a number or a bool on a Channels input, which is all such a
+/// node's read carries; on a port that names no pin type, a function node takes any value.
 pub(crate) fn refuse_a_value_the_input_port_does_not_take(
     node_name: &str,
     node_kind: Option<NodeKind>,
@@ -168,7 +170,7 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
                 ),
             ));
         }
-        return pin.pin_type.check_value(value).map_err(|not_taken| {
+        pin.pin_type.check_value(value).map_err(|not_taken| {
             InputValueRefusal::of(
                 InputValueRefusalCode::InputValueNotValid,
                 format!(
@@ -177,9 +179,14 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
                     not_taken.takes, not_taken.example
                 ),
             )
-        });
-    }
-    if matches!(node_kind, Some(NodeKind::Function { .. })) {
+        })?;
+        if matches!(
+            node_kind,
+            Some(NodeKind::Function { .. } | NodeKind::Shader)
+        ) {
+            return Ok(());
+        }
+    } else if matches!(node_kind, Some(NodeKind::Function { .. })) {
         return Ok(());
     }
     if port.family.family != PortFamily::Channels {
@@ -204,26 +211,34 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
     Ok(())
 }
 
+/// Whether a node of `node_type` still takes a config: its config schema lists a field, or
+/// `node_types` does not describe the type.
+pub fn node_type_takes_a_config(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+) -> bool {
+    node_types
+        .placeholder_of_the_node_type_not_described(node_type)
+        .is_some()
+        || node_types.port_info(node_type).is_none()
+        || LegacyConfigOfANodeType::of(node_types, node_type).takes_a_config()
+}
+
 /// Whether an exposure of `exposed_config_fields` on a node of `node_type` is recorded: true for
-/// a type that still takes a config, or one `node_types` does not describe; false for a type
-/// whose config schema lists no field, on which each name must be one of its inputs.
+/// a type that still takes a config; false for a type that takes none, on which each name must
+/// be one of its inputs.
 pub fn an_exposure_of_config_fields_is_recorded_on(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
     exposed_config_fields: &[String],
 ) -> crate::core::Result<bool> {
-    if node_types
-        .placeholder_of_the_node_type_not_described(node_type)
-        .is_some()
-    {
+    if node_type_takes_a_config(node_types, node_type) {
         return Ok(true);
     }
-    let Some((input_ports, _)) = node_types.port_info(node_type) else {
-        return Ok(true);
-    };
-    if LegacyConfigOfANodeType::of(node_types, node_type).takes_a_config() {
-        return Ok(true);
-    }
+    let input_ports = node_types
+        .port_info(node_type)
+        .map(|(input_ports, _)| input_ports)
+        .unwrap_or_default();
     let not_inputs: Vec<String> = exposed_config_fields
         .iter()
         .filter(|name| !input_ports.iter().any(|port| &port.name == *name))
@@ -284,5 +299,7 @@ fn names_in_backticks(names: &[String]) -> String {
         .join(", ")
 }
 
+#[cfg(test)]
+mod function_and_shader_node_tests;
 #[cfg(test)]
 mod tests;
