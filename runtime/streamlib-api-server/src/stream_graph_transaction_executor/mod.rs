@@ -37,7 +37,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
     GraphTransactionInputOverriddenByALink, GraphTransactionToolResult,
-    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -269,13 +269,15 @@ pub(crate) struct WhatAGraphOperationNames {
 }
 
 /// Why one graph action was refused: what kind of refusal it is, the runtime's own words, the
-/// input it refuses a value of when that is not the one the action names, and the JSON pointer,
-/// into the action's own params, of the value refused.
+/// input it refuses a value of when that is not the one the action names, the JSON pointer,
+/// into the action's own params, of the value refused, and why the node it reaches does not run
+/// when that is why.
 pub(super) struct GraphRequestRefusal {
     refusal_code: ControlOperationRefusalCode,
     runtime_words: String,
     refused_field: Option<String>,
     refused_params_pointer: Option<String>,
+    not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
 }
 
 impl GraphRequestRefusal {
@@ -299,6 +301,19 @@ impl GraphRequestRefusal {
             runtime_words: refusal.words,
             refused_field: None,
             refused_params_pointer: Some(refused_params_pointer),
+            not_running_because: None,
+        }
+    }
+
+    /// A refusal of a value set live on a `reset` input while its stream's playback is stopped,
+    /// in the runtime's words: coded `node_not_running`, because the playback is stopped.
+    fn of_a_reset_input_while_stopped(runtime_words: String) -> Self {
+        Self {
+            refusal_code: ControlOperationRefusalCode::NodeNotRunning,
+            runtime_words,
+            refused_field: None,
+            refused_params_pointer: None,
+            not_running_because: Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
         }
     }
 
@@ -318,6 +333,7 @@ impl From<String> for GraphRequestRefusal {
             runtime_words,
             refused_field: None,
             refused_params_pointer: None,
+            not_running_because: None,
         }
     }
 }
@@ -362,6 +378,7 @@ impl GraphTransactionRefusal {
             runtime_words,
             refused_field,
             refused_params_pointer,
+            not_running_because,
         } = self.refusal;
         let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
             (Some(pointer), Some(index)) if tool_name == <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME => {
@@ -375,6 +392,7 @@ impl GraphTransactionRefusal {
             refused_link: what_the_refused_operation_names.link,
             refused_field: refused_field.or(what_the_refused_operation_names.field),
             refused_params_pointer,
+            not_running_because,
             ..ProjectActionRefusalOnTheWire::of_the_action(tool_name, refusal_code, runtime_words)
         }
     }

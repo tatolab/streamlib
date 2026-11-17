@@ -3,7 +3,9 @@
 
 use serde_json::json;
 
-use super::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
+use super::{
+    LIVE_INPUT_VALUES_TABLE, ProjectStoresOpenInThisRuntime, StoreScopedToThisNode, key_of_the_node,
+};
 
 #[test]
 fn two_runtimes_holding_one_project_share_its_store() {
@@ -119,6 +121,48 @@ fn closing_a_project_drops_the_keys_of_every_node_its_graphs_no_longer_hold() {
         Some(json!(0.5))
     );
     assert_eq!(store_of(node_deleted).read("value").expect("reads"), None);
+}
+
+/// Closing a project drops the kept live value of each input of a node its graphs no longer
+/// hold, and keeps each one of a node they still hold.
+///
+/// Mental-revert: sweeping only the `node_store` table at close leaves the deleted node's
+/// `gain` in the store.
+#[test]
+fn closing_a_project_drops_the_kept_live_values_of_every_node_its_graphs_no_longer_hold() {
+    let project_directory = tempfile::tempdir().expect("a temporary project");
+    let node_still_held = uuid::Uuid::new_v4();
+    let node_deleted = uuid::Uuid::new_v4();
+    let runtime = ProjectStoresOpenInThisRuntime::default();
+    let project_store = runtime
+        .the_store_of_the_project_at(project_directory.path())
+        .expect("the runtime opens the store");
+    for node_uuid in [node_still_held, node_deleted] {
+        project_store
+            .write(
+                LIVE_INPUT_VALUES_TABLE,
+                &key_of_the_node(node_uuid, "gain"),
+                &json!(0.7),
+            )
+            .expect("writes");
+    }
+    drop(project_store);
+
+    runtime.close_the_store_of_the_project_at(
+        project_directory.path(),
+        Some(&std::collections::HashSet::from([node_still_held])),
+    );
+    let reopened_runtime = ProjectStoresOpenInThisRuntime::default();
+    let reopened = reopened_runtime
+        .the_store_of_the_project_at(project_directory.path())
+        .expect("the store opens again");
+    let kept_for = |node_uuid| {
+        reopened
+            .read(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node_uuid, "gain"))
+            .expect("reads")
+    };
+    assert_eq!(kept_for(node_still_held), Some(json!(0.7)));
+    assert_eq!(kept_for(node_deleted), None);
 }
 
 #[test]

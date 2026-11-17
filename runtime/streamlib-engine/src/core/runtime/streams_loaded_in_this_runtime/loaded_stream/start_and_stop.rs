@@ -18,7 +18,7 @@ use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, ObservableGraphReadiness, NodePauseGateComponent,
-    NodeRunId, StateComponent, StepProgressOfOneNodeComponent,
+    NodeRunId, StateComponent, StepProgressOfOneNodeComponent, WhyTheNodeLeaves,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::nodes::{NodeSpec, NodeState};
@@ -297,7 +297,10 @@ impl LoadedStreamInThisRuntime {
             let node_run_ids: Vec<NodeRunId> = graph.traversal().v(()).ids();
             let count = node_run_ids.len();
             for proc_id in node_run_ids {
-                tx.log(PendingOperation::RemoveNode(proc_id));
+                tx.log(PendingOperation::RemoveNode(
+                    proc_id,
+                    WhyTheNodeLeaves::TornDownAtAStop,
+                ));
             }
             graph.set_state(GraphState::Idle);
             (count, nodes_torn_down, links_torn_down)
@@ -346,9 +349,27 @@ impl LoadedStreamInThisRuntime {
         (node_removal_outcome, nodes_torn_down, links_torn_down)
     }
 
+    /// End the playback, its graph held to read and edit until the next start: every node torn
+    /// down and put back as the graph held it. Each value set live on a `kept` input is held
+    /// across, and each on a `reset` input is forgotten, the input's followers told it reads its
+    /// saved value again.
     #[tracing::instrument(name = "stream.stop_playback", skip_all, fields(stream = %self.stream_id()))]
     pub fn stop_playback_keeping_the_graph(&self) -> Result<()> {
         let _one_start_or_stop_at_a_time = self.one_start_or_stop_at_a_time.lock();
+        let (stopped, inputs_reset) = self.with_no_other_input_value_change(|| {
+            let inputs_reset = self.forget_every_live_value_reset_at_the_stop();
+            (
+                self.stop_the_playback_and_put_the_graph_back(),
+                inputs_reset,
+            )
+        });
+        self.announce_each_input_reset_at_the_stop(&inputs_reset);
+        stopped
+    }
+
+    /// [`Self::stop_playback_keeping_the_graph`] with the start-or-stop lock held and no input
+    /// value changing.
+    fn stop_the_playback_and_put_the_graph_back(&self) -> Result<()> {
         if self.runtime_context.lock().is_none() {
             self.is_held_stopped.store(true, Ordering::Release);
             return Ok(());

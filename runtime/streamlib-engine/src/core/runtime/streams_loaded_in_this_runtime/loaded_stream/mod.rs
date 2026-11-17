@@ -18,6 +18,9 @@ use crate::core::context::{
 };
 use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
+use crate::core::graph::input_values::{
+    LiveInputValuesKeptInTheProjectStore, LiveInputValuesOfAStream,
+};
 use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -37,6 +40,7 @@ use crate::core::{Error, Result};
 
 mod input_values_set_live;
 mod live_graph_edits;
+mod live_input_values_at_load_and_stop;
 mod shutdown_and_teardown;
 mod start_and_stop;
 
@@ -255,9 +259,18 @@ impl LoadedStreamInThisRuntime {
             stream_tag,
         };
         let node_types_this_stream_resolves = Arc::new(NodeTypesOneStreamResolves::new());
-        let compiler = Arc::new(Compiler::new_resolving_node_types_through(Arc::clone(
-            &node_types_this_stream_resolves,
-        )));
+        let compiler = Arc::new(Compiler::new_of_a_stream(
+            Arc::clone(&node_types_this_stream_resolves),
+            LiveInputValuesOfAStream::mirrored_into(
+                LiveInputValuesKeptInTheProjectStore::of_the_project_at(
+                    Arc::clone(
+                        &engine_resources_shared_by_every_stream
+                            .project_stores_open_in_this_runtime,
+                    ),
+                    Arc::from(project_directory.as_path()),
+                ),
+            ),
+        ));
         compiler.scope(|graph, _tx| graph.set_loaded_stream_id(stream_id.clone()));
         let runtime_context = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(RuntimeStatus::Initial));

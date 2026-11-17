@@ -15,7 +15,8 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe, the_default_name_a_new_node_takes,
+    LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
+    the_default_name_a_new_node_takes,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
@@ -283,7 +284,7 @@ impl LoadedStreamInThisRuntime {
         };
         if matches!(refusal, Error::UnknownNodeType { .. }) {
             self.compiler.scope(|graph, _tx| {
-                if !graph.drop_the_node(&node_run_id) {
+                if !graph.drop_the_node(&node_run_id, WhyTheNodeLeaves::Removed) {
                     tracing::warn!("`{node_run_id}`, which a refused add left, was not dropped");
                 }
             });

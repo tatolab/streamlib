@@ -560,6 +560,7 @@ fn generate_descriptor_from_schema(
                 Some(quota) => quote! { ::std::option::Option::Some(#quota) },
                 None => quote! { ::std::option::Option::None },
             };
+            let lifetime_tokens = node_value_lifetime_tokens(p.lifetime);
             quote! {
                 .with_input(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -571,6 +572,7 @@ fn generate_descriptor_from_schema(
                     family: #family_tokens,
                     pin_default: ::std::option::Option::None,
                     pin_declaration: #pin_declaration_tokens,
+                    lifetime: #lifetime_tokens,
                 })
             }
         })
@@ -598,6 +600,7 @@ fn generate_descriptor_from_schema(
                     family: #family_tokens,
                     pin_default: ::std::option::Option::None,
                     pin_declaration: #pin_declaration_tokens,
+                    lifetime: __streamlib_sdk::descriptors::NodeValueLifetime::Kept,
                 })
             }
         })
@@ -863,6 +866,18 @@ fn port_family_declaration_tokens(
             family_from_config_key: ::std::option::Option::None,
             codec_from_config_key: ::std::option::Option::None,
             family_follows_input_port: ::std::option::Option::None,
+        }
+    }
+}
+
+/// Emit the `lifetime` an input declared.
+fn node_value_lifetime_tokens(lifetime: streamlib_node_schema::NodeValueLifetime) -> TokenStream {
+    use streamlib_node_schema::NodeValueLifetime;
+
+    match lifetime {
+        NodeValueLifetime::Kept => quote! { __streamlib_sdk::descriptors::NodeValueLifetime::Kept },
+        NodeValueLifetime::Reset => {
+            quote! { __streamlib_sdk::descriptors::NodeValueLifetime::Reset }
         }
     }
 }

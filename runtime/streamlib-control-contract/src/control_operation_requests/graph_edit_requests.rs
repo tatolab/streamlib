@@ -248,7 +248,7 @@ pub struct SetNodeInputValueRequest {
 }
 
 /// What `set_node_input_value`'s `mode` says.
-const SET_NODE_INPUT_VALUE_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, gone on the next load, never in history; send `commit` when a continuous gesture ends.";
+const SET_NODE_INPUT_VALUE_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, never in history; a `kept` input holds it across a Stop and the next load, and a `reset` input forgets it at Stop; send `commit` when a continuous gesture ends.";
 
 /// `rename_node`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]

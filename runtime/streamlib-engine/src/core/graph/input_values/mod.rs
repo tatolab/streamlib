@@ -17,15 +17,17 @@ use crate::core::graph::legacy_config_of_a_node::{
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
 mod live_input_values;
+mod live_input_values_kept_in_the_project_store;
 
 pub use live_input_values::{
     InputValueComesFrom, InputValueRead, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, LiveInputValuesOfAStream,
 };
 pub(crate) use live_input_values::{
-    the_input_port_takes_a_value, the_input_value_change,
+    the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,
     the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
 };
+pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 
 /// What kind of value a refused set sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
