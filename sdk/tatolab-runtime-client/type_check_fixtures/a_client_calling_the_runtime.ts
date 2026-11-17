@@ -7,7 +7,6 @@ import {
   ControlOperationError,
   ControlPostTransport,
   ControlRequestInvalid,
-  ControlSchemas,
   TatolabRuntimeClient,
   controlAnswerResult,
   controlNotificationParams,
@@ -68,8 +67,6 @@ export async function aClientCallingEveryKindOfOperation(
   const requestMessage = controlRequestMessage("open_project", { project_directory: "/projects/arm" }, 7);
   const openedFromAnAnswer: ProjectStreamActionQueuedToolResult = controlAnswerResult("open_project", { jsonrpc: "2.0", id: 7, result: {} });
   const heardChange = controlNotificationParams({ jsonrpc: "2.0", method: "project_changed", params: {} });
-  const parsedDirectly = ControlSchemas.operations.open_project.result.parse({});
-  const parsedByComponent: DiscoverResult = ControlSchemas.components.DiscoverResult.parse({});
 
   // @ts-expect-error the client has no method the contract does not declare.
   await client.no_such_method({});
@@ -97,7 +94,7 @@ export async function aClientCallingEveryKindOfOperation(
   }
   const everyMethodName: readonly ControlOperationMethodName[] = CONTROL_OPERATION_METHOD_NAMES;
   void [discovered, subscribed, described, opened, transacted, added, connected, describedUntilAborted, describedByName];
-  void [describedOverAPost, listedOverItsOwnTransport, requestMessage, openedFromAnAnswer, heardChange, parsedDirectly, parsedByComponent];
+  void [describedOverAPost, listedOverItsOwnTransport, requestMessage, openedFromAnAnswer, heardChange];
   void everyMethodName;
   await client.close();
 }

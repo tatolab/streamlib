@@ -36,6 +36,22 @@ test("params that do not match the contract reject naming the field, and nothing
   }
 });
 
+test("an optional field given as undefined is absent, as JSON leaves it out", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const discovered = await client.discover({ contract_version: undefined });
+    assert.equal(typeof discovered.contract_version, "number");
+    await assert.rejects(client.open_project({ project_directory: undefined }), (rejection) => {
+      assert.deepEqual(rejection.issues.map((issue) => [issue.code, issue.path]), [["missing", ["project_directory"]]]);
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
 test("a method builds its own request and resolves the answer it checked", async () => {
   const localApi = await startALocalApiThatAnswersOnlyWhenTold();
   try {

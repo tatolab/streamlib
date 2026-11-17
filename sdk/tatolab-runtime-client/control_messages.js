@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { ControlSchemas } from "./control_schemas.js";
+import { readAgainstControlContractSchema, readControlContractValue } from "./control_contract_check.js";
+import { CONTROL_CONTRACT_SCHEMAS } from "./control_contract_schemas.js";
 
 const WRITTEN_INTEGER_PATTERN = /^-?\d+$/;
 
@@ -15,8 +16,8 @@ export class ControlOperationError extends Error {
   }
 
   get refusal() {
-    const checkedRefusal = ControlSchemas.components.ProjectActionRefusalOnTheWire.safeParse(this.data);
-    return checkedRefusal.success ? checkedRefusal.data : undefined;
+    const refusalReading = readControlContractValue("ProjectActionRefusalOnTheWire", this.data);
+    return refusalReading.read ? refusalReading.value : undefined;
   }
 }
 
@@ -67,16 +68,20 @@ export function controlMessageOfText(messageText) {
   );
 }
 
+function schemasOfTheMethod(method) {
+  return Object.hasOwn(CONTROL_CONTRACT_SCHEMAS.operations, method) ? CONTROL_CONTRACT_SCHEMAS.operations[method] : undefined;
+}
+
 export function controlRequestMessage(method, params, id) {
-  const schemasOfTheMethod = Object.hasOwn(ControlSchemas.operations, method) ? ControlSchemas.operations[method] : undefined;
-  if (schemasOfTheMethod === undefined) {
+  const schemas = schemasOfTheMethod(method);
+  if (schemas === undefined) {
     throw new ControlRequestInvalid(method, anIssue("the control contract declares no such method"));
   }
-  const checkedParams = schemasOfTheMethod.params.safeParse(params);
-  if (!checkedParams.success) {
-    throw new ControlRequestInvalid(method, checkedParams.error.issues);
+  const checkedParams = readAgainstControlContractSchema(schemas.params, params, "sent");
+  if (checkedParams.issues.length > 0) {
+    throw new ControlRequestInvalid(method, checkedParams.issues);
   }
-  return { jsonrpc: "2.0", id, method, params: checkedParams.data };
+  return { jsonrpc: "2.0", id, method, params };
 }
 
 export function controlAnswerResult(method, answerMessage) {
@@ -93,26 +98,26 @@ export function controlAnswerResult(method, answerMessage) {
   if (!Object.hasOwn(answerMessage, "result")) {
     throw new ControlAnswerInvalid(method, anIssue("the answer carries neither `result` nor `error`"));
   }
-  const schemasOfTheMethod = Object.hasOwn(ControlSchemas.operations, method) ? ControlSchemas.operations[method] : undefined;
-  if (schemasOfTheMethod === undefined) {
+  const schemas = schemasOfTheMethod(method);
+  if (schemas === undefined) {
     throw new ControlAnswerInvalid(method, anIssue("the control contract declares no such method"));
   }
-  const checkedResult = schemasOfTheMethod.result.safeParse(answerMessage.result);
-  if (!checkedResult.success) {
-    throw new ControlAnswerInvalid(method, checkedResult.error.issues);
+  const checkedResult = readAgainstControlContractSchema(schemas.result, answerMessage.result, "read");
+  if (checkedResult.issues.length > 0) {
+    throw new ControlAnswerInvalid(method, checkedResult.issues);
   }
-  return checkedResult.data;
+  return checkedResult.value;
 }
 
 export function controlNotificationParams(notificationMessage) {
   const method = typeof notificationMessage?.method === "string" ? notificationMessage.method : "(no method)";
-  const paramsSchema = Object.hasOwn(ControlSchemas.notifications, method) ? ControlSchemas.notifications[method] : undefined;
+  const paramsSchema = Object.hasOwn(CONTROL_CONTRACT_SCHEMAS.notifications, method) ? CONTROL_CONTRACT_SCHEMAS.notifications[method] : undefined;
   if (paramsSchema === undefined) {
     throw new ControlNotificationInvalid(method, anIssue("the control contract declares no such notification"));
   }
-  const checkedParams = paramsSchema.safeParse(notificationMessage.params);
-  if (!checkedParams.success) {
-    throw new ControlNotificationInvalid(method, checkedParams.error.issues);
+  const checkedParams = readAgainstControlContractSchema(paramsSchema, notificationMessage.params, "read");
+  if (checkedParams.issues.length > 0) {
+    throw new ControlNotificationInvalid(method, checkedParams.issues);
   }
-  return { method, params: checkedParams.data };
+  return { method, params: checkedParams.value };
 }

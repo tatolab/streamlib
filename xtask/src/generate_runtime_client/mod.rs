@@ -12,12 +12,15 @@ use std::path::Path;
 use crate::contract_component_references::{
     COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names, component_schemas_of,
 };
+use crate::runtime_client_contract_schemas::{
+    contract_schemas_declarations, contract_schemas_javascript,
+    refuse_a_schema_the_checker_does_not_know,
+};
 use crate::runtime_client_node_ui_manifest::{
     NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
     node_ui_manifest_declarations, node_ui_manifest_json_schema,
 };
 use crate::runtime_client_pin_types::RuntimeClientPinTypes;
-use crate::runtime_client_zod_schemas::{ZodSchemasOfOneContractEntry, zod_schemas_javascript};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use streamlib_control_contract::{
@@ -44,6 +47,10 @@ pub const RUNTIME_CLIENT_PACKAGE_FILES_THE_RUNTIME_UNIT_CARRIES: &[&str] = &[
     "runtime_client.d.ts",
     "control_messages.js",
     "control_messages.d.ts",
+    "control_contract_check.js",
+    "control_contract_check.d.ts",
+    "contract.js",
+    "contract.d.ts",
     "control_transports.js",
     "control_transports.d.ts",
     GENERATED_PIN_TYPES_TYPES_FILE_NAME,
@@ -64,8 +71,8 @@ const GENERATED_PIN_TYPES_TYPES_FILE_NAME: &str = "pin_types.d.ts";
 const GENERATED_PIN_TYPES_FILE_NAME: &str = "pin_types.js";
 const GENERATED_CONTRACT_TYPES_FILE_NAME: &str = "control_contract.d.ts";
 const GENERATED_CONTRACT_CONSTANTS_FILE_NAME: &str = "control_contract.js";
-const GENERATED_SCHEMAS_FILE_NAME: &str = "control_schemas.js";
-const GENERATED_SCHEMAS_TYPES_FILE_NAME: &str = "control_schemas.d.ts";
+const GENERATED_SCHEMAS_FILE_NAME: &str = "control_contract_schemas.js";
+const GENERATED_SCHEMAS_TYPES_FILE_NAME: &str = "control_contract_schemas.d.ts";
 const GENERATED_CLIENT_FILE_NAME: &str = "control_client.js";
 const GENERATED_CLIENT_TYPES_FILE_NAME: &str = "control_client.d.ts";
 const GENERATED_REFERENCE_FILE_NAME: &str = "REFERENCE.md";
@@ -186,6 +193,11 @@ pub fn runtime_client_generated_files(
 ) -> Result<Vec<(&'static str, String)>> {
     let contract = &the_contract_with_its_may_grow_defaults_marked(contract);
     let control_contract = ControlContractRead::of(contract)?;
+    refuse_a_schema_the_checker_does_not_know(
+        control_contract.component_schemas,
+        &control_contract.methods,
+        &control_contract.notifications,
+    )?;
     Ok(vec![
         (
             GENERATED_CONTRACT_TYPES_FILE_NAME,
@@ -205,11 +217,11 @@ pub fn runtime_client_generated_files(
         ),
         (
             GENERATED_SCHEMAS_FILE_NAME,
-            control_contract.zod_schemas_javascript(),
+            control_contract.contract_schemas_javascript(),
         ),
         (
             GENERATED_SCHEMAS_TYPES_FILE_NAME,
-            control_contract.zod_schemas_declarations(),
+            contract_schemas_declarations(),
         ),
         (
             GENERATED_CLIENT_FILE_NAME,
@@ -236,12 +248,12 @@ pub fn runtime_client_generated_files(
 }
 
 /// One method or notification of the contract file, as the generator reads it.
-struct ControlContractEntryRead<'contract> {
-    name: &'contract str,
+pub(crate) struct ControlContractEntryRead<'contract> {
+    pub(crate) name: &'contract str,
     summary: &'contract str,
     description: &'contract str,
-    params_schema: &'contract Value,
-    result_schema: Option<&'contract Value>,
+    pub(crate) params_schema: &'contract Value,
+    pub(crate) result_schema: Option<&'contract Value>,
     errors: Vec<(i64, &'contract str)>,
     since_contract_version: u64,
     stability: &'contract str,
@@ -320,6 +332,18 @@ impl<'contract> ControlContractRead<'contract> {
                 write_component_declaration(&mut declarations, name, schema);
             }
         }
+        declarations.push_str(
+            "/** Every component of the contract, by name: the type its schema states. */\n\
+             export interface ControlContractComponents {\n",
+        );
+        for name in self.component_schemas.keys() {
+            let _ = writeln!(declarations, "  {}: {name};", property_key(name));
+        }
+        declarations.push_str(
+            "}\n\n\
+             /** A component the contract names, which the checker reads a value as. */\n\
+             export type ControlContractComponentName = keyof ControlContractComponents;\n\n",
+        );
         declarations.push_str(
             "/** Every operation the runtime serves, by method name: the params it takes and the result it answers. */\n\
              export interface ControlOperations {\n",
@@ -421,44 +445,8 @@ impl<'contract> ControlContractRead<'contract> {
             .collect()
     }
 
-    fn zod_schemas_javascript(&self) -> String {
-        let entries_of = |entries: &[ControlContractEntryRead<'contract>]| -> Vec<ZodSchemasOfOneContractEntry<'contract>> {
-            entries
-                .iter()
-                .map(|entry| ZodSchemasOfOneContractEntry {
-                    name: entry.name,
-                    params_schema: entry.params_schema,
-                    result_schema: entry.result_schema,
-                })
-                .collect()
-        };
-        zod_schemas_javascript(
-            self.component_schemas,
-            &entries_of(&self.methods),
-            &entries_of(&self.notifications),
-        )
-    }
-
-    fn zod_schemas_declarations(&self) -> String {
-        let mut declarations = String::from(GENERATED_SOURCE_HEADER);
-        declarations.push_str(
-            "\nimport type { z } from \"zod\";\n\n\
-             import type * as ControlContract from \"./control_contract.js\";\n\n\
-             /** Every zod schema of the contract: by component, by method's params and result, and by notification's params. */\n\
-             export interface ControlSchemasOfTheContract {\n  readonly components: {\n",
-        );
-        for name in self.component_schemas.keys() {
-            let _ = writeln!(
-                declarations,
-                "    readonly {name}: z.ZodType<ControlContract.{name}>;"
-            );
-        }
-        declarations.push_str(
-            "  };\n  readonly operations: {\n    readonly [Method in ControlContract.ControlOperationMethodName]: {\n      readonly params: z.ZodType<ControlContract.ControlOperations[Method][\"params\"]>;\n      readonly result: z.ZodType<ControlContract.ControlOperations[Method][\"result\"]>;\n    };\n  };\n  readonly notifications: {\n    readonly [Method in ControlContract.ControlNotificationMethodName]: z.ZodType<ControlContract.ControlNotifications[Method]>;\n  };\n}\n\n\
-             /** Every zod schema of the contract, which the client checks each request, answer and notification against. */\n\
-             export declare const ControlSchemas: ControlSchemasOfTheContract;\n",
-        );
-        declarations
+    fn contract_schemas_javascript(&self) -> String {
+        contract_schemas_javascript(self.component_schemas, &self.methods, &self.notifications)
     }
 
     fn client_javascript(&self) -> String {
@@ -613,7 +601,7 @@ impl<'contract> ControlContractRead<'contract> {
 }
 
 impl<'contract> ControlContractEntryRead<'contract> {
-    fn of(entry: &'contract Value) -> Result<Self> {
+    pub(crate) fn of(entry: &'contract Value) -> Result<Self> {
         let name = entry["name"]
             .as_str()
             .context("a contract entry has no `name`")?;
@@ -677,6 +665,10 @@ pub(crate) fn write_component_declaration(declarations: &mut String, name: &str,
 /// then reads such a property as present, as the runtime's `#[serde(default)]` does.
 pub(crate) const READS_ITS_DEFAULT_MARK: &str = "x-generated-reads-its-default";
 
+/// Marks a set that may gain a member: the client reads a member it does not name as the set's
+/// last, as the runtime reads one.
+pub(crate) const SET_THAT_MAY_GROW_MARK: &str = "x-may-grow";
+
 /// `contract` with `READS_ITS_DEFAULT_MARK` on each property it applies to.
 fn the_contract_with_its_may_grow_defaults_marked(contract: &Value) -> Value {
     fn mark(schema: &mut Value, component_schemas: &Map<String, Value>) {
@@ -688,9 +680,9 @@ fn the_contract_with_its_may_grow_defaults_marked(contract: &Value) -> Value {
                             && component_names_a_schema_names(property_schema)
                                 .into_iter()
                                 .any(|name| {
-                                    component_schemas
-                                        .get(name)
-                                        .is_some_and(|set| set["x-may-grow"] == Value::Bool(true))
+                                    component_schemas.get(name).is_some_and(|set| {
+                                        set[SET_THAT_MAY_GROW_MARK] == Value::Bool(true)
+                                    })
                                 });
                         if names_a_set_that_may_grow && property_schema.get("default").is_some() {
                             property_schema[READS_ITS_DEFAULT_MARK] = Value::Bool(true);
@@ -758,13 +750,6 @@ fn typescript_type_of(schema: &Value, indent_level: usize) -> String {
     if let Some(constant) = schema.get("const") {
         return json_literal(constant);
     }
-    if let Some(variants) = schema["enum"].as_array() {
-        return variants
-            .iter()
-            .map(json_literal)
-            .collect::<Vec<_>>()
-            .join(" | ");
-    }
     for union_keyword in ["oneOf", "anyOf"] {
         if let Some(variants) = schema[union_keyword].as_array() {
             let union = variants
@@ -778,13 +763,6 @@ fn typescript_type_of(schema: &Value, indent_level: usize) -> String {
                 union
             };
         }
-    }
-    if let Some(parts) = schema["allOf"].as_array() {
-        return parts
-            .iter()
-            .map(|part| parenthesized(typescript_type_of(part, indent_level)))
-            .collect::<Vec<_>>()
-            .join(" & ");
     }
     match &schema["type"] {
         Value::String(type_name) => typescript_type_of_a_json_type(type_name, schema, indent_level),
