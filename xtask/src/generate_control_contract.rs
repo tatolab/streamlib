@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `cargo xtask generate-control-contract`: writes the control contract file from the
-//! operation registry. `--check` is the CI gate that fails when the checked-in file differs
-//! from it.
+//! operation registry, then every generated file that reads it. `--check` is the CI gate that
+//! fails when the checked-in contract file differs from the registry; each generator that reads
+//! the file keeps its own `--check`, so a red step names what drifted.
 
 use std::path::Path;
 
@@ -12,8 +13,8 @@ use streamlib_control_contract::{
     CONTROL_CONTRACT_FILE_WORKSPACE_PATH, CONTROL_OPERATIONS, control_contract_file_contents,
 };
 
-/// Regenerate the contract file, or with `check_only` fail when the checked-in one differs from
-/// a regeneration.
+/// Regenerate the contract file and the files generated from it, or with `check_only` fail when
+/// the checked-in contract file differs from a regeneration.
 pub fn run(workspace_root: &Path, check_only: bool) -> Result<()> {
     let rendered_contract = control_contract_file_contents();
     let contract_file_path = workspace_root.join(CONTROL_CONTRACT_FILE_WORKSPACE_PATH);
@@ -36,5 +37,5 @@ pub fn run(workspace_root: &Path, check_only: bool) -> Result<()> {
         "wrote {CONTROL_CONTRACT_FILE_WORKSPACE_PATH} ({} operations)",
         CONTROL_OPERATIONS.len()
     );
-    Ok(())
+    crate::generate_runtime_client::run(workspace_root, false)
 }

@@ -19,6 +19,7 @@ pub mod node_kind;
 pub mod node_reference_in_config;
 pub mod node_schema;
 pub mod node_value_lifetime;
+pub mod pin_type;
 pub mod port_family;
 pub mod port_stream_facts;
 

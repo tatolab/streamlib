@@ -4092,6 +4092,450 @@ export interface CallOperationRequest {
   params?: { [key: string]: unknown } | null;
 }
 
+/**
+ * A Boolean's stored value: a JSON boolean.
+ */
+export type BooleanPinValue = boolean;
+
+/**
+ * An Integer's stored value: a whole number, within its exact size when the type states one
+ * and exact to 2^53 when it states none.
+ */
+export type IntegerPinValue = number | bigint;
+
+/**
+ * A Float's stored value: any JSON number; `1` is taken as 1.0.
+ */
+export type FloatPinValue = number;
+
+/**
+ * A String's stored value: any text; the empty string is a value.
+ */
+export type StringPinValue = string;
+
+/**
+ * A Menu's stored value: one of the type's option names, spelled as declared.
+ */
+export type MenuPinValue = string;
+
+/**
+ * A Color's stored value: sRGB red, green and blue and alpha, each 0 for none and 1 for full,
+ * not linear light and not multiplied by alpha. Alpha 1 is opaque. A number outside 0 to 1 is
+ * taken as sent.
+ */
+export interface ColorPinValue {
+  red: number;
+  green: number;
+  blue: number;
+  alpha: number;
+}
+
+/**
+ * A Vector's stored value: `x` and `y`, with `z` for three components and `w` for four, and no
+ * other key. The type's declared size says which keys it holds.
+ */
+export interface VectorPinValue {
+  x: number;
+  y: number;
+  /**
+   * Present for three and four components.
+   */
+  z?: number;
+  /**
+   * Present for four components.
+   */
+  w?: number;
+}
+
+/**
+ * A Rectangle's stored value: its left edge `x`, its top edge `y`, and a `width` and `height`
+ * of 0 or more. The node says whether they are pixels or a share of the frame.
+ */
+export interface RectanglePinValue {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A Transform's stored value: a 4 by 4 matrix as 16 numbers, row by row. It multiplies a
+ * column, so the fourth number of each of the first three rows is the translation.
+ */
+export type TransformPinValue = Array<number>;
+
+/**
+ * An Asset's stored value: the asset's UUID as `list_assets` answers it, with `from`, the
+ * import's project UUID, for an asset of an import. Never a bare string.
+ */
+export interface AssetPinValue {
+  /**
+   * The asset's UUID.
+   */
+  asset: string;
+  /**
+   * The UUID of the imported project that holds the asset; absent, the project's own.
+   */
+  from?: string;
+}
+
+/**
+ * A List's stored value: a list of its element's form, in order. `[]` is a value.
+ */
+export type ListPinValue = Array<unknown>;
+
+/**
+ * A bundle's stored value: an object keyed by member name, each member in its own type's form.
+ * Only a member that declares a default may be left out.
+ */
+export type BundlePinValue = { [key: string]: unknown };
+
+/**
+ * A config value naming another node of the graph, of any type.
+ */
+export interface NodeReferenceInConfig {
+  /**
+   * The referenced node's name, as `add` gave it.
+   */
+  node: string;
+}
+
+/**
+ * What a port carries, as an author, a person and a client name it.
+ * 
+ * The set is closed: a named type and a bundle are how a project adds its own.
+ */
+export type PinType = {
+  type: "boolean";
+} | ({
+  /**
+   * The size the number must fit; absent, any whole number exact to 2^53.
+   */
+  exact_size?: IntegerSize | null;
+  type: "integer";
+}) | ({
+  /**
+   * The size the number is held in; absent, a 64-bit float.
+   */
+  exact_size?: FloatSize | null;
+  type: "float";
+}) | {
+  type: "string";
+} | {
+  /**
+   * The options, spelled as declared.
+   */
+  option_names: Array<string>;
+  type: "menu";
+} | {
+  type: "color";
+} | {
+  /**
+   * How many numbers it holds.
+   */
+  component_count: VectorComponentCount;
+  type: "vector";
+} | {
+  type: "rectangle";
+} | {
+  type: "transform";
+} | {
+  /**
+   * The formats it may hold; on an input, empty takes any.
+   */
+  pixel_formats?: Array<TexturePixelFormat>;
+  type: "texture";
+} | {
+  type: "audio";
+} | {
+  /**
+   * The codecs it may hold; empty takes any.
+   */
+  codecs?: Array<string>;
+  type: "encoded_video";
+} | {
+  /**
+   * The codecs it may hold; empty takes any.
+   */
+  codecs?: Array<string>;
+  type: "encoded_audio";
+} | {
+  type: "tensor";
+} | {
+  /**
+   * The media the asset must hold one of; empty takes any asset.
+   */
+  media?: Array<ProjectAssetMedia>;
+  type: "asset";
+} | {
+  type: "trigger";
+} | {
+  /**
+   * The type of each element.
+   */
+  element_type: PinType;
+  type: "list_of";
+} | {
+  /**
+   * The members, in declared order.
+   */
+  members: Array<BundleMember>;
+  type: "bundle";
+} | {
+  /**
+   * The class that declares it.
+   */
+  named_pin_type: NamedPinTypeImportPath;
+  type: "named";
+} | ({
+  /**
+   * The node type the referenced node must be; absent, any node.
+   */
+  referenced_node_type?: string | null;
+  /**
+   * Whether one node at most may name a given node through this setting.
+   */
+  one_referrer_per_referenced_node?: boolean;
+  type: "node_reference";
+}) | {
+  /**
+   * The types it may choose; empty chooses any.
+   */
+  among?: Array<PinType>;
+  type: "pin_type_choice";
+};
+
+/**
+ * The size an Integer must fit.
+ */
+export type IntegerSize = "int8" | "int16" | "int32" | "int64" | "uint8" | "uint16" | "uint32" | "uint64";
+
+/**
+ * The size a Float is held in.
+ */
+export type FloatSize = "float32" | "float64";
+
+/**
+ * How many numbers a Vector holds.
+ */
+export type VectorComponentCount = "two" | "three" | "four";
+
+/**
+ * A texture format, spelled as the escalate wire spells it.
+ */
+export type TexturePixelFormat = "rgba8_unorm" | "rgba8_unorm_srgb" | "bgra8_unorm" | "bgra8_unorm_srgb" | "rgba16_float" | "rgba32_float" | "nv12";
+
+/**
+ * What an asset holds, as its media facts or its kind name it.
+ */
+export type ProjectAssetMedia = "image" | "video" | "audio" | "lut" | "scene" | "stream";
+
+/**
+ * One member of a bundle.
+ */
+export interface BundleMember {
+  /**
+   * The member's name, a key of the bundle's stored value.
+   */
+  name: string;
+  /**
+   * The member's type.
+   */
+  member_type: PinType;
+  /**
+   * What the member's value stands for, such as `frequency`.
+   */
+  meaning?: string | null;
+  /**
+   * The value a stored bundle that leaves the member out reads; absent, the member must be
+   * present.
+   */
+  default_value?: unknown;
+}
+
+/**
+ * The class that declares a named pin type, `module:QualifiedClassName`.
+ */
+export type NamedPinTypeImportPath = string;
+
+/**
+ * What a port declares about what it carries.
+ */
+export interface PinDeclaration {
+  /**
+   * The type it carries, or how that type is found.
+   */
+  pin_type: DeclaredPinType;
+  /**
+   * How its messages are read.
+   */
+  flow: PinFlow;
+  /**
+   * What it states besides its type, none of which decides a link.
+   */
+  annotations?: PinAnnotations;
+  /**
+   * Names the port had before, each of which still finds it.
+   */
+  former_names?: Array<string>;
+  /**
+   * Whether an input may hold no value and read as nothing.
+   */
+  may_be_unset?: boolean;
+}
+
+/**
+ * The pin type a port declares, or how it is found.
+ */
+export type DeclaredPinType = {
+  /**
+   * The type.
+   */
+  pin_type: PinType;
+  kind: "is";
+} | {
+  /**
+   * The types it takes.
+   */
+  pin_types: Array<PinType>;
+  kind: "one_of";
+} | {
+  kind: "any";
+} | {
+  /**
+   * The input whose type it takes.
+   */
+  input_port_name: string;
+  kind: "same_as_input";
+} | {
+  /**
+   * The input that chooses its type.
+   */
+  input_name: string;
+  kind: "set_by_input";
+};
+
+/**
+ * How a pin's messages are read.
+ */
+export type PinFlow = "value" | "stream" | "trigger";
+
+/**
+ * What a pin states besides its type. None of it decides a link.
+ */
+export interface PinAnnotations {
+  /**
+   * The lowest and highest number it holds.
+   */
+  range?: PinNumberRange | null;
+  /**
+   * The step a control moves a number by.
+   */
+  step?: number | null;
+  /**
+   * The unit a number is in, such as `Hz`.
+   */
+  unit?: string | null;
+  /**
+   * What its value stands for, such as `frequency`.
+   */
+  meaning?: string | null;
+  /**
+   * The control that edits or shows it: one of the Studio's, or a module's qualified name.
+   */
+  control?: string | null;
+  /**
+   * The frame rate a Texture output's stream has, stated or read from a config key.
+   */
+  frame_rate?: ImageOutputPortFrameRate | null;
+  /**
+   * The sample rate an Audio output's stream has, stated or read from a config key.
+   */
+  sample_rate?: ChannelsOutputPortSampleRate | null;
+  /**
+   * The sample type an Audio output's stream has.
+   */
+  sample_type?: ChannelsOutputPortSampleType | null;
+  /**
+   * Where a Tensor output's values live.
+   */
+  residency?: ArrayOutputPortResidency | null;
+}
+
+/**
+ * The lowest and highest number a pin holds; either may be left open.
+ */
+export interface PinNumberRange {
+  /**
+   * The lowest; absent, no lower bound.
+   */
+  minimum?: number | null;
+  /**
+   * The highest; absent, no upper bound.
+   */
+  maximum?: number | null;
+}
+
+/**
+ * The frame rate an Image output states, written on the class or read from its node's config.
+ */
+export type ImageOutputPortFrameRate = {
+  stated: ImageStreamFrameRate;
+} | {
+  from_config: {
+    config_key: string;
+  };
+};
+
+/**
+ * An Image stream's frame rate, as a rational number of frames per second.
+ */
+export interface ImageStreamFrameRate {
+  numerator: number;
+  denominator: number;
+}
+
+/**
+ * The sample rate a Channels output states, written on the class or read from its node's config.
+ */
+export type ChannelsOutputPortSampleRate = {
+  stated: number;
+} | {
+  from_config: {
+    config_key: string;
+  };
+};
+
+/**
+ * The sample type of a Channels output.
+ */
+export type ChannelsOutputPortSampleType = "f32" | "f64";
+
+/**
+ * Where an Array output's attributes live.
+ */
+export type ArrayOutputPortResidency = "gpu" | "cpu";
+
+/**
+ * Whether an input takes a wire, a stored value, or both.
+ */
+export type NodeInputMode = {
+  mode: "wire_or_value";
+} | {
+  mode: "wire_only";
+} | {
+  /**
+   * When the node reads it.
+   */
+  read?: SettingReadTime;
+  mode: "setting_only";
+};
+
+/**
+ * When a node reads a setting-only input.
+ */
+export type SettingReadTime = "at_setup" | "each_run";
+
 /** Every operation the runtime serves, by method name: the params it takes and the result it answers. */
 export interface ControlOperations {
   /**
