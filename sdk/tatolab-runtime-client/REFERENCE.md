@@ -298,9 +298,9 @@ Take out the link between an output port and an input port in one loaded stream,
 
 ### `set_node_config`
 
-Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.
 
-Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands.
+Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.
 
 - Since contract version 1, stable.
 - Params: `SetNodeConfigRequest`
@@ -309,12 +309,23 @@ Replace a node's config whole, as one transaction, applied to the running node a
 
 ### `set_pin_value`
 
-Set the value one of a node's inputs holds while no link feeds it, as one transaction.
+Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.
 
-Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.
+Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.
 
 - Since contract version 1, stable.
 - Params: `SetPinValueRequest`
+- Result: `GraphTransactionToolResult`
+- Errors: `1` refused, `2` failed, `-32602` params do not match
+
+### `set_node_input_value`
+
+Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
+
+Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A config field takes a link once `set_exposed_config_fields` exposes it as an input. It is also an operation of `transact`.
+
+- Since contract version 3, experimental.
+- Params: `SetNodeInputValueRequest`
 - Result: `GraphTransactionToolResult`
 - Errors: `1` refused, `2` failed, `-32602` params do not match
 
@@ -344,7 +355,7 @@ Replace what Tato Studio draws a node with — canvas position, group, comment, 
 
 Replace the config fields a node takes as inputs, as one transaction.
 
-Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.
+Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value.
 
 - Since contract version 1, stable.
 - Params: `SetExposedConfigFieldsRequest`

@@ -13,6 +13,7 @@ pub mod graph_interface_resolution;
 mod graph_readiness;
 pub mod graph_snapshot;
 pub mod graph_variable_resolution;
+pub mod input_values;
 pub(crate) mod legacy_config_of_a_node;
 mod node_state_ecs_component;
 mod nodes;

@@ -478,7 +478,7 @@ async fn an_edit_sent_again_under_its_idempotency_key_applies_once() {
             .map(|key| key.as_str()),
         Some("add-sink-gesture")
     );
-    assert_eq!(undone["format_version"], json!(2), "{undone}");
+    assert_eq!(undone["format_version"], json!(3), "{undone}");
     assert_eq!(undone["idempotency_key"], "undo-gesture", "{undone}");
     assert!(
         undone["applied_at"]

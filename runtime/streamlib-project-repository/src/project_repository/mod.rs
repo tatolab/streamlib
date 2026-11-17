@@ -51,8 +51,9 @@ use crate::project_transaction::{
     ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectSettingsAction, ProjectStreamDocumentOperation, ProjectTransaction,
-    ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
-    ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
+    ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
+    ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
+    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_nodes_input_values_reference};
 

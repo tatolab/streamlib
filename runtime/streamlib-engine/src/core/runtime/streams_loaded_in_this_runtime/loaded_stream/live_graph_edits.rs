@@ -237,8 +237,23 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<()> {
         let config_json =
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
+        self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, |_| {
+            Ok(config_json)
+        })
+    }
 
+    /// Log, for the next commit, the config `build` makes of the config the node will hold once
+    /// the updates already logged, and any the commit in progress took, apply; `None` for a node
+    /// holding none. The build and the log are one step, so a config update logged beside it, or
+    /// taken by a commit not yet applying it, is never lost.
+    pub(in crate::core::runtime) fn log_a_node_config_update_for_the_next_commit_built_from(
+        &self,
+        node_run_id: &NodeRunId,
+        build: impl FnOnce(Option<serde_json::Value>) -> Result<serde_json::Value>,
+    ) -> Result<()> {
         self.compiler.scope(|graph, tx| -> Result<()> {
+            let config_held = tx.the_config_the_node_will_hold(graph, node_run_id);
+            let config_json = build(config_held)?;
             if let Some(node) = graph.traversal().v(node_run_id).first() {
                 crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
                     &node.display_name,

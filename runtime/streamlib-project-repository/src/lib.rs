@@ -107,9 +107,9 @@ pub use project_transaction::{
     ProjectAssetContent, ProjectAssetImportSource, ProjectAssetOperation, ProjectFileContent,
     ProjectFileOperation, ProjectImportFiles, ProjectImportOperation, ProjectOperation,
     ProjectSettingsAction, ProjectSettingsOperation, ProjectStreamDocumentOperation,
-    ProjectTransaction, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
-    ProjectTransactionLineage, ProjectTransactionReversal, ProjectTransactionUndoState,
-    StreamGraphOperationOnAStream,
+    ProjectTransaction, ProjectTransactionAsSentAndAnswered, ProjectTransactionAuthor,
+    ProjectTransactionAuthorKind, ProjectTransactionLineage, ProjectTransactionReversal,
+    ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
 pub use project_views::{
     PROJECT_VIEWS_DIRECTORY, ProjectBringingAView, ProjectViewFolderRead,
@@ -137,7 +137,8 @@ pub use stream_graph_action::{
     GROUP_COLOUR_ARGUMENT_DESCRIPTION, GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION,
     GROUP_TITLE_ARGUMENT_DESCRIPTION, IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
-    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
+    NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd,
 };

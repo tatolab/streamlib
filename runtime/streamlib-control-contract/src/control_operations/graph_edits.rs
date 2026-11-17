@@ -14,9 +14,9 @@ use crate::control_operation_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
     ImportGraphGeneratorRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
     RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest,
-    SetGroupFieldsRequest, SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    WriteGraphInputRequest,
+    SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest,
+    SetPinValueRequest, SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest,
+    UnlockSubgraphRequest, WriteGraphInputRequest,
 };
 
 /// `transact`: several graph operations of one project as one transaction.
@@ -138,8 +138,8 @@ impl ControlOperation for SetNodeConfig {
     type Request = SetNodeConfigRequest;
     type Result = GraphTransactionToolResult;
     const METHOD_NAME: &'static str = "set_node_config";
-    const ONE_LINE_DOC: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands.";
+    const ONE_LINE_DOC: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.";
+    const AGENT_USAGE_NOTE: &'static str = "Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{\"asset\": \"<uuid>\"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
@@ -147,6 +147,7 @@ impl ControlOperation for SetNodeConfig {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `set_pin_value`: set the value one of a node's inputs holds while no link feeds it, as one transaction.
@@ -156,11 +157,30 @@ impl ControlOperation for SetPinValue {
     type Request = SetPinValueRequest;
     type Result = GraphTransactionToolResult;
     const METHOD_NAME: &'static str = "set_pin_value";
-    const ONE_LINE_DOC: &'static str =
-        "Set the value one of a node's inputs holds while no link feeds it, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.";
+    const ONE_LINE_DOC: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.";
+    const AGENT_USAGE_NOTE: &'static str = "Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
+}
+
+/// `set_node_input_value`: set the value one input of one node holds while no link feeds it,
+/// saved or live, as one transaction.
+pub struct SetNodeInputValue;
+
+impl ControlOperation for SetNodeInputValue {
+    type Request = SetNodeInputValueRequest;
+    type Result = GraphTransactionToolResult;
+    const METHOD_NAME: &'static str = "set_node_input_value";
+    const ONE_LINE_DOC: &'static str = "Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.";
+    const AGENT_USAGE_NOTE: &'static str = "Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. A config field takes a link once `set_exposed_config_fields` exposes it as an input. It is also an operation of `transact`.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE;
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
@@ -213,7 +233,7 @@ impl ControlOperation for SetExposedConfigFields {
     const METHOD_NAME: &'static str = "set_exposed_config_fields";
     const ONE_LINE_DOC: &'static str =
         "Replace the config fields a node takes as inputs, as one transaction.";
-    const AGENT_USAGE_NOTE: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.";
+    const AGENT_USAGE_NOTE: &'static str = "Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. It makes a config field linkable; `set_node_input_value` sets a field's value.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Graph;

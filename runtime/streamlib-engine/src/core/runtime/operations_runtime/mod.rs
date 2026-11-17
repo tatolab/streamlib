@@ -59,6 +59,7 @@ fn this_thread_may_commit_inline() -> bool {
 async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitContext) -> Result<()> {
     let Some(runtime_ctx) = live else {
         take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler);
+        hand_each_config_update_to_its_node_now_no_commit_builds(compiler);
         return Ok(());
     };
     let compiler = Arc::clone(compiler);
@@ -100,6 +101,31 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
         }
         for node_run_id in &nodes_pending_deletion {
             this_streams_graph.traversal_mut().v(node_run_id).drop();
+        }
+    });
+}
+
+/// On a stream no commit builds, a stopped one or one not started, hand each config update
+/// logged for a node no instance runs to that node now: the graph it holds to read and edit then
+/// shows the config, and the node is built from it at the next start.
+fn hand_each_config_update_to_its_node_now_no_commit_builds(compiler: &Compiler) {
+    compiler.scope(|this_streams_graph, tx| {
+        let nodes_no_instance_runs: HashSet<NodeRunId> = this_streams_graph
+            .traversal()
+            .v(())
+            .iter()
+            .filter(|node| !node.has::<NodeInstanceComponent>())
+            .map(|node| node.id.clone())
+            .collect();
+        for (node_run_id, config_to_apply) in tx.take_each_config_update_of(&nodes_no_instance_runs)
+        {
+            if let Some(node) = this_streams_graph
+                .traversal_mut()
+                .v(&node_run_id)
+                .first_mut()
+            {
+                node.set_config(config_to_apply);
+            }
         }
     });
 }
@@ -563,6 +589,19 @@ impl LoadedStreamInThisRuntime {
         Ok(())
     }
 
+    /// Update the config of `node_run_id` to what `build` makes of the config it will hold once
+    /// the updates already logged apply, built and logged in one step, then commit it.
+    pub(super) async fn update_node_config_built_from_the_one_it_holds(
+        &self,
+        node_run_id: &NodeRunId,
+        build: impl FnOnce(Option<serde_json::Value>) -> Result<serde_json::Value>,
+    ) -> Result<()> {
+        self.log_a_node_config_update_for_the_next_commit_built_from(node_run_id, build)?;
+        commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        Ok(())
+    }
+
     fn tokio_runtime_variant(&self) -> &TokioRuntimeVariant {
         &self
             .engine_resources_shared_by_every_stream()
@@ -719,6 +758,45 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
                 &node_type,
                 input_values,
             ),
+        )
+    }
+
+    fn refuse_an_input_value_its_input_does_not_take(
+        &self,
+        node_type: &NodeClassImportPath,
+        node_name: &str,
+        input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
+        crate::core::graph::input_values::refuse_an_input_value_its_input_does_not_take(
+            self.node_types_this_stream_resolves(),
+            &crate::core::graph::input_values::NodeAnInputValueIsSetOn {
+                name: node_name,
+                node_type,
+                input_values_after_the_set,
+            },
+            input,
+            value,
+        )
+    }
+
+    fn node_type_takes_a_config(&self, node_type: &NodeClassImportPath) -> bool {
+        crate::core::graph::input_values::node_type_takes_a_config(
+            self.node_types_this_stream_resolves(),
+            node_type,
+        )
+    }
+
+    fn an_exposure_of_config_fields_is_recorded_on(
+        &self,
+        node_type: &NodeClassImportPath,
+        exposed_config_fields: &[String],
+    ) -> Result<bool> {
+        crate::core::graph::input_values::an_exposure_of_config_fields_is_recorded_on(
+            self.node_types_this_stream_resolves(),
+            node_type,
+            exposed_config_fields,
         )
     }
 

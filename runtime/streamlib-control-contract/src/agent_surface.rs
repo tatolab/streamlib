@@ -188,7 +188,9 @@ pub fn the_operation_served_to_agents_as(
 /// What `list_operation_groups` answers.
 pub fn the_operation_groups_served_to_agents() -> ListOperationGroupsResult {
     let mut groups: Vec<AgentOperationGroup> = Vec::new();
-    for declaration in the_operations_served_to_agents() {
+    for declaration in the_operations_served_to_agents()
+        .filter(|declaration| declaration.is_listed_by_the_discovery_tools())
+    {
         let operation = AgentOperationInItsGroup {
             name: declaration.method_name.to_owned(),
             summary: declaration.one_line_doc.to_owned(),
@@ -230,7 +232,9 @@ pub fn the_operations_described_for(
                 .collect()
         }
         (None, Some(group)) => the_operations_served_to_agents()
-            .filter(|declaration| declaration.group == group)
+            .filter(|declaration| {
+                declaration.group == group && declaration.is_listed_by_the_discovery_tools()
+            })
             .collect(),
         _ => {
             return Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
@@ -391,7 +395,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_group_lists_only_operations_the_agent_surface_serves() {
+    fn every_group_lists_only_operations_the_agent_surface_serves_and_nothing_replaced() {
         let listed = the_operation_groups_served_to_agents();
         let listed_names: Vec<&str> = listed
             .groups
@@ -404,6 +408,7 @@ mod tests {
             })
             .collect();
         let mut served: Vec<&str> = the_operations_served_to_agents()
+            .filter(|declaration| declaration.replaced_by.is_none())
             .map(|declaration| declaration.method_name)
             .collect();
         let mut listed_sorted = listed_names.clone();
@@ -509,5 +514,51 @@ mod tests {
             ControlOperationRefusalCode::OperationNotFound
         );
         assert!(the_operations_described_for(DescribeOperationsRequest::default()).is_err());
+    }
+
+    #[test]
+    fn a_replaced_operation_is_not_listed_and_is_still_described_and_reached_by_name() {
+        let replaced = ["set_node_config", "set_pin_value"];
+        let listed = the_operation_groups_served_to_agents();
+        let listed_names: Vec<&str> = listed
+            .groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .operations
+                    .iter()
+                    .map(|operation| operation.name.as_str())
+            })
+            .collect();
+        assert!(
+            listed_names.contains(&"set_node_input_value"),
+            "{listed_names:?}"
+        );
+        for replaced in replaced {
+            assert!(!listed_names.contains(&replaced), "{replaced} is listed");
+            let described = the_operations_described_for(DescribeOperationsRequest {
+                operations: Some(vec![replaced.to_owned()]),
+                group: None,
+            })
+            .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
+            assert_eq!(described.operations.len(), 1);
+            assert!(
+                described.operations[0]
+                    .usage
+                    .contains("set_node_input_value"),
+                "{replaced} names its replacement"
+            );
+        }
+        let described_graph_group = the_operations_described_for(DescribeOperationsRequest {
+            operations: None,
+            group: Some(ControlOperationGroup::Graph),
+        })
+        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
+        assert!(
+            described_graph_group
+                .operations
+                .iter()
+                .all(|operation| !replaced.contains(&operation.name.as_str()))
+        );
     }
 }

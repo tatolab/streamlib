@@ -288,6 +288,29 @@ impl ProjectRepository {
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
+        self.apply_project_operations_answered(
+            author,
+            idempotency_key,
+            ProjectTransactionAsSentAndAnswered {
+                actions_as_sent,
+                inputs_overridden_by_links: Vec::new(),
+            },
+            operations,
+            lineage,
+        )
+    }
+
+    /// Apply `operations` as [`Self::apply_project_operations`] does, recording beside them what
+    /// their caller sent and what its answer named, which an action sent again under the same
+    /// key is answered with.
+    pub fn apply_project_operations_answered(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        as_sent_and_answered: ProjectTransactionAsSentAndAnswered,
+        operations: Vec<ProjectOperation>,
+        lineage: ProjectTransactionLineage,
+    ) -> Result<ProjectActionApplyOutcome, ProjectRepositoryRefusal> {
         if let Some(applied_before) =
             self.the_transaction_applied_under_a_key_the_caller_sent(idempotency_key)?
         {
@@ -295,10 +318,10 @@ impl ProjectRepository {
                 applied_before,
             ));
         }
-        self.apply_and_commit_project_operations(
+        self.apply_and_commit_project_operations_answered(
             author,
             idempotency_key,
-            actions_as_sent,
+            as_sent_and_answered,
             operations,
             lineage,
         )
@@ -310,6 +333,29 @@ impl ProjectRepository {
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
         actions_as_sent: Vec<ProjectAction>,
+        operations: Vec<ProjectOperation>,
+        lineage: ProjectTransactionLineage,
+    ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
+        self.apply_and_commit_project_operations_answered(
+            author,
+            idempotency_key,
+            ProjectTransactionAsSentAndAnswered {
+                actions_as_sent,
+                inputs_overridden_by_links: Vec::new(),
+            },
+            operations,
+            lineage,
+        )
+    }
+
+    fn apply_and_commit_project_operations_answered(
+        &mut self,
+        author: &ProjectTransactionAuthor,
+        idempotency_key: Option<&ProjectActionIdempotencyKey>,
+        ProjectTransactionAsSentAndAnswered {
+            actions_as_sent,
+            inputs_overridden_by_links,
+        }: ProjectTransactionAsSentAndAnswered,
         operations: Vec<ProjectOperation>,
         lineage: ProjectTransactionLineage,
     ) -> Result<AppliedProjectTransaction, ProjectRepositoryRefusal> {
@@ -425,6 +471,7 @@ impl ProjectRepository {
             redoes,
             idempotency_key: idempotency_key.cloned(),
             actions: actions_as_sent,
+            inputs_overridden_by_links,
         };
 
         let mut performed_effects = Vec::with_capacity(transaction.operations.len());

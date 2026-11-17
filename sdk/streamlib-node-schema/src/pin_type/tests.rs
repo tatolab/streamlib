@@ -466,3 +466,136 @@ fn a_texture_pixel_format_is_found_by_its_wire_name_and_no_other() {
     }
     assert_eq!(TexturePixelFormat::from_wire_name("yuv420"), None);
 }
+
+#[test]
+fn a_type_holds_a_stored_value_exactly_when_it_states_a_value_form() {
+    for name in BuiltInPinTypeName::EVERY_NAME {
+        let pin_type = a_pin_type_named(name);
+        let holds_none = matches!(
+            name,
+            BuiltInPinTypeName::Texture
+                | BuiltInPinTypeName::Audio
+                | BuiltInPinTypeName::EncodedVideo
+                | BuiltInPinTypeName::EncodedAudio
+                | BuiltInPinTypeName::Tensor
+                | BuiltInPinTypeName::Trigger
+                | BuiltInPinTypeName::Named
+        );
+        assert_eq!(pin_type.holds_a_stored_value(), !holds_none, "{name:?}");
+    }
+}
+
+#[test]
+fn each_type_takes_the_example_it_gives_and_refuses_a_value_of_another_form() {
+    for name in BuiltInPinTypeName::EVERY_NAME {
+        let pin_type = a_pin_type_named(name);
+        if !pin_type.holds_a_stored_value() {
+            let refused = pin_type
+                .check_value(&json!(1.0))
+                .expect_err("holds no value");
+            assert_eq!(refused.takes, "no value, only a link", "{name:?}");
+            continue;
+        }
+        let refused = pin_type
+            .check_value(&json!({ "neither": "form" }))
+            .expect_err("an object of no member is no type's value here");
+        pin_type
+            .check_value(&refused.example)
+            .unwrap_or_else(|not_taken| panic!("{name:?} refuses its own example: {not_taken:?}"));
+    }
+}
+
+#[test]
+fn a_number_is_taken_within_its_size_and_never_rounded_or_clamped() {
+    let byte = PinType::Integer {
+        exact_size: Some(IntegerSize::UInt8),
+    };
+    assert!(byte.check_value(&json!(255)).is_ok());
+    assert_eq!(
+        byte.check_value(&json!(256))
+            .expect_err("past a byte")
+            .takes,
+        "a whole number from 0 to 255"
+    );
+    assert!(byte.check_value(&json!(-1)).is_err());
+    assert!(byte.check_value(&json!(1.5)).is_err(), "no rounding");
+    assert!(byte.check_value(&json!(true)).is_err());
+
+    let float = PinType::Float { exact_size: None };
+    assert!(float.check_value(&json!(1)).is_ok(), "`1` is taken as 1.0");
+    assert!(float.check_value(&json!(1.7)).is_ok());
+    assert!(float.check_value(&json!("1.7")).is_err());
+    let float32 = PinType::Float {
+        exact_size: Some(FloatSize::Float32),
+    };
+    assert!(float32.check_value(&json!(1e300)).is_err());
+
+    assert!(PinType::Boolean {}.check_value(&json!(false)).is_ok());
+    assert!(PinType::Boolean {}.check_value(&json!(0)).is_err());
+}
+
+#[test]
+fn a_shaped_value_is_taken_only_whole_and_of_its_declared_size() {
+    let three = PinType::Vector {
+        component_count: VectorComponentCount::Three,
+    };
+    assert!(
+        three
+            .check_value(&json!({ "x": 1, "y": 2, "z": 3 }))
+            .is_ok()
+    );
+    assert!(three.check_value(&json!({ "x": 1, "y": 2 })).is_err());
+    assert!(
+        three
+            .check_value(&json!({ "x": 1, "y": 2, "z": 3, "w": 4 }))
+            .is_err()
+    );
+    assert!(
+        PinType::Rectangle {}
+            .check_value(&json!({ "x": 0, "y": 0, "width": -1, "height": 1 }))
+            .is_err()
+    );
+    let menu = PinType::Menu {
+        option_names: vec!["sine".into(), "square".into()],
+    };
+    assert!(menu.check_value(&json!("square")).is_ok());
+    assert_eq!(
+        menu.check_value(&json!("Square"))
+            .expect_err("spelled as declared")
+            .takes,
+        "one of `sine`, `square`"
+    );
+    let floats = PinType::ListOf {
+        element_type: Box::new(PinType::Float { exact_size: None }),
+    };
+    assert!(floats.check_value(&json!([0.5, 1])).is_ok());
+    assert!(floats.check_value(&json!([0.5, "one"])).is_err());
+}
+
+#[test]
+fn a_bundle_takes_each_member_in_its_form_and_leaves_out_only_one_with_a_default() {
+    let bundle = PinType::Bundle {
+        members: vec![
+            BundleMember {
+                name: "gain".into(),
+                member_type: PinType::Float { exact_size: None },
+                meaning: None,
+                default_value: Some(json!(1.0)),
+            },
+            BundleMember {
+                name: "enabled".into(),
+                member_type: PinType::Boolean {},
+                meaning: None,
+                default_value: None,
+            },
+        ],
+    };
+    assert!(bundle.check_value(&json!({ "enabled": true })).is_ok());
+    assert!(bundle.check_value(&json!({ "gain": 0.5 })).is_err());
+    assert!(
+        bundle
+            .check_value(&json!({ "enabled": true, "other": 1 }))
+            .is_err()
+    );
+    assert!(bundle.check_value(&json!({ "enabled": 1 })).is_err());
+}

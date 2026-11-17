@@ -3,9 +3,17 @@
 
 use super::*;
 
+/// What the answer of a graph transaction names beside the operations it applied: the `as` of
+/// each node added, and each input value set that a link overrides.
+pub(super) struct WhatAnAnswerNamesBesideItsOperations<'labels> {
+    pub(super) labels_of_added_nodes: &'labels HashMap<Uuid, String>,
+    pub(super) overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
+}
+
 impl StreamGraphTransactionExecutor<'_> {
     /// The answer of `applied_before`, the transaction of the project `project` an action sent
-    /// again under its key first applied, each edit of a loaded stream under its stream id.
+    /// again under its key first applied: each edit of a loaded stream under its stream id, and
+    /// each input value set that a link overrode, as its first answer named them.
     pub(super) fn the_answer_of_a_graph_transaction_applied_before(
         &self,
         project: Uuid,
@@ -38,7 +46,10 @@ impl StreamGraphTransactionExecutor<'_> {
                     .ok()
             },
             applied_live,
-            &HashMap::new(),
+            WhatAnAnswerNamesBesideItsOperations {
+                labels_of_added_nodes: &HashMap::new(),
+                overridden_by_links: applied_before.transaction.inputs_overridden_by_links,
+            },
         )
     }
 
@@ -49,7 +60,10 @@ impl StreamGraphTransactionExecutor<'_> {
         commit: Option<String>,
         stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
-        labels_of_added_nodes: &HashMap<Uuid, String>,
+        WhatAnAnswerNamesBesideItsOperations {
+            labels_of_added_nodes,
+            overridden_by_links,
+        }: WhatAnAnswerNamesBesideItsOperations<'_>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
         let mut added_groups = Vec::new();
@@ -144,6 +158,8 @@ impl StreamGraphTransactionExecutor<'_> {
             connected_links,
             added_groups,
             added_notes,
+            nodes_rebuilt: Vec::new(),
+            overridden_by_links,
         }
     }
 }

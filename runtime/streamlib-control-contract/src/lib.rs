@@ -45,7 +45,8 @@ pub use control_operation::{
 };
 pub use control_operation_refusals::{
     ParamsThatDoNotMatchTheirSchema, the_call_that_describes, the_call_that_lists_every_operation,
-    the_params_read_as, the_refusal_of_an_unknown_operation, the_suggested_call,
+    the_json_pointer_token_of, the_params_read_as, the_refusal_of_an_unknown_operation,
+    the_suggested_call,
 };
 pub use control_operation_requests::{
     ASSET_ARGUMENT_DESCRIPTION, ASSET_PROJECT_DIRECTORY_ARGUMENT_DESCRIPTION,
@@ -70,12 +71,13 @@ pub use control_operation_requests::{
     STREAM_ACTION_STREAM_ARGUMENT_DESCRIPTION, STREAM_ARGUMENT_DESCRIPTION,
     STREAM_ASSET_ARGUMENT_DESCRIPTION, STREAM_DISPLAY_NAME_ARGUMENT_DESCRIPTION,
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
-    SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
-    SetStudioFieldsRequest, SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
-    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
+    WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 pub use control_operation_results::{
     ControlContractVersionMismatch, DiscoverResult, SubscribeProjectChangesResult,
@@ -93,9 +95,9 @@ pub use control_operations::{
     OpenViewer, PausePlayback, ReadAssetPreview, ReadProjectChanges, ReadProjectFile, Redo,
     RefreshFragments, ReloadProject, RelocateAsset, RemoveDependency, RemoveGroup, RemoveNode,
     RemoveNote, RemoveProject, RenameNode, RenameProject, ReplaceAsset, ResumePlayback,
-    SetAssetSettings, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNoteFields,
-    SetPinValue, SetProjectCover, SetProjectDescription, SetStreamClockScale, SetStreamDisplayName,
-    SetStudioFields, StartPlayback, StopPlayback, SubscribeProjectChanges,
+    SetAssetSettings, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
+    SetNoteFields, SetPinValue, SetProjectCover, SetProjectDescription, SetStreamClockScale,
+    SetStreamDisplayName, SetStudioFields, StartPlayback, StopPlayback, SubscribeProjectChanges,
     SubscribeProjectLogRecords, SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
     Transact, Undo, UnlockSubgraph, UpdateDependency, UseDependencyStream, WriteGraphInput,
     WriteProjectFile, WriteStudioViewOutput,

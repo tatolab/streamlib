@@ -71,6 +71,8 @@ impl ControlOperationDispatcher {
                 connected_links: Vec::new(),
                 added_groups: Vec::new(),
                 added_notes: Vec::new(),
+                nodes_rebuilt: Vec::new(),
+                overridden_by_links: Vec::new(),
             });
         }
         self.apply_a_graph_transaction(

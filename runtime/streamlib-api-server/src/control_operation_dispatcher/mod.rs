@@ -377,6 +377,10 @@ impl ControlOperationDispatcher {
             ControlOperationCall::SetPinValue(request) => {
                 self.answer_set_pin_value(request, request_origin).await
             }
+            ControlOperationCall::SetNodeInputValue(request) => {
+                self.answer_set_node_input_value(request, request_origin)
+                    .await
+            }
             ControlOperationCall::RenameNode(request) => {
                 self.answer_rename_node(request, request_origin).await
             }

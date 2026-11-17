@@ -15,7 +15,8 @@ use streamlib_project_repository::{
     GROUP_DESCRIPTION_ARGUMENT_DESCRIPTION, GROUP_TITLE_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_CONFIG_ARGUMENT_DESCRIPTION,
     IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION,
-    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
+    IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
+    NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
     NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
 };
@@ -32,7 +33,7 @@ use super::{
 pub struct TransactRequest {
     /// The operations, applied in order and whole or not at all.
     #[schemars(
-        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
+        description = "The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project."
     )]
     pub operations: Vec<StreamGraphAction>,
     /// Whether the edit is kept.
@@ -214,6 +215,40 @@ pub struct SetPinValueRequest {
     #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
     pub idempotency_key: Option<String>,
 }
+
+/// `set_node_input_value`'s params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SetNodeInputValueRequest {
+    /// The stream asset the edit is in.
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: Uuid,
+    /// The subgraph the edit is inside, by the fragment nodes leading to it; the stream's own
+    /// level when omitted.
+    #[schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION)]
+    pub level: Option<Vec<Uuid>>,
+    /// The node, by its UUID.
+    #[schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION)]
+    pub node: String,
+    /// The input, by name.
+    #[schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION)]
+    pub input: String,
+    /// The value the input holds while no link feeds it; none takes the value off.
+    #[schemars(description = NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION)]
+    pub value: Option<Value>,
+    /// Whether the value is saved.
+    #[schemars(description = SET_NODE_INPUT_VALUE_MODE_ARGUMENT_DESCRIPTION)]
+    pub mode: Option<GraphEditMode>,
+    /// Who the change is by.
+    #[schemars(description = AUTHOR_ARGUMENT_DESCRIPTION)]
+    pub author: Option<ProjectTransactionAuthorArgument>,
+    /// The key the caller minted for this gesture.
+    #[schemars(description = IDEMPOTENCY_KEY_ARGUMENT_DESCRIPTION)]
+    pub idempotency_key: Option<String>,
+}
+
+/// What `set_node_input_value`'s `mode` says.
+const SET_NODE_INPUT_VALUE_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, gone on the next load, never in history; send `commit` when a continuous gesture ends.";
 
 /// `rename_node`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]

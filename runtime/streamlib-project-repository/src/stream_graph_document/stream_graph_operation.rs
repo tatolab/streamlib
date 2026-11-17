@@ -45,7 +45,8 @@ pub enum StreamGraphOperation {
     /// The node's config was replaced whole: each input value `from` names taken out, then each
     /// `to` names set.
     SetNodeConfig { node: Uuid, from: Value, to: Value },
-    /// The value of one of the node's inputs was set, `None` being no value.
+    /// The value of one of the node's inputs was set, `None` being no value; an older runtime
+    /// recorded it so.
     SetPinValue {
         node: Uuid,
         input: String,
@@ -118,6 +119,14 @@ pub enum StreamGraphOperation {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         port_links_put_back: Vec<StreamGraphDocumentValueAtItsPosition>,
     },
+    /// The value the node's input holds while no link feeds it was set, `None` being no value,
+    /// so the input reads its declared default.
+    SetNodeInputValue {
+        node: Uuid,
+        input: String,
+        from: Option<Value>,
+        to: Option<Value>,
+    },
 }
 
 impl StreamGraphOperation {
@@ -139,6 +148,17 @@ impl StreamGraphOperation {
                 from,
                 to,
             } => Self::SetPinValue {
+                node,
+                input,
+                from: to,
+                to: from,
+            },
+            Self::SetNodeInputValue {
+                node,
+                input,
+                from,
+                to,
+            } => Self::SetNodeInputValue {
                 node,
                 input,
                 from: to,
@@ -207,6 +227,9 @@ impl StreamGraphOperation {
             }
             Self::SetNodeConfig { node, .. } => format!("set_node_config {node}"),
             Self::SetPinValue { node, input, .. } => format!("set_pin_value {node}/{input}"),
+            Self::SetNodeInputValue { node, input, .. } => {
+                format!("set_node_input_value {node}/{input}")
+            }
             Self::RenameNode { node, to, .. } => format!("rename_node {node} {to}"),
             Self::SetStudioFields { node, .. } => format!("set_studio_fields {node}"),
             Self::RefreshFragment { node, to, .. } => {
@@ -262,6 +285,7 @@ impl StreamGraphOperation {
             Self::Connect { link } | Self::Disconnect { link } => Some(link.target.node),
             Self::SetNodeConfig { node, .. }
             | Self::SetPinValue { node, .. }
+            | Self::SetNodeInputValue { node, .. }
             | Self::RenameNode { node, .. }
             | Self::SetStudioFields { node, .. }
             | Self::RefreshFragment { node, .. }
@@ -303,9 +327,25 @@ impl StreamGraphOperation {
         }
     }
 
-    /// The `set_pin_value` that sets `to` on `node`'s input `input`, `None` clearing it. A clear
-    /// of a config field the node exposes as an input is refused: the node holds one value of
-    /// the field, so the clear would take its config value out while the running node keeps it.
+    /// The set of `node`'s input `input` to `to`, `None` or `null` taking the value off, with
+    /// the value it held as `from`.
+    pub fn set_node_input_value_of(
+        node: &StreamGraphDocumentNode,
+        input: String,
+        to: Option<Value>,
+    ) -> Self {
+        Self::SetNodeInputValue {
+            node: node.id,
+            from: node.input_values.get(&input).cloned(),
+            input,
+            to: to.filter(|value| !value.is_null()),
+        }
+    }
+
+    /// The input value set a `set_pin_value` of `to` on `node`'s input `input` makes, `None`
+    /// clearing it. A clear of a config field the node exposes as an input is refused: the node
+    /// holds one value of the field, so the clear would take its config value out while the
+    /// running node keeps it.
     pub fn set_pin_value_of(
         node: &StreamGraphDocumentNode,
         input: String,
@@ -314,16 +354,12 @@ impl StreamGraphOperation {
         let to = to.filter(|value| !value.is_null());
         if to.is_none() && node.exposed_config_fields.contains(&input) {
             return Err(format!(
-                "node {} `{}` takes `{input}` as an input of its config field of that name, so                  the value it holds is its config's: set it with set_node_config",
+                "node {} `{}` takes `{input}` as an input of its config field of that name, so \
+                 the value it holds is its config's: set it with set_node_config",
                 node.id, node.name
             ));
         }
-        Ok(Self::SetPinValue {
-            node: node.id,
-            from: node.input_values.get(&input).cloned(),
-            input,
-            to,
-        })
+        Ok(Self::set_node_input_value_of(node, input, to))
     }
 
     /// Each node's input values the operation leaves it with, by that node's UUID: its own
@@ -346,6 +382,12 @@ impl StreamGraphOperation {
                 ..
             } => input_values.push((*node, to.clone())),
             Self::SetPinValue {
+                node,
+                input,
+                to: Some(value),
+                ..
+            }
+            | Self::SetNodeInputValue {
                 node,
                 input,
                 to: Some(value),

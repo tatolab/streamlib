@@ -9,6 +9,7 @@ mod built_in_pin_types;
 mod pin_declaration;
 mod pin_type_variants;
 mod stored_pin_values;
+mod stored_value_check;
 
 pub use built_in_pin_types::{
     BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
@@ -27,6 +28,7 @@ pub use stored_pin_values::{
     ListPinValue, MenuPinValue, RectanglePinValue, StringPinValue, TransformPinValue,
     VectorPinValue,
 };
+pub use stored_value_check::PinValueNotTaken;
 
 #[cfg(test)]
 mod tests;

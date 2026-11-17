@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -42,6 +43,7 @@ use crate::core::compiler::compiler_ops::shader_node_island::{
     unwire_each_link_of_the_shader_nodes_restarted,
 };
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
+use crate::core::compiler::compiler_transaction::ConfigsACommitIsApplying;
 use crate::core::compiler::node_thread_shutdown::{
     AbandonedNodeThreadStillRunning, DescriptionOfTheAbandonedNodeThreads, NodeDisplayNameAndId,
     NodeThreadJoinBudgets, remove_nodes_signalling_every_thread_before_joining_any,
@@ -63,6 +65,8 @@ pub(crate) struct Compiler {
     graph: Arc<RwLock<Graph>>,
     // Transaction accumulates operations until commit
     transaction: Arc<Mutex<Vec<PendingOperation>>>,
+    /// The config each node holds once the commit in progress applies the update it took.
+    configs_a_commit_is_applying: ConfigsACommitIsApplying,
     /// Held for the whole of a commit: two batches compiling at once would
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
@@ -90,6 +94,7 @@ impl Compiler {
                 node_types_this_stream_resolves,
             ))),
             transaction: Arc::new(Mutex::new(Vec::new())),
+            configs_a_commit_is_applying: Arc::new(Mutex::new(HashMap::new())),
             one_commit_at_a_time: Mutex::new(()),
             abandoned_node_threads: Mutex::new(Vec::new()),
         }
@@ -111,7 +116,10 @@ impl Compiler {
         F: FnOnce(&mut Graph, &CompilerTransactionHandle) -> R,
     {
         let mut graph = self.graph.write();
-        let tx = CompilerTransactionHandle::new(Arc::clone(&self.transaction));
+        let tx = CompilerTransactionHandle::new(
+            Arc::clone(&self.transaction),
+            Arc::clone(&self.configs_a_commit_is_applying),
+        );
         f(&mut graph, &tx)
     }
 
@@ -134,7 +142,7 @@ impl Compiler {
     #[tracing::instrument(name = "compiler.commit", skip_all)]
     pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
         let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
-        let operations = std::mem::take(&mut *self.transaction.lock());
+        let operations = self.take_the_logged_operations_to_compile();
         if operations.is_empty() {
             tracing::info!("[commit] No pending operations");
             return Ok(());
@@ -145,12 +153,32 @@ impl Compiler {
             operations.len()
         );
 
-        Self::compile(
+        let compiled = Self::compile(
             Arc::clone(&self.graph),
             operations,
             runtime_ctx,
             &self.abandoned_node_threads,
-        )
+        );
+        self.configs_a_commit_is_applying.lock().clear();
+        compiled
+    }
+
+    /// Take every operation logged, for a commit to compile, recording in the same step the
+    /// config each config update taken hands its node, which a config built before the commit
+    /// applies it builds on.
+    pub(super) fn take_the_logged_operations_to_compile(&self) -> Vec<PendingOperation> {
+        let mut transaction = self.transaction.lock();
+        let mut configs_a_commit_is_applying = self.configs_a_commit_is_applying.lock();
+        for operation in transaction.iter() {
+            if let PendingOperation::UpdateNodeConfig {
+                node_run_id,
+                config_to_apply,
+            } = operation
+            {
+                configs_a_commit_is_applying.insert(node_run_id.clone(), config_to_apply.clone());
+            }
+        }
+        std::mem::take(&mut *transaction)
     }
 
     fn compile(

@@ -34,6 +34,9 @@ pub trait ControlOperation {
     const EFFECT: ControlOperationEffect;
     /// How the agent surface offers it.
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing;
+    /// The method name of the operation that replaces it, for one an agent no longer finds
+    /// listed though it still answers.
+    const REPLACED_BY: Option<&'static str> = None;
 }
 
 /// What an operation does to what the runtime holds.
@@ -128,6 +131,8 @@ pub struct ControlOperationDeclaration {
     pub effect: ControlOperationEffect,
     /// How the agent surface offers it.
     pub agent_tool_listing: ControlOperationAgentToolListing,
+    /// The method name of the operation that replaces it.
+    pub replaced_by: Option<&'static str>,
     /// The schema of its request, its named types added to the generator's definitions.
     pub request_json_schema: fn(&mut SchemaGenerator) -> schemars::Schema,
     /// The schema of its result, its named types added to the generator's definitions.
@@ -138,6 +143,12 @@ impl ControlOperationDeclaration {
     /// Whether the agent surface serves it.
     pub fn is_served_to_agents(&self) -> bool {
         self.exposures.contains(&ControlOperationExposure::Agent)
+    }
+
+    /// Whether the discovery tools list it: the agent surface serves it and no operation
+    /// replaces it.
+    pub fn is_listed_by_the_discovery_tools(&self) -> bool {
+        self.is_served_to_agents() && self.replaced_by.is_none()
     }
 
     /// Whether it is a tool of its own in the agent surface's tool list.
@@ -158,6 +169,7 @@ impl ControlOperationDeclaration {
             exposures: Operation::EXPOSURES,
             effect: Operation::EFFECT,
             agent_tool_listing: Operation::AGENT_TOOL_LISTING,
+            replaced_by: Operation::REPLACED_BY,
             request_json_schema: the_json_schema_of::<Operation::Request>,
             result_json_schema: the_json_schema_of::<Operation::Result>,
         }

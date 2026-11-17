@@ -48,9 +48,14 @@ fn the_json_pointer_of(path: &serde_path_to_error::Path) -> Option<String> {
             serde_path_to_error::Segment::Unknown => break,
         };
         pointer.push('/');
-        pointer.push_str(&token.replace('~', "~0").replace('/', "~1"));
+        pointer.push_str(&the_json_pointer_token_of(&token));
     }
     (!pointer.is_empty()).then_some(pointer)
+}
+
+/// `key` as one token of a JSON pointer: `~` written `~0` and `/` written `~1`.
+pub fn the_json_pointer_token_of(key: &str) -> String {
+    key.replace('~', "~0").replace('/', "~1")
 }
 
 /// The call `operation` with `params`, when an agent can make it: a discovery tool whose

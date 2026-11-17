@@ -70,6 +70,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("set_pin_value", params, callOptions);
   }
 
+  set_node_input_value(params, callOptions) {
+    return this.call("set_node_input_value", params, callOptions);
+  }
+
   rename_node(params, callOptions) {
     return this.call("rename_node", params, callOptions);
   }

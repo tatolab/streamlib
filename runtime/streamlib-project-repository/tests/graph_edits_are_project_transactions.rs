@@ -221,6 +221,68 @@ fn five_edits_batched_in_one_transaction_are_kept_and_one_undo_reverses_them_all
     project.undo(&agent).unwrap_err();
 }
 
+/// A set of one input value is one commit whose undo puts back the value the input held, and a
+/// set with no value takes the input's value off.
+#[test]
+fn a_set_of_one_input_value_is_undone_to_the_value_it_replaced() {
+    let mut project = ProjectHoldingOneStream::new();
+    let agent = an_author(ProjectTransactionAuthorKind::Agent, "rig agent");
+    let effect = a_node("effect", json!({ "strength": 0.5 }));
+    project
+        .apply(&agent, vec![project.on_the_stream(add(&effect))])
+        .unwrap();
+
+    let set = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, effect.id),
+        "strength".to_owned(),
+        Some(json!(0.75)),
+    );
+    assert_eq!(
+        set,
+        StreamGraphOperation::SetNodeInputValue {
+            node: effect.id,
+            input: "strength".to_owned(),
+            from: Some(json!(0.5)),
+            to: Some(json!(0.75)),
+        }
+    );
+    project
+        .apply(&agent, vec![project.on_the_stream(set)])
+        .unwrap();
+    assert_eq!(
+        held_node(&project, effect.id).input_values,
+        Map::from_iter([("strength".to_owned(), json!(0.75))])
+    );
+    project.undo(&agent).unwrap();
+    assert_eq!(
+        held_node(&project, effect.id).input_values,
+        Map::from_iter([("strength".to_owned(), json!(0.5))])
+    );
+
+    let cleared = StreamGraphOperation::set_node_input_value_of(
+        &held_node(&project, effect.id),
+        "strength".to_owned(),
+        Some(serde_json::Value::Null),
+    );
+    project
+        .apply(&agent, vec![project.on_the_stream(cleared)])
+        .unwrap();
+    assert_eq!(
+        held_node(&project, effect.id).input_values,
+        Map::new(),
+        "`null` takes the value off"
+    );
+}
+
+fn held_node(project: &ProjectHoldingOneStream, node: Uuid) -> StreamGraphDocumentNode {
+    ProjectRepository::open(project.repository.project_directory())
+        .unwrap()
+        .stream_graph_document(project.stream)
+        .unwrap()
+        .node(node)
+        .unwrap()
+}
+
 #[test]
 fn each_authors_undo_reverses_only_that_authors_own_edits() {
     let mut project = ProjectHoldingOneStream::new();

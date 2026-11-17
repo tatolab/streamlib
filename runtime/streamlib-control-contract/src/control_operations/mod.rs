@@ -23,12 +23,13 @@ use crate::control_operation_requests::{
     RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
     RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
-    SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest, SetProjectCoverRequest,
-    SetProjectDescriptionRequest, SetStreamClockScaleRequest, SetStreamDisplayNameRequest,
-    SetStudioFieldsRequest, SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
-    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
-    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
-    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
+    SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeProjectChangesRequest,
+    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
+    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
+    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
+    WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
@@ -55,8 +56,8 @@ pub use discovery_and_subscriptions::{
 pub use graph_edits::{
     AddGroup, AddNode, AddNote, CollapseSelectionIntoSubgraph, Connect, Disconnect,
     ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote, RenameNode,
-    SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNoteFields, SetPinValue,
-    SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
+    SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue, SetNoteFields,
+    SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
 };
 pub use playback_and_stream_actions::{
     CancelStreamAction, DescribeStreamAction, PausePlayback, ResumePlayback, SetStreamClockScale,
@@ -104,6 +105,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Disconnect>(),
     ControlOperationDeclaration::of::<SetNodeConfig>(),
     ControlOperationDeclaration::of::<SetPinValue>(),
+    ControlOperationDeclaration::of::<SetNodeInputValue>(),
     ControlOperationDeclaration::of::<RenameNode>(),
     ControlOperationDeclaration::of::<SetStudioFields>(),
     ControlOperationDeclaration::of::<SetExposedConfigFields>(),
@@ -203,6 +205,8 @@ pub enum ControlOperationCall {
     SetNodeConfig(SetNodeConfigRequest),
     /// A `set_pin_value` call.
     SetPinValue(SetPinValueRequest),
+    /// A `set_node_input_value` call.
+    SetNodeInputValue(SetNodeInputValueRequest),
     /// A `rename_node` call.
     RenameNode(RenameNodeRequest),
     /// A `set_studio_fields` call.
@@ -413,6 +417,9 @@ impl ControlOperationCall {
             SetPinValue::METHOD_NAME => {
                 the_request_of::<SetPinValue>(params).map(Self::SetPinValue)
             }
+            SetNodeInputValue::METHOD_NAME => {
+                the_request_of::<SetNodeInputValue>(params).map(Self::SetNodeInputValue)
+            }
             RenameNode::METHOD_NAME => the_request_of::<RenameNode>(params).map(Self::RenameNode),
             SetStudioFields::METHOD_NAME => {
                 the_request_of::<SetStudioFields>(params).map(Self::SetStudioFields)
@@ -604,6 +611,7 @@ impl ControlOperationCall {
             Self::Disconnect(_) => Disconnect::METHOD_NAME,
             Self::SetNodeConfig(_) => SetNodeConfig::METHOD_NAME,
             Self::SetPinValue(_) => SetPinValue::METHOD_NAME,
+            Self::SetNodeInputValue(_) => SetNodeInputValue::METHOD_NAME,
             Self::RenameNode(_) => RenameNode::METHOD_NAME,
             Self::SetStudioFields(_) => SetStudioFields::METHOD_NAME,
             Self::SetExposedConfigFields(_) => SetExposedConfigFields::METHOD_NAME,

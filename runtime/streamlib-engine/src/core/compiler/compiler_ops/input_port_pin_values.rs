@@ -12,6 +12,7 @@ use crate::core::graph::{
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
+use crate::core::graph::input_values::refuse_a_value_the_input_port_does_not_take;
 
 /// Hand each helper the pin values its input ports read while unlinked, when
 /// they differ from those it holds.
@@ -68,7 +69,8 @@ fn the_pin_values_its_input_ports_read(node: &GraphNode) -> serde_json::Map<Stri
         .collect()
 }
 
-fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
+/// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
+pub(crate) fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
     match pin_value {
         JsonValue::Bool(pin_is_on) => Some(if *pin_is_on { 1.0 } else { 0.0 }),
         JsonValue::Number(number) => number.as_f64(),
@@ -135,38 +137,23 @@ pub(crate) fn refuse_a_function_node_input_with_no_value_as_the_stream_starts(
     )))
 }
 
-/// Refuse a pin value set on an input of a node that is not a function node
-/// unless it is a number or a bool on a Channels input, which is all such a
-/// node's read carries.
+/// Refuse a pin value set on an input of `node` that the input does not take, as
+/// [`refuse_a_value_the_input_port_does_not_take`] decides.
 pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     node: &GraphNode,
     input: &str,
     pin_value: &JsonValue,
 ) -> Result<()> {
-    if node
-        .node_kind()
-        .is_some_and(|node_kind| matches!(node_kind, NodeKind::Function { .. }))
-    {
-        return Ok(());
-    }
     let Some(port) = node.ports.inputs.iter().find(|port| port.name == input) else {
         return Ok(());
     };
-    if port.family.family != PortFamily::Channels {
-        return Err(Error::Configuration(format!(
-            "input `{input}` of `{}` carries {}, and a pin value is a control value, which only \
-             a Channels input reads. To fix: link `{input}` instead",
-            node.display_name, port.family.family
-        )));
-    }
-    if the_control_value_of_a_pin(pin_value).is_none() {
-        return Err(Error::Configuration(format!(
-            "the pin value of input `{input}` of `{}` is {pin_value}, and a Channels input reads \
-             a number or a bool",
-            node.display_name
-        )));
-    }
-    Ok(())
+    refuse_a_value_the_input_port_does_not_take(
+        &node.display_name,
+        node.node_kind(),
+        port,
+        pin_value,
+    )
+    .map_err(|refusal| Error::Configuration(refusal.words))
 }
 
 #[cfg(test)]

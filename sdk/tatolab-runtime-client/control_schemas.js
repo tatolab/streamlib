@@ -11,7 +11,7 @@
 import { z } from "zod";
 
 /** @type {z.ZodType<ControlContract.ControlOperationRefusalCode>} */
-const ControlOperationRefusalCode = z.string().pipe(z.union([z.literal("params_do_not_match_schema"), z.literal("operation_not_found"), z.literal("node_not_running"), z.literal("runtime_failed"), z.literal("refused")]).catch("refused"));
+const ControlOperationRefusalCode = z.string().pipe(z.union([z.literal("params_do_not_match_schema"), z.literal("operation_not_found"), z.literal("node_not_running"), z.literal("runtime_failed"), z.literal("port_not_found"), z.literal("input_takes_no_value"), z.literal("input_value_not_valid"), z.literal("refused")]).catch("refused"));
 
 /** @type {z.ZodType<ControlContract.GraphLinkEndOnTheWire>} */
 const GraphLinkEndOnTheWire = z.looseObject({
@@ -296,6 +296,13 @@ const StreamGraphAction = z.union([z.strictObject({
   level: z.array(z.guid()).optional(),
   group: z.string(),
   operation: z.literal("remove_group"),
+}), z.strictObject({
+  stream: z.guid(),
+  level: z.array(z.guid()).optional(),
+  node: z.string(),
+  input: z.string(),
+  value: z.unknown().optional(),
+  operation: z.literal("set_node_input_value"),
 })]);
 
 /** @type {z.ZodType<ControlContract.GraphEditMode>} */
@@ -348,6 +355,21 @@ const GraphTransactionAddedNote = z.looseObject({
   note: z.string(),
 });
 
+/** @type {z.ZodType<ControlContract.GraphTransactionRebuiltNode>} */
+const GraphTransactionRebuiltNode = z.looseObject({
+  stream: z.string(),
+  node: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.GraphTransactionInputOverriddenByALink>} */
+const GraphTransactionInputOverriddenByALink = z.looseObject({
+  stream: z.string(),
+  node: z.string(),
+  input: z.string(),
+  from_node: z.string(),
+  from_output: z.string(),
+});
+
 /** @type {z.ZodType<ControlContract.GraphTransactionToolResult>} */
 const GraphTransactionToolResult = z.looseObject({
   mode: z.string(),
@@ -358,6 +380,8 @@ const GraphTransactionToolResult = z.looseObject({
   connected_links: z.array(GraphTransactionConnectedLink),
   added_groups: z.array(GraphTransactionAddedGroup).optional(),
   added_notes: z.array(GraphTransactionAddedNote).optional(),
+  nodes_rebuilt: z.array(GraphTransactionRebuiltNode).optional(),
+  overridden_by_links: z.array(GraphTransactionInputOverriddenByALink).optional(),
 });
 
 /** @type {z.ZodType<ControlContract.AddNodeRequest>} */
@@ -420,6 +444,18 @@ const SetNodeConfigRequest = z.strictObject({
 
 /** @type {z.ZodType<ControlContract.SetPinValueRequest>} */
 const SetPinValueRequest = z.strictObject({
+  stream: z.guid(),
+  level: z.array(z.guid()).nullable().optional(),
+  node: z.string(),
+  input: z.string(),
+  value: z.unknown().optional(),
+  mode: GraphEditMode.nullable().optional(),
+  author: ProjectTransactionAuthorArgument.nullable().optional(),
+  idempotency_key: z.string().nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.SetNodeInputValueRequest>} */
+const SetNodeInputValueRequest = z.strictObject({
   stream: z.guid(),
   level: z.array(z.guid()).nullable().optional(),
   node: z.string(),
@@ -1801,12 +1837,15 @@ export const ControlSchemas = Object.freeze({
     GraphTransactionConnectedLink,
     GraphTransactionAddedGroup,
     GraphTransactionAddedNote,
+    GraphTransactionRebuiltNode,
+    GraphTransactionInputOverriddenByALink,
     AddNodeRequest,
     OneLinkGraphEditRequest,
     ImportGraphGeneratorRequest,
     OneNodeGraphEditRequest,
     SetNodeConfigRequest,
     SetPinValueRequest,
+    SetNodeInputValueRequest,
     RenameNodeRequest,
     SetStudioFieldsRequest,
     SetExposedConfigFieldsRequest,
@@ -2045,6 +2084,10 @@ export const ControlSchemas = Object.freeze({
     }),
     set_pin_value: Object.freeze({
       params: SetPinValueRequest,
+      result: GraphTransactionToolResult,
+    }),
+    set_node_input_value: Object.freeze({
+      params: SetNodeInputValueRequest,
       result: GraphTransactionToolResult,
     }),
     rename_node: Object.freeze({
