@@ -21,7 +21,7 @@ proc-macro-crate = "3"
 unicode-normalization.workspace = true
 
 # Execution types (shared with streamlib for code generation)
-streamlib-node-schema = { path = "../streamlib-node-schema", version = "0.68.82" }
+streamlib-node-schema = { path = "../streamlib-node-schema", version = "0.69.66" }
 # The catalog entry's fields, rebuilt in the generated descriptor.
 serde_json = { workspace = true }
 
