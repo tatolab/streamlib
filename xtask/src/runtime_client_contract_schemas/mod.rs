@@ -13,32 +13,17 @@ use serde_json::{Map, Value};
 
 use crate::contract_component_references::COMPONENT_SCHEMA_REFERENCE_PREFIX;
 use crate::generate_runtime_client::{
-    GENERATED_SOURCE_HEADER, READS_ITS_DEFAULT_MARK, property_key,
+    ControlContractEntryRead, GENERATED_SOURCE_HEADER, READS_ITS_DEFAULT_MARK,
+    SET_THAT_MAY_GROW_MARK, property_key,
 };
 
-/// The keywords `control_contract_check.js` checks a value against.
-const KEYWORDS_THE_CHECKER_CHECKS: &[&str] = &[
-    "type",
-    "properties",
-    "required",
-    "additionalProperties",
-    "items",
-    "minItems",
-    "maxItems",
-    "const",
-    "oneOf",
-    "anyOf",
-    "$ref",
-    "format",
-    "minimum",
-];
+/// The keywords `control_contract_check.js` checks a value against whose stated value, once its
+/// shape is right, needs no further look here.
+const KEYWORDS_CHECKED_AS_STATED: &[&str] =
+    &["const", "minimum", "minItems", "maxItems", "required"];
 
 /// The keywords that state no check: the checker reads past them.
 const KEYWORDS_THAT_STATE_NO_CHECK: &[&str] = &["description", "default"];
-
-/// Marks a set that may gain a member: the checker reads a member it does not name as the set's
-/// last, as the runtime reads one.
-const SET_THAT_MAY_GROW_MARK: &str = "x-may-grow";
 
 /// The JSON types a `type` may name.
 const JSON_TYPE_NAMES: &[&str] = &[
@@ -52,19 +37,12 @@ const FORMATS_THE_CHECKER_KNOWS: &[&str] = &[
     "uint64", "uint",
 ];
 
-/// One method or notification whose schemas the data holds.
-pub(crate) struct ContractSchemasOfOneEntry<'contract> {
-    pub(crate) name: &'contract str,
-    pub(crate) params_schema: &'contract Value,
-    pub(crate) result_schema: Option<&'contract Value>,
-}
-
 /// Refuses the first schema of the contract that states a keyword, type or format the checker
 /// does not implement, naming where it is.
 pub(crate) fn refuse_a_schema_the_checker_does_not_know(
     component_schemas: &Map<String, Value>,
-    methods: &[ContractSchemasOfOneEntry<'_>],
-    notifications: &[ContractSchemasOfOneEntry<'_>],
+    methods: &[ControlContractEntryRead<'_>],
+    notifications: &[ControlContractEntryRead<'_>],
 ) -> Result<()> {
     for (name, schema) in component_schemas {
         refuse_what_the_checker_does_not_know(
@@ -152,9 +130,9 @@ fn refuse_what_the_checker_does_not_know(
                 }
             }
             "type" => {
-                let type_names: Vec<&Value> = match stated {
-                    Value::Array(type_names) => type_names.iter().collect(),
-                    one => vec![one],
+                let type_names = match stated {
+                    Value::Array(type_names) => type_names.as_slice(),
+                    one => std::slice::from_ref(one),
                 };
                 for type_name in type_names {
                     if !type_name
@@ -202,7 +180,7 @@ fn refuse_what_the_checker_does_not_know(
                 }
             }
             keyword
-                if KEYWORDS_THE_CHECKER_CHECKS.contains(&keyword)
+                if KEYWORDS_CHECKED_AS_STATED.contains(&keyword)
                     || KEYWORDS_THAT_STATE_NO_CHECK.contains(&keyword)
                     || keyword == READS_ITS_DEFAULT_MARK => {}
             keyword => bail!(
@@ -227,7 +205,6 @@ fn schema_as_the_checker_reads_it(schema: &Value) -> Value {
         let kept = match keyword.as_str() {
             "description" => continue,
             "default" if !reads_its_default => continue,
-            "const" | "default" | "required" => stated.clone(),
             "properties" => Value::Object(
                 stated
                     .as_object()
@@ -263,8 +240,8 @@ fn compact_json_of(schema: &Value) -> String {
 /// per notification's params, frozen throughout.
 pub(crate) fn contract_schemas_javascript(
     component_schemas: &Map<String, Value>,
-    methods: &[ContractSchemasOfOneEntry<'_>],
-    notifications: &[ContractSchemasOfOneEntry<'_>],
+    methods: &[ControlContractEntryRead<'_>],
+    notifications: &[ControlContractEntryRead<'_>],
 ) -> String {
     let mut schemas = String::from(GENERATED_SOURCE_HEADER);
     schemas.push_str(

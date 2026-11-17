@@ -8,6 +8,9 @@ const READS_ITS_DEFAULT_MARK = "x-generated-reads-its-default";
 const UUID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 const ARRAY_KEYWORDS = ["items", "minItems", "maxItems"];
 const OBJECT_KEYWORDS = ["properties", "required", "additionalProperties"];
+const UUID_FORMAT = "uuid";
+/** The floating-point formats, which state no check beyond `type`. */
+const FORMATS_THAT_STATE_NO_CHECK = new Set(["double", "float"]);
 const WIDE_INTEGER_FORMATS = new Set(["int64", "uint64"]);
 const INTEGER_RANGE_BY_FORMAT = new Map([
   ["int8", [-(2n ** 7n), 2n ** 7n - 1n]],
@@ -52,9 +55,19 @@ function describedValue(value) {
   return typeof value === "bigint" ? `${value}` : JSON.stringify(value);
 }
 
-function componentSchemaNamed(reference) {
-  const name = reference.startsWith(COMPONENT_SCHEMA_REFERENCE_PREFIX) ? reference.slice(COMPONENT_SCHEMA_REFERENCE_PREFIX.length) : reference;
+/** The component schema called `name`, or undefined when the contract holds none. */
+function componentSchema(name) {
   return Object.hasOwn(CONTROL_CONTRACT_SCHEMAS.components, name) ? CONTROL_CONTRACT_SCHEMAS.components[name] : undefined;
+}
+
+/** The component schema a `$ref` points at, or undefined when it points at none. */
+function referencedComponentSchema(reference) {
+  return reference.startsWith(COMPONENT_SCHEMA_REFERENCE_PREFIX) ? componentSchema(reference.slice(COMPONENT_SCHEMA_REFERENCE_PREFIX.length)) : undefined;
+}
+
+/** A property whose value is `undefined` is absent, as `JSON.stringify` leaves it out. */
+function isPresent(value, key) {
+  return Object.hasOwn(value, key) && value[key] !== undefined;
 }
 
 function theAlternativesOf(schema) {
@@ -76,32 +89,37 @@ class ControlContractReader {
     this.issues.push({ code, path, message });
   }
 
-  /** Reads `value` against `schema` at `path` and answers it as read: the same value unless a default or a fallback was read into it. `alsoKnownKeys` names the keys a schema beside this one states. */
-  read(schema, value, path, alsoKnownKeys = []) {
+  /**
+   * Reads `value` against `schema` at `path` and answers it as read: the same value unless a default or a fallback was read into it.
+   * `alsoKnownKeys` names the keys a schema beside this one states; `unknownKeysAreCheckedElsewhere` is set for the keywords beside a `$ref`, whose component checks them.
+   */
+  read(schema, value, path, alsoKnownKeys = [], unknownKeysAreCheckedElsewhere = false) {
     if (schema === true) return value;
     if (schema === false) {
       this.issue("not_allowed", path, "no value is allowed here");
       return value;
     }
     let read = value;
+    let keysCheckedElsewhere = unknownKeysAreCheckedElsewhere;
     if (typeof schema.$ref === "string") {
-      const named = componentSchemaNamed(schema.$ref);
-      if (named === undefined) {
+      const referenced = referencedComponentSchema(schema.$ref);
+      if (referenced === undefined) {
         this.issue("unknown_reference", path, `the contract has no component \`${schema.$ref}\``);
         return value;
       }
-      read = this.read(named, read, path, alsoKnownKeys);
+      read = this.read(referenced, read, path, [...alsoKnownKeys, ...thePropertyNamesOf(schema)], unknownKeysAreCheckedElsewhere);
+      keysCheckedElsewhere = true;
     }
     if (schema["x-may-grow"] === true && this.direction === "read") {
-      return this.readASetThatMayGrow(schema, read, path, alsoKnownKeys);
+      return this.readASetThatMayGrow(schema, read, path, alsoKnownKeys, keysCheckedElsewhere);
     }
-    return this.readAgainstItsKeywords(schema, read, path, alsoKnownKeys);
+    return this.readAgainstItsKeywords(schema, read, path, alsoKnownKeys, keysCheckedElsewhere);
   }
 
   /** A set marked `x-may-grow`, read: a value of its members' own JSON type it does not name reads as its last member, as the runtime reads one. */
-  readASetThatMayGrow(schema, value, path, alsoKnownKeys) {
+  readASetThatMayGrow(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {
     const closedSetReader = new ControlContractReader(this.direction);
-    const read = closedSetReader.readAgainstItsKeywords(schema, value, path, alsoKnownKeys);
+    const read = closedSetReader.readAgainstItsKeywords(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere);
     if (closedSetReader.issues.length === 0) return read;
     const alternatives = theAlternativesOf(schema) ?? [];
     const lastMember = alternatives.at(-1);
@@ -112,7 +130,7 @@ class ControlContractReader {
     return value;
   }
 
-  readAgainstItsKeywords(schema, value, path, alsoKnownKeys) {
+  readAgainstItsKeywords(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {
     const issuesBefore = this.issues.length;
     if (Object.hasOwn(schema, "const") && !sameJson(value, schema.const)) {
       this.issue("invalid_value", path, `expected ${describedValue(schema.const)}, read ${describedValue(value)}`);
@@ -129,11 +147,11 @@ class ControlContractReader {
     } else if (Array.isArray(value) && ARRAY_KEYWORDS.some((keyword) => Object.hasOwn(schema, keyword))) {
       read = this.readAnArray(schema, value, path);
     } else if (isAJsonObject(value) && OBJECT_KEYWORDS.some((keyword) => Object.hasOwn(schema, keyword))) {
-      read = this.readAnObject(schema, value, path, alsoKnownKeys);
+      read = this.readAnObject(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere);
     }
     const alternatives = theAlternativesOf(schema);
     if (alternatives !== undefined && this.issues.length === issuesBefore) {
-      read = this.readOneAlternative(alternatives, read, path, [...alsoKnownKeys, ...thePropertyNamesOf(schema)]);
+      read = this.readOneAlternative(alternatives, read, path, [...alsoKnownKeys, ...thePropertyNamesOf(schema)], unknownKeysAreCheckedElsewhere);
     }
     return read;
   }
@@ -148,7 +166,8 @@ class ControlContractReader {
       return statedType === "number" && valueType === "integer" && typeof value === "number";
     });
     if (!isOfOne) {
-      this.issue("invalid_type", path, `expected ${statedTypes.join(" or ")}, read ${valueType === "integer" && typeof value === "bigint" ? "an integer past 2^53" : valueType}`);
+      const readType = typeof value === "bigint" && statedTypes.includes("integer") ? `a bigint, which only an int64 or uint64 field takes` : valueType;
+      this.issue("invalid_type", path, `expected ${statedTypes.join(" or ")}, read ${readType}`);
     }
     return isOfOne;
   }
@@ -161,6 +180,7 @@ class ControlContractReader {
     if (typeof schema.minimum === "number" && value < schema.minimum) {
       this.issue("too_small", path, `expected at least ${schema.minimum}, read ${value}`);
     }
+    if (FORMATS_THAT_STATE_NO_CHECK.has(schema.format)) return;
     const range = INTEGER_RANGE_BY_FORMAT.get(schema.format);
     if (range !== undefined && (typeof value === "bigint" || Number.isInteger(value))) {
       const [lowest, highest] = range;
@@ -172,7 +192,7 @@ class ControlContractReader {
   }
 
   checkAString(schema, value, path) {
-    if (schema.format === "uuid" && !UUID_PATTERN.test(value)) {
+    if (schema.format === UUID_FORMAT && !UUID_PATTERN.test(value)) {
       this.issue("invalid_format", path, `expected a UUID, read ${describedValue(value)}`);
     }
   }
@@ -196,7 +216,7 @@ class ControlContractReader {
     return read;
   }
 
-  readAnObject(schema, value, path, alsoKnownKeys) {
+  readAnObject(schema, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {
     const properties = isAJsonObject(schema.properties) ? schema.properties : {};
     let read = value;
     const readInto = (key, propertyRead) => {
@@ -204,39 +224,40 @@ class ControlContractReader {
       read[key] = propertyRead;
     };
     for (const [key, propertySchema] of Object.entries(properties)) {
-      if (Object.hasOwn(value, key)) {
+      if (isPresent(value, key)) {
         const propertyRead = this.read(propertySchema, value[key], [...path, key]);
         if (propertyRead !== value[key]) readInto(key, propertyRead);
       } else if (this.direction === "read" && propertySchema?.[READS_ITS_DEFAULT_MARK] === true) {
         readInto(key, propertySchema.default);
-      } else if (Array.isArray(schema.required) && schema.required.includes(key)) {
-        this.issue("missing", [...path, key], "required, and absent");
       }
     }
     for (const key of Array.isArray(schema.required) ? schema.required : []) {
-      if (!Object.hasOwn(properties, key) && !Object.hasOwn(value, key)) {
+      if (!isPresent(read, key)) {
         this.issue("missing", [...path, key], "required, and absent");
       }
     }
     for (const key of Object.keys(value)) {
-      if (Object.hasOwn(properties, key)) continue;
+      if (Object.hasOwn(properties, key) || !isPresent(value, key)) continue;
       const additionalProperties = schema.additionalProperties;
       if (additionalProperties !== undefined && additionalProperties !== false) {
         const propertyRead = this.read(additionalProperties, value[key], [...path, key]);
         if (propertyRead !== value[key]) readInto(key, propertyRead);
-      } else if (this.direction === "sent" && theAlternativesOf(schema) === undefined && !alsoKnownKeys.includes(key)) {
+      } else if (this.direction === "sent" && !unknownKeysAreCheckedElsewhere && theAlternativesOf(schema) === undefined && !alsoKnownKeys.includes(key)) {
         this.issue("unknown_key", [...path, key], "the contract names no such field");
       }
     }
     return read;
   }
 
-  /** The first alternative `value` reads as, or the issues of the one its tag names. */
-  readOneAlternative(alternatives, value, path, alsoKnownKeys) {
+  /**
+   * The first alternative `value` reads as, or the issues of the one its tag names.
+   * An untagged `oneOf` takes its first match, as serde's untagged enum takes the first variant that deserializes.
+   */
+  readOneAlternative(alternatives, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere) {
     let issuesOfTheTaggedAlternative;
     for (const alternative of alternatives) {
       const alternativeReader = new ControlContractReader(this.direction);
-      const read = alternativeReader.read(alternative, value, path, alsoKnownKeys);
+      const read = alternativeReader.read(alternative, value, path, alsoKnownKeys, unknownKeysAreCheckedElsewhere);
       if (alternativeReader.issues.length === 0) return read;
       if (issuesOfTheTaggedAlternative === undefined && this.isTheAlternativeItsTagNames(alternative, value)) {
         issuesOfTheTaggedAlternative = alternativeReader.issues;
@@ -250,10 +271,14 @@ class ControlContractReader {
     return value;
   }
 
+  /** Whether `value` carries every tag `alternative` states, beside a `$ref` or in the component it points at. */
   isTheAlternativeItsTagNames(alternative, value) {
-    const resolved = typeof alternative?.$ref === "string" ? componentSchemaNamed(alternative.$ref) : alternative;
-    if (!isAJsonObject(value) || !isAJsonObject(resolved?.properties)) return false;
-    const tags = Object.entries(resolved.properties).filter(([, propertySchema]) => isAJsonObject(propertySchema) && Object.hasOwn(propertySchema, "const"));
+    if (!isAJsonObject(value) || !isAJsonObject(alternative)) return false;
+    const referenced = typeof alternative.$ref === "string" ? referencedComponentSchema(alternative.$ref) : undefined;
+    const tags = [alternative, referenced]
+      .filter((schema) => isAJsonObject(schema?.properties))
+      .flatMap((schema) => Object.entries(schema.properties))
+      .filter(([, propertySchema]) => isAJsonObject(propertySchema) && Object.hasOwn(propertySchema, "const"));
     return tags.length > 0 && tags.every(([key, propertySchema]) => sameJson(value[key], propertySchema.const));
   }
 }
@@ -268,10 +293,11 @@ export function readAgainstControlContractSchema(schema, value, direction) {
 }
 
 function theComponentSchemaNamed(name) {
-  if (!Object.hasOwn(CONTROL_CONTRACT_SCHEMAS.components, name)) {
+  const schema = typeof name === "string" ? componentSchema(name) : undefined;
+  if (schema === undefined) {
     throw new TypeError(`the control contract has no component named ${describedValue(name)}`);
   }
-  return CONTROL_CONTRACT_SCHEMAS.components[name];
+  return schema;
 }
 
 export function controlContractIssues(name, value, direction) {

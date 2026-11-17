@@ -13,7 +13,7 @@ use crate::contract_component_references::{
     COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names, component_schemas_of,
 };
 use crate::runtime_client_contract_schemas::{
-    ContractSchemasOfOneEntry, contract_schemas_declarations, contract_schemas_javascript,
+    contract_schemas_declarations, contract_schemas_javascript,
     refuse_a_schema_the_checker_does_not_know,
 };
 use crate::runtime_client_node_ui_manifest::{
@@ -195,8 +195,8 @@ pub fn runtime_client_generated_files(
     let control_contract = ControlContractRead::of(contract)?;
     refuse_a_schema_the_checker_does_not_know(
         control_contract.component_schemas,
-        &control_contract.methods_schemas(),
-        &control_contract.notifications_schemas(),
+        &control_contract.methods,
+        &control_contract.notifications,
     )?;
     Ok(vec![
         (
@@ -248,12 +248,12 @@ pub fn runtime_client_generated_files(
 }
 
 /// One method or notification of the contract file, as the generator reads it.
-struct ControlContractEntryRead<'contract> {
-    name: &'contract str,
+pub(crate) struct ControlContractEntryRead<'contract> {
+    pub(crate) name: &'contract str,
     summary: &'contract str,
     description: &'contract str,
-    params_schema: &'contract Value,
-    result_schema: Option<&'contract Value>,
+    pub(crate) params_schema: &'contract Value,
+    pub(crate) result_schema: Option<&'contract Value>,
     errors: Vec<(i64, &'contract str)>,
     since_contract_version: u64,
     stability: &'contract str,
@@ -445,20 +445,8 @@ impl<'contract> ControlContractRead<'contract> {
             .collect()
     }
 
-    fn methods_schemas(&self) -> Vec<ContractSchemasOfOneEntry<'contract>> {
-        schemas_of_the_entries(&self.methods)
-    }
-
-    fn notifications_schemas(&self) -> Vec<ContractSchemasOfOneEntry<'contract>> {
-        schemas_of_the_entries(&self.notifications)
-    }
-
     fn contract_schemas_javascript(&self) -> String {
-        contract_schemas_javascript(
-            self.component_schemas,
-            &self.methods_schemas(),
-            &self.notifications_schemas(),
-        )
+        contract_schemas_javascript(self.component_schemas, &self.methods, &self.notifications)
     }
 
     fn client_javascript(&self) -> String {
@@ -612,22 +600,8 @@ impl<'contract> ControlContractRead<'contract> {
     }
 }
 
-/// The schemas of each method or notification, as the checker's data holds them.
-fn schemas_of_the_entries<'contract>(
-    entries: &[ControlContractEntryRead<'contract>],
-) -> Vec<ContractSchemasOfOneEntry<'contract>> {
-    entries
-        .iter()
-        .map(|entry| ContractSchemasOfOneEntry {
-            name: entry.name,
-            params_schema: entry.params_schema,
-            result_schema: entry.result_schema,
-        })
-        .collect()
-}
-
 impl<'contract> ControlContractEntryRead<'contract> {
-    fn of(entry: &'contract Value) -> Result<Self> {
+    pub(crate) fn of(entry: &'contract Value) -> Result<Self> {
         let name = entry["name"]
             .as_str()
             .context("a contract entry has no `name`")?;
@@ -691,6 +665,10 @@ pub(crate) fn write_component_declaration(declarations: &mut String, name: &str,
 /// then reads such a property as present, as the runtime's `#[serde(default)]` does.
 pub(crate) const READS_ITS_DEFAULT_MARK: &str = "x-generated-reads-its-default";
 
+/// Marks a set that may gain a member: the client reads a member it does not name as the set's
+/// last, as the runtime reads one.
+pub(crate) const SET_THAT_MAY_GROW_MARK: &str = "x-may-grow";
+
 /// `contract` with `READS_ITS_DEFAULT_MARK` on each property it applies to.
 fn the_contract_with_its_may_grow_defaults_marked(contract: &Value) -> Value {
     fn mark(schema: &mut Value, component_schemas: &Map<String, Value>) {
@@ -702,9 +680,9 @@ fn the_contract_with_its_may_grow_defaults_marked(contract: &Value) -> Value {
                             && component_names_a_schema_names(property_schema)
                                 .into_iter()
                                 .any(|name| {
-                                    component_schemas
-                                        .get(name)
-                                        .is_some_and(|set| set["x-may-grow"] == Value::Bool(true))
+                                    component_schemas.get(name).is_some_and(|set| {
+                                        set[SET_THAT_MAY_GROW_MARK] == Value::Bool(true)
+                                    })
                                 });
                         if names_a_set_that_may_grow && property_schema.get("default").is_some() {
                             property_schema[READS_ITS_DEFAULT_MARK] = Value::Bool(true);

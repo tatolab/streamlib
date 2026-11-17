@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 
 import {
@@ -83,10 +84,68 @@ test("reading leaves the value it was given untouched", () => {
   assert.equal("refusal_code" in refusal, false);
 });
 
+test("the schema data holds every component ControlContractComponents names, and no other", async () => {
+  const declarations = await readFile(new URL("../control_contract.d.ts", import.meta.url), "utf8");
+  const [, body] = declarations.match(/export interface ControlContractComponents \{\n([^}]*)\n\}/) ?? [];
+  assert.ok(body !== undefined, "control_contract.d.ts declares ControlContractComponents");
+  const declaredNames = body.split("\n").map((line) => line.trim().split(":")[0]).filter((name) => name !== "");
+  assert.ok(declaredNames.length > 0);
+  assert.deepEqual([...declaredNames].sort(), Object.keys(CONTROL_CONTRACT_SCHEMAS.components).sort());
+});
+
+const VALID_VALUES_BY_COMPONENT = {
+  PinType: { type: "boolean" },
+  AddNodeRequest: { stream: STREAM, type: "nodes.grayscale_effect:GrayscaleEffect" },
+  DescribeRuntimeToolResult: { version: "0.68.82", build_id: "stand-in", up_for_ms: 3 },
+  ProjectActionRefusalOnTheWire: { action: "open_project", runtime_words: "refused", refusal_code: "refused" },
+  ProjectChangeFeedEntryOnTheWire: {
+    status: "applied",
+    format_version: 1,
+    transaction: "t1",
+    commit: "c1",
+    author_kind: "person",
+    author_name: "someone",
+    operations: [],
+    inverse_operations: [],
+    applied_at: "2026-11-17T00:00:00Z",
+  },
+  NodeTypeOfOneProjectSource: { type: "nodes.grayscale_effect:GrayscaleEffect", description: "Grays a frame.", source: "dependency", project: "p", folder: "f", version: "1.0.0" },
+};
+
+test("a representative valid value of each kind of component reads clean both ways", () => {
+  for (const [name, value] of Object.entries(VALID_VALUES_BY_COMPONENT)) {
+    assert.deepEqual(controlContractIssues(name, value, "sent"), [], `${name} sent`);
+    assert.deepEqual(controlContractIssues(name, value, "read"), [], `${name} read`);
+    assert.equal(isControlContractValue(name, value), true, name);
+  }
+  const unknownBesideOneOf = { ...VALID_VALUES_BY_COMPONENT.NodeTypeOfOneProjectSource, colour: "red" };
+  assert.deepEqual(controlContractIssues("NodeTypeOfOneProjectSource", unknownBesideOneOf, "sent").map((issue) => [issue.code, issue.path]), [["unknown_key", ["colour"]]]);
+  const unknownInAFeedEntry = { ...VALID_VALUES_BY_COMPONENT.ProjectChangeFeedEntryOnTheWire, colour: "red" };
+  assert.deepEqual(controlContractIssues("ProjectChangeFeedEntryOnTheWire", unknownInAFeedEntry, "sent").map((issue) => [issue.code, issue.path]), [["unknown_key", ["colour"]]]);
+  assert.deepEqual(controlContractIssues("ProjectChangeFeedEntryOnTheWire", unknownInAFeedEntry, "read"), []);
+});
+
+test("a wrong field in a feed entry names that field, under the alternative its tag beside a $ref chose", () => {
+  const entry = { ...VALID_VALUES_BY_COMPONENT.ProjectChangeFeedEntryOnTheWire, commit: 7 };
+  for (const direction of ["sent", "read"]) {
+    assert.deepEqual(controlContractIssues("ProjectChangeFeedEntryOnTheWire", entry, direction).map((issue) => [issue.code, issue.path]), [["invalid_type", ["commit"]]], direction);
+  }
+  const { applied_at: _, ...withNoTime } = VALID_VALUES_BY_COMPONENT.ProjectChangeFeedEntryOnTheWire;
+  assert.deepEqual(controlContractIssues("ProjectChangeFeedEntryOnTheWire", withNoTime, "read").map((issue) => [issue.code, issue.path]), [["missing", ["applied_at"]]]);
+});
+
+test("a bigint on a narrow integer field is refused as a bigint, whatever its size", () => {
+  const [issue] = controlContractIssues("NodeTypeOfOneProjectSource", { ...VALID_VALUES_BY_COMPONENT.NodeTypeOfOneProjectSource, line: 3n }, "read");
+  assert.deepEqual(issue.path, ["line"]);
+  assert.doesNotMatch(issue.message, /2\^53/);
+  assert.match(issue.message, /bigint/);
+});
+
 test("every component the schema data holds is read by its name, and a name it does not hold is refused", () => {
   for (const name of Object.keys(CONTROL_CONTRACT_SCHEMAS.components)) {
     assert.ok(Array.isArray(controlContractIssues(name, null, "read")), name);
   }
+  assert.throws(() => controlContractIssues("#/components/schemas/PinType", {}, "read"), TypeError);
   assert.ok(Object.isFrozen(CONTROL_CONTRACT_SCHEMAS.components.PinType));
   assert.throws(() => controlContractIssues("NoSuchComponent", {}, "read"), TypeError);
   assert.throws(() => controlContractIssues("PinType", {}, "both"), TypeError);

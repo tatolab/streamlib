@@ -82,13 +82,10 @@ fn the_data_drops_descriptions_and_every_default_the_client_does_not_read() {
         },
         "Code": { "oneOf": [{ "type": "string", "const": "refused", "description": "Refused." }], "x-may-grow": true }
     });
+    let graph = json!({ "name": "graph", "params": [{ "schema": { "$ref": "#/components/schemas/Refusal" } }] });
     let javascript = contract_schemas_javascript(
         component_schemas.as_object().unwrap(),
-        &[ContractSchemasOfOneEntry {
-            name: "graph",
-            params_schema: &json!({ "$ref": "#/components/schemas/Refusal" }),
-            result_schema: None,
-        }],
+        &[ControlContractEntryRead::of(&graph).unwrap()],
         &[],
     );
     assert!(javascript.contains(
@@ -109,4 +106,29 @@ fn the_data_drops_descriptions_and_every_default_the_client_does_not_read() {
             || line.starts_with("export ") && line.contains(" from ")),
         "{javascript}"
     );
+}
+
+#[test]
+fn the_checker_implements_every_format_the_generator_lets_through() {
+    let checker = include_str!("../../../sdk/tatolab-runtime-client/control_contract_check.js");
+    let integer_ranges = checker
+        .split_once("const INTEGER_RANGE_BY_FORMAT = new Map([")
+        .and_then(|(_, rest)| rest.split_once("]);"))
+        .map(|(ranges, _)| ranges)
+        .expect("the checker states its integer ranges");
+    let formats_that_state_no_check = checker
+        .split_once("const FORMATS_THAT_STATE_NO_CHECK = new Set([")
+        .and_then(|(_, rest)| rest.split_once("]);"))
+        .map(|(formats, _)| formats)
+        .expect("the checker states its formats that state no check");
+    for format in FORMATS_THE_CHECKER_KNOWS {
+        let quoted = format!("\"{format}\"");
+        let is_implemented = integer_ranges.contains(&format!("[{quoted},"))
+            || formats_that_state_no_check.contains(&quoted)
+            || checker.contains(&format!("const UUID_FORMAT = {quoted};"));
+        assert!(
+            is_implemented,
+            "control_contract_check.js does not implement the format {format}"
+        );
+    }
 }
