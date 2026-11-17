@@ -1501,6 +1501,241 @@ const CallOperationRequest = z.strictObject({
   params: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
+/** @type {z.ZodType<ControlContract.BooleanPinValue>} */
+const BooleanPinValue = z.boolean();
+
+/** @type {z.ZodType<ControlContract.IntegerPinValue>} */
+const IntegerPinValue = z.union([z.number().int(), z.bigint()]);
+
+/** @type {z.ZodType<ControlContract.FloatPinValue>} */
+const FloatPinValue = z.number();
+
+/** @type {z.ZodType<ControlContract.StringPinValue>} */
+const StringPinValue = z.string();
+
+/** @type {z.ZodType<ControlContract.MenuPinValue>} */
+const MenuPinValue = z.string();
+
+/** @type {z.ZodType<ControlContract.ColorPinValue>} */
+const ColorPinValue = z.strictObject({
+  red: z.number(),
+  green: z.number(),
+  blue: z.number(),
+  alpha: z.number(),
+});
+
+/** @type {z.ZodType<ControlContract.VectorPinValue>} */
+const VectorPinValue = z.strictObject({
+  x: z.number(),
+  y: z.number(),
+  z: z.number().optional(),
+  w: z.number().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.RectanglePinValue>} */
+const RectanglePinValue = z.strictObject({
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+});
+
+/** @type {z.ZodType<ControlContract.TransformPinValue>} */
+const TransformPinValue = z.array(z.number()).min(16).max(16);
+
+/** @type {z.ZodType<ControlContract.AssetPinValue>} */
+const AssetPinValue = z.strictObject({
+  asset: z.guid(),
+  from: z.guid().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.ListPinValue>} */
+const ListPinValue = z.array(z.unknown());
+
+/** @type {z.ZodType<ControlContract.BundlePinValue>} */
+const BundlePinValue = z.record(z.string(), z.unknown());
+
+/** @type {z.ZodType<ControlContract.NodeReferenceInConfig>} */
+const NodeReferenceInConfig = z.strictObject({
+  node: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.IntegerSize>} */
+const IntegerSize = z.union([z.literal("int8"), z.literal("int16"), z.literal("int32"), z.literal("int64"), z.literal("uint8"), z.literal("uint16"), z.literal("uint32"), z.literal("uint64")]);
+
+/** @type {z.ZodType<ControlContract.FloatSize>} */
+const FloatSize = z.union([z.literal("float32"), z.literal("float64")]);
+
+/** @type {z.ZodType<ControlContract.VectorComponentCount>} */
+const VectorComponentCount = z.union([z.literal("two"), z.literal("three"), z.literal("four")]);
+
+/** @type {z.ZodType<ControlContract.TexturePixelFormat>} */
+const TexturePixelFormat = z.union([z.literal("rgba8_unorm"), z.literal("rgba8_unorm_srgb"), z.literal("bgra8_unorm"), z.literal("bgra8_unorm_srgb"), z.literal("rgba16_float"), z.literal("rgba32_float"), z.literal("nv12")]);
+
+/** @type {z.ZodType<ControlContract.ProjectAssetMedia>} */
+const ProjectAssetMedia = z.union([z.literal("image"), z.literal("video"), z.literal("audio"), z.literal("lut"), z.literal("scene"), z.literal("stream")]);
+
+/** @type {z.ZodType<ControlContract.BundleMember>} */
+const BundleMember = z.strictObject({
+  name: z.string(),
+  member_type: z.lazy(() => PinType),
+  meaning: z.string().nullable().optional(),
+  default_value: z.unknown().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.NamedPinTypeImportPath>} */
+const NamedPinTypeImportPath = z.string();
+
+/** @type {z.ZodType<ControlContract.PinType>} */
+const PinType = z.union([z.strictObject({
+  type: z.literal("boolean"),
+}), z.strictObject({
+  exact_size: IntegerSize.nullable().optional(),
+  type: z.literal("integer"),
+}), z.strictObject({
+  exact_size: FloatSize.nullable().optional(),
+  type: z.literal("float"),
+}), z.strictObject({
+  type: z.literal("string"),
+}), z.strictObject({
+  option_names: z.array(z.string()),
+  type: z.literal("menu"),
+}), z.strictObject({
+  type: z.literal("color"),
+}), z.strictObject({
+  component_count: VectorComponentCount,
+  type: z.literal("vector"),
+}), z.strictObject({
+  type: z.literal("rectangle"),
+}), z.strictObject({
+  type: z.literal("transform"),
+}), z.strictObject({
+  pixel_formats: z.array(TexturePixelFormat).optional(),
+  type: z.literal("texture"),
+}), z.strictObject({
+  type: z.literal("audio"),
+}), z.strictObject({
+  codecs: z.array(z.string()).optional(),
+  type: z.literal("encoded_video"),
+}), z.strictObject({
+  codecs: z.array(z.string()).optional(),
+  type: z.literal("encoded_audio"),
+}), z.strictObject({
+  type: z.literal("tensor"),
+}), z.strictObject({
+  media: z.array(ProjectAssetMedia).optional(),
+  type: z.literal("asset"),
+}), z.strictObject({
+  type: z.literal("trigger"),
+}), z.strictObject({
+  element_type: z.lazy(() => PinType),
+  type: z.literal("list_of"),
+}), z.strictObject({
+  members: z.array(BundleMember),
+  type: z.literal("bundle"),
+}), z.strictObject({
+  named_pin_type: NamedPinTypeImportPath,
+  type: z.literal("named"),
+}), z.strictObject({
+  referenced_node_type: z.string().nullable().optional(),
+  one_referrer_per_referenced_node: z.boolean().optional(),
+  type: z.literal("node_reference"),
+}), z.strictObject({
+  among: z.array(z.lazy(() => PinType)).optional(),
+  type: z.literal("pin_type_choice"),
+})]);
+
+/** @type {z.ZodType<ControlContract.DeclaredPinType>} */
+const DeclaredPinType = z.union([z.strictObject({
+  pin_type: PinType,
+  kind: z.literal("is"),
+}), z.strictObject({
+  pin_types: z.array(PinType),
+  kind: z.literal("one_of"),
+}), z.strictObject({
+  kind: z.literal("any"),
+}), z.strictObject({
+  input_port_name: z.string(),
+  kind: z.literal("same_as_input"),
+}), z.strictObject({
+  input_name: z.string(),
+  kind: z.literal("set_by_input"),
+})]);
+
+/** @type {z.ZodType<ControlContract.PinFlow>} */
+const PinFlow = z.union([z.literal("value"), z.literal("stream"), z.literal("trigger")]);
+
+/** @type {z.ZodType<ControlContract.PinNumberRange>} */
+const PinNumberRange = z.strictObject({
+  minimum: z.number().nullable().optional(),
+  maximum: z.number().nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.ImageStreamFrameRate>} */
+const ImageStreamFrameRate = z.strictObject({
+  numerator: z.number().int().min(0),
+  denominator: z.number().int().min(0),
+});
+
+/** @type {z.ZodType<ControlContract.ImageOutputPortFrameRate>} */
+const ImageOutputPortFrameRate = z.union([z.strictObject({
+  stated: ImageStreamFrameRate,
+}), z.strictObject({
+  from_config: z.looseObject({
+    config_key: z.string(),
+  }),
+})]);
+
+/** @type {z.ZodType<ControlContract.ChannelsOutputPortSampleRate>} */
+const ChannelsOutputPortSampleRate = z.union([z.strictObject({
+  stated: z.number().int().min(0),
+}), z.strictObject({
+  from_config: z.looseObject({
+    config_key: z.string(),
+  }),
+})]);
+
+/** @type {z.ZodType<ControlContract.ChannelsOutputPortSampleType>} */
+const ChannelsOutputPortSampleType = z.union([z.literal("f32"), z.literal("f64")]);
+
+/** @type {z.ZodType<ControlContract.ArrayOutputPortResidency>} */
+const ArrayOutputPortResidency = z.union([z.literal("gpu"), z.literal("cpu")]);
+
+/** @type {z.ZodType<ControlContract.PinAnnotations>} */
+const PinAnnotations = z.strictObject({
+  range: PinNumberRange.nullable().optional(),
+  step: z.number().nullable().optional(),
+  unit: z.string().nullable().optional(),
+  meaning: z.string().nullable().optional(),
+  control: z.string().nullable().optional(),
+  frame_rate: ImageOutputPortFrameRate.nullable().optional(),
+  sample_rate: ChannelsOutputPortSampleRate.nullable().optional(),
+  sample_type: ChannelsOutputPortSampleType.nullable().optional(),
+  residency: ArrayOutputPortResidency.nullable().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.PinDeclaration>} */
+const PinDeclaration = z.strictObject({
+  pin_type: DeclaredPinType,
+  flow: PinFlow,
+  annotations: PinAnnotations.optional(),
+  former_names: z.array(z.string()).optional(),
+  may_be_unset: z.boolean().optional(),
+});
+
+/** @type {z.ZodType<ControlContract.SettingReadTime>} */
+const SettingReadTime = z.union([z.literal("at_setup"), z.literal("each_run")]);
+
+/** @type {z.ZodType<ControlContract.NodeInputMode>} */
+const NodeInputMode = z.union([z.strictObject({
+  mode: z.literal("wire_or_value"),
+}), z.strictObject({
+  mode: z.literal("wire_only"),
+}), z.strictObject({
+  read: SettingReadTime.optional(),
+  mode: z.literal("setting_only"),
+})]);
+
 /** @satisfies {ControlSchemasOfTheContract} */
 export const ControlSchemas = Object.freeze({
   components: Object.freeze({
@@ -1686,6 +1921,39 @@ export const ControlSchemas = Object.freeze({
     ControlOperationStability,
     ControlOperationEffect,
     CallOperationRequest,
+    BooleanPinValue,
+    IntegerPinValue,
+    FloatPinValue,
+    StringPinValue,
+    MenuPinValue,
+    ColorPinValue,
+    VectorPinValue,
+    RectanglePinValue,
+    TransformPinValue,
+    AssetPinValue,
+    ListPinValue,
+    BundlePinValue,
+    NodeReferenceInConfig,
+    PinType,
+    IntegerSize,
+    FloatSize,
+    VectorComponentCount,
+    TexturePixelFormat,
+    ProjectAssetMedia,
+    BundleMember,
+    NamedPinTypeImportPath,
+    PinDeclaration,
+    DeclaredPinType,
+    PinFlow,
+    PinAnnotations,
+    PinNumberRange,
+    ImageOutputPortFrameRate,
+    ImageStreamFrameRate,
+    ChannelsOutputPortSampleRate,
+    ChannelsOutputPortSampleType,
+    ArrayOutputPortResidency,
+    NodeInputMode,
+    SettingReadTime,
   }),
   operations: Object.freeze({
     discover: Object.freeze({

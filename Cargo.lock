@@ -5544,6 +5544,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
+ "streamlib-node-schema",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "uuid",
@@ -5699,11 +5700,13 @@ version = "0.68.82"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "unicode-normalization",
  "utoipa",
+ "uuid",
 ]
 
 [[package]]

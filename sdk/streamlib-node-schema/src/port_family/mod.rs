@@ -9,6 +9,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::pin_type::TexturePixelFormat;
+
 /// The memory layout a port carries; a link joins two ports of one family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
@@ -333,15 +335,15 @@ impl PortFamilyDeclaration {
 
 /// The texture format wire names an Image port's `formats=` takes: every
 /// `TextureFormat` the engine's RHI defines, spelled as the escalate wire spells it.
-pub const IMAGE_TEXTURE_FORMAT_WIRE_NAMES: [&str; 7] = [
-    "rgba8_unorm",
-    "rgba8_unorm_srgb",
-    "bgra8_unorm",
-    "bgra8_unorm_srgb",
-    "rgba16_float",
-    "rgba32_float",
-    "nv12",
-];
+pub const IMAGE_TEXTURE_FORMAT_WIRE_NAMES: [&str; TexturePixelFormat::EVERY_FORMAT.len()] = {
+    let mut wire_names = [""; TexturePixelFormat::EVERY_FORMAT.len()];
+    let mut position = 0;
+    while position < wire_names.len() {
+        wire_names[position] = TexturePixelFormat::EVERY_FORMAT[position].wire_name();
+        position += 1;
+    }
+    wire_names
+};
 
 /// One end of a link, as a refusal names it.
 #[derive(Debug, Clone, Copy)]
@@ -628,6 +630,9 @@ pub fn refusal_of_required_names(
          does not state (it states {output_names:?})"
     ))
 }
+
+#[cfg(feature = "contract-json-schema")]
+mod contract_json_schema;
 
 #[cfg(test)]
 mod tests;
