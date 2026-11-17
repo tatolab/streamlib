@@ -5,9 +5,14 @@
 //! document readers pass what they are given through [`upgrade_stream_document_in_place`] first, so
 //! the readers after it know only the current keys. It finds an old shape by its content and
 //! holds no state, so it covers a document however it reached the project; nothing is
-//! rewritten on disk until the document's next committed edit.
+//! rewritten on disk until the document's next committed edit. A transaction an older runtime
+//! recorded in history is read in the current forms through `recorded_transaction` the same
+//! way.
 
 use serde_json::{Map, Value};
+
+#[cfg(feature = "history")]
+pub(crate) mod recorded_transaction;
 
 /// The key a node holds its value of each input under, by input name.
 pub const NODE_INPUT_VALUES_KEY: &str = "input_values";

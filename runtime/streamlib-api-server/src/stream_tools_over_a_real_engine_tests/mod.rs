@@ -42,6 +42,7 @@ use crate::mcp::tests::{first_text_block_json, tool_call_result};
 use crate::mcp_stdio_upgrade::tests::rmcp_client_over_the_upgraded_stream;
 
 mod a_stream_outliving_its_connection_tests;
+mod an_edit_recorded_before_the_update_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;

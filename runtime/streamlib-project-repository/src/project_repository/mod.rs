@@ -55,6 +55,7 @@ use crate::project_transaction::{
     ProjectTransactionEnvelopeHeader, ProjectTransactionLineage, ProjectTransactionReversal,
     ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
+use crate::stream_document_upgrade::recorded_transaction::upgrade_recorded_transaction_in_place;
 use crate::stream_graph_document::{StreamGraphDocument, assets_a_nodes_input_values_reference};
 
 mod asset_effects;
@@ -211,6 +212,8 @@ fn the_transaction_trailer_of(commit_message: &str) -> Option<&str> {
     })
 }
 
+/// The transaction a commit's trailer records, one of an older format read in the forms this
+/// runtime records; one of a newer format is refused by name.
 fn applied_transaction_read_from_its_trailer(
     transaction_json: &str,
     history_commit: ProjectHistoryCommit,
@@ -225,7 +228,14 @@ fn applied_transaction_read_from_its_trailer(
             },
         );
     }
-    let transaction: ProjectTransaction = serde_json::from_str(transaction_json)?;
+    let transaction: ProjectTransaction =
+        if envelope.format_version < PROJECT_TRANSACTION_FORMAT_VERSION {
+            let mut recorded: serde_json::Value = serde_json::from_str(transaction_json)?;
+            upgrade_recorded_transaction_in_place(&mut recorded);
+            serde_json::from_value(recorded)?
+        } else {
+            serde_json::from_str(transaction_json)?
+        };
     Ok(AppliedProjectTransaction {
         transaction,
         commit: history_commit.commit,
