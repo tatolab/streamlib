@@ -27,18 +27,18 @@ fn the_key_of_the_input(node: Uuid, input: &str) -> String {
     format!("{node}/{input}")
 }
 
-/// The node, by UUID, and the input a key of [`LIVE_INPUT_VALUES_TABLE`] names; `None` for a
-/// key no input's value is kept under.
-pub(crate) fn the_node_and_input_of_the_key(key: &str) -> Option<(Uuid, &str)> {
-    let (node, input) = key.split_once('/')?;
-    Some((node.parse().ok()?, input))
+/// The node, by UUID, and what follows it in a key of [`LIVE_INPUT_VALUES_TABLE`] or of
+/// `node_store`, each of which leads with its node's UUID; `None` for a key that does not.
+pub(crate) fn the_node_a_key_leads_with(key: &str) -> Option<(Uuid, &str)> {
+    let (node, rest) = key.split_once('/')?;
+    Some((node.parse().ok()?, rest))
 }
 
 /// One stream's project's store, where the live values of its `kept` inputs are mirrored. A
 /// store that does not open, read or take a write is logged and leaves the live value as set:
 /// it lives on while the stream runs and is gone after a restart.
 #[derive(Debug)]
-pub struct LiveInputValuesKeptInTheProjectStore {
+pub(crate) struct LiveInputValuesKeptInTheProjectStore {
     project_stores: Arc<ProjectStoresOpenInThisRuntime>,
     project_directory: Arc<Path>,
 }
@@ -87,7 +87,7 @@ impl LiveInputValuesKeptInTheProjectStore {
             return;
         };
         for key in Self::every_key(&project_store) {
-            if the_node_and_input_of_the_key(&key).is_some_and(|(kept_for, _)| kept_for == node) {
+            if the_node_a_key_leads_with(&key).is_some_and(|(kept_for, _)| kept_for == node) {
                 project_store.remove(LIVE_INPUT_VALUES_TABLE, &key);
             }
         }
@@ -105,7 +105,7 @@ impl LiveInputValuesKeptInTheProjectStore {
         Self::every_key(&project_store)
             .into_iter()
             .filter_map(|key| {
-                let (node, input) = the_node_and_input_of_the_key(&key)?;
+                let (node, input) = the_node_a_key_leads_with(&key)?;
                 if !is_held(node) {
                     return None;
                 }

@@ -71,15 +71,18 @@ impl LiveInputValuesOfAStream {
         value: Option<Value>,
         lifetime: NodeValueLifetime,
     ) -> Option<Value> {
+        let project_store = self.kept_values_mirrored_into.get();
         let mut values = self.values.write();
-        let before = match &value {
-            Some(value) => values.entry(node).or_default().insert(
-                input.to_owned(),
-                LiveInputValue {
-                    value: value.clone(),
-                    lifetime,
-                },
-            ),
+        let before = match value {
+            Some(value) => {
+                if let Some(project_store) = project_store.filter(|_| lifetime.is_kept()) {
+                    project_store.keep(node, input, &value);
+                }
+                values
+                    .entry(node)
+                    .or_default()
+                    .insert(input.to_owned(), LiveInputValue { value, lifetime })
+            }
             None => match values.get_mut(&node) {
                 Some(values_of_the_node) => {
                     let before = values_of_the_node.remove(input);
@@ -91,17 +94,15 @@ impl LiveInputValuesOfAStream {
                 None => None,
             },
         };
-        if let Some(project_store) = self.kept_values_mirrored_into.get() {
-            match &value {
-                Some(value) if lifetime.is_kept() => project_store.keep(node, input, value),
-                _ if before
-                    .as_ref()
-                    .is_some_and(|before| before.lifetime.is_kept()) =>
-                {
-                    project_store.forget(node, input)
-                }
-                _ => {}
-            }
+        let the_store_holds_a_value_now_gone = before
+            .as_ref()
+            .is_some_and(|before| before.lifetime.is_kept())
+            && !values
+                .get(&node)
+                .and_then(|values_of_the_node| values_of_the_node.get(input))
+                .is_some_and(|live| live.lifetime.is_kept());
+        if let Some(project_store) = project_store.filter(|_| the_store_holds_a_value_now_gone) {
+            project_store.forget(node, input);
         }
         before.map(|before| before.value)
     }

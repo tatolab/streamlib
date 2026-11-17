@@ -15,7 +15,7 @@ use streamlib_project_repository::{ProjectStore, ProjectStoreTableName};
 use uuid::Uuid;
 
 use crate::core::error::{Error, Result};
-use crate::core::graph::input_values::{LIVE_INPUT_VALUES_TABLE, the_node_and_input_of_the_key};
+use crate::core::graph::input_values::{LIVE_INPUT_VALUES_TABLE, the_node_a_key_leads_with};
 
 /// The table every node's own keys live in, each key prefixed by the node's UUID.
 const NODE_STORE_TABLE: ProjectStoreTableName = ProjectStoreTableName::named("node_store");
@@ -125,26 +125,13 @@ impl Drop for ProjectStoresOpenInThisRuntime {
 }
 
 /// Remove every key of the `node_store` table, and every kept live value of an input, whose
-/// node UUID `node_uuids_held` leaves out.
+/// node UUID `node_uuids_held` leaves out; a key of either table leads with its node's UUID.
 fn drop_the_keys_of_every_node_not_held(
     project_store: &ProjectStore,
     resolved_project_directory: &Path,
     node_uuids_held: &HashSet<Uuid>,
 ) {
-    let node_uuid_of_a_node_store_key = |key: &str| {
-        key.split_once('/')
-            .and_then(|(node_uuid, _)| node_uuid.parse::<Uuid>().ok())
-    };
-    let node_uuid_of_a_live_input_value_key =
-        |key: &str| the_node_and_input_of_the_key(key).map(|(node_uuid, _)| node_uuid);
-    let tables: [(ProjectStoreTableName, &dyn Fn(&str) -> Option<Uuid>); 2] = [
-        (NODE_STORE_TABLE, &node_uuid_of_a_node_store_key),
-        (
-            LIVE_INPUT_VALUES_TABLE,
-            &node_uuid_of_a_live_input_value_key,
-        ),
-    ];
-    for (table, node_uuid_of_the_key) in tables {
+    for table in [NODE_STORE_TABLE, LIVE_INPUT_VALUES_TABLE] {
         let keys = match project_store.keys_in(table) {
             Ok(keys) => keys,
             Err(not_listed) => {
@@ -158,8 +145,8 @@ fn drop_the_keys_of_every_node_not_held(
             }
         };
         for key in keys {
-            if node_uuid_of_the_key(&key)
-                .is_some_and(|node_uuid| !node_uuids_held.contains(&node_uuid))
+            if the_node_a_key_leads_with(&key)
+                .is_some_and(|(node_uuid, _)| !node_uuids_held.contains(&node_uuid))
             {
                 project_store.remove(table, &key);
             }
