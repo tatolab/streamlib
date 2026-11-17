@@ -291,6 +291,9 @@ class HelperProcessLifecycle:
                     )
                 ],
             )
+            self._link_data_access.keep_the_last_message_of_output_ports(
+                command.get("output_ports_keeping_their_last_message") or []
+            )
             # Opened before any link is wired, so every link mirrors its losses
             # from its first. Only a stand-in parent sends no board.
             loss_count_board = command.get("loss_count_board")

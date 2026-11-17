@@ -609,7 +609,19 @@ impl PythonNodeLinkDataAccess {
         output_port_names: Vec<String>,
     ) {
         self.declared_input_ports.lock().extend(input_port_names);
+        if let Some(output_writer) = self.output_writer.get() {
+            output_writer.declare_output_ports(output_port_names.iter().cloned());
+        }
         self.declared_output_ports.lock().extend(output_port_names);
+    }
+
+    /// Have each of `output_port_names` keep the last message written to it, linked or not,
+    /// and send it to a reader that connects after it, as the parent's setup command names
+    /// them. A data plane with no writer of its own keeps nothing.
+    pub(crate) fn keep_the_last_message_of_output_ports(&self, output_port_names: Vec<String>) {
+        if let Some(output_writer) = self.output_writer.get() {
+            output_writer.keep_the_last_message_of_output_ports(output_port_names);
+        }
     }
 
     /// Publish one message carrying `payload` to every downstream link on

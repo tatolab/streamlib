@@ -130,6 +130,13 @@ impl NodeInstance {
         if let (Some(output_inner), Some(descriptor)) = (&output_inner, self.0.descriptor()) {
             output_inner
                 .declare_output_ports(descriptor.outputs.iter().map(|port| port.name.clone()));
+            output_inner.keep_the_last_message_of_output_ports(
+                descriptor
+                    .outputs
+                    .iter()
+                    .filter(|port| port.flows_as_a_value())
+                    .map(|port| port.name.clone()),
+            );
         }
         let input_inner =
             needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));

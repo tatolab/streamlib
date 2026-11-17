@@ -64,5 +64,6 @@ fn open_channel_data_service(tag: &str, max_subscribers: usize) -> Iceoryx2Servi
         .expect("open the channel data service")
 }
 
+mod output_port_kept_last_message_tests;
 mod output_port_link_and_loss_accounting_tests;
 mod output_port_write_and_loan_tests;

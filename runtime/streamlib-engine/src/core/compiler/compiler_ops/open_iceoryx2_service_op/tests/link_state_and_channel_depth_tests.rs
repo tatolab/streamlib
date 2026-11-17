@@ -634,3 +634,42 @@ fn a_disconnected_link_releases_the_services_it_held() {
         "nothing may still hold the channel of a link that is gone"
     );
 }
+
+/// A destination linked after its source's port kept a message reads that message as soon as
+/// the link is opened, with nothing written after it.
+///
+/// Fail-without-fix: drop the send after the destination side opens, and the destination's
+/// mailbox is empty until the source's own scheduling loop comes round.
+#[test]
+fn a_destination_linked_after_a_kept_message_reads_it_once_the_link_opens() {
+    use crate::core::test_support::{MockInputOnlyNode, MockOutputOnlyNode};
+
+    let node = Iceoryx2Node::for_this_test_process();
+    let mut graph = Graph::new();
+    let source_id = add_mock_output_only(&mut graph);
+    let (_, source_output, _) =
+        attach_mock_instance::<MockOutputOnlyNode::Node>(&mut graph, &source_id);
+    let source_output = source_output.expect("an output-only mock holds an output writer");
+    source_output.keep_the_last_message_of_output_ports(["out1".to_string()]);
+    source_output
+        .write_bytes_with_timestamp(
+            "out1",
+            b"the value before any link",
+            0,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .expect("a write to a declared port no link reached sends nothing");
+    let dest_id = add_mock_input_only(&mut graph);
+    let (_, _, dest_input) = attach_mock_instance::<MockInputOnlyNode::Node>(&mut graph, &dest_id);
+    let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
+
+    let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+    open_iceoryx2_service(&mut graph, &link_id, &node).expect("the link wires");
+    dest_input.receive_pending();
+
+    assert_eq!(
+        dest_input.drain("in1").len(),
+        1,
+        "the destination reads the kept message"
+    );
+}

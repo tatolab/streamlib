@@ -250,8 +250,17 @@ class NodeLinkDataAccess(Protocol):
     ) -> None:
         """Name the class's ports ahead of any wiring.
 
-        A declared port no link has reached reads as empty and drops what is
+        A declared port no link has reached reads as empty and sends nothing
         written to it; only an undeclared name is refused.
+        """
+        ...
+
+    def keep_the_last_message_of_output_ports(self, output_port_names: Sequence[str]) -> None:
+        """Have each named output port keep the last message written to it.
+
+        The message is kept whether or not a link reaches the port, and sent
+        again to a reader that connects after it. The parent names the ports
+        whose pins flow as a Value.
         """
         ...
 

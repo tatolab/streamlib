@@ -8,7 +8,7 @@ use std::time::Duration;
 use std::os::fd::OwnedFd;
 
 use crate::core::context::{StreamClock, StreamClockSpec};
-use crate::iceoryx2::InputMailboxesInner;
+use crate::iceoryx2::{InputMailboxesInner, OutputWriterInner};
 
 pub const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -67,6 +67,10 @@ pub trait NodeSchedulingLoopHost {
     fn pause_requested(&self) -> bool;
 
     fn input_mailboxes(&self) -> Option<Arc<InputMailboxesInner>>;
+
+    /// The writer of the node's output ports. On each pass while the node runs, the loop has
+    /// it send each kept last message to a reader that connected after that message.
+    fn output_writer(&self) -> Option<Arc<OutputWriterInner>>;
 
     /// The fd that turns readable when a control arrives, which a reactive
     /// loop waits on beside its input listener. Owned by the host for as long
@@ -136,6 +140,7 @@ pub fn run_reactive_scheduling_loop(
             tracing::info!("[{node_name_for_logs}] its scheduling loop was stopped");
             return;
         }
+        send_each_kept_message_to_a_reader_it_missed(host);
 
         let is_paused = host.pause_requested();
         if is_paused != was_paused {
@@ -215,6 +220,8 @@ pub fn run_reactive_scheduling_loop(
                 tracing::info!("[{node_name_for_logs}] its scheduling loop was stopped");
                 return;
             }
+            // A long drain still reaches a reader that connected during it.
+            send_each_kept_message_to_a_reader_it_missed(host);
 
             // Drained before the readiness check, so a bag whose notify this
             // clears is one that check sees.
@@ -234,6 +241,18 @@ fn wait_without_a_waiter_then_drain(
     let waited = host.wait_on_the_machine_clock_or_a_control(NO_WAITER_FALLBACK_SLEEP);
     drain_input_listener(host);
     waited
+}
+
+/// Have the node's output ports send each kept last message to a reader that connected after
+/// it. Called on every pass of a loop, so a reader that connects while the node writes nothing
+/// still reads its value; a paused node sends nothing.
+fn send_each_kept_message_to_a_reader_it_missed(host: &impl NodeSchedulingLoopHost) {
+    if host.pause_requested() {
+        return;
+    }
+    if let Some(output_writer) = host.output_writer() {
+        output_writer.send_each_kept_message_to_a_reader_it_missed();
+    }
 }
 
 fn ports_would_return_something(host: &impl NodeSchedulingLoopHost) -> Option<bool> {
@@ -386,6 +405,7 @@ fn run_continuous_scheduling_in_steps(
         if host.take_arrived_control() == NodeSchedulingLoopControl::Stop {
             return ContinuousLoopLeftItsMode::Stopped;
         }
+        send_each_kept_message_to_a_reader_it_missed(host);
         let Some(step_index) =
             host.wait_for_a_step_opened_after(*last_step_handled, CONTINUOUS_LOOP_CLOCK_RECHECK)
         else {
@@ -456,6 +476,7 @@ pub(crate) fn wait_for_a_deadline_or_a_control(
         if host.take_arrived_control() == NodeSchedulingLoopControl::Stop {
             return ContinuousLoopWaitOutcome::Stopped;
         }
+        send_each_kept_message_to_a_reader_it_missed(host);
         if stops_waiting_early() {
             return ContinuousLoopWaitOutcome::StoppedWaitingEarly;
         }
