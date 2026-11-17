@@ -132,7 +132,7 @@ pub use graph::{
     NodeTraversal, NodeTraversalMut, ObservableGraphReadiness, ObservableNodeState,
     OutOfProcessLinkWireProgress, OutOfProcessLinkWireRepliesComponent,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef, OutputPortMarker, PendingDeletionComponent,
-    PortInfo, PortKind, PortMarker, ProcessRaisingBecauseComponent,
+    PortInfo, PortMarker, ProcessRaisingBecauseComponent,
     ReadOfALinkByTheReaderOfAFunctionNodeIsland, ShaderNodeFusedGroupComponent,
     ShaderNodeFusedGroupOfAnIsland, ShutdownChannelComponent, StateComponent,
     StepProgressCallbackInFlight, StepProgressOfOneNode, StepProgressOfOneNodeComponent,

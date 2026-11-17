@@ -3,19 +3,30 @@
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use streamlib_node_schema::pin_type::PinType;
+use streamlib_node_schema::pin_type::{PinFlow, PinType};
 
 /// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in
-/// its default flow.
-pub(super) fn pin_declaration_tokens(pin_type: Option<&PinType>) -> TokenStream {
+/// the flow it states, else in its type's default flow.
+pub(super) fn pin_declaration_tokens(
+    pin_type: Option<&PinType>,
+    flow: Option<PinFlow>,
+) -> TokenStream {
     let Some(pin_type) = pin_type else {
         return quote! { ::std::option::Option::None };
     };
+    let descriptors = quote! { __streamlib_sdk::descriptors };
     let pin_type = pin_type_tokens(pin_type);
+    let exactly = quote! { #descriptors::PinDeclaration::exactly(#pin_type) };
+    let Some(flow) = flow else {
+        return quote! { ::std::option::Option::Some(#exactly) };
+    };
+    // The derived `Debug` of a fieldless enum is its variant's name.
+    let flow = Ident::new(&format!("{flow:?}"), Span::call_site());
     quote! {
-        ::std::option::Option::Some(
-            __streamlib_sdk::descriptors::PinDeclaration::exactly(#pin_type)
-        )
+        ::std::option::Option::Some(#descriptors::PinDeclaration {
+            flow: #descriptors::PinFlow::#flow,
+            ..#exactly
+        })
     }
 }
 

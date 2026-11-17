@@ -382,8 +382,9 @@ pub struct NodePortSchema {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`. The one delivery knob on the authoring surface: it names
     /// a read policy and resolves to the consumer-side drain order and the
-    /// ring depth. Required on every input port and always `None` on an
-    /// output port.
+    /// ring depth. Optional on an input port with a pin, which reads by its
+    /// pin's default, required on every other input port, and always `None`
+    /// on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
     /// The samples each link into this input port may hold beyond its mailbox,
@@ -399,12 +400,16 @@ pub struct NodePortSchema {
     pub audio_window: Option<crate::AudioWindowContract>,
     /// The port family this port declares and its family's keys.
     pub family: crate::PortFamilyDeclaration,
-    /// The pin type this port declares, read in the type's default flow; `None` when it declares
-    /// only a family. Its schema is open JSON: only the control contract's schemars renders
-    /// pin types.
+    /// The pin type this port declares; `None` when it declares only a family. Its schema is
+    /// open JSON: only the control contract's schemars renders pin types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     pub pin_type: Option<crate::pin_type::PinType>,
+    /// The flow this port states — `value`, `stream` or `trigger`; `None` when it reads in its
+    /// pin type's default flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub flow: Option<crate::pin_type::PinFlow>,
 }
 
 /// Config definition within a node schema.

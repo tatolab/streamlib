@@ -108,9 +108,8 @@ pub(crate) fn delivery_profile_for_input_port(
 
     let Some(declared) = port.delivery_profile.as_deref() else {
         return Err(Error::Configuration(format!(
-            "input port '{port_name}' on '{node_type}' declares no delivery_profile. \
-             Every input port must declare one — {}. There is no default: channel policy \
-             is declared port-locally at the consuming input port",
+            "input port '{port_name}' on '{node_type}' reads by no delivery_profile: it \
+             declares none and has no pin to default one from. Declare one — {}",
             render_delivery_profile_values()
         )));
     };
@@ -172,12 +171,13 @@ mod tests {
     }
 
     mod port_declaration_resolution {
-        //! `delivery_profile_for_input_port` reads the port's own declaration
-        //! and nothing else. There is no second source to fall back to.
+        //! `delivery_profile_for_input_port` reads the port's own declaration,
+        //! or its pin's default where it declares none.
 
         use super::super::{DeliveryProfile, delivery_profile_for_input_port};
         use crate::core::descriptors::{
-            NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor,
+            NodeClassImportPath, NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily,
+            PortFamilyDeclaration,
         };
         use crate::core::error::Error;
         use crate::core::nodes::{NODE_REGISTRY, NodeTypesOneStreamResolves};
@@ -186,29 +186,42 @@ mod tests {
             NodeClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
         }
 
-        fn register_node_with_one_input_port(
+        fn a_node_type_with_one_input_port(
             type_name: &str,
             port_name: &str,
+            family: PortFamily,
             declared_profile: Option<&str>,
-        ) -> NodeClassImportPath {
-            let import_path = class_path(type_name);
+        ) -> NodeDescriptor {
             let mut port = PortDescriptor::new(
                 port_name,
                 "input",
                 true,
-                crate::core::descriptors::PortFamilyDeclaration::of_family(
-                    crate::core::descriptors::PortFamily::Image,
-                ),
+                PortFamilyDeclaration::of_family(family),
             );
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }
             let mut descriptor = NodeDescriptor::new(
                 NodeClassShortName::new(type_name).unwrap(),
-                import_path.clone(),
+                class_path(type_name),
                 type_name,
             );
             descriptor.inputs.push(port);
+            descriptor
+        }
+
+        fn register_node_with_one_input_port(
+            type_name: &str,
+            port_name: &str,
+            declared_profile: Option<&str>,
+        ) -> NodeClassImportPath {
+            let descriptor = a_node_type_with_one_input_port(
+                type_name,
+                port_name,
+                PortFamily::Image,
+                declared_profile,
+            );
+            let import_path = descriptor.node_class_import_path.clone();
             NODE_REGISTRY
                 .register_descriptor_only(descriptor)
                 .expect("descriptor registration");
@@ -244,24 +257,49 @@ mod tests {
             );
         }
 
-        /// A registered input port carrying no declaration is a wiring error
-        /// naming the port. There is nothing left to infer a profile from, so
-        /// any resolution here other than an error is a regression.
+        /// A picture input that declares no profile reads by its Texture
+        /// pin's default, `newest`, and the catalog serves that profile.
         #[test]
-        fn missing_declaration_is_a_wiring_error_naming_the_port() {
-            let ident = register_node_with_one_input_port("SampleSink", "audio_in", None);
+        fn a_typed_input_declaring_none_reads_by_its_pins_default() {
+            let ident = register_node_with_one_input_port("PictureSink", "video_in", None);
+            assert_eq!(
+                delivery_profile_for_input_port(
+                    &NodeTypesOneStreamResolves::new(),
+                    &ident,
+                    "video_in"
+                )
+                .unwrap(),
+                DeliveryProfile::Newest
+            );
+            let served = NODE_REGISTRY.descriptor(&ident).unwrap();
+            assert_eq!(served.inputs[0].delivery_profile.as_deref(), Some("newest"));
+        }
+
+        /// An input with no pin and no declared profile has nothing to read
+        /// by, so wiring it is an error naming the port.
+        #[test]
+        fn an_untyped_input_declaring_none_is_a_wiring_error_naming_the_port() {
+            let descriptor = a_node_type_with_one_input_port(
+                "SampleSink",
+                "records_in",
+                PortFamily::Records,
+                None,
+            );
+            let ident = descriptor.node_class_import_path.clone();
+            NODE_REGISTRY
+                .register_descriptor_only(descriptor)
+                .expect("descriptor registration");
             let err = delivery_profile_for_input_port(
                 &NodeTypesOneStreamResolves::new(),
                 &ident,
-                "audio_in",
+                "records_in",
             )
-            .expect_err("an undeclared delivery profile must be a wiring error");
+            .expect_err("an input with nothing to read by must be a wiring error");
             let msg = err.to_string();
             assert!(
-                msg.contains("audio_in"),
+                msg.contains("'records_in'") && msg.contains("reads by no delivery_profile"),
                 "the error must name the port: {msg}"
             );
-            assert!(msg.contains("declares no delivery_profile"), "got: {msg}");
             assert!(matches!(err, Error::Configuration(_)));
         }
 

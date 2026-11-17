@@ -16,6 +16,7 @@ use ports_typed_by_a_signature::{
     ports_a_shader_node_program_types,
 };
 use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
+use streamlib_node_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
 const DESCRIBED_SHORT_NAME_KEY: &str = "short_name";
@@ -414,6 +415,22 @@ fn read_port_descriptors(
         if let Some(pin_default) = declaration.get("pin_default") {
             let pin_default = read_pin_default(pin_default, &port, direction)?;
             port = port.with_pin_default(pin_default);
+        }
+        if matches!(direction, PortDirection::Input)
+            && port.delivery_profile.is_none()
+            && port.declared_pin().is_none()
+        {
+            return Err(format!(
+                "input port {:?} of family {} states no delivery — a port with no pin type \
+                 states `delivery=`, one of {}",
+                port.name,
+                port.family.family,
+                DELIVERY_PROFILE_DECLARATION_VALUES
+                    .iter()
+                    .map(|value| format!("{value:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
         }
         ports.push(port);
     }

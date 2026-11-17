@@ -228,7 +228,6 @@ mod tests {
         PortInfo {
             name: name.to_string(),
             description: String::new(),
-            port_kind: Default::default(),
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
