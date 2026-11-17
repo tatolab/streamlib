@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::PinType;
+use super::{PinType, built_in_pin_type};
 use crate::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     ImageOutputPortFrameRate,
@@ -31,6 +31,70 @@ pub struct PinDeclaration {
     /// Whether an input may hold no value and read as nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_be_unset: bool,
+}
+
+impl PinDeclaration {
+    /// A port of exactly `pin_type`, read in the type's default flow, stating nothing else.
+    pub fn exactly(pin_type: PinType) -> Self {
+        Self {
+            flow: pin_type.default_flow(),
+            pin_type: DeclaredPinType::Is { pin_type },
+            annotations: PinAnnotations::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+        }
+    }
+
+    /// The type and flow a port of this declaration resolves to without its graph: the ones
+    /// it declares, when it declares exactly one type; `None` when its type is found another way.
+    pub fn into_resolved(self) -> Option<ResolvedPin> {
+        match self.pin_type {
+            DeclaredPinType::Is { pin_type } => Some(ResolvedPin {
+                pin_type,
+                flow: self.flow,
+            }),
+            DeclaredPinType::OneOf { .. }
+            | DeclaredPinType::Any
+            | DeclaredPinType::SameAsInput { .. }
+            | DeclaredPinType::SetByInput { .. } => None,
+        }
+    }
+}
+
+/// The pin type a port of a graph carries, resolved, and how its messages are read.
+// `Eq` because a graph's port info, which holds one, is compared whole.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct ResolvedPin {
+    /// The type it carries. Its schema here is open JSON: only the control contract's schemars
+    /// renders pin types.
+    #[schemars(with = "serde_json::Value")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
+    pub pin_type: PinType,
+    /// How its messages are read: `value`, `stream` or `trigger`.
+    #[schemars(with = "String")]
+    #[cfg_attr(feature = "utoipa", schema(value_type = String))]
+    pub flow: PinFlow,
+}
+
+impl PinType {
+    /// The flow a pin of this type has when its author states none: its row's first, except
+    /// that a List or a bundle holding a member that streams is one message read as a stream.
+    pub fn default_flow(&self) -> PinFlow {
+        match self {
+            Self::ListOf { element_type } if element_type.default_flow() == PinFlow::Stream => {
+                PinFlow::Stream
+            }
+            Self::Bundle { members }
+                if members
+                    .iter()
+                    .any(|member| member.member_type.default_flow() == PinFlow::Stream) =>
+            {
+                PinFlow::Stream
+            }
+            _ => built_in_pin_type(self.built_in_name()).flows[0],
+        }
+    }
 }
 
 /// The pin type a port declares, or how it is found.

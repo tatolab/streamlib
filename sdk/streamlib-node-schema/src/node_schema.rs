@@ -399,6 +399,12 @@ pub struct NodePortSchema {
     pub audio_window: Option<crate::AudioWindowContract>,
     /// The port family this port declares and its family's keys.
     pub family: crate::PortFamilyDeclaration,
+    /// The pin type this port declares, read in the type's default flow; `None` when it declares
+    /// only a family. Its schema is open JSON: only the control contract's schemars renders
+    /// pin types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Value>")]
+    pub pin_type: Option<crate::pin_type::PinType>,
 }
 
 /// Config definition within a node schema.

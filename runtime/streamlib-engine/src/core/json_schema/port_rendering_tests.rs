@@ -3,8 +3,8 @@
 
 use super::*;
 
-/// Every key a rendered port may carry. A port that grows a type field
-/// again fails here, whatever the field is named.
+/// Every key a rendered port with no exact pin type carries. A port that
+/// grows another field fails here, whatever the field is named.
 const PORT_INFO_KEYS: [&str; 5] = [
     "name",
     "description",
@@ -12,12 +12,15 @@ const PORT_INFO_KEYS: [&str; 5] = [
     "delivery_profile",
     "family",
 ];
-const PORT_DESCRIPTOR_KEYS: [&str; 5] = [
+/// A picture port is a Texture, so it serves its pin type and flow beside its family.
+const PORT_DESCRIPTOR_OF_A_PICTURE_KEYS: [&str; 7] = [
     "name",
     "description",
     "required",
     "delivery_profile",
     "family",
+    "pin_type",
+    "flow",
 ];
 const PORT_INFO_WITH_A_CONTRACT_KEYS: [&str; 6] = [
     "name",
@@ -70,6 +73,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         borrow_quota: None,
         audio_window: None,
         pin_default: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -103,6 +107,7 @@ fn a_node_whose_output_is(
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
+            pin: None,
             family: crate::core::descriptors::PortFamilyDeclaration {
                 frame_rate,
                 ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -278,6 +283,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         borrow_quota: None,
         audio_window: None,
         pin_default: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -287,7 +293,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
 }
 
 #[test]
-fn port_descriptor_output_carries_no_type_key() {
+fn a_picture_ports_descriptor_renders_its_pin_type_and_flow_and_no_retired_type_key() {
     let pd = crate::core::PortDescriptor::new(
         "video",
         "Video output",
@@ -302,7 +308,7 @@ fn port_descriptor_output_carries_no_type_key() {
     assert_eq!(json["name"], "video");
     assert_eq!(json["description"], "Video output");
     assert_eq!(json["delivery_profile"], "ordered");
-    assert_renders_exactly(&json, &PORT_DESCRIPTOR_KEYS);
+    assert_renders_exactly(&json, &PORT_DESCRIPTOR_OF_A_PICTURE_KEYS);
     assert_carries_no_type_key(&json);
 }
 
@@ -328,6 +334,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         borrow_quota: None,
         audio_window: Some(declared_window_contract()),
         pin_default: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -370,6 +377,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
             },
         )),
         pin_default: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -400,6 +408,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         borrow_quota: None,
         audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
         pin_default: None,
+        pin: None,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -433,6 +442,7 @@ fn a_node_declaring_the_sentinel(
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             pin_default: None,
+            pin: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),
@@ -532,7 +542,7 @@ fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
         "Samples to frame",
         true,
         crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
+            crate::core::descriptors::PortFamily::Channels,
         ),
     )
     .with_delivery_profile("ordered")
@@ -550,7 +560,7 @@ fn a_contract_bearing_descriptor_renders_its_contract_too() {
         "Samples to frame",
         true,
         crate::core::descriptors::PortFamilyDeclaration::of_family(
-            crate::core::descriptors::PortFamily::Image,
+            crate::core::descriptors::PortFamily::Channels,
         ),
     )
     .with_delivery_profile("ordered")

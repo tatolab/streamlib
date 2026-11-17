@@ -233,6 +233,7 @@ impl GraphVariablesAsDrawn {
                 values_checked: None,
                 family: None,
                 pin_default: None,
+                pin: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
             let config = config_of_a_node_holding_no_pin_value(&variable_node.input_values);

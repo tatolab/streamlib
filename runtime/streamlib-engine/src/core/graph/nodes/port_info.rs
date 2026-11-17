@@ -36,6 +36,11 @@ pub struct PortInfo {
     /// [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_default: Option<serde_json::Value>,
+    /// The pin type this port carries, resolved from what its node type declares, and its
+    /// flow; `None` on a port whose type the code does not state exactly, which links by its
+    /// family alone.
+    #[serde(flatten)]
+    pub pin: Option<crate::core::descriptors::ResolvedPin>,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
@@ -49,6 +54,26 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             audio_window: port.audio_window.clone(),
             family: port.family.clone(),
             pin_default: port.pin_default.clone(),
+            pin: port
+                .declared_pin()
+                .and_then(crate::core::descriptors::PinDeclaration::into_resolved),
         }
+    }
+}
+
+impl PortInfo {
+    /// A port named `name` that declares only `family`, typed as any port declaring that family
+    /// is.
+    pub fn declaring_only_a_family(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        family: crate::core::descriptors::PortFamilyDeclaration,
+    ) -> Self {
+        Self::from(&crate::core::descriptors::PortDescriptor::new(
+            name,
+            description,
+            true,
+            family,
+        ))
     }
 }

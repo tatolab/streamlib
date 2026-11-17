@@ -239,9 +239,12 @@ pub(crate) struct ParsedPort {
     /// `None` everywhere else — this is opt-in, and a port without one is
     /// unchanged in every respect.
     pub audio_window: Option<AudioWindowContract>,
-    /// The port family the port declares with `family = …` and its family's
-    /// keys.
+    /// The port family the port declares with `family = …`, or the one its
+    /// `pin_type = …` is carried in, and its family's keys.
     pub family: PortFamilyDeclaration,
+    /// The pin type the port declares with `pin_type = …`; `None` when it
+    /// declares only a family.
+    pub pin_type: Option<streamlib_node_schema::pin_type::PinType>,
 }
 
 pub(crate) struct ParsedNodeAttr {
@@ -276,6 +279,7 @@ impl ParsedNodeAttr {
             borrow_quota: p.borrow_quota,
             audio_window: p.audio_window.clone(),
             family: p.family.clone(),
+            pin_type: p.pin_type.clone(),
         };
 
         NodeSchema {

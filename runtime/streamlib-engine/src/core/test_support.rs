@@ -210,6 +210,23 @@ impl crate::core::ReactiveNode for MockBorrowingConsumerNode::Node {
     }
 }
 
+/// Mock node whose ports are declared by pin type rather than by family.
+#[crate::node(
+    execution = reactive,
+    input("gain", delivery_profile = "newest", pin_type = Float),
+    output("frames", pin_type = Texture),
+)]
+pub(crate) struct MockPinTypedNode;
+
+impl crate::core::ReactiveNode for MockPinTypedNode::Node {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mock consumer whose audio input port declares the `match_device` sentinel.
 /// Nothing resolves it on this rung, which is what makes it a wiring error
 /// rather than a default.
@@ -349,6 +366,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         NODE_REGISTRY.register::<MockWindowedAudioConsumerNode::Node>();
         NODE_REGISTRY.register::<MockDeviceMatchedAudioConsumerNode::Node>();
         NODE_REGISTRY.register::<MockBorrowingConsumerNode::Node>();
+        NODE_REGISTRY.register::<MockPinTypedNode::Node>();
         NODE_REGISTRY.register::<MockInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockOrderedInputOnlyNode::Node>();
         NODE_REGISTRY.register::<MockReactiveInputOnlyNode::Node>();

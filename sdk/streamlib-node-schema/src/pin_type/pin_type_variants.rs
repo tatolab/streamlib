@@ -11,7 +11,7 @@ use crate::error::{SchemaError, SchemaResult};
 /// The set is closed: a named type and a bundle are how a project adds its own.
 // A type with nothing to state is an empty struct variant: serde ignores the keys beside the tag
 // of an internally tagged unit variant, and refuses them on a struct variant.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
     derive(schemars_1::JsonSchema),
@@ -208,6 +208,14 @@ macro_rules! texture_pixel_formats {
                     $(Self::$format => $wire_name,)+
                 }
             }
+
+            /// The format the escalate wire spells `wire_name`; `None` for a name no format has.
+            pub fn from_wire_name(wire_name: &str) -> Option<Self> {
+                match wire_name {
+                    $($wire_name => Some(Self::$format),)+
+                    _ => None,
+                }
+            }
         }
     };
 }
@@ -253,7 +261,7 @@ pub enum ProjectAssetMedia {
 }
 
 /// One member of a bundle.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "contract-json-schema",
     derive(schemars_1::JsonSchema),

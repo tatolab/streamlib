@@ -185,6 +185,7 @@ fn port_named(name: &str) -> PortDescriptor {
             crate::core::descriptors::PortFamily::Image,
         ),
         pin_default: None,
+        pin_declaration: None,
     }
 }
 

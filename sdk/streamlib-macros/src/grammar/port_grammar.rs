@@ -6,8 +6,9 @@ use streamlib_node_schema::{
     ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
     OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    cast_exposed_name_to_url_safe, refuse_audio_window_beside_a_skipping_delivery_profile,
-    render_declaration_values,
+    cast_exposed_name_to_url_safe,
+    pin_type::{PinType, TexturePixelFormat},
+    refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
 use syn::parse::ParseStream;
@@ -19,7 +20,11 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// Parse an `input(...)` / `output(...)` port body.
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
-/// audio_window(...) | audio_window = match_device, catalog = <Section>Entry { … }]`.
+/// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType>,
+/// <family key> = …]`.
+///
+/// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
+/// type serves the family its messages belong to, and its family keys apply to that family.
 ///
 /// `delivery_profile` is a consumer-side setting: **required** on every
 /// `input(...)`, and rejected with a spanned error on an `output(...)` rather
@@ -64,6 +69,7 @@ pub(super) fn parse_port(
     let mut borrow_quota = None;
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut family: Option<PortFamily> = None;
+    let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
     let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
@@ -135,6 +141,13 @@ pub(super) fn parse_port(
                 let family_ident: Ident = content.parse()?;
                 family = Some(parse_port_family(&family_ident, &name)?);
             }
+            "pin_type" => {
+                let pin_type_ident: Ident = content.parse()?;
+                pin_type = Some((
+                    pin_type_ident.span(),
+                    parse_pin_type(&pin_type_ident, &name)?,
+                ));
+            }
             family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate"
             | "frame_rate" | "dtype" | "formats" | "residency") => {
                 first_family_key_span.get_or_insert(key_span);
@@ -145,7 +158,8 @@ pub(super) fn parse_port(
                     key.span(),
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
-                         `borrow_quota`, `description`, `audio_window`, `family`, or one of \
+                         `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
+                         or one of \
                          the family keys `names`, `requires`, `codec`, `requires_codec`, \
                          `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
                     ),
@@ -173,37 +187,59 @@ pub(super) fn parse_port(
             .map_err(|refusal| syn::Error::new(*key_span, format!("port `{name}`: {refusal}")))?;
     }
 
-    let family = match (family, first_family_key_span) {
-        (Some(family), _) => {
-            family_keys.family = family;
-            let declaration_direction = match direction {
-                PortDirection::Input => PortFamilyDeclarationDirection::Input,
-                PortDirection::Output => PortFamilyDeclarationDirection::Output,
-            };
-            if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
-                return Err(syn::Error::new(name_lit.span(), refusal));
-            }
-            family_keys
+    let family_its_pin_type_carries = pin_type
+        .as_ref()
+        .map(|(span, pin_type)| (*span, PortFamily::carrying(pin_type)));
+    let family = match (family, family_its_pin_type_carries, first_family_key_span) {
+        (Some(stated), Some((pin_type_span, Some(carried))), _) if stated != carried => {
+            return Err(syn::Error::new(
+                pin_type_span,
+                format!(
+                    "port `{name}` declares `family = {stated}` and a pin type whose messages \
+                     are {carried} — drop `family = …`, which the pin type sets"
+                ),
+            ));
         }
-        (None, Some(family_key_span)) => {
+        (Some(family), _, _) | (None, Some((_, Some(family))), _) => family,
+        (None, _, Some(family_key_span)) => {
             return Err(syn::Error::new(
                 family_key_span,
                 format!(
-                    "port `{name}` states a family key without `family = …` — one of {}",
+                    "port `{name}` states a family key without `family = …` or \
+                     `pin_type = …` — a family is one of {}",
                     rendered_port_family_names()
                 ),
             ));
         }
-        (None, None) => {
+        (None, _, None) => {
             return Err(syn::Error::new(
                 name_lit.span(),
                 format!(
-                    "port `{name}` declares no family — add `family = …`, one of {}",
-                    rendered_port_family_names()
+                    "port `{name}` declares no family — add `family = …`, one of {}, or \
+                     `pin_type = …`, one of {}",
+                    rendered_port_family_names(),
+                    rendered_rust_declared_pin_type_names()
                 ),
             ));
         }
     };
+    family_keys.family = family;
+    let declaration_direction = match direction {
+        PortDirection::Input => PortFamilyDeclarationDirection::Input,
+        PortDirection::Output => PortFamilyDeclarationDirection::Output,
+    };
+    if let Some(refusal) = family_keys.refusal_of_its_keys(&name, declaration_direction) {
+        return Err(syn::Error::new(name_lit.span(), refusal));
+    }
+    let pin_type = match pin_type {
+        Some((pin_type_span, PinType::Texture { .. })) => Some(texture_of_the_formats_stated(
+            &family_keys,
+            &name,
+            pin_type_span,
+        )?),
+        other => other.map(|(_, pin_type)| pin_type),
+    };
+    let family = family_keys;
 
     Ok(ParsedPort {
         declared_marker_ident,
@@ -213,6 +249,7 @@ pub(super) fn parse_port(
         borrow_quota,
         audio_window: audio_window.map(|(_, contract)| contract),
         family,
+        pin_type,
     })
 }
 
@@ -222,6 +259,70 @@ fn rendered_port_family_names() -> String {
         .map(|family| format!("`{family}`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The Texture a port declaring `pin_type = Texture` carries: of the pixel formats its
+/// `formats` key states, any when it states none.
+fn texture_of_the_formats_stated(
+    family_keys: &PortFamilyDeclaration,
+    port_name: &str,
+    pin_type_span: proc_macro2::Span,
+) -> syn::Result<PinType> {
+    let pixel_formats = family_keys
+        .formats
+        .iter()
+        .map(|format| {
+            TexturePixelFormat::from_wire_name(format).ok_or_else(|| {
+                syn::Error::new(
+                    pin_type_span,
+                    format!("port `{port_name}` states format {format:?}, which no texture has"),
+                )
+            })
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
+    Ok(PinType::Texture { pixel_formats })
+}
+
+/// Each pin type a Rust port declares by name alone, taking any size, format or layout: the
+/// types whose family carries them today as it carries that family's messages.
+const RUST_DECLARED_PIN_TYPES: [(&str, PinType); 6] = [
+    ("Boolean", PinType::Boolean {}),
+    ("Integer", PinType::Integer { exact_size: None }),
+    ("Float", PinType::Float { exact_size: None }),
+    (
+        "Texture",
+        PinType::Texture {
+            pixel_formats: Vec::new(),
+        },
+    ),
+    ("Audio", PinType::Audio {}),
+    ("Tensor", PinType::Tensor {}),
+];
+
+fn rendered_rust_declared_pin_type_names() -> String {
+    RUST_DECLARED_PIN_TYPES
+        .iter()
+        .map(|(name, _)| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Parse `pin_type = <PinType>`'s value.
+fn parse_pin_type(pin_type_ident: &Ident, port_name: &str) -> syn::Result<PinType> {
+    RUST_DECLARED_PIN_TYPES
+        .iter()
+        .find(|(name, _)| pin_type_ident == name)
+        .map(|(_, pin_type)| pin_type.clone())
+        .ok_or_else(|| {
+            syn::Error::new(
+                pin_type_ident.span(),
+                format!(
+                    "port `{port_name}` declares `pin_type = {pin_type_ident}` — a Rust port's \
+                     pin type is one of {}",
+                    rendered_rust_declared_pin_type_names()
+                ),
+            )
+        })
 }
 
 /// Parse `family = <Family>`'s value.

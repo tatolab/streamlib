@@ -34,6 +34,11 @@ use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, PortDirection, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
 
+use interface_node_config::{
+    port_and_family_an_interface_nodes_config_declares,
+    refuse_a_config_key_the_interface_node_does_not_take,
+};
+
 pub use streamlib_project_repository::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, is_a_graph_interface_node_type,
@@ -773,8 +778,14 @@ impl GraphInterfacePort {
         })
     }
 
-    /// A port named `port_name` of the family this port declares, as `graph` renders a port.
+    /// A port named `port_name` of the family this port declares, as `graph` renders a port:
+    /// typed as a node's port of that family is.
     pub fn rendered_as_a_port_named(&self, port_name: &str) -> PortInfoOutput {
+        let family = self.family.map(PortFamilyDeclaration::of_family);
+        let pin = family.clone().and_then(|family| {
+            crate::core::graph::PortInfo::declaring_only_a_family(port_name, String::new(), family)
+                .pin
+        });
         PortInfoOutput {
             name: port_name.to_string(),
             description: String::new(),
@@ -784,8 +795,9 @@ impl GraphInterfacePort {
             audio_window: None,
             stream_facts: None,
             values_checked: None,
-            family: self.family.map(PortFamilyDeclaration::of_family),
+            family,
             pin_default: None,
+            pin,
         }
     }
 
@@ -814,162 +826,6 @@ fn the_input_without_what_only_the_graphs_producer_can_meet(
     }
 }
 
-fn interface_node_kind(node: &GraphSnapshotNode) -> &'static str {
-    if node.node_type.as_str() == GRAPH_OUTPUT_NODE_TYPE {
-        "GraphOutput"
-    } else {
-        "GraphInput"
-    }
-}
-
-/// The port an interface node's config names, and the family it names, `None` when it leaves
-/// `family` out or `null`.
-fn port_and_family_an_interface_nodes_config_declares(
-    node: &GraphSnapshotNode,
-) -> Result<(String, Option<PortFamily>)> {
-    let kind = interface_node_kind(node);
-    let port = node
-        .input_values
-        .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)
-        .and_then(serde_json::Value::as_str)
-        .filter(|port| !port.is_empty())
-        .ok_or_else(|| {
-            Error::GraphError(format!(
-                "`{kind}` node `{}` names no port: its config takes \
-                 `{GRAPH_INTERFACE_PORT_CONFIG_KEY}`, a non-empty string",
-                node.name
-            ))
-        })?;
-    let family = match node.input_values.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY) {
-        None | Some(serde_json::Value::Null) => None,
-        Some(named) => {
-            let family_wire_name = named.as_str();
-            Some(
-                PortFamily::ALL
-                    .into_iter()
-                    .find(|family| Some(family.wire_name()) == family_wire_name)
-                    .ok_or_else(|| {
-                        Error::GraphError(format!(
-                            "`{kind}` node `{}` declares its port of family {named}, and its \
-                             config's `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}` is one of {}, or \
-                             left out for the family of the first port linked to it",
-                            node.name,
-                            PortFamily::ALL.map(|family| family.wire_name()).join(", ")
-                        ))
-                    })?,
-            )
-        }
-    };
-    Ok((port.to_string(), family))
-}
-
-/// Refuse a config key `node` does not take at `level` with `family`, and on a top-level
-/// `GraphInput` a client writes, a `default`, `range` or `lifetime` its family does not take.
-/// A top-level `GraphInput` whose family is not resolved yet takes all three, checked once a
-/// link resolves it.
-fn refuse_a_config_key_the_interface_node_does_not_take(
-    node: &GraphSnapshotNode,
-    level: GraphInterfaceLevel,
-    family: Option<PortFamily>,
-) -> Result<()> {
-    let kind = interface_node_kind(node);
-    let may_run_as_a_source_node = kind == "GraphInput"
-        && level == GraphInterfaceLevel::TheStreamsTopLevel
-        && family.is_none_or(a_top_level_graph_input_of_the_family_runs);
-    let keys_it_takes: &[&str] = if may_run_as_a_source_node {
-        &[
-            GRAPH_INTERFACE_PORT_CONFIG_KEY,
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-            GRAPH_INPUT_DEFAULT_CONFIG_KEY,
-            GRAPH_INPUT_RANGE_CONFIG_KEY,
-            GRAPH_INPUT_LIFETIME_CONFIG_KEY,
-        ]
-    } else {
-        &[
-            GRAPH_INTERFACE_PORT_CONFIG_KEY,
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-        ]
-    };
-    if let Some(unread_key) = node
-        .input_values
-        .keys()
-        .find(|key| !keys_it_takes.contains(&key.as_str()))
-    {
-        let where_it_would_be_taken = if kind == "GraphInput"
-            && [
-                GRAPH_INPUT_DEFAULT_CONFIG_KEY,
-                GRAPH_INPUT_RANGE_CONFIG_KEY,
-                GRAPH_INPUT_LIFETIME_CONFIG_KEY,
-            ]
-            .contains(&unread_key.as_str())
-        {
-            " A `GraphInput` takes it on a stream's top level, of a family a client writes: \
-             array, channels or records"
-        } else {
-            ""
-        };
-        return Err(Error::GraphError(format!(
-            "`{kind}` node `{}` carries the config key `{unread_key}`, which it does not take. \
-             It takes: {}.{where_it_would_be_taken}",
-            node.name,
-            keys_it_takes
-                .iter()
-                .map(|key| format!("`{key}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    if let Some(family) = family
-        && may_run_as_a_source_node
-    {
-        refuse_a_default_or_range_its_family_does_not_take(node, family)?;
-    }
-    Ok(())
-}
-
-fn refuse_a_default_or_range_its_family_does_not_take(
-    node: &GraphSnapshotNode,
-    family: PortFamily,
-) -> Result<()> {
-    the_value_lifetime_a_graph_input_config_declares(Some(&serde_json::Value::Object(
-        node.input_values.clone(),
-    )))
-    .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
-    if let Some(default) = node.input_values.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
-        && let Err(why) =
-            crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, default, 0)
-    {
-        return Err(Error::GraphError(format!(
-            "`GraphInput` node `{}` declares its `{GRAPH_INPUT_DEFAULT_CONFIG_KEY}` as \
-             {default}, and it carries {}: {why}",
-            node.name,
-            family.declaration_name()
-        )));
-    }
-    let Some(range) = node.input_values.get(GRAPH_INPUT_RANGE_CONFIG_KEY) else {
-        return Ok(());
-    };
-    if family == PortFamily::Records {
-        return Err(Error::GraphError(format!(
-            "`GraphInput` node `{}` carries Records, and a `{GRAPH_INPUT_RANGE_CONFIG_KEY}` \
-             spans a number, which only an Array or a Channels Input carries",
-            node.name
-        )));
-    }
-    let lowest_and_highest = range
-        .as_array()
-        .filter(|bounds| bounds.len() == 2)
-        .and_then(|bounds| Some((bounds[0].as_f64()?, bounds[1].as_f64()?)));
-    match lowest_and_highest {
-        Some((lowest, highest)) if lowest <= highest => Ok(()),
-        _ => Err(Error::GraphError(format!(
-            "`GraphInput` node `{}` declares its `{GRAPH_INPUT_RANGE_CONFIG_KEY}` as {range}, \
-             and a range is `[lowest, highest]`, two numbers, lowest first",
-            node.name
-        ))),
-    }
-}
-
 fn refuse_an_interface_port_other_than_value(end: &LinkPortRefOutput) -> Result<()> {
     if cast_exposed_name_to_url_safe(&end.port)
         .is_ok_and(|port_cast| port_cast == GRAPH_INTERFACE_VALUE_PORT_NAME)
@@ -992,6 +848,8 @@ fn cast_or_as_written(name: &str) -> String {
         .map(std::borrow::Cow::into_owned)
         .unwrap_or_else(|_| name.to_string())
 }
+
+mod interface_node_config;
 
 #[cfg(test)]
 mod tests;

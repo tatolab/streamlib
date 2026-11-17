@@ -199,6 +199,7 @@ mod tests {
             audio_window: None,
             family: PortFamilyDeclaration::of_family(PortFamily::Image),
             pin_default: None,
+            pin_declaration: None,
         }
     }
 
