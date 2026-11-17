@@ -1,13 +1,14 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::core::graph::{LinkUniqueId, NodeRunId};
+use crate::core::graph::{LinkUniqueId, NodeRunId, WhyTheNodeLeaves};
 
 #[derive(Debug, Clone)]
 pub(crate) enum PendingOperation {
     AddNode(NodeRunId),
 
-    RemoveNode(NodeRunId),
+    /// Take a node out of the running graph, stopping it, and why it leaves.
+    RemoveNode(NodeRunId, WhyTheNodeLeaves),
 
     /// Wire a link that exists in the Graph but isn't wired yet.
     AddLink(LinkUniqueId),
@@ -35,7 +36,7 @@ impl std::fmt::Display for PendingOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PendingOperation::AddNode(id) => write!(f, "AddNode({})", id),
-            PendingOperation::RemoveNode(id) => write!(f, "RemoveNode({})", id),
+            PendingOperation::RemoveNode(id, _) => write!(f, "RemoveNode({})", id),
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
             PendingOperation::UpdateNodeConfig { node_run_id, .. } => {

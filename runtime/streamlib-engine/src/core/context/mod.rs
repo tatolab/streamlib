@@ -51,6 +51,9 @@ pub(crate) use runtime_context::{
     LoadedStreamARuntimeContextBelongsTo, StoreOfOneNodeOpenedOnFirstUse,
 };
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+pub(crate) use store_scoped_to_this_node::{
+    LIVE_INPUT_VALUES_TABLE, key_of_the_node, the_node_a_key_leads_with,
+};
 pub use store_scoped_to_this_node::{ProjectStoresOpenInThisRuntime, StoreScopedToThisNode};
 pub use texture_pools_and_rings::node_output_pixel_buffer_pool_of_one_native_node::{
     NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,

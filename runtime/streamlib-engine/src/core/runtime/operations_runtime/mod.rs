@@ -21,7 +21,7 @@ use crate::core::graph::input_values::{
 };
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
-    NodeRunId, PendingDeletionComponent, StateComponent, node_named_or_refused,
+    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
     refuse_a_link_between_ports_whose_families_do_not_match,
 };
 use crate::core::logging::{
@@ -103,7 +103,7 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
         for node_run_id in &nodes_pending_deletion {
-            if !this_streams_graph.drop_the_node(node_run_id) {
+            if !this_streams_graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
                 tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
             }
         }
@@ -296,7 +296,7 @@ pub(super) async fn add_node_impl(
                     )
                 })
             {
-                if !graph.drop_the_node(&node_id) {
+                if !graph.drop_the_node(&node_id, WhyTheNodeLeaves::Removed) {
                     tracing::warn!("`{node_id}`, whose add was refused, was not dropped");
                 }
                 return Err(refusal);
@@ -350,7 +350,10 @@ fn mark_the_node_and_each_of_its_links_pending_deletion(
     if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
         node.insert(PendingDeletionComponent);
     }
-    tx.log(PendingOperation::RemoveNode(node_run_id.clone()));
+    tx.log(PendingOperation::RemoveNode(
+        node_run_id.clone(),
+        WhyTheNodeLeaves::Removed,
+    ));
     Ok(())
 }
 

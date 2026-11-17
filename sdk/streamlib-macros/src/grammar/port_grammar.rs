@@ -5,8 +5,8 @@ use streamlib_node_schema::{
     ArrayOutputPortResidency, AudioWindowContract, AudioWindowContractDeclaredValues,
     ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
-    OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration, PortFamilyDeclarationDirection,
-    cast_exposed_name_to_url_safe,
+    NodeValueLifetime, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
+    PortFamilyDeclarationDirection, cast_exposed_name_to_url_safe,
     pin_type::{PinDeclaration, PinFlow, PinType, TexturePixelFormat},
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
@@ -21,7 +21,7 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType>,
-/// flow = <PinFlow>, <family key> = …]`.
+/// lifetime = kept | reset, flow = <PinFlow>, <family key> = …]`.
 ///
 /// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
 /// type serves the family its messages belong to, and its family keys apply to that family.
@@ -32,7 +32,8 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 /// reads by its pin's default when it states none, **required** on every other `input(...)`,
 /// and rejected with a spanned error on an `output(...)` rather than silently dropped.
 /// `audio_window` is likewise consumer-side and likewise rejected on an output — a producer
-/// publishes what it has, and only a consumer states what it needs.
+/// publishes what it has, and only a consumer states what it needs. `lifetime` is the input's too:
+/// whether a value set live on it is kept across Stop or reset there, kept when it is not stated.
 pub(super) fn parse_port(
     input: ParseStream<'_>,
     direction: PortDirection,
@@ -72,6 +73,7 @@ pub(super) fn parse_port(
     let mut audio_window: Option<(proc_macro2::Span, AudioWindowContract)> = None;
     let mut family: Option<PortFamily> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
+    let mut lifetime = NodeValueLifetime::Kept;
     let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
     let mut first_family_key_span: Option<proc_macro2::Span> = None;
@@ -151,6 +153,10 @@ pub(super) fn parse_port(
                     parse_pin_type(&pin_type_ident, &name)?,
                 ));
             }
+            "lifetime" => {
+                let lifetime_ident: Ident = content.parse()?;
+                lifetime = parse_lifetime(&lifetime_ident, &name, direction)?;
+            }
             "flow" => {
                 let flow_ident: Ident = content.parse()?;
                 flow = Some((flow_ident.span(), parse_pin_flow(&flow_ident, &name)?));
@@ -166,7 +172,7 @@ pub(super) fn parse_port(
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
-                         `flow`, or one of \
+                         `lifetime`, `flow`, or one of \
                          the family keys `names`, `requires`, `codec`, `requires_codec`, \
                          `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
                     ),
@@ -269,7 +275,38 @@ pub(super) fn parse_port(
         audio_window: audio_window.map(|(_, contract)| contract),
         family,
         pin_type,
+        lifetime,
         flow: flow.map(|(_, flow)| flow),
+    })
+}
+
+/// The lifetime `lifetime_ident` names on port `name`, which only an input declares.
+fn parse_lifetime(
+    lifetime_ident: &Ident,
+    name: &str,
+    direction: PortDirection,
+) -> syn::Result<NodeValueLifetime> {
+    if direction == PortDirection::Output {
+        return Err(syn::Error::new(
+            lifetime_ident.span(),
+            format!(
+                "`lifetime` is declared by an input, not `output(\"{name}\", ...)` — it says \
+                 how long a value set live on the input lives"
+            ),
+        ));
+    }
+    NodeValueLifetime::named(&lifetime_ident.to_string()).ok_or_else(|| {
+        syn::Error::new(
+            lifetime_ident.span(),
+            format!(
+                "port `{name}` declares `lifetime = {lifetime_ident}` — a lifetime is one of {}",
+                NodeValueLifetime::EVERY_LIFETIME
+                    .iter()
+                    .map(|lifetime| format!("`{}`", lifetime.wire_name()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
     })
 }
 

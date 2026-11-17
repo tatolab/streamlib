@@ -233,6 +233,7 @@ mod tests {
             audio_window: None,
             pin_default: None,
             pin: None,
+            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             family,
         }
     }

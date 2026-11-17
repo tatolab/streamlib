@@ -186,6 +186,7 @@ fn port_named(name: &str) -> PortDescriptor {
         ),
         pin_default: None,
         pin_declaration: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
     }
 }
 

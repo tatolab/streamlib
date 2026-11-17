@@ -49,6 +49,7 @@ mod graph_action_feed_and_subscription_tests;
 mod graph_edit_transaction_and_undo_tests;
 mod graph_generator_fragment_tests;
 mod imported_and_nested_stream_fragment_tests;
+mod input_value_lifetime_tests;
 mod input_value_set_live_tests;
 mod input_value_set_tests;
 mod played_project_end_to_end_tests;
