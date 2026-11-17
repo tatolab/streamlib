@@ -51,6 +51,7 @@ use crate::core::compiler::node_thread_shutdown::{
 };
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
+use crate::core::graph::input_values::LiveInputValuesOfAStream;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
     LinkUniqueId, NodeReadyBarrierHandle, NodeRunId, OutOfProcessLinkWireRepliesComponent,
@@ -82,16 +83,22 @@ impl Default for Compiler {
 impl Compiler {
     /// Create a new compiler whose graph resolves the natively compiled node types alone.
     pub(crate) fn new() -> Self {
-        Self::new_resolving_node_types_through(Arc::new(NodeTypesOneStreamResolves::new()))
+        Self::new_of_a_stream(
+            Arc::new(NodeTypesOneStreamResolves::new()),
+            LiveInputValuesOfAStream::default(),
+        )
     }
 
-    /// Create a new compiler whose graph resolves node types through its stream's lookup.
-    pub(crate) fn new_resolving_node_types_through(
+    /// Create a new compiler of a stream, whose graph resolves node types through its stream's
+    /// lookup and holds `live_input_values`, empty, as the values set live on its inputs.
+    pub(crate) fn new_of_a_stream(
         node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+        live_input_values: LiveInputValuesOfAStream,
     ) -> Self {
         Self {
-            graph: Arc::new(RwLock::new(Graph::new_resolving_node_types_through(
+            graph: Arc::new(RwLock::new(Graph::new_of_a_stream(
                 node_types_this_stream_resolves,
+                live_input_values,
             ))),
             transaction: Arc::new(Mutex::new(Vec::new())),
             configs_a_commit_is_applying: Arc::new(Mutex::new(HashMap::new())),
@@ -243,6 +250,7 @@ impl Compiler {
         // 1. Validate and categorize operations
         // =====================================================================
         let mut plan = the_plan_these_operations_make(&graph_arc, operations);
+        let node_ids_to_remove = plan.node_ids_to_remove();
         let promotions_planned = plan_every_function_node_promotion(&graph_arc, &mut plan);
 
         {
@@ -253,7 +261,7 @@ impl Compiler {
         refuse_an_edit_an_island_cannot_take(
             &graph_arc.read(),
             &plan.nodes_to_add,
-            &plan.nodes_to_remove,
+            &node_ids_to_remove,
             &plan.links_to_add,
             &plan.links_to_remove,
             &plan.config_updates,
@@ -261,7 +269,7 @@ impl Compiler {
         let shader_nodes_restarted = the_running_shader_nodes_a_live_edit_restarts(
             &graph_arc.read(),
             &plan.nodes_to_add,
-            &plan.nodes_to_remove,
+            &node_ids_to_remove,
             &[
                 plan.links_to_add.as_slice(),
                 plan.links_to_remove.as_slice(),
@@ -272,7 +280,7 @@ impl Compiler {
         place_each_stateful_function_node_several_readers_read_in_a_process_of_its_own(
             &mut graph_arc.write(),
             &plan.nodes_to_add,
-            &plan.nodes_to_remove,
+            &node_ids_to_remove,
         )?;
         {
             let mut graph = graph_arc.write();
@@ -805,9 +813,7 @@ fn the_plan_these_operations_make(
                     tracing::debug!("AddNode({}): already running, skipping", id);
                 }
             }
-            PendingOperation::RemoveNode(id) => {
-                plan.nodes_to_remove.push(id);
-            }
+            PendingOperation::RemoveNode(id, why) => plan.remove_the_node(id, why),
             PendingOperation::AddLink(id) => {
                 let graph = graph_arc.read();
                 let link = graph.traversal().e(&id).first();
@@ -902,7 +908,7 @@ fn plan_every_function_node_promotion(
                 &promotion.reader_id,
                 &promotion.reason,
                 &WhatTheCompileCarryingAPromotionRemoves {
-                    nodes: &plan.nodes_to_remove,
+                    nodes: &plan.node_ids_to_remove(),
                     links: &plan.links_to_remove,
                 },
             ) {

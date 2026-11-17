@@ -90,3 +90,34 @@ fn a_link_queued_twice_in_one_batch_is_wired_once() {
         vec![link_into_the_first_reader, link_into_the_second_reader]
     );
 }
+
+/// A node a batch logs as removed and as torn down at a Stop, in either order, leaves once and
+/// removed, so the project's store forgets its kept live values.
+///
+/// Fail-without-fix: let the last logged reason win and a Stop's teardown logged after a removal
+/// keeps a removed node's kept values in the store.
+#[test]
+fn a_node_removed_and_torn_down_at_a_stop_in_one_batch_leaves_once_removed() {
+    use crate::core::graph::WhyTheNodeLeaves;
+
+    for reasons in [
+        [WhyTheNodeLeaves::Removed, WhyTheNodeLeaves::TornDownAtAStop],
+        [WhyTheNodeLeaves::TornDownAtAStop, WhyTheNodeLeaves::Removed],
+    ] {
+        let node_run_id = NodeRunId::new();
+
+        let plan = the_plan_these_operations_make(
+            &RwLock::new(Graph::new()),
+            reasons
+                .iter()
+                .map(|why| PendingOperation::RemoveNode(node_run_id.clone(), *why))
+                .collect(),
+        );
+
+        assert_eq!(
+            plan.nodes_to_remove,
+            vec![(node_run_id, WhyTheNodeLeaves::Removed)],
+            "logged as {reasons:?}",
+        );
+    }
+}

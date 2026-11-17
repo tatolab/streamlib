@@ -194,7 +194,8 @@ pub(crate) mod tests {
     const LEVEL_METER_NODE_TYPE: &str = "test_nodes:LevelMeter";
 
     /// A graph resolving a process node type reading `level`, which declares
-    /// a default of 0.5, `gain`, which declares none, and `frames`, Records.
+    /// a default of 0.5, `gain`, which declares none and whose live value is
+    /// reset at Stop, and `frames`, Records.
     pub(crate) fn a_graph_resolving_a_process_node_type_with_channels_inputs() -> Graph {
         let import_path = NodeClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap();
         let descriptor = NodeDescriptor::new(
@@ -211,12 +212,15 @@ pub(crate) mod tests {
             )
             .with_pin_default(serde_json::json!(0.5)),
         )
-        .with_input(PortDescriptor::new(
-            "gain",
-            "",
-            true,
-            PortFamilyDeclaration::of_family(PortFamily::Channels),
-        ))
+        .with_input(
+            PortDescriptor::new(
+                "gain",
+                "",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            )
+            .with_lifetime(crate::core::descriptors::NodeValueLifetime::Reset),
+        )
         .with_input(PortDescriptor::new(
             "frames",
             "",

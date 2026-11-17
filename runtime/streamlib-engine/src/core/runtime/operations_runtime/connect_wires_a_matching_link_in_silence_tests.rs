@@ -180,7 +180,7 @@ fn removing_a_node_logs_every_incident_link_ahead_of_the_node() {
         .expect("the link's own removal is logged");
     let node_removal = logged
         .iter()
-        .position(|op| matches!(op, PendingOperation::RemoveNode(id) if *id == consumer_id))
+        .position(|op| matches!(op, PendingOperation::RemoveNode(id, _) if *id == consumer_id))
         .expect("the node's removal is logged");
     assert!(
         link_removal < node_removal,

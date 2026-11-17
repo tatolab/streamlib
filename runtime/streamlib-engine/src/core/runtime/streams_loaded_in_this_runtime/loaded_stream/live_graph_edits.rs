@@ -15,7 +15,7 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
     refuse_a_pin_value_a_process_node_cannot_read,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
-use crate::core::graph::input_values::the_input_value_change;
+use crate::core::graph::input_values::{the_input_value_change, the_lifetime_of_the_input};
 use crate::core::graph::legacy_config_of_a_node::{
     input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
@@ -473,6 +473,7 @@ impl LoadedStreamInThisRuntime {
             })?;
         }
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
+        self.hold_the_live_values_the_project_store_keeps();
         Ok(())
     }
 }
@@ -500,6 +501,7 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
             direction: crate::core::PortDirection::Input,
         });
     }
+    let lifetime = the_lifetime_of_the_input(node, input);
     if value.is_some() && node.is_an_exposed_config_field_input(input) {
         return Err(Error::Configuration(format!(
             "input `{input}` of `{}` is a config field it exposes, which reads the \
@@ -512,14 +514,16 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
         refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
     let saved_value_before = set_the_pin(node, input, value);
-    let live_value_before = graph.live_input_values().set(node_uuid, input, None);
+    let live_value_before = graph
+        .live_input_values()
+        .set(node_uuid, input, None, lifetime);
     if let Err(not_handed_over) = hand_each_island_and_the_helper_the_value(graph, node_run_id) {
         if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
             set_the_pin(node, input, saved_value_before);
         }
         graph
             .live_input_values()
-            .set(node_uuid, input, live_value_before);
+            .set(node_uuid, input, live_value_before, lifetime);
         if let Err(not_handed_back) = hand_each_island_and_the_helper_the_value(graph, node_run_id)
         {
             tracing::error!(

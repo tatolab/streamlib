@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::compiler_ops::shader_node_island::RunningShaderNodesALiveEditRestarts;
-use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
+use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, WhyTheNodeLeaves};
 
 /// Categorized operations ready for execution.
 ///
@@ -10,7 +10,8 @@ use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
 #[derive(Debug, Default)]
 pub(super) struct CompilationPlan {
     pub(super) nodes_to_add: Vec<NodeRunId>,
-    pub(super) nodes_to_remove: Vec<NodeRunId>,
+    /// Each node to remove, once, beside why it leaves the graph.
+    pub(super) nodes_to_remove: Vec<(NodeRunId, WhyTheNodeLeaves)>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
     pub(super) config_updates: Vec<(NodeRunId, serde_json::Value)>,
@@ -39,6 +40,31 @@ impl CompilationPlan {
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
             && self.function_node_promotions.is_empty()
+    }
+
+    /// Queue a node to leave the graph. A node queued twice leaves once, and removed when either
+    /// queueing removes it.
+    pub(super) fn remove_the_node(&mut self, node_run_id: NodeRunId, why: WhyTheNodeLeaves) {
+        match self
+            .nodes_to_remove
+            .iter_mut()
+            .find(|(queued, _)| *queued == node_run_id)
+        {
+            Some((_, queued_why)) => {
+                if why == WhyTheNodeLeaves::Removed {
+                    *queued_why = WhyTheNodeLeaves::Removed;
+                }
+            }
+            None => self.nodes_to_remove.push((node_run_id, why)),
+        }
+    }
+
+    /// The node of each entry of `nodes_to_remove`.
+    pub(super) fn node_ids_to_remove(&self) -> Vec<NodeRunId> {
+        self.nodes_to_remove
+            .iter()
+            .map(|(node_run_id, _)| node_run_id.clone())
+            .collect()
     }
 
     /// Queue each running node a live edit restarts to be built again, and each
@@ -109,8 +135,13 @@ impl CompilationPlan {
                 tracing::debug!("[commit] link-add {link_id} skipped — link absent from graph");
                 return false;
             };
-            let source_removed = nodes_to_remove.contains(link.source().node_run_id());
-            let target_removed = nodes_to_remove.contains(link.to_port().node_run_id());
+            let removed = |node_run_id: &NodeRunId| {
+                nodes_to_remove
+                    .iter()
+                    .any(|(queued, _)| queued == node_run_id)
+            };
+            let source_removed = removed(link.source().node_run_id());
+            let target_removed = removed(link.to_port().node_run_id());
             if source_removed || target_removed {
                 tracing::debug!(
                     "[commit] link-add {link_id} skipped — endpoint node removed in same batch"
@@ -174,7 +205,7 @@ mod tests {
 
         let mut plan = CompilationPlan {
             links_to_add: vec![link_id],
-            nodes_to_remove: vec![source_id],
+            nodes_to_remove: vec![(source_id, WhyTheNodeLeaves::Removed)],
             ..Default::default()
         };
         plan.drop_link_adds_into_removed_nodes(&graph);

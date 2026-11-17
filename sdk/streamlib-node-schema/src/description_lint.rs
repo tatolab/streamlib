@@ -187,7 +187,10 @@ fn markdown_without_code(markdown: &str) -> String {
 mod tests {
     use super::*;
     use crate::descriptors::PortDescriptor;
-    use crate::{NodeClassImportPath, NodeClassShortName, PortFamily, PortFamilyDeclaration};
+    use crate::{
+        NodeClassImportPath, NodeClassShortName, NodeValueLifetime, PortFamily,
+        PortFamilyDeclaration,
+    };
 
     fn port(name: &str, description: &str) -> PortDescriptor {
         PortDescriptor {
@@ -200,6 +203,7 @@ mod tests {
             family: PortFamilyDeclaration::of_family(PortFamily::Image),
             pin_default: None,
             pin_declaration: None,
+            lifetime: NodeValueLifetime::Kept,
         }
     }
 

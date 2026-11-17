@@ -66,6 +66,17 @@ pub struct Graph {
     live_input_values: Arc<LiveInputValuesOfAStream>,
 }
 
+/// Why a node leaves its stream's graph, which decides what the stream forgets of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WhyTheNodeLeaves {
+    /// Removed from the graph: every value set live on its inputs is forgotten, and the
+    /// project's store forgets each kept one.
+    Removed,
+    /// Torn down as its stream stops, to be put back as the graph held it: each value set live
+    /// on a `reset` input is forgotten, and each on a `kept` input held across.
+    TornDownAtAStop,
+}
+
 impl Default for Graph {
     fn default() -> Self {
         Self::new()
@@ -82,6 +93,18 @@ impl Graph {
     pub fn new_resolving_node_types_through(
         node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
     ) -> Self {
+        Self::new_of_a_stream(
+            node_types_this_stream_resolves,
+            LiveInputValuesOfAStream::default(),
+        )
+    }
+
+    /// Create a new empty Graph of a stream, resolving node types through its stream's lookup
+    /// and holding `live_input_values`, empty, as the values set live on its inputs.
+    pub(crate) fn new_of_a_stream(
+        node_types_this_stream_resolves: Arc<NodeTypesOneStreamResolves>,
+        live_input_values: LiveInputValuesOfAStream,
+    ) -> Self {
         Self {
             digraph: DiGraph::new(),
             loaded_stream_id: None,
@@ -92,7 +115,7 @@ impl Graph {
             node_names_the_graph_only_nodes_hold: HashSet::new(),
             compiled_at: None,
             state: GraphState::Idle,
-            live_input_values: Arc::default(),
+            live_input_values: Arc::new(live_input_values),
         }
     }
 
@@ -115,10 +138,10 @@ impl Graph {
         })
     }
 
-    /// Drop the node `node_run_id` and the links into and out of it, then forget each value set
-    /// live on its inputs; whether it was dropped.
+    /// Drop the node `node_run_id` and the links into and out of it, then forget the values set
+    /// live on its inputs as `why` it leaves says; whether it was dropped.
     #[must_use]
-    pub fn drop_the_node(&mut self, node_run_id: &NodeRunId) -> bool {
+    pub fn drop_the_node(&mut self, node_run_id: &NodeRunId, why: WhyTheNodeLeaves) -> bool {
         let node_uuid = self
             .traversal()
             .v(node_run_id)
@@ -126,7 +149,7 @@ impl Graph {
             .map(|node| node.node_uuid);
         let dropped = !self.traversal_mut().v(node_run_id).drop().exists();
         if dropped && let Some(node_uuid) = node_uuid {
-            self.live_input_values.forget_the_node(node_uuid);
+            self.live_input_values.forget_the_node(node_uuid, why);
         }
         dropped
     }

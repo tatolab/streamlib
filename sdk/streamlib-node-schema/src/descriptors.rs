@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::pin_type::PinDeclaration;
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
-    PortFamilyDeclaration,
+    NodeValueLifetime, PortFamilyDeclaration,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -57,6 +57,10 @@ pub struct PortDescriptor {
     /// exactly. [`PortDescriptor::declared_pin`] is what the port declares.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_declaration: Option<PinDeclaration>,
+    /// Whether a value set live on this *input* is kept across Stop and a restart of the
+    /// runtime, or reset at Stop; kept when it declares none, and on every output port.
+    #[serde(default, skip_serializing_if = "NodeValueLifetime::is_kept")]
+    pub lifetime: NodeValueLifetime,
 }
 
 fn deserialize_a_pin_default_that_may_be_null<'de, D>(
@@ -85,6 +89,7 @@ impl PortDescriptor {
             family,
             pin_default: None,
             pin_declaration: None,
+            lifetime: NodeValueLifetime::Kept,
         }
     }
 
@@ -107,6 +112,13 @@ impl PortDescriptor {
     /// Meaningful only on an input port.
     pub fn with_pin_default(mut self, pin_default: serde_json::Value) -> Self {
         self.pin_default = Some(pin_default);
+        self
+    }
+
+    /// Builder-style override for how long a value set live on the input lives. Meaningful only
+    /// on an input port.
+    pub fn with_lifetime(mut self, lifetime: NodeValueLifetime) -> Self {
+        self.lifetime = lifetime;
         self
     }
 

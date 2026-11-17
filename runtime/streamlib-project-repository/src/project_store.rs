@@ -113,11 +113,20 @@ impl ProjectStore {
     /// Open the store of the project at `project_directory`, making it on first use.
     pub fn open_in_the_project_at(project_directory: &Path) -> Result<Self, ProjectStoreRefusal> {
         Self::open_at_the_file(
-            &project_directory
-                .join(PROJECT_RUNTIME_DIRECTORY)
-                .join(PROJECT_STORE_FILE_NAME),
+            &Self::the_file_in_the_project_at(project_directory),
             PROJECT_STORE_WRITE_DEBOUNCE_WINDOW,
         )
+    }
+
+    /// Whether the project at `project_directory` has a store yet, made by its first open.
+    pub fn exists_in_the_project_at(project_directory: &Path) -> bool {
+        Self::the_file_in_the_project_at(project_directory).exists()
+    }
+
+    fn the_file_in_the_project_at(project_directory: &Path) -> PathBuf {
+        project_directory
+            .join(PROJECT_RUNTIME_DIRECTORY)
+            .join(PROJECT_STORE_FILE_NAME)
     }
 
     /// Open the store at `store_file`, its writer committing at most once per `debounce_window`.

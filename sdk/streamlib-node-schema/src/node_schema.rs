@@ -412,6 +412,11 @@ pub struct NodePortSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     pub pin_type: Option<crate::pin_type::PinType>,
+    /// Whether a value set live on this input is kept across Stop and a restart of the runtime,
+    /// or reset at Stop; kept when it declares none, and on every output port.
+    #[serde(default, skip_serializing_if = "crate::NodeValueLifetime::is_kept")]
+    #[schemars(with = "Option<String>")]
+    pub lifetime: crate::NodeValueLifetime,
     /// The flow this port states — `value`, `stream` or `trigger`; `None` when it reads in its
     /// pin type's default flow.
     #[serde(default, skip_serializing_if = "Option::is_none")]

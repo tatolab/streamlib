@@ -37,6 +37,13 @@ pub struct PortInfo {
     /// family alone.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
+    /// Whether a value set live on this input is kept across Stop and a restart of the runtime,
+    /// or reset at Stop. Mirrors the field on [`crate::core::descriptors::PortDescriptor`].
+    #[serde(
+        default,
+        skip_serializing_if = "crate::core::descriptors::NodeValueLifetime::is_kept"
+    )]
+    pub lifetime: crate::core::descriptors::NodeValueLifetime,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
@@ -52,6 +59,7 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             pin: port
                 .declared_pin()
                 .and_then(crate::core::descriptors::PinDeclaration::into_resolved),
+            lifetime: port.lifetime,
         }
     }
 }

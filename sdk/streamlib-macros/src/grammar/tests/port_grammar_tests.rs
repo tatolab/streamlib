@@ -4,7 +4,8 @@
 use quote::quote;
 use streamlib_node_schema::{
     ArrayOutputPortResidency, AudioWindowContractDeclaredValues, ChannelsOutputPortSampleRate,
-    ChannelsOutputPortSampleType, ImageOutputPortFrameRate, OutputPortDeclaredNames, PortFamily,
+    ChannelsOutputPortSampleType, ImageOutputPortFrameRate, NodeValueLifetime,
+    OutputPortDeclaredNames, PortFamily,
 };
 
 use super::*;
@@ -140,6 +141,46 @@ fn input_delivery_profile_is_accepted() {
     assert_eq!(
         parsed.inputs[0].delivery_profile.as_deref(),
         Some("ordered")
+    );
+}
+
+/// An input names how long a value set live on it lives, kept when it names none.
+///
+/// Mental-revert: drop the `lifetime` arm and the first declaration is refused as an unknown
+/// port key; default the parsed port to reset and the second reads reset.
+#[test]
+fn an_input_declares_its_lifetime_and_is_kept_when_it_declares_none() {
+    let parsed = parse_ok(quote! {
+        execution = manual,
+        input("trigger_level", pin_type = Float, delivery_profile = "newest", lifetime = reset),
+        input("gain", pin_type = Float, delivery_profile = "newest"),
+    });
+    assert_eq!(parsed.inputs[0].lifetime, NodeValueLifetime::Reset);
+    assert_eq!(parsed.inputs[1].lifetime, NodeValueLifetime::Kept);
+    assert_eq!(
+        parsed.to_node_schema().inputs[0].lifetime,
+        NodeValueLifetime::Reset
+    );
+}
+
+/// A lifetime is the input's and is one of the lifetimes there are.
+#[test]
+fn a_lifetime_on_an_output_or_naming_no_lifetime_is_an_error() {
+    let on_an_output = parse_err(quote! {
+        execution = manual,
+        output("level", pin_type = Float, lifetime = reset),
+    });
+    assert!(
+        on_an_output.contains("`lifetime` is declared by an input"),
+        "{on_an_output}"
+    );
+    let no_such_lifetime = parse_err(quote! {
+        execution = manual,
+        input("gain", pin_type = Float, delivery_profile = "newest", lifetime = forever),
+    });
+    assert!(
+        no_such_lifetime.contains("a lifetime is one of `kept`, `reset`"),
+        "{no_such_lifetime}"
     );
 }
 
