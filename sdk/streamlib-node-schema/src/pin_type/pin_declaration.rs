@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::PinType;
+use super::{PinType, ProjectAssetMedia};
 use crate::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     ImageOutputPortFrameRate,
@@ -163,6 +163,24 @@ pub struct PinAnnotations {
     /// Where a Tensor output's values live.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub residency: Option<ArrayOutputPortResidency>,
+    /// That a String holds the UUID of one of the project's assets, so a client offers the
+    /// project's assets to pick from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_asset: Option<PinProjectAssetAnnotation>,
+}
+
+/// The project's assets a String holding an asset's UUID is picked from.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "contract-json-schema",
+    derive(schemars_1::JsonSchema),
+    schemars(crate = "schemars_1")
+)]
+#[serde(deny_unknown_fields)]
+pub struct PinProjectAssetAnnotation {
+    /// The media an asset must hold one of; empty, any asset of the project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media: Vec<ProjectAssetMedia>,
 }
 
 impl PinAnnotations {

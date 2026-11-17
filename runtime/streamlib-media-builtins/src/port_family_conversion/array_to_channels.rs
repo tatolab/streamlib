@@ -242,6 +242,73 @@ mod tests {
         (DataChannelPayloadDescriptor::array_frame(body), payload)
     }
 
+    /// The node catalog lists `ArrayToChannels`'s settings, as it registers, after its `array`
+    /// port in the order its config schema lists them, each an input taking no wire with its
+    /// default: `sample_rate` a 32-bit unsigned
+    /// Integer, `attribute` a String, and `channel_names`, a list, with no pin type.
+    ///
+    /// Mental-revert: rendering only the declared inputs leaves `array` alone in `inputs`.
+    #[test]
+    fn the_catalog_lists_its_settings_as_inputs_taking_no_wire_after_its_port() {
+        crate::register_media_builtin_node_types();
+        let descriptor = streamlib::sdk::nodes::NODE_REGISTRY
+            .descriptor(&ArrayToChannels::node_class_import_path())
+            .expect("the built-in registers");
+        let rendered = serde_json::to_value(
+            streamlib::sdk::json_schema::NodeDescriptorOutput::from(&descriptor),
+        )
+        .unwrap();
+        let inputs = rendered["inputs"].as_array().unwrap();
+        assert_eq!(
+            inputs
+                .iter()
+                .map(|input| input["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["array", "attribute", "channel_names", "sample_rate"],
+            "{rendered}"
+        );
+        let setting = |name: &str| inputs.iter().find(|input| input["name"] == name).unwrap();
+        for name in ["channel_names", "sample_rate", "attribute"] {
+            assert_eq!(
+                setting(name)["input_mode"],
+                serde_json::json!({"mode": "setting_only", "read": "at_setup"}),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            (
+                &setting("sample_rate")["pin_type"]["pin_type"],
+                &setting("sample_rate")["default_value"]
+            ),
+            (
+                &serde_json::json!({"type": "integer", "exact_size": "uint32"}),
+                &serde_json::json!(48_000)
+            )
+        );
+        assert_eq!(
+            (
+                &setting("attribute")["pin_type"]["pin_type"],
+                &setting("attribute")["default_value"]
+            ),
+            (
+                &serde_json::json!({"type": "string"}),
+                &serde_json::json!("samples")
+            )
+        );
+        assert!(
+            setting("channel_names").get("pin_type").is_none(),
+            "{rendered}"
+        );
+        assert_eq!(
+            setting("channel_names")["default_value"],
+            serde_json::json!(["value"])
+        );
+        assert!(
+            rendered.get("exposable_config_fields").is_none(),
+            "a natively compiled type exposes no config field: {rendered}"
+        );
+    }
+
     #[test]
     fn a_channels_block_converted_to_an_array_and_back_keeps_its_samples() {
         let samples: Vec<u8> = [0.25f64, 0.5, -0.25, -0.5]

@@ -371,6 +371,11 @@ export interface PinAnnotations {
    * Where a Tensor output's values live.
    */
   residency?: ArrayOutputPortResidency | null;
+  /**
+   * That a String holds the UUID of one of the project's assets, so a client offers the
+   * project's assets to pick from.
+   */
+  project_asset?: PinProjectAssetAnnotation | null;
 }
 
 /**
@@ -426,6 +431,16 @@ export type ChannelsOutputPortSampleType = "f32" | "f64";
  * Where an Array output's attributes live.
  */
 export type ArrayOutputPortResidency = "gpu" | "cpu";
+
+/**
+ * The project's assets a String holding an asset's UUID is picked from.
+ */
+export interface PinProjectAssetAnnotation {
+  /**
+   * The media an asset must hold one of; empty, any asset of the project.
+   */
+  media?: Array<ProjectAssetMedia>;
+}
 
 /**
  * The name of a built-in pin type: the `type` tag of its pin type.

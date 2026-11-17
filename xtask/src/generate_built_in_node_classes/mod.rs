@@ -38,6 +38,25 @@ struct BuiltInNodePortDescriptor {
     delivery_profile: Option<String>,
     #[serde(default)]
     family: Option<BuiltInNodePortFamilyDeclaration>,
+    /// How the input takes its value, tagged by `mode`; present on a setting, which the config
+    /// renders, so the docstring's inputs leave it out.
+    #[serde(default)]
+    input_mode: Option<BuiltInNodeInputMode>,
+}
+
+/// The part of an input's mode the generator reads: whether it is a setting.
+#[derive(Debug, Deserialize)]
+struct BuiltInNodeInputMode {
+    mode: String,
+}
+
+impl BuiltInNodePortDescriptor {
+    /// Whether the catalog lists this input as a setting, a config field the config renders.
+    fn is_a_setting(&self) -> bool {
+        self.input_mode
+            .as_ref()
+            .is_some_and(|input_mode| input_mode.mode == "setting_only")
+    }
 }
 
 /// The part of a port's family declaration a built-in's docstring renders.
@@ -236,10 +255,13 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
         &sentence(&descriptor.description),
         &refused_item_label,
     )?];
-    for (heading, ports) in [
-        ("Inputs", &descriptor.inputs),
-        ("Outputs", &descriptor.outputs),
-    ] {
+    let input_ports: Vec<&BuiltInNodePortDescriptor> = descriptor
+        .inputs
+        .iter()
+        .filter(|input| !input.is_a_setting())
+        .collect();
+    let output_ports: Vec<&BuiltInNodePortDescriptor> = descriptor.outputs.iter().collect();
+    for (heading, ports) in [("Inputs", &input_ports), ("Outputs", &output_ports)] {
         if !ports.is_empty() {
             class_doc_paragraphs.push(render_port_paragraph(heading, ports, &refused_item_label)?);
         }
@@ -265,7 +287,7 @@ fn render_one_built_in_node(descriptor: &BuiltInNodeDescriptor) -> Result<Render
 
 fn render_port_paragraph(
     heading: &str,
-    ports: &[BuiltInNodePortDescriptor],
+    ports: &[&BuiltInNodePortDescriptor],
     refused_item_label: &str,
 ) -> Result<String> {
     let mut paragraph = format!("{heading}:");

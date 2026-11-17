@@ -19,6 +19,13 @@ use serde_json::{Map, Value};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 
+mod config_fields_described_as_settings;
+
+pub(crate) use config_fields_described_as_settings::{
+    ConfigFieldDescribedAsASetting, refuse_a_config_field_named_as_an_input_port,
+    the_config_fields_a_node_of_the_type_can_expose, the_config_fields_described_as_settings,
+};
+
 /// How one node type splits its nodes' input values into a config and the values on its inputs.
 pub(crate) struct LegacyConfigOfANodeType {
     fields_its_config_schema_lists: HashSet<String>,
@@ -115,13 +122,27 @@ pub(crate) fn fields_the_config_schema_of_a_node_type_lists(
     node_types: &NodeTypesOneStreamResolves,
     node_type: &NodeClassImportPath,
 ) -> HashSet<String> {
-    node_types
+    let config_schema = node_types
         .descriptor(node_type)
-        .and_then(|descriptor| descriptor.config_schema)
-        .and_then(|config_schema| match config_schema.get("properties") {
-            Some(Value::Object(properties)) => Some(properties.keys().cloned().collect()),
-            _ => None,
-        })
+        .and_then(|descriptor| descriptor.config_schema);
+    the_properties_of_a_config_schema(config_schema.as_ref())
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Each field `config_schema` lists, by name, with its schema; `None` for no schema, or one
+/// listing no `properties`.
+pub(crate) fn the_properties_of_a_config_schema(
+    config_schema: Option<&Value>,
+) -> Option<&Map<String, Value>> {
+    config_schema?.get("properties")?.as_object()
+}
+
+/// What `schema` says of what it describes, its `description`; empty when it says nothing.
+pub(crate) fn the_description_of(schema: &Value) -> &str {
+    schema
+        .get("description")
+        .and_then(Value::as_str)
         .unwrap_or_default()
 }
 

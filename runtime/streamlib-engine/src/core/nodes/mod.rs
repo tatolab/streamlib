@@ -33,7 +33,9 @@ pub use node_instance_factory::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, NodeInstanceFactory,
 };
 pub use node_spec::NodeSpec;
-pub(crate) use node_types_one_stream_resolves::HowANodeOfADescribedTypeRuns;
+pub(crate) use node_types_one_stream_resolves::{
+    HowANodeOfADescribedTypeRuns, is_a_natively_compiled_node_type,
+};
 pub use node_types_one_stream_resolves::{InstalledModuleOfANodeType, NodeTypesOneStreamResolves};
 pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};

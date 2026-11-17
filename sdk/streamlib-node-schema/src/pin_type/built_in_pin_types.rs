@@ -89,6 +89,7 @@ pub enum PinAnnotationName {
     SampleRate,
     SampleType,
     Residency,
+    ProjectAsset,
 }
 
 /// One built-in pin type, as the contract states it.
@@ -111,7 +112,7 @@ pub struct PinTypeDescription {
 }
 
 use PinAnnotationName::{
-    Control, FrameRate, Meaning, Range, Residency, SampleRate, SampleType, Step, Unit,
+    Control, FrameRate, Meaning, ProjectAsset, Range, Residency, SampleRate, SampleType, Step, Unit,
 };
 
 const VALUE_THEN_STREAM: &[PinFlow] = &[PinFlow::Value, PinFlow::Stream];
@@ -122,6 +123,7 @@ const TRIGGER_ONLY: &[PinFlow] = &[PinFlow::Trigger];
 
 const NUMBER_ANNOTATIONS: &[PinAnnotationName] = &[Range, Step, Unit, Meaning, Control];
 const VALUE_ANNOTATIONS: &[PinAnnotationName] = &[Meaning, Control];
+const STRING_ANNOTATIONS: &[PinAnnotationName] = &[Meaning, Control, ProjectAsset];
 const MEANING_ONLY: &[PinAnnotationName] = &[Meaning];
 
 /// One row per built-in pin type, in [`BuiltInPinTypeName::EVERY_NAME`] order.
@@ -178,7 +180,7 @@ pub fn built_in_pin_type(name: BuiltInPinTypeName) -> PinTypeDescription {
             "String",
             "Text.",
             VALUE_THEN_STREAM,
-            VALUE_ANNOTATIONS,
+            STRING_ANNOTATIONS,
             &["str"],
             "\"string\"",
         ),

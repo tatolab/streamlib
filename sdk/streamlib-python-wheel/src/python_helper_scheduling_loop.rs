@@ -16,7 +16,7 @@ use streamlib::sdk::execution::node_scheduling_loop::{
     run_continuous_scheduling_loop_on_its_stream_clock,
     run_continuous_scheduling_loop_on_real_time, run_reactive_scheduling_loop,
 };
-use streamlib::sdk::iceoryx2::InputMailboxesInner;
+use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
 
 use crate::python_helper_stream_clock::{
     HelperProcessStreamClock, helper_stream_clock_open_step_index,
@@ -221,6 +221,10 @@ impl NodeSchedulingLoopHost for NodeSchedulingLoopHostInThisHelper {
 
     fn input_mailboxes(&self) -> Option<Arc<InputMailboxesInner>> {
         self.link_data_access().input_mailboxes_of_this_helper()
+    }
+
+    fn output_writer(&self) -> Option<Arc<OutputWriterInner>> {
+        self.link_data_access().output_writer_of_this_helper()
     }
 
     fn control_arrival_fd(&self) -> Option<RawFd> {

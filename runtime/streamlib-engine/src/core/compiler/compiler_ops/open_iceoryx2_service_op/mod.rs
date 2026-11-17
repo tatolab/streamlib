@@ -326,6 +326,7 @@ fn open_iceoryx2_service_read_at(
         open_the_source_side_of_a_link(graph, &from_port, link_id, &destination, iceoryx2_node)?;
     let wire_reply_awaited_from_the_destination =
         open_the_destination_side_of_a_link(graph, link_id, &opened_source_side, destination)?;
+    opened_source_side.send_each_kept_message_to_a_reader_it_missed();
 
     let link = graph
         .traversal_mut()
