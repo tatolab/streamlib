@@ -516,10 +516,10 @@ impl ControlOperationDispatcher {
                 })
                 .await
                 .map_err(|not_in_line| {
-                    format!(
+                    not_in_line.with_its_words_after(format_args!(
                         "{method_name} applied its transaction, and the loaded streams were not \
-                         brought in line with it: {not_in_line}"
-                    )
+                         brought in line with it"
+                    ))
                 })?;
             answered.action = loads_queued
                 .into_iter()

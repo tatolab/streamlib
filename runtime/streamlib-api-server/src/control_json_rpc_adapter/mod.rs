@@ -851,17 +851,19 @@ fn the_json_rpc_error_of_a_contract_version_mismatch(
     )
 }
 
-/// `refusal` as `/control` carries it: a suggested call is kept only when `/control` serves it,
-/// so a discovery tool only an agent reaches is never suggested here.
+/// `refusal` as `/control` carries it: a suggested call is kept only when `/control` serves its
+/// operation, so a discovery tool only an agent reaches is never suggested here. Its params need
+/// no second read: `the_suggested_call` makes only a suggestion whose params read.
 fn the_data_of_a_refusal(mut refusal: ProjectActionRefusalOnTheWire) -> Value {
-    let suggests_a_call_control_does_not_serve = refusal.suggested_call.as_ref().is_some_and(
-        |SuggestedOperationCall { operation, params }| {
-            ControlOperationCall::parse(operation, Some(Value::Object(params.clone()))).is_err()
-        },
-    );
-    if suggests_a_call_control_does_not_serve {
-        refusal.suggested_call = None;
-    }
+    refusal.suggested_call =
+        refusal
+            .suggested_call
+            .take()
+            .filter(|SuggestedOperationCall { operation, .. }| {
+                streamlib_control_contract::CONTROL_OPERATIONS
+                    .iter()
+                    .any(|declaration| declaration.method_name == operation)
+            });
     refusal.the_refusal_as_json()
 }
 

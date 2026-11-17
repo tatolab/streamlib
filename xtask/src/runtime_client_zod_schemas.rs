@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 use serde_json::{Map, Value};
 
 use crate::generate_runtime_client::{
-    COMPONENT_SCHEMA_REFERENCE_PREFIX, GENERATED_SOURCE_HEADER, is_a_wide_integer_format,
-    property_key,
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, GENERATED_SOURCE_HEADER, READS_ITS_DEFAULT_MARK,
+    is_a_wide_integer_format, property_key,
 };
 
 /// One method or notification whose schemas `ControlSchemas` holds.
@@ -188,11 +188,16 @@ impl ZodSourceWriter<'_> {
         }
         if let Some((closed, fallback)) = the_closed_set_and_fallback_of_a_set_that_may_grow(schema)
         {
-            return format!(
+            let with_fallback = format!(
                 "{}.catch({})",
                 self.expression_of(&closed, indent_level),
                 json_text_of(fallback)
             );
+            return match fallback {
+                Value::String(_) => format!("z.string().pipe({with_fallback})"),
+                Value::Number(_) => format!("z.number().pipe({with_fallback})"),
+                _ => with_fallback,
+            };
         }
         if let Some(constant) = schema.get("const") {
             return literal_expression_of(constant);
@@ -352,9 +357,11 @@ impl ZodSourceWriter<'_> {
         let mut shape = String::from("{\n");
         for (property_name, property_schema) in properties.into_iter().flatten() {
             let optional = if required.contains(&property_name.as_str()) {
-                ""
+                String::new()
+            } else if property_schema[READS_ITS_DEFAULT_MARK] == Value::Bool(true) {
+                format!(".default({})", json_text_of(&property_schema["default"]))
             } else {
-                ".optional()"
+                ".optional()".to_owned()
             };
             let _ = writeln!(
                 shape,
@@ -376,7 +383,8 @@ impl ZodSourceWriter<'_> {
 }
 
 /// A set marked `x-may-grow`, without the mark, and the member a value it does not name reads
-/// as: its last, as the runtime's `#[serde(other)]` reads one. `None` for any other schema.
+/// as: its last, as the runtime's `#[serde(other)]` reads one. Only a value of the members' own
+/// JSON type falls back; any other is refused. `None` for any other schema.
 fn the_closed_set_and_fallback_of_a_set_that_may_grow(schema: &Value) -> Option<(Value, &Value)> {
     if schema.get("x-may-grow") != Some(&Value::Bool(true)) {
         return None;
@@ -450,11 +458,11 @@ mod tests {
                 ],
                 "x-may-grow": true,
             })),
-            "z.union([z.literal(\"operation_not_found\"), z.literal(\"refused\")]).catch(\"refused\")"
+            "z.string().pipe(z.union([z.literal(\"operation_not_found\"), z.literal(\"refused\")]).catch(\"refused\"))"
         );
         assert_eq!(
             expression_outside_any_component(&json!({ "enum": ["a", "b"], "x-may-grow": true })),
-            "z.enum([\"a\", \"b\"]).catch(\"b\")"
+            "z.string().pipe(z.enum([\"a\", \"b\"]).catch(\"b\"))"
         );
         assert_eq!(
             expression_outside_any_component(&json!({ "enum": ["a", "b"] })),

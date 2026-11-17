@@ -240,11 +240,9 @@ impl ControlOperationDispatcher {
                 })
         })
         .await
-        .map_err(|not_run| {
-            ControlOperationRefusal::Failed(format!(
-                "subscribe_stream_graph_changes failed: {not_run}"
-            ))
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "subscribe_stream_graph_changes failed: the subscription",
+        ))?
     }
 
     pub(super) async fn subscribe_to_stream_action_changes(
@@ -265,10 +263,8 @@ impl ControlOperationDispatcher {
                 .collect(),
         })
         .await
-        .map_err(|not_run| {
-            ControlOperationRefusal::Failed(format!(
-                "subscribe_stream_action_changes failed: {not_run}"
-            ))
-        })
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "subscribe_stream_action_changes failed: the subscription",
+        ))
     }
 }

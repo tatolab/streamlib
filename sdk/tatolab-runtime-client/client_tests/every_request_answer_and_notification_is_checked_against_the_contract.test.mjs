@@ -149,6 +149,48 @@ test("a refusal code this client does not know reads as refused and keeps the re
   }
 });
 
+test("a refusal from a runtime that sends no code reads as refused", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const refusal = { action: "open_project", refused_operation_index: 0, runtime_words: "the runtime refused it" };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: refusal.runtime_words, data: refusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.deepEqual(rejection.refusal, { ...refusal, refusal_code: "refused" });
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("a refusal code that is not a string is not read as a refusal", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold();
+  try {
+    const client = await TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    const opened = client.open_project({ project_directory: "/somewhere" });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const notARefusal = { refusal_code: 42, action: "open_project", runtime_words: "the runtime refused it" };
+    localApi.writeOnTheConnection(
+      JSON.stringify({ jsonrpc: "2.0", id: localApi.requestsHeardOnTheConnection[0].id, error: { code: 1, message: notARefusal.runtime_words, data: notARefusal } }),
+    );
+    await assert.rejects(opened, (rejection) => {
+      assert.ok(rejection instanceof ControlOperationError);
+      assert.equal(rejection.refusal, undefined);
+      return true;
+    });
+    await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
 test("an integer past Number.MAX_SAFE_INTEGER keeps its digits as a bigint, both ways", async () => {
   const localApi = await startALocalApiThatAnswersOnlyWhenTold();
   try {

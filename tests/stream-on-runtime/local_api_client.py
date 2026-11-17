@@ -258,7 +258,7 @@ class LocalApiClient:
         stated = result.content[0]
         assert isinstance(stated, TextContent), result.content
         refusal = json.loads(stated.text)
-        assert refusal == (result.structuredContent or {}).get("refusal"), result
+        assert refusal == (result.structured_content or {}).get("refusal"), result
         return str(refusal["runtime_words"])
 
     def await_every_node_running(

@@ -214,6 +214,19 @@ impl ControlOperationRefusal {
         }
     }
 
+    /// This refusal, of the same kind, its words led by `context`.
+    pub(crate) fn with_its_words_after(self, context: impl std::fmt::Display) -> Self {
+        match self {
+            Self::Failed(why) => Self::Failed(format!("{context}: {why}")),
+            Self::RuntimeFailed(why) => Self::RuntimeFailed(format!("{context}: {why}")),
+            Self::RefusedAction(mut refused) => {
+                refused.runtime_words = format!("{context}: {}", refused.runtime_words);
+                Self::RefusedAction(refused)
+            }
+            Self::ContractVersionMismatch(mismatch) => Self::ContractVersionMismatch(mismatch),
+        }
+    }
+
     /// The refusal of a task handed off the async runtime that did not finish, `task` naming it,
     /// as in `"logs failed: the read"`.
     pub(crate) fn the_task_did_not_finish(
