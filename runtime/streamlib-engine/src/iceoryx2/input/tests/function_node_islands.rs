@@ -296,10 +296,12 @@ fn an_unlinked_input_port_reads_its_pin_value_until_a_link_feeds_it() {
 }
 
 /// A node in this process handed its unlinked input values reads a number as itself and a bool
-/// as 1 or 0, stamped with its stream's time; a value of another kind reaches no port.
+/// as 1 or 0, stamped with its stream's time, at its port's cast name; a value of another kind
+/// reaches no port.
 ///
 /// Mental-revert: reading a bool as no number leaves `armed` reading nothing; stamping with media
-/// time ignores the stream clock reached.
+/// time ignores the stream clock reached; holding `Wet Mix` under its raw name leaves the read of
+/// `wet-mix` with nothing.
 #[test]
 fn an_unlinked_input_reads_its_number_or_bool_value_at_stream_time() {
     use crate::core::context::{StreamClock, StreamClockSpec};
@@ -316,7 +318,7 @@ fn an_unlinked_input_reads_its_number_or_bool_value_at_stream_time() {
     ));
     mailboxes.reach_the_stream_clock(Arc::clone(&half_speed_since_a_second_ago));
     mailboxes.read_each_unlinked_input_as_its_value(
-        serde_json::json!({"gain": 2, "armed": true, "label": "loud"})
+        serde_json::json!({"gain": 2, "armed": true, "label": "loud", "Wet Mix": 0.5, "!!": 1})
             .as_object()
             .unwrap(),
     );
@@ -335,6 +337,16 @@ fn an_unlinked_input_reads_its_number_or_bool_value_at_stream_time() {
         1.0f64.to_le_bytes()
     );
     assert!(!mailboxes.has_port("label"));
+    assert_eq!(
+        mailboxes
+            .read_raw("wet-mix")
+            .unwrap()
+            .unwrap()
+            .payload
+            .bytes(),
+        0.5f64.to_le_bytes(),
+        "an input is held at its port's cast name, which a read looks up"
+    );
     assert!(
         half_speed_since_a_second_ago.stream_time_ns_at(machine_before_ns) <= gain.timestamp_ns
             && gain.timestamp_ns

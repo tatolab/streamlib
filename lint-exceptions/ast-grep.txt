@@ -110,7 +110,6 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/input_port_pin_values.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/node_interpreter_shutdown_ladder.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/project_node_types_listed_from_source.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_island.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_native_evaluator.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_program.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/compiler/compiler_ops/spawn_node_op.rs

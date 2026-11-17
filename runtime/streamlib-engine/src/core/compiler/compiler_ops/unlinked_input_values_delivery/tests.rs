@@ -105,7 +105,10 @@ fn a_value_set_while_a_node_is_handed_its_values_is_the_one_it_is_left_with() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod a_shader_node_in_this_process {
     use super::*;
-    use crate::core::compiler::compiler_ops::shader_node_island::place_each_shader_node_island_on_its_host;
+    use crate::core::compiler::compiler_ops::shader_node_island::{
+        place_each_shader_node_island_on_its_host,
+        the_host_input_port_a_fused_shader_node_input_is_read_at,
+    };
     use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
     use crate::core::compiler::compiler_ops::shader_node_native_evaluator::ShaderNodeNativeEvaluator;
     use crate::core::descriptors::{

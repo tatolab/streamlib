@@ -6,7 +6,10 @@ use std::sync::atomic::Ordering;
 use parking_lot::RwLock;
 use serde_json::{Value, json};
 
-use super::super::live_graph_edits::set_the_saved_value_and_hand_it_over;
+use super::super::live_graph_edits::{
+    SavedValuesOfAKeptNode, set_the_saved_value_and_hand_it_over,
+    set_the_saved_values_of_each_kept_node_and_hand_them_over,
+};
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::{
     a_graph_resolving_three_function_node_types, a_helper_reader_before_its_setup, add_a_node, link,
@@ -384,6 +387,77 @@ fn a_function_node_read_inside_an_island()
     )
     .unwrap();
     (graph, remap, delivery)
+}
+
+fn the_saved_values_of(node_run_id: &NodeRunId, pins: Value) -> SavedValuesOfAKeptNode {
+    SavedValuesOfAKeptNode {
+        node_run_id: node_run_id.clone(),
+        pins: pins.as_object().unwrap().clone(),
+        studio: serde_json::Map::new(),
+    }
+}
+
+/// The saved values a reconcile sets on the nodes it keeps reach each: the island evaluating a
+/// function node, and a node's helper. A helper refusing them leaves the graph holding the
+/// document's values, the next kept node is still handed its own, and the refusal is answered
+/// once every node is set.
+///
+/// Mental-revert: leaving the island to a compile hands the reader no island with 0.25; handing
+/// the helper nothing leaves it on its default; returning at the refusal leaves the second meter
+/// unset; logging the refusal and answering `Ok` reports it as done.
+#[test]
+fn a_reconcile_hands_each_kept_node_the_document_values_and_answers_a_refusal_after_the_last() {
+    let (graph, remap, island_delivery) = a_function_node_read_inside_an_island();
+    let island_graph = RwLock::new(graph);
+    set_the_saved_values_of_each_kept_node_and_hand_them_over(
+        &island_graph,
+        vec![the_saved_values_of(&remap, json!({ "x": 0.25 }))],
+    )
+    .unwrap();
+    assert_eq!(
+        island_delivery
+            .late_fed_function_node_islands
+            .lock()
+            .last()
+            .map(|island| island["nodes"][0]["pins"].clone()),
+        Some(json!({ "x": 0.25 }))
+    );
+
+    let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
+    let (refusing_meter, refusing_delivery) = a_level_meter_past_its_setup(&mut graph);
+    let (level_meter, delivery) = a_level_meter_past_its_setup(&mut graph);
+    let helper_graph = RwLock::new(graph);
+    refusing_delivery
+        .refuses_input_values
+        .store(true, Ordering::SeqCst);
+
+    let refused = set_the_saved_values_of_each_kept_node_and_hand_them_over(
+        &helper_graph,
+        vec![
+            the_saved_values_of(&refusing_meter, json!({ "level": 0.1 })),
+            the_saved_values_of(&level_meter, json!({ "level": 0.75 })),
+        ],
+    );
+
+    let refusal = refused.expect_err("the refusal is answered").to_string();
+    assert!(refusal.contains(&refusing_meter.to_string()), "{refusal}");
+    assert!(!refusal.contains(&level_meter.to_string()), "{refusal}");
+    let the_pins_of = |node_run_id: &NodeRunId| {
+        helper_graph
+            .read()
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .unwrap()
+            .pins["level"]
+            .clone()
+    };
+    assert_eq!(the_pins_of(&refusing_meter), json!(0.1));
+    assert_eq!(the_pins_of(&level_meter), json!(0.75));
+    assert_eq!(
+        delivery.input_values_handed_over.lock().last().unwrap()["level"],
+        json!(0.75)
+    );
 }
 
 /// Mental-revert: returning the island's refusal without putting the set back leaves the

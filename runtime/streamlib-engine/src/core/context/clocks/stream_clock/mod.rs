@@ -859,10 +859,7 @@ fn machine_monotonic_now_ns() -> i64 {
 /// Stream time now on `stream_clock`, in nanoseconds; media time where no stream clock is
 /// reached yet.
 pub(crate) fn stream_time_now_ns_on(stream_clock: Option<&StreamClock>) -> i64 {
-    stream_clock.map_or_else(
-        || crate::core::media_clock::MediaClock::now().as_nanos() as i64,
-        StreamClock::now_ns,
-    )
+    stream_clock.map_or_else(machine_monotonic_now_ns, StreamClock::now_ns)
 }
 
 #[cfg(test)]

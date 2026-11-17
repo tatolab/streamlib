@@ -8,14 +8,9 @@ use serde_json::{Map, Value};
 use streamlib_project_repository::STREAM_DOCUMENT_ASSET_KEY;
 use uuid::Uuid;
 
-use crate::core::compiler::compiler_ops::function_node_island::{
-    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
-    runs_inside_the_read_of_each_node_it_feeds,
-};
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
-use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
@@ -33,6 +28,9 @@ use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
     ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl,
     describe_the_type_an_add_names_when_it_must, disconnect_impl, remove_node_impl,
+};
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
+    SavedValuesOfAKeptNode, set_the_saved_values_of_each_kept_node_and_hand_them_over,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -87,7 +85,8 @@ impl LoadedStreamInThisRuntime {
     /// its UUID: a node the document no longer holds, or holds as another type, taken out; a
     /// kept node renamed, reconfigured and repinned to the document's; each new node added;
     /// and the links made to be the document's. The document is resolved and validated whole,
-    /// as a load is, before the live graph is touched.
+    /// as a load is, before the live graph is touched. A kept node not handed the values the
+    /// document sets on it fails the reconcile once every node and link is made.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         mut graph_document: Value,
@@ -168,6 +167,7 @@ impl LoadedStreamInThisRuntime {
 
         let kept_live_nodes = self.the_live_nodes();
         let mut kept_live_nodes_to_rename = Vec::new();
+        let mut kept_nodes_whose_saved_values_change = Vec::new();
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
             if live_node.display_name != cast_name(&document_node.name)? {
@@ -252,13 +252,19 @@ impl LoadedStreamInThisRuntime {
                 )?;
             }
             if live_node.pins != document_pins || live_node.studio != document_node.studio {
-                self.set_the_saved_values_and_studio_fields_on_a_kept_node(
-                    &live_node.node_run_id,
-                    document_pins,
-                    document_node.studio.clone(),
-                );
+                kept_nodes_whose_saved_values_change.push(SavedValuesOfAKeptNode {
+                    node_run_id: live_node.node_run_id.clone(),
+                    pins: document_pins,
+                    studio: document_node.studio.clone(),
+                });
             }
         }
+        let saved_values_handed_over = self.with_no_other_input_value_change(|| {
+            set_the_saved_values_of_each_kept_node_and_hand_them_over(
+                self.compiler.graph_lock(),
+                kept_nodes_whose_saved_values_change,
+            )
+        });
 
         let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
             .the_live_nodes()
@@ -296,7 +302,7 @@ impl LoadedStreamInThisRuntime {
             .await?;
         }
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
+        saved_values_handed_over
     }
 
     /// Describe each type `graph_whose_every_node_holds_a_uuid` names into this stream, then
@@ -389,51 +395,6 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Each node the live graph holds as it was given, as a reconcile compares it.
-    /// Set the saved values `pins` and the studio fields `studio` on the kept node
-    /// `node_run_id`, while no other input value of the stream changes, then hand the node what
-    /// its inputs read now: each island evaluating it under the graph's write lock, its helper
-    /// or itself with the lock released. A node or island not handed its values is logged and
-    /// the reconcile goes on, the graph holding the values the document does.
-    fn set_the_saved_values_and_studio_fields_on_a_kept_node(
-        &self,
-        node_run_id: &NodeRunId,
-        pins: Map<String, Value>,
-        studio: Map<String, Value>,
-    ) {
-        self.with_no_other_input_value_change(|| {
-            let handed_to_each_island = self.compiler.scope(|this_streams_graph, _tx| {
-                if let Some(node) = this_streams_graph
-                    .traversal_mut()
-                    .v(node_run_id)
-                    .first_mut()
-                {
-                    node.pins = pins;
-                    node.studio = studio;
-                }
-                if !runs_inside_the_read_of_each_node_it_feeds(this_streams_graph, node_run_id) {
-                    return Ok(());
-                }
-                hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
-                    this_streams_graph,
-                    std::slice::from_ref(node_run_id),
-                )
-            });
-            let handed_over = handed_to_each_island.and_then(|()| {
-                deliver_the_unlinked_input_values_of_each_node(
-                    self.compiler.graph_lock(),
-                    std::slice::from_ref(node_run_id),
-                )
-            });
-            if let Err(not_handed_over) = handed_over {
-                tracing::error!(
-                    %not_handed_over,
-                    %node_run_id,
-                    "a node the reconcile kept was not handed the values the graph document sets"
-                );
-            }
-        });
-    }
-
     pub(in crate::core::runtime) fn the_live_nodes(&self) -> Vec<LiveNodeAsTheGraphHoldsIt> {
         self.compiler
             .scope(|this_streams_graph, _tx| the_live_nodes_as_given_of(this_streams_graph))

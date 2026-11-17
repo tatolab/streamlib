@@ -14,14 +14,13 @@ use serde_json::{Map, Value};
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use super::shader_node_island::{
-    is_a_call_inside_a_shader_node_island, is_a_shader_node,
-    the_host_input_port_a_fused_shader_node_input_is_read_at,
-    the_host_of_the_shader_node_island_of,
+    is_a_shader_node, the_host_input_port_a_member_input_is_read_at,
+    the_host_of_the_shader_node_island_of, the_members_of_the_shader_node_island_hosted_by,
 };
 use crate::core::error::Result;
 use crate::core::graph::input_values::the_unlinked_input_values;
 use crate::core::graph::{
-    Graph, GraphNode, GraphNodeWithComponents, Link, NodeInstanceComponent, NodeRunId,
+    Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent, NodeRunId,
     OutOfProcessLinkWiringComponent,
 };
 use crate::core::nodes::{NodeInstance, OutOfProcessLinkWiringEnvelope};
@@ -117,72 +116,105 @@ fn the_unlinked_input_values_of_the_shader_node_island(
     graph: &Graph,
     host_id: &NodeRunId,
 ) -> Map<String, Value> {
-    let mut input_values = Map::new();
-    let mut members = vec![host_id.clone()];
-    while let Some(member_id) = members.pop() {
-        let Some(member) = graph.traversal().v(&member_id).first() else {
-            continue;
-        };
-        for (input, value) in the_unlinked_input_values(graph, member) {
-            let read_at = if member_id == *host_id {
-                input
-            } else {
-                the_host_input_port_a_fused_shader_node_input_is_read_at(
-                    host_id, &member_id, &input,
-                )
-                .port_name()
-                .to_string()
-            };
-            input_values.insert(read_at, value);
-        }
-        let links_in: Vec<&Link> = graph.traversal().v(&member_id).in_e().iter().collect();
-        members.extend(
-            links_in
+    the_members_of_the_shader_node_island_hosted_by(graph, host_id)
+        .iter()
+        .filter_map(|member_id| graph.traversal().v(member_id).first())
+        .flat_map(|member| {
+            the_unlinked_input_values(graph, member)
                 .into_iter()
-                .filter(|link| is_a_call_inside_a_shader_node_island(graph, link))
-                .map(|link| link.source().node_run_id().clone()),
-        );
-    }
-    input_values
+                .map(|(input, value)| {
+                    let read_at =
+                        the_host_input_port_a_member_input_is_read_at(host_id, &member.id, &input);
+                    (read_at, value)
+                })
+        })
+        .collect()
 }
 
 /// Hand each of `node_ids` in `graph`, once built, the values it reads while no link feeds its
 /// inputs, the graph read to find each and released before any is handed; a function node read
-/// inside an island is left out, its island carrying its values. The values are read again after
-/// they are handed, and a node whose values changed meanwhile is handed them again, so a value
-/// set while it was handed its own is the one it is left with.
+/// inside an island is left out, its island carrying its values, and the shader nodes of one
+/// island are handed theirs once, through its host.
+///
+/// The values are read again after they are handed, and a node whose values changed meanwhile is
+/// handed them again, so a value set while it was handed its own is the one it is left with. A
+/// node not handed its values ends the pass, and the nodes handed theirs before it are read again
+/// before the first refusal is answered. After [`HAND_OVER_PASSES_AT_MOST`] passes, a node whose
+/// values still change is logged and left; a set landing after the last pass hands that node
+/// its own value.
 pub(crate) fn deliver_the_unlinked_input_values_of_each_node(
     graph: &RwLock<Graph>,
     node_ids: &[NodeRunId],
 ) -> Result<()> {
-    let mut node_ids_to_hand = node_ids.to_vec();
-    while !node_ids_to_hand.is_empty() {
-        let mut values_handed = Vec::with_capacity(node_ids_to_hand.len());
-        for delivery in the_delivery_to_each_node(graph, &node_ids_to_hand) {
-            values_handed.push(
-                delivery
-                    .as_ref()
-                    .and_then(UnlinkedInputValuesDelivery::input_values)
-                    .cloned(),
-            );
-            delivery.map_or(Ok(()), UnlinkedInputValuesDelivery::hand_over)?;
+    let mut node_ids_to_hand = the_node_each_is_handed_its_values_through(graph, node_ids);
+    let mut first_not_handed_over = None;
+    for _ in 0..HAND_OVER_PASSES_AT_MOST {
+        if node_ids_to_hand.is_empty() {
+            break;
         }
-        let read_again = the_delivery_to_each_node(graph, &node_ids_to_hand);
-        node_ids_to_hand = node_ids_to_hand
+        let deliveries = the_delivery_to_each_node(graph, &node_ids_to_hand);
+        let mut handed = Vec::with_capacity(node_ids_to_hand.len());
+        for (node_id, delivery) in node_ids_to_hand.into_iter().zip(deliveries) {
+            let values_handed = delivery
+                .as_ref()
+                .and_then(UnlinkedInputValuesDelivery::input_values)
+                .cloned();
+            if let Some(Err(not_handed_over)) = delivery.map(UnlinkedInputValuesDelivery::hand_over)
+            {
+                first_not_handed_over.get_or_insert(not_handed_over);
+                break;
+            }
+            handed.push((node_id, values_handed));
+        }
+        let node_ids_handed: Vec<NodeRunId> =
+            handed.iter().map(|(node_id, _)| node_id.clone()).collect();
+        let read_again = the_delivery_to_each_node(graph, &node_ids_handed);
+        node_ids_to_hand = handed
             .into_iter()
-            .zip(values_handed)
             .zip(read_again)
-            .filter(|((_, handed), again)| {
+            .filter(|((_, values_handed), again)| {
                 again
                     .as_ref()
                     .and_then(UnlinkedInputValuesDelivery::input_values)
-                    != handed.as_ref()
+                    != values_handed.as_ref()
             })
             .map(|((node_id, _), _)| node_id)
             .collect();
     }
-    Ok(())
+    if !node_ids_to_hand.is_empty() {
+        tracing::warn!(
+            nodes = ?node_ids_to_hand,
+            "the values of these nodes changed on each of {HAND_OVER_PASSES_AT_MOST} hand-overs; \
+             the next set on each hands it its value"
+        );
+    }
+    first_not_handed_over.map_or(Ok(()), Err)
 }
+
+/// Each node of `graph` that `node_ids` are handed their values through, once: a shader node
+/// through the host of its island, which takes the values of every member, and any other node
+/// through itself.
+fn the_node_each_is_handed_its_values_through(
+    graph: &RwLock<Graph>,
+    node_ids: &[NodeRunId],
+) -> Vec<NodeRunId> {
+    let graph = graph.read();
+    let mut handed_through: Vec<NodeRunId> = Vec::with_capacity(node_ids.len());
+    for node_id in node_ids {
+        let through = if is_a_shader_node(&graph, node_id) {
+            the_host_of_the_shader_node_island_of(&graph, node_id)
+        } else {
+            node_id.clone()
+        };
+        if !handed_through.contains(&through) {
+            handed_through.push(through);
+        }
+    }
+    handed_through
+}
+
+/// How many times a compile hands a node its values while they keep changing under it.
+const HAND_OVER_PASSES_AT_MOST: usize = 4;
 
 /// How each of `node_ids` in `graph` takes its values, at its index; none for a node the graph
 /// no longer holds.

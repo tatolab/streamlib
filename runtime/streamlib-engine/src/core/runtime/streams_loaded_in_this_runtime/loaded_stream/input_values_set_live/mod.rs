@@ -18,12 +18,11 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
-use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
-    refuse_an_input_value_its_input_does_not_take, the_input_value_change,
-    the_lifetime_of_the_input,
+    refuse_an_input_value_its_input_does_not_take, the_control_value_of_a_pin,
+    the_input_value_change, the_lifetime_of_the_input,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,

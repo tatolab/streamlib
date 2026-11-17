@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::core::context::stream_time_now_ns_on;
+use crate::core::graph::cast_exposed_name_to_url_safe;
 use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::iceoryx2::function_node_island_input_port::{
     FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
@@ -117,15 +118,20 @@ impl InputMailboxesInner {
 
     /// Read each input of `input_values` that holds a number or a bool as that number, 1 or 0
     /// for a bool, while no link feeds it, stamped with stream time at each read, in place of
-    /// the values read before; an input left out, or holding a value of another kind, reads
-    /// only its links again.
+    /// the values read before; each is held at its port's cast name, which every read looks up.
+    /// An input left out, holding a value of another kind, or whose name casts to nothing,
+    /// reads only its links again.
     pub fn read_each_unlinked_input_as_its_value(
         &self,
         input_values: &serde_json::Map<String, serde_json::Value>,
     ) {
         let numbers = input_values
             .iter()
-            .filter_map(|(input, value)| Some((input.clone(), the_control_value_of_a_pin(value)?)))
+            .filter_map(|(input, value)| {
+                let number = the_control_value_of_a_pin(value)?;
+                let port = cast_exposed_name_to_url_safe(input).ok()?.into_owned();
+                Some((port, number))
+            })
             .collect();
         let stream_clock = Arc::clone(&self.stream_clock);
         self.read_each_unlinked_input_port_as_its_pin_value(
