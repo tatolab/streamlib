@@ -211,7 +211,8 @@ fn a_shader_nodes_input_values_are_checked() {
 }
 
 /// A value set live on a function node and on a shader node of a loaded stream not started is
-/// the pin value each node holds; taken off, the node holds none.
+/// the pin value each node holds in the graph; taken off, the node holds none. It proves what the
+/// graph holds, not that a running shader's evaluator reads it.
 #[test]
 #[serial_test::serial]
 fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_holds() {

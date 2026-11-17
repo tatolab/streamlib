@@ -116,6 +116,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream.stream_operations.as_ref(),
                         &set_on,
                         config,
+                        None,
                     )
                     .map_err(refused)?
                 }
@@ -222,10 +223,20 @@ impl StreamGraphTransactionExecutor<'_> {
                 if let Some(configured) =
                     self.the_node_an_action_sets_values_on(stream_id, level, node, staged)
                 {
+                    let config_the_running_node_holds = if level.is_empty() {
+                        let rendered_graph = self
+                            .async_runtime
+                            .block_on(stream_operations.to_json_async())
+                            .map_err(|refusal| refusal.to_string())?;
+                        the_config_a_running_node_holds(&rendered_graph, configured.id)
+                    } else {
+                        None
+                    };
                     let sets = the_input_value_sets_a_config_stands_for(
                         stream_operations.as_ref(),
                         &configured,
                         config,
+                        config_the_running_node_holds.as_ref(),
                     )?;
                     return self.apply_each_input_value_set(
                         stream_id,
@@ -335,6 +346,39 @@ pub(super) fn the_link_overriding_the_input(
         })
 }
 
+/// The value node `node` of `rendered_graph`, a running stream's `graph` render, holds on its
+/// input `input`: its pin value, else its config field; `None` when it holds none, so a set
+/// made on the running node is reversed to what the node held, saved or live.
+pub(super) fn the_value_a_running_node_holds_on_the_input(
+    rendered_graph: &Value,
+    node: Uuid,
+    input: &str,
+) -> Option<Value> {
+    let rendered_node = rendered_graph["nodes"]
+        .as_array()?
+        .iter()
+        .find(|rendered| rendered["id"] == node.to_string())?;
+    rendered_node["pins"]
+        .get(input)
+        .or_else(|| rendered_node["config"].get(input))
+        .filter(|value| !value.is_null())
+        .cloned()
+}
+
+/// The config node `node` of `rendered_graph`, a running stream's `graph` render, holds; `None`
+/// when the render holds no such node or it holds no config.
+fn the_config_a_running_node_holds(
+    rendered_graph: &Value,
+    node: Uuid,
+) -> Option<Map<String, Value>> {
+    rendered_graph["nodes"]
+        .as_array()?
+        .iter()
+        .find(|rendered| rendered["id"] == node.to_string())?["config"]
+        .as_object()
+        .cloned()
+}
+
 /// The type of `node`, refused when it names none.
 fn the_node_type_of(node: &StreamGraphDocumentNode) -> Result<NodeClassImportPath, String> {
     NodeClassImportPath::new(&node.node_type)
@@ -368,11 +412,13 @@ pub(super) fn refuse_a_value_the_input_does_not_take(
 /// The input values `config`, sent to `set_node_config`, sets on `configured`, checked: each it
 /// names, even one the graph document already holds, since the running node may hold another
 /// set live, and, on a node type that takes a config, each config field it does not name taken
-/// off.
+/// off, among them each `config_the_running_node_holds` holds live alone, so the config is
+/// replaced whole.
 fn the_input_value_sets_a_config_stands_for(
     stream_operations: &dyn RuntimeOperations,
     configured: &StreamGraphDocumentNode,
     config: &Map<String, Value>,
+    config_the_running_node_holds: Option<&Map<String, Value>>,
 ) -> Result<Vec<(String, Option<Value>)>, GraphRequestRefusal> {
     let node_type = the_node_type_of(configured)?;
     let mut sets: Vec<(String, Option<Value>)> = config
@@ -402,14 +448,21 @@ fn the_input_value_sets_a_config_stands_for(
                 .into());
             }
         };
-        sets.extend(
-            config_held
-                .keys()
-                .filter(|input| {
-                    !config.contains_key(*input) && configured.input_values.contains_key(*input)
-                })
-                .map(|input| (input.clone(), None)),
-        );
+        let mut taken_off: Vec<&String> = config_held
+            .keys()
+            .filter(|input| {
+                !config.contains_key(*input) && configured.input_values.contains_key(*input)
+            })
+            .collect();
+        for held_live in config_the_running_node_holds
+            .into_iter()
+            .flat_map(Map::keys)
+        {
+            if !config.contains_key(held_live) && !taken_off.contains(&held_live) {
+                taken_off.push(held_live);
+            }
+        }
+        sets.extend(taken_off.into_iter().map(|input| (input.clone(), None)));
     }
     let mut input_values_after_the_sets = configured.input_values.clone();
     for (input, value) in &sets {

@@ -377,16 +377,45 @@ impl StreamGraphTransactionExecutor<'_> {
                 .insert(collapsed.placed_stream, collapsed.document);
         }
         if made_on_the_running_stream_now {
+            let value_the_running_input_held = match &edit_as_drawn {
+                StreamGraphOperation::SetNodeInputValue { node, input, .. } => {
+                    Some(the_value_a_running_node_holds_on_the_input(
+                        &self
+                            .async_runtime
+                            .block_on(stream_operations.to_json_async())
+                            .map_err(|refusal| refusal.to_string())?,
+                        *node,
+                        input,
+                    ))
+                }
+                _ => None,
+            };
             let applied = self
                 .async_runtime
                 .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))
                 .map_err(|refusal| refusal.to_string())?;
+            let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
+                (
+                    StreamGraphOperation::SetNodeInputValue {
+                        node, input, to, ..
+                    },
+                    Some(held),
+                ) => StreamGraphOperation::SetNodeInputValue {
+                    node: *node,
+                    input: input.clone(),
+                    from: held,
+                    to: to.clone(),
+                },
+                _ => applied.clone(),
+            };
             let stream = streams
                 .get_mut(stream_id)
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
             if let Err(why) = stream.staged_graph.apply(&applied) {
                 if let Err(not_reversed) = self.async_runtime.block_on(
-                    stream_operations.apply_a_stream_graph_operation_live(applied.inverse()),
+                    stream_operations.apply_a_stream_graph_operation_live(
+                        applied_on_the_running_stream.inverse(),
+                    ),
                 ) {
                     tracing::error!(
                         stream = %stream_id,
@@ -409,8 +438,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 },
             ));
             return Ok(OneGraphRequestApplied {
-                operation_answered: applied.clone(),
-                applied_live: Some(applied),
+                operation_answered: applied,
+                applied_live: Some(applied_on_the_running_stream),
                 project_operations,
                 made_live_once_the_documents_hold_them: Vec::new(),
                 overridden_by_a_link,

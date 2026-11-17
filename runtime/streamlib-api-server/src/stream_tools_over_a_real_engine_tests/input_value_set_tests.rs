@@ -627,3 +627,59 @@ async fn the_operations_it_replaces_record_what_it_records() {
         "{refusal:?}"
     );
 }
+
+/// What a node holds live alone is kept by a committed transaction refused part-way, whose
+/// sets are reversed to what the running node held, and is taken off by a `set_node_config`
+/// that replaces the config whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_by_a_whole_config() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    for (input, value) in [("gain", json!(0.25)), ("frame_width", json!(800))] {
+        engine
+            .the_answer_or_the_refusal_of(
+                "set_node_input_value",
+                json!({ "stream": stream_asset, "node": MIXER_NODE_UUID, "input": input,
+                        "value": value, "mode": "live" }),
+            )
+            .await
+            .expect("the live value is set");
+    }
+    let saved_before = project.the_graph_document_of("main");
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "operations": [
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "node": MIXER_NODE_UUID, "input": "gain", "value": 0.5 },
+                { "operation": "set_node_input_value", "stream": stream_asset,
+                  "node": MIXER_NODE_UUID, "input": "frame_width", "value": 1024 },
+                { "operation": "rename_node", "stream": stream_asset,
+                  "node": "00000000-0000-4000-8000-000000000000", "name": "nobody" },
+            ], "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("the rename of a node the stream does not hold is refused");
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+    let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    assert_eq!(
+        the_pin_values_of(&mixer),
+        json!({ "gain": 0.25 }),
+        "{mixer}"
+    );
+    assert_eq!(mixer["config"], json!({ "frame_width": 800 }), "{mixer}");
+
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_config",
+            json!({ "stream": stream_asset, "node": MIXER_NODE_UUID, "config": {},
+                    "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("the config is replaced whole");
+    let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    assert_eq!(mixer["config"], json!({}), "{mixer}");
+}
