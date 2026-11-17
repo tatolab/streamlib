@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::core::descriptors::PinType;
+use crate::core::descriptors::{FloatSize, PinType};
 
 #[test]
 fn image_formats_spell_every_engine_texture_format() {
@@ -255,7 +255,9 @@ fn a_shaders_float_input_is_a_float_and_its_pictures_are_textures() {
 
     assert_eq!(
         declared_pin_of(&shader, "amount"),
-        exactly(PinType::Float { exact_size: None })
+        exactly(PinType::Float {
+            exact_size: Some(FloatSize::Float32)
+        })
     );
     assert_eq!(declared_pin_of(&shader, "image"), exactly(texture.clone()));
     assert_eq!(declared_pin_of(&shader, "result"), exactly(texture));

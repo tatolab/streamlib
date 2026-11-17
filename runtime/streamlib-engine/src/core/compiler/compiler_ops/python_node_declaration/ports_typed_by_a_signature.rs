@@ -4,7 +4,7 @@
 //! The pin types a function or shader node's signature states exactly: its number and Boolean
 //! values. Its picture ports are typed by their Image family, as every picture port is.
 
-use crate::core::descriptors::{NodeDescriptor, PinDeclaration, PinType};
+use crate::core::descriptors::{FloatSize, NodeDescriptor, PinDeclaration, PinType};
 
 use super::super::shader_node_program::ShaderNodeProgram;
 
@@ -77,7 +77,7 @@ pub(super) fn ports_a_function_node_signature_types(
 }
 
 /// Each port a shader node's program types exactly, by name, with its declaration: its float
-/// inputs, each exactly a Float.
+/// inputs, each exactly a 32-bit Float, the four bytes its push constant holds.
 pub(super) fn ports_a_shader_node_program_types(
     program: &ShaderNodeProgram,
 ) -> Vec<(String, PinDeclaration)> {
@@ -86,7 +86,9 @@ pub(super) fn ports_a_shader_node_program_types(
         .map(|port| {
             (
                 port.to_string(),
-                PinDeclaration::exactly(PinType::Float { exact_size: None }),
+                PinDeclaration::exactly(PinType::Float {
+                    exact_size: Some(FloatSize::Float32),
+                }),
             )
         })
         .collect()
