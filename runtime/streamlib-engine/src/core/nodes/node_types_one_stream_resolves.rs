@@ -17,7 +17,7 @@ use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     FunctionNodePromotedToItsOwnProcessComponent, GraphNode, GraphNodeWithComponents, PortInfo,
 };
-use crate::core::nodes::node_instance_factory::refuse_port_names_not_cast_or_declared_twice;
+use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
 use crate::core::nodes::project_view_node::{
     NodeWhoseOutputsAClientWrites, the_node_type_of_a_project_view,
     the_node_type_of_a_top_level_graph_input,
@@ -180,16 +180,19 @@ impl NodeTypesOneStreamResolves {
                 );
                 continue;
             }
-            if let Err(refusal) = refuse_port_names_not_cast_or_declared_twice(&descriptor) {
-                why_no_node_takes_each_view.insert(
-                    node_type,
-                    format!(
-                        "the view `{}` declares a port no node takes: {refusal}",
-                        view.view_type
-                    ),
-                );
-                continue;
-            }
+            let descriptor = match the_node_type_as_registered(descriptor) {
+                Ok(descriptor) => descriptor,
+                Err(refusal) => {
+                    why_no_node_takes_each_view.insert(
+                        node_type,
+                        format!(
+                            "the view `{}` declares a port no node takes: {refusal}",
+                            view.view_type
+                        ),
+                    );
+                    continue;
+                }
+            };
             why_no_node_takes_each_view.remove(&node_type);
             let input_and_output_port_info = (
                 descriptor.inputs.iter().map(PortInfo::from).collect(),
@@ -255,7 +258,7 @@ impl NodeTypesOneStreamResolves {
         descriptor: NodeDescriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns,
     ) -> Result<()> {
-        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        let descriptor = the_node_type_as_registered(descriptor)?;
         let node_type = descriptor.node_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {
             return Err(Error::Configuration(format!(

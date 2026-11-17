@@ -250,7 +250,7 @@ class AudioWindowContract:
 def _audio_window_declaration(
     audio_window: object,
     port_name: str,
-    delivery_profile: str,
+    delivery_profile: Optional[str],
 ) -> "dict[str, Any]":
     """Validate a declared window contract and render it for the native half."""
     if isinstance(audio_window, AudioWindowMatchDeviceSentinel):
@@ -644,7 +644,8 @@ def _collect_declared_ports(
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
     port_spelling_by_cast_name: "dict[str, str]" = {}
-    for marker in _declared_port_markers(node_class):
+    for port_attribute in _declared_port_attributes(node_class):
+        marker = port_attribute._as_port_marker()
         port_spelling = marker["name"]
         try:
             port_name = cast_exposed_name_to_url_safe(port_spelling)
@@ -668,12 +669,13 @@ def _collect_declared_ports(
                 f"apart once cast"
             )
         port_spelling_by_cast_name[port_name] = port_spelling
-        if "delivery_profile" in marker:
-            declared_input = {
+        if isinstance(port_attribute, Input):
+            declared_input: "dict[str, Any]" = {
                 "name": port_name,
                 "description": marker["description"],
-                "delivery_profile": marker["delivery_profile"],
             }
+            if "delivery_profile" in marker:
+                declared_input["delivery_profile"] = marker["delivery_profile"]
             if "borrow_quota" in marker:
                 declared_input["borrow_quota"] = marker["borrow_quota"]
             if "audio_window" in marker:
@@ -694,7 +696,7 @@ def _collect_declared_ports(
     return input_ports, output_ports
 
 
-def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
+def _declared_port_attributes(node_class: type) -> "list[Input[Any] | Output[Any]]":
     """Every `Input` and `Output` class attribute declared on the class or
     inherited, in declaration order.
 
@@ -709,7 +711,7 @@ def _declared_port_markers(node_class: type) -> "list[dict[str, Any]]":
                 port_attributes_by_name[attribute_name] = attribute
             else:
                 port_attributes_by_name.pop(attribute_name, None)
-    return [attribute._as_port_marker() for attribute in port_attributes_by_name.values()]
+    return list(port_attributes_by_name.values())
 
 
 def _resolve_execution(

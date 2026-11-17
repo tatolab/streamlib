@@ -195,9 +195,8 @@ def test_a_key_the_family_does_not_take_is_refused_naming_the_port_and_the_key(d
         node.process(execution="manual")(node_class)
 
 
-def test_an_input_without_a_delivery_is_refused():
-    with pytest.raises(ValueError, match="delivery="):
-        Input(Image)
+def test_an_input_without_a_delivery_states_none():
+    assert Input(Image).delivery is None
 
 
 def test_a_family_that_is_not_one_of_the_five_is_refused():

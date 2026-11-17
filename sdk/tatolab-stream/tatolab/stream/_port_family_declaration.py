@@ -202,8 +202,10 @@ class _DeclaredPortAttribute(Generic[_PortFamilyReadType]):
 class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
     """An input port of one family, declared as a class attribute: `audio = Input(Channels, delivery="ordered")`.
 
-    `delivery=` is required: `"newest"` drains to the most recent message,
-    `"ordered"` receives them in publication order. `borrow_quota=` is how many
+    `delivery=` is `"newest"`, which drains to the most recent message, or
+    `"ordered"`, which receives them in publication order. A port with a pin
+    type, as an Image input has, reads by its type's default when it states
+    none; the runtime refuses any other input that states none. `borrow_quota=` is how many
     read messages each link into the port may hold beyond its mailbox at once.
     `requires=` names the output's names this input needs (Array, Channels,
     Records), `requires_codec=` the codecs it decodes (Packets), `formats=` the
@@ -279,10 +281,10 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
             _refuse_a_port_family_that_is_not_one(each, "Input(also_takes=…)")
             for each in also_takes
         )
-        if delivery not in _DELIVERY_PROFILES:
+        if delivery is not None and delivery not in _DELIVERY_PROFILES:
             raise ValueError(
-                f"Input({family!r}) must declare `delivery=`, one of "
-                f"{', '.join(repr(each) for each in _DELIVERY_PROFILES)}; got {delivery!r}"
+                f"Input({family!r}) declares `delivery=` {delivery!r}; it is one of "
+                f"{', '.join(repr(each) for each in _DELIVERY_PROFILES)}"
             )
         if borrow_quota is not None and (
             isinstance(borrow_quota, bool)
@@ -293,7 +295,7 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
                 f"invalid borrow_quota {borrow_quota!r}: must be a whole number of messages, "
                 f"0 or more"
             )
-        self.delivery: str = delivery
+        self.delivery: Optional[str] = delivery
         self.borrow_quota = borrow_quota
         self.requires = _tuple_of_strings(requires, "requires")
         self.requires_codec = _tuple_of_strings(requires_codec, "requires_codec")
@@ -335,9 +337,10 @@ class Input(_DeclaredPortAttribute[_PortFamilyReadType]):
         marker: "dict[str, Any]" = {
             "name": self.port_name,
             "description": self.description,
-            "delivery_profile": self.delivery,
             "family": family_declaration,
         }
+        if self.delivery is not None:
+            marker["delivery_profile"] = self.delivery
         if self.borrow_quota is not None:
             marker["borrow_quota"] = self.borrow_quota
         if self.default is not None:

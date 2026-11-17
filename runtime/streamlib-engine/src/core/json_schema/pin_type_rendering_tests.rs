@@ -75,6 +75,76 @@ fn the_catalog_serves_a_rust_ports_declared_pin_type_beside_its_family() {
     assert_eq!(ports[1]["family"], json!({"family": "image"}));
 }
 
+/// Mock node whose typed inputs state no delivery profile, except one, and
+/// whose ports state a flow other than their type's default.
+#[crate::node(
+    execution = reactive,
+    input("gain", pin_type = Float),
+    input("levels", pin_type = Float, flow = Stream),
+    input("audio", pin_type = Audio),
+    input("frames", family = Image),
+    input("every_frame", pin_type = Texture, delivery_profile = "ordered"),
+    output("still", pin_type = Texture, flow = Value),
+)]
+struct MockNodeReadingByItsPins;
+
+impl crate::core::ReactiveNode for MockNodeReadingByItsPins::Node {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
+/// Each port's name, flow and delivery profile, as `ports` renders them.
+fn flows_and_deliveries(ports: &[serde_json::Value]) -> Vec<(String, String, Option<String>)> {
+    ports
+        .iter()
+        .map(|port| {
+            (
+                port["name"].as_str().unwrap().to_string(),
+                port["flow"].as_str().unwrap().to_string(),
+                port["delivery_profile"].as_str().map(str::to_string),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn graph_and_the_catalog_serve_the_flow_a_port_states_and_the_delivery_its_pin_defaults_to() {
+    let read = |name: &str, flow: &str, delivery: Option<&str>| {
+        (
+            name.to_string(),
+            flow.to_string(),
+            delivery.map(str::to_string),
+        )
+    };
+    let expected = vec![
+        read("gain", "value", Some("newest")),
+        read("levels", "stream", Some("ordered")),
+        read("audio", "stream", Some("ordered")),
+        read("frames", "stream", Some("newest")),
+        read("every_frame", "stream", Some("ordered")),
+        read("still", "value", None),
+    ];
+
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockNodeReadingByItsPins::Node>());
+    let node = rendered_node_of_type(MockNodeReadingByItsPins::node_class_import_path());
+    let graph_ports: Vec<serde_json::Value> = node["ports"]["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(node["ports"]["outputs"].as_array().unwrap())
+        .cloned()
+        .collect();
+    assert_eq!(flows_and_deliveries(&graph_ports), expected);
+
+    let catalog_ports = catalog_ports_of_type(MockNodeReadingByItsPins::node_class_import_path());
+    assert_eq!(flows_and_deliveries(&catalog_ports), expected);
+}
+
 #[test]
 fn a_port_with_no_exact_pin_type_serves_neither_field_in_graph_or_the_catalog() {
     let node = rendered_node_of_type(MockChannelsSourceNode::node_class_import_path());

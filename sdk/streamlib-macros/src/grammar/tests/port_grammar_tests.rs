@@ -147,7 +147,7 @@ fn input_delivery_profile_is_accepted() {
 fn input_without_a_delivery_profile_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("video_in", family = Image),
+        input("video_in", family = Records),
     });
     assert!(
         msg.contains("input port `video_in` must declare a `delivery_profile`"),

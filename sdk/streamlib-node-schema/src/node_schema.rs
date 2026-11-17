@@ -368,7 +368,14 @@ pub const DEFAULT_INPUT_PORT_BORROW_QUOTA: usize = 2;
 /// limit when the first opener creates it.
 pub const MAX_INPUT_PORT_BORROW_QUOTA: usize = 8;
 
-pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] = ["newest", "ordered"];
+/// The delivery profile that reads only the newest message an input has received.
+pub const NEWEST_DELIVERY_PROFILE: &str = "newest";
+
+/// The delivery profile that reads every message an input receives, in order.
+pub const ORDERED_DELIVERY_PROFILE: &str = "ordered";
+
+pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 2] =
+    [NEWEST_DELIVERY_PROFILE, ORDERED_DELIVERY_PROFILE];
 
 /// A port definition within a node schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -382,8 +389,9 @@ pub struct NodePortSchema {
     /// Delivery profile declared by this input port — `"newest"` or
     /// `"ordered"`. The one delivery knob on the authoring surface: it names
     /// a read policy and resolves to the consumer-side drain order and the
-    /// ring depth. Required on every input port and always `None` on an
-    /// output port.
+    /// ring depth. Optional on an input port with a pin, which reads by its
+    /// pin's default, required on every other input port, and always `None`
+    /// on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
     /// The samples each link into this input port may hold beyond its mailbox,
@@ -399,12 +407,16 @@ pub struct NodePortSchema {
     pub audio_window: Option<crate::AudioWindowContract>,
     /// The port family this port declares and its family's keys.
     pub family: crate::PortFamilyDeclaration,
-    /// The pin type this port declares, read in the type's default flow; `None` when it declares
-    /// only a family. Its schema is open JSON: only the control contract's schemars renders
-    /// pin types.
+    /// The pin type this port declares; `None` when it declares only a family. Its schema is
+    /// open JSON: only the control contract's schemars renders pin types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     pub pin_type: Option<crate::pin_type::PinType>,
+    /// The flow this port states — `value`, `stream` or `trigger`; `None` when it reads in its
+    /// pin type's default flow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<String>")]
+    pub flow: Option<crate::pin_type::PinFlow>,
 }
 
 /// Config definition within a node schema.

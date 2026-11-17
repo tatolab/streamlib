@@ -5,10 +5,8 @@ mod graph_node;
 mod graph_node_ports;
 mod node_run_id;
 mod port_info;
-mod port_kind;
 
 pub use graph_node::GraphNode;
 pub use graph_node_ports::GraphNodePorts;
 pub use node_run_id::NodeRunId;
 pub use port_info::PortInfo;
-pub use port_kind::PortKind;

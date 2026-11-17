@@ -156,7 +156,7 @@ fn a_described_type(node_type: &NodeClassImportPath, input_port: &str) -> serde_
         "scheduling_priority": null,
         "paced_by_real_time": false,
         "config_schema": {"type": "object"},
-        "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}}],
+        "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}, "delivery_profile": "newest"}],
         "output_ports": [],
     })
 }
