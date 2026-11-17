@@ -305,8 +305,8 @@ pub(crate) fn the_value_an_input_reads(
     })
 }
 
-/// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now; `None`
-/// when the node has no such input.
+/// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now, under
+/// the input's current name; `None` when the node has no such input.
 pub(crate) fn the_input_value_change(
     graph: &Graph,
     node: &GraphNode,
@@ -315,12 +315,12 @@ pub(crate) fn the_input_value_change(
     let port = node.input_port(input)?;
     Some(RuntimeEvent::InputValueDidChange {
         node: node.node_uuid,
-        input: input.to_owned(),
+        input: port.name.clone(),
         value_read: the_value_an_input_reads(
             graph,
             node,
             port,
-            graph.link_into(&node.id, input).is_some(),
+            graph.link_into(&node.id, &port.name).is_some(),
         ),
     })
 }

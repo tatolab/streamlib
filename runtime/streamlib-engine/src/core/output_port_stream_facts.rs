@@ -234,6 +234,8 @@ mod tests {
             pin_default: None,
             pin: None,
             lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
+            former_names: Vec::new(),
+            may_be_unset: false,
             family,
         }
     }

@@ -39,22 +39,27 @@ impl LiveInputValuesKeptInTheProjectStore {
         }
     }
 
-    /// Keep `value` as the live value of input `input` of `node`.
-    pub(crate) fn keep(&self, node: Uuid, input: &str, value: &Value) {
+    /// Keep `value` as the live value of input `input` of `node`, answering whether the store
+    /// holds it now.
+    pub(crate) fn keep(&self, node: Uuid, input: &str, value: &Value) -> bool {
         let Some(project_store) = self.the_project_store() else {
-            return;
+            return false;
         };
-        if let Err(not_kept) = project_store.write(
+        match project_store.write(
             LIVE_INPUT_VALUES_TABLE,
             &key_of_the_node(node, input),
             value,
         ) {
-            tracing::error!(
-                %node,
-                input,
-                "a kept input's live value was not written to the project's store, so a \
-                 restart of the runtime does not bring it back: {not_kept}"
-            );
+            Ok(_) => true,
+            Err(not_kept) => {
+                tracing::error!(
+                    %node,
+                    input,
+                    "a kept input's live value was not written to the project's store, so a \
+                     restart of the runtime does not bring it back: {not_kept}"
+                );
+                false
+            }
         }
     }
 

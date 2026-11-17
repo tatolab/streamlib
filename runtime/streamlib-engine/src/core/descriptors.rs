@@ -14,8 +14,8 @@ pub use streamlib_node_schema::descriptors::{
 };
 pub use streamlib_node_schema::pin_type::{
     DeclaredPinType, FloatSize, IntegerSize, NodeInputMode, PinAnnotations, PinDeclaration,
-    PinFlow, PinNumberRange, PinProjectAssetAnnotation, PinType, ResolvedPin, SettingReadTime,
-    TexturePixelFormat,
+    PinFlow, PinNumberRange, PinProjectAssetAnnotation, PinType, PinValueNotTaken, ResolvedPin,
+    SettingReadTime, TexturePixelFormat,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,

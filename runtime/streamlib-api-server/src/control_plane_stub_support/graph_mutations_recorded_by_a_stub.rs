@@ -67,6 +67,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             Box::pin(async { Ok(()) })
         }
+        fn the_ports_a_node_type_declares(
+            &self,
+            _node_type: &str,
+        ) -> ::std::option::Option<::streamlib::sdk::graph::GraphNodePorts> {
+            None
+        }
         fn the_config_a_node_holding_the_input_values_takes(
             &self,
             _node_type: &str,

@@ -24,6 +24,8 @@ mod validation;
 
 #[cfg(test)]
 mod graph_tests;
+#[cfg(test)]
+mod renamed_port_tests;
 
 // top level
 pub(crate) use config_node_reference_edges::{
@@ -80,7 +82,9 @@ pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
-pub use nodes::{GraphNode, GraphNodePorts, NodeRunId, PortInfo};
+pub use nodes::{
+    GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PortInfo,
+};
 pub(crate) use traversal::the_default_name_a_new_node_takes;
 pub use traversal::{
     LinkTraversal, LinkTraversalMut, NodeTraversal, NodeTraversalMut, TraversalSource,

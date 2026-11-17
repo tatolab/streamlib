@@ -604,3 +604,37 @@ fn a_bundle_takes_each_member_in_its_form_and_leaves_out_only_one_with_a_default
     );
     assert!(bundle.check_value(&json!({ "enabled": 1 })).is_err());
 }
+
+#[test]
+fn an_input_that_may_be_unset_takes_null_and_one_that_may_not_refuses_it() {
+    let declared = PinDeclaration::exactly(PinType::Float { exact_size: None });
+    let refused = declared
+        .check_value(&serde_json::Value::Null)
+        .expect_err("an input that must hold a value refuses null");
+    assert_eq!(refused.takes, "a number");
+
+    let may_be_unset = PinDeclaration {
+        may_be_unset: true,
+        ..declared
+    };
+    assert!(may_be_unset.check_value(&serde_json::Value::Null).is_ok());
+    assert!(may_be_unset.check_value(&json!(0.25)).is_ok());
+    assert!(may_be_unset.check_value(&json!("loud")).is_err());
+}
+
+#[test]
+fn a_declaration_of_several_types_takes_a_value_any_of_them_takes() {
+    let declared = PinDeclaration {
+        pin_type: DeclaredPinType::OneOf {
+            pin_types: vec![PinType::Boolean {}, PinType::String {}],
+        },
+        ..PinDeclaration::exactly(PinType::Boolean {})
+    };
+    assert!(declared.check_value(&json!(true)).is_ok());
+    assert!(declared.check_value(&json!("on")).is_ok());
+    let refused = declared
+        .check_value(&json!(1))
+        .expect_err("neither type takes a number");
+    assert_eq!(refused.takes, "true or false, or text");
+    assert_eq!(refused.example, json!(true));
+}
