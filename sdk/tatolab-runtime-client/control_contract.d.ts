@@ -4536,6 +4536,62 @@ export type NodeInputMode = {
  */
 export type SettingReadTime = "at_setup" | "each_run";
 
+/**
+ * What a module's `node_ui/tatolab_node_ui.json` registers.
+ */
+export interface NodeUiManifest {
+  /**
+   * The view contract the elements were built for, as `"1.1"`.
+   */
+  contract: string;
+  /**
+   * Each control the module registers, which edits or shows an input of one pin type.
+   */
+  controls?: Array<NodeUiManifestControl>;
+  /**
+   * Each node body the module registers, which draws the inside of one node type's node.
+   */
+  node_bodies?: Array<NodeUiManifestNodeBody>;
+}
+
+/**
+ * A control a module registers for one pin type.
+ */
+export interface NodeUiManifestControl {
+  /**
+   * The pin type whose inputs the control edits or shows.
+   */
+  type: BuiltInPinTypeName;
+  /**
+   * The control's name, which a pin's `control` annotation picks it by. Left out, the control
+   * is its pin type's default.
+   */
+  control?: string;
+  /**
+   * The script that default-exports the control's element class, inside the node UI folder.
+   */
+  script: string;
+}
+
+/**
+ * The name of a built-in pin type: the `type` tag of its pin type.
+ */
+export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
+
+/**
+ * A node body a module registers for one node type.
+ */
+export interface NodeUiManifestNodeBody {
+  /**
+   * The node type whose node it draws, as `acme:Crossfade`.
+   */
+  node_type: string;
+  /**
+   * The script that default-exports the node body's element class, inside the node UI folder.
+   */
+  script: string;
+}
+
 /** Every operation the runtime serves, by method name: the params it takes and the result it answers. */
 export interface ControlOperations {
   /**

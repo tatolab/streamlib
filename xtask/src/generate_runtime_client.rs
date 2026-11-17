@@ -9,6 +9,11 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::contract_component_references::COMPONENT_SCHEMA_REFERENCE_PREFIX;
+use crate::runtime_client_node_ui_manifest::{
+    NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
+    node_ui_manifest_declarations, node_ui_manifest_json_schema,
+};
 use crate::runtime_client_zod_schemas::{ZodSchemasOfOneContractEntry, zod_schemas_javascript};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
@@ -45,6 +50,8 @@ pub const RUNTIME_CLIENT_PACKAGE_FILES_THE_RUNTIME_UNIT_CARRIES: &[&str] = &[
     GENERATED_CLIENT_TYPES_FILE_NAME,
     GENERATED_REFERENCE_FILE_NAME,
     COPIED_CONTRACT_FILE_NAME,
+    NODE_UI_MANIFEST_TYPES_FILE_NAME,
+    NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME,
 ];
 
 const GENERATED_CONTRACT_TYPES_FILE_NAME: &str = "control_contract.d.ts";
@@ -109,8 +116,6 @@ const CLIENT_MEMBER_NAMES_NO_METHOD_MAY_TAKE: &[&str] = &[
 
 /// What a notification's listener method is named with before the notification's name.
 const NOTIFICATION_LISTENER_METHOD_PREFIX: &str = "on_";
-
-pub(crate) const COMPONENT_SCHEMA_REFERENCE_PREFIX: &str = "#/components/schemas/";
 
 pub(crate) const GENERATED_SOURCE_HEADER: &str = "// Copyright (c) 2025 Tatolab LLC\n\
 // SPDX-License-Identifier: GPL-3.0-only\n\
@@ -198,6 +203,14 @@ pub fn runtime_client_generated_files(
             control_contract.reference_markdown(),
         ),
         (COPIED_CONTRACT_FILE_NAME, contract_file_contents.to_owned()),
+        (
+            NODE_UI_MANIFEST_TYPES_FILE_NAME,
+            node_ui_manifest_declarations(control_contract.component_schemas)?,
+        ),
+        (
+            NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME,
+            node_ui_manifest_json_schema(control_contract.component_schemas)?,
+        ),
     ])
 }
 
