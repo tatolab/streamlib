@@ -120,8 +120,7 @@ fn a_plain_node(id: Uuid, name: &str) -> StreamGraphDocumentNode {
         id,
         name: name.to_owned(),
         node_type: format!("looks.nodes:{name}"),
-        config: json!({ "strength": 2 }),
-        pins: Map::new(),
+        input_values: Map::from_iter([("strength".to_owned(), json!(2))]),
         exposed_config_fields: Vec::new(),
         studio: Default::default(),
         fragment: None,
@@ -242,8 +241,8 @@ fn a_node_added_wired_and_configured_at_a_placed_level_lands_in_the_placed_strea
         },
     );
     assert_eq!(
-        configured.node(uuid(BLUR)).unwrap().config,
-        json!({ "strength": 5 })
+        configured.node(uuid(BLUR)).unwrap().input_values,
+        Map::from_iter([("strength".to_owned(), json!(5))])
     );
 }
 
@@ -261,7 +260,7 @@ fn a_config_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
         },
     );
     assert_eq!(
-        configured.node(uuid(BLUR)).unwrap().config["follows"],
+        configured.node(uuid(BLUR)).unwrap().input_values["follows"],
         json!(drawn_tint)
     );
     assert_eq!(
@@ -277,7 +276,7 @@ fn a_config_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
 
     let speck = Uuid::from_u128(0x201);
     let mut speck_naming_tint = a_plain_node(speck, "speck");
-    speck_naming_tint.config = json!({ "follows": TINT });
+    speck_naming_tint.input_values = Map::from_iter([("follows".to_owned(), json!(TINT))]);
     let add = StreamGraphOperation::AddNode {
         node: speck_naming_tint,
         links: Vec::new(),
@@ -290,7 +289,10 @@ fn a_config_naming_a_node_uuid_at_a_placed_level_is_kept_as_it_was_sent() {
         panic!("an add is drawn as an add");
     };
     assert_eq!(node.id, drawn_inside(LOOK, &speck.to_string()));
-    assert_eq!(node.config, json!({ "follows": TINT }));
+    assert_eq!(
+        node.input_values,
+        Map::from_iter([("follows".to_owned(), json!(TINT))])
+    );
 }
 
 #[test]
@@ -478,8 +480,8 @@ fn a_stream_placed_inside_a_placed_stream_is_reached_through_the_path_of_both() 
         },
     );
     assert_eq!(
-        configured.node(uuid(NOISE)).unwrap().config,
-        json!({ "strength": 9 })
+        configured.node(uuid(NOISE)).unwrap().input_values,
+        Map::from_iter([("strength".to_owned(), json!(9))])
     );
 }
 

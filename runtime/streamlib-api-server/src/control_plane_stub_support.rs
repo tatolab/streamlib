@@ -129,8 +129,15 @@ macro_rules! graph_mutation_ops_are_unreachable {
             &self,
             _node_type: &str,
             _node_name: &str,
-            _config: &::serde_json::Value,
+            _input_values: &::serde_json::Map<String, ::serde_json::Value>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
+        fn the_config_a_node_holding_the_input_values_takes(
+            &self,
+            _node_type: &str,
+            _input_values: &::serde_json::Map<String, ::serde_json::Value>,
+        ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
         fn apply_a_stream_graph_operation_live(
@@ -643,9 +650,16 @@ macro_rules! graph_mutation_ops_record_the_call {
             &self,
             _node_type: &str,
             _node_name: &str,
-            _config: &::serde_json::Value,
+            _input_values: &::serde_json::Map<String, ::serde_json::Value>,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             Box::pin(async { Ok(()) })
+        }
+        fn the_config_a_node_holding_the_input_values_takes(
+            &self,
+            _node_type: &str,
+            input_values: &::serde_json::Map<String, ::serde_json::Value>,
+        ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
+            Ok(::serde_json::Value::Object(input_values.clone()))
         }
         fn apply_a_stream_graph_operation_live(
             &self,

@@ -1,0 +1,139 @@
+{
+  "asset": "f1c83dce-5dce-5935-8146-e2cf9318ec9c",
+  "links": [
+    {
+      "source": {
+        "node": "50aae44d-36a5-5a0a-9053-9681bbb3178f",
+        "port": "video"
+      },
+      "target": {
+        "node": "6518dfb4-95e3-5bfb-a5fd-6499e1cd4cb6",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "50aae44d-36a5-5a0a-9053-9681bbb3178f",
+        "port": "video"
+      },
+      "target": {
+        "node": "2b7aba00-1808-5067-be43-618f7dc88034",
+        "port": "video"
+      }
+    },
+    {
+      "source": {
+        "node": "2b7aba00-1808-5067-be43-618f7dc88034",
+        "port": "video"
+      },
+      "target": {
+        "node": "2b6321d2-ee56-5e23-a0f5-a55b6ddfa536",
+        "port": "video"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "50aae44d-36a5-5a0a-9053-9681bbb3178f",
+      "input_values": {
+        "height": 720,
+        "width": 1280
+      },
+      "name": "testpatternsource",
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "id": "6518dfb4-95e3-5bfb-a5fd-6499e1cd4cb6",
+      "input_values": {
+        "bitrate_bps": 4000000,
+        "effort_level": 1,
+        "fps": 30,
+        "height": 1080,
+        "keyframe_interval_seconds": 2,
+        "width": 1920
+      },
+      "name": "h265encoder",
+      "type": "tatolab.h265:H265Encoder"
+    },
+    {
+      "fragment": {
+        "links": [
+          {
+            "source": {
+              "node": "be80a161-1a92-50ef-9993-2da818742173",
+              "port": "value"
+            },
+            "target": {
+              "node": "1a25f782-7645-5dcd-bc93-02e0bb1821a2",
+              "port": "video"
+            }
+          },
+          {
+            "source": {
+              "node": "1a25f782-7645-5dcd-bc93-02e0bb1821a2",
+              "port": "video_out"
+            },
+            "target": {
+              "node": "2d238fca-cf26-5f9b-b857-3bded7091e04",
+              "port": "value"
+            }
+          }
+        ],
+        "nodes": [
+          {
+            "id": "be80a161-1a92-50ef-9993-2da818742173",
+            "input_values": {
+              "family": "image",
+              "port": "video"
+            },
+            "name": "source",
+            "type": "tatolab.stream:GraphInput"
+          },
+          {
+            "id": "1a25f782-7645-5dcd-bc93-02e0bb1821a2",
+            "input_values": {
+              "amount": 2,
+              "radius": 8
+            },
+            "name": "blur",
+            "type": "looks.nodes:Blur"
+          },
+          {
+            "id": "2d238fca-cf26-5f9b-b857-3bded7091e04",
+            "input_values": {
+              "family": "image",
+              "port": "video"
+            },
+            "name": "out",
+            "type": "tatolab.stream:GraphOutput"
+          }
+        ]
+      },
+      "id": "2b7aba00-1808-5067-be43-618f7dc88034",
+      "input_values": {
+        "radius": 8,
+        "tint": "warm"
+      },
+      "name": "look",
+      "type": "looks.generators:look"
+    },
+    {
+      "exposed_config_fields": [
+        "strength"
+      ],
+      "id": "2b6321d2-ee56-5e23-a0f5-a55b6ddfa536",
+      "input_values": {
+        "label": "day",
+        "strength": 3
+      },
+      "name": "grade",
+      "studio": {
+        "position": [
+          600,
+          80
+        ]
+      },
+      "type": "looks.nodes:Grade"
+    }
+  ]
+}

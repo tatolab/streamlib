@@ -19,7 +19,6 @@ mod project_history_repository;
 #[cfg(feature = "history")]
 mod project_import_copy;
 mod project_import_folders;
-mod project_nodes_moved_off_tatolab_ops;
 mod project_pyproject_import_sources;
 #[cfg(feature = "history")]
 mod project_repositories_open_in_this_runtime;
@@ -32,6 +31,7 @@ mod project_stream_document;
 mod project_transaction;
 mod project_views;
 mod sample_project;
+mod stream_document_upgrade;
 mod stream_fragment_references;
 mod stream_graph_action;
 mod stream_graph_default_port_and_variable_names;
@@ -73,9 +73,6 @@ pub use project_history_repository::{
     ProjectHistoryCommit, ProjectHistoryCommitWritten, ProjectHistoryRepository,
 };
 pub use project_import_folders::{the_file_of_an_imported_asset, the_folder_of_an_import};
-pub use project_nodes_moved_off_tatolab_ops::{
-    TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY, the_type_that_replaced_a_tatolab_ops_type,
-};
 pub use project_pyproject_import_sources::{
     FirstPartyModuleDeclaredByAProject, PROJECT_CARRIED_WHEELS_LINK,
     PROJECT_FIRST_PARTY_MODULE_LINKS_DIRECTORY, PYPROJECT_FILE_NAME, distribution_names_are_one,
@@ -122,6 +119,10 @@ pub use sample_project::{
     SAMPLE_PROJECT_MAIN_STREAM_DOCUMENT_PATH, SampleProjectListed,
     SampleProjectTheRuntimeUnitCarries, every_sample_project_in, the_sample_project_named,
 };
+pub use stream_document_upgrade::{
+    NODE_INPUT_VALUES_KEY, NODE_KEYS_FOLDED_INTO_INPUT_VALUES, fold_into_input_values,
+    stream_document_in_the_current_shape, upgrade_stream_document_in_place,
+};
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
     graph_document_with_each_stream_fragment_reference_resolved,
@@ -152,7 +153,7 @@ pub use stream_graph_document::{
     StreamGraphDocumentGroup, StreamGraphDocumentLink, StreamGraphDocumentLinkEnd,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
     StreamGraphOperation, asset_references_made_references_into_the_import,
-    assets_a_node_config_references, fragment_with_each_node_uuid_kept_by_its_name,
+    assets_a_nodes_input_values_reference, fragment_with_each_node_uuid_kept_by_its_name,
     is_a_graph_interface_node_type,
 };
 pub use stream_graph_fragment_fold::{

@@ -24,24 +24,22 @@
   ],
   "nodes": [
     {
-      "config": {},
       "id": "5c8ca6e2-f861-4a7e-ae5e-563ea95e8c48",
       "name": "microphonesource",
       "type": "tatolab.microphone:MicrophoneSource"
     },
     {
-      "config": {
+      "id": "f5b33cd8-e2c0-419d-8e79-8f4143be5a56",
+      "input_values": {
         "damping": 0.5,
         "dry_level": 0.7,
         "room_size": 0.7,
         "wet_level": 0.25
       },
-      "id": "f5b33cd8-e2c0-419d-8e79-8f4143be5a56",
       "name": "reverbeffect",
       "type": "nodes.reverb_effect:ReverbEffect"
     },
     {
-      "config": {},
       "id": "755c1c97-44c7-4f60-83b8-4b211bcad726",
       "name": "speakersink",
       "type": "tatolab.speaker:SpeakerSink"

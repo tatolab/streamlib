@@ -280,6 +280,11 @@ impl StreamGraphTransactionExecutor<'_> {
             the_function_nodes_rendered_in(&rendered_graph, &mut function_nodes);
             Ok(function_nodes)
         };
+        let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
+            stream_operations
+                .the_config_a_node_holding_the_input_values_takes(node_type, input_values)
+                .map_err(|refusal| refusal.to_string())
+        };
         let mut placed_stream_a_collapse_saves = None;
         let mut edit_as_drawn = graph_operation_for_the_request(
             request,
@@ -291,6 +296,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 document_of_a_placed_stream: &document_of_a_placed_stream,
                 family_of_an_output_port: &family_of_an_output_port,
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
+                config_a_node_takes: &config_a_node_takes,
             },
             &mut placed_stream_a_collapse_saves,
         )?;
@@ -363,14 +369,15 @@ impl StreamGraphTransactionExecutor<'_> {
             ));
         }
         let edit = reached.the_operation_on_the_document(edit_as_drawn)?;
-        if let Some((node_type, node_name, config)) =
+        if let Some((node_type, node_name, input_values)) =
             the_graph_node_an_edit_adds_or_configures(&edit, &reached.document)
         {
             self.async_runtime
-                .block_on(
-                    stream_operations
-                        .refuse_a_node_a_live_add_would_refuse(&node_type, &node_name, &config),
-                )
+                .block_on(stream_operations.refuse_a_node_a_live_add_would_refuse(
+                    &node_type,
+                    &node_name,
+                    &input_values,
+                ))
                 .map_err(|refusal| refusal.to_string())?;
         }
         let mut placed_document_after_the_edit = reached.document.clone();

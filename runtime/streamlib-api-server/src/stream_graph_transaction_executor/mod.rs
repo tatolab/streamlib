@@ -28,7 +28,7 @@ use streamlib_project_repository::{
     StreamGraphLevelOfAPlacedStream, StreamGraphNodeStudioFields, StreamGraphNoteFields,
     StreamGraphOperation, StreamGraphOperationOnAStream,
     asset_references_made_references_into_the_import,
-    config_holding_the_default_name_of_a_graph_port_or_variable,
+    config_holding_the_default_name_of_a_graph_port_or_variable, fold_into_input_values,
     fragment_with_each_node_uuid_kept_by_its_name, graph_document_holds_a_stream_fragment,
     is_a_graph_interface_node_type, the_fragment_a_stream_fragment_places,
     the_stream_document_of_an_import,
@@ -188,15 +188,17 @@ fn the_document_a_placed_stream_holds(
     }
 }
 
+/// The type, name and input values of the node `edit` adds, or the config it sets on one, when
+/// that node runs as a node of its type.
 fn the_graph_node_an_edit_adds_or_configures(
     edit: &StreamGraphOperation,
     document: &StreamGraphDocument,
-) -> Option<(String, String, Value)> {
-    let (node_type, node_name, config, holds_a_fragment) = match edit {
+) -> Option<(String, String, Map<String, Value>)> {
+    let (node_type, node_name, input_values, holds_a_fragment) = match edit {
         StreamGraphOperation::AddNode { node, .. } => (
             node.node_type.clone(),
             node.name.clone(),
-            node.config.clone(),
+            node.input_values.clone(),
             node.fragment.is_some(),
         ),
         StreamGraphOperation::SetNodeConfig { node, to, .. } => {
@@ -204,7 +206,7 @@ fn the_graph_node_an_edit_adds_or_configures(
             (
                 configured.node_type,
                 configured.name,
-                to.clone(),
+                to.as_object().cloned().unwrap_or_default(),
                 configured.fragment.is_some(),
             )
         }
@@ -213,7 +215,7 @@ fn the_graph_node_an_edit_adds_or_configures(
     let names_a_node = !holds_a_fragment
         && node_type != STREAM_FRAGMENT_NODE_TYPE
         && !is_a_graph_interface_node_type(&node_type);
-    names_a_node.then_some((node_type, node_name, config))
+    names_a_node.then_some((node_type, node_name, input_values))
 }
 
 /// Record `label` against the node `operation` adds, under the UUID `drawn_uuid_of` gives it.
@@ -568,6 +570,11 @@ type FamilyOfAnOutputPortOfTheRunningStream<'stream> =
 /// The UUID of each node the running stream's `graph` renders as a function node.
 type FunctionNodesOfTheRunningStream<'stream> = dyn Fn() -> Result<HashSet<Uuid>, String> + 'stream;
 
+/// The config a node of a type holding some input values takes whole, as the running stream
+/// resolves the type.
+type ConfigANodeOfTheRunningStreamTakes<'stream> =
+    dyn Fn(&str, &Map<String, Value>) -> Result<Value, String> + 'stream;
+
 /// What building a graph request's operation reads of the running stream and its project.
 struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     run_the_graph_generator: &'reads GraphGeneratorRunOfTheStream<'reads>,
@@ -575,6 +582,7 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     document_of_a_placed_stream: &'reads DocumentOfAPlacedStream<'reads>,
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
+    config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
 }
 
 /// The UUID of each node `rendered_level`, a level of a stream's `graph` render, renders as a
@@ -736,10 +744,7 @@ pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
                 stream: stream_location.stream_asset,
                 generator: fragment_node.node_type,
                 name: Some(fragment_node.name),
-                config: match fragment_node.config {
-                    Value::Object(promoted_settings) => Some(promoted_settings),
-                    _ => None,
-                },
+                config: Some(fragment_node.input_values),
                 label: None,
             });
         }

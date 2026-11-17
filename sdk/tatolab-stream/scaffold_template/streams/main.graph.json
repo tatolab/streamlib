@@ -1,6 +1,6 @@
 {
   "links": [],
   "nodes": [
-    {"config": {}, "name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"}
+    {"name": "testpatternsource", "type": "tatolab.testpattern:TestPatternSource"}
   ]
 }

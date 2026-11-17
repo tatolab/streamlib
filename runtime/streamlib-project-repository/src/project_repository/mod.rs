@@ -40,10 +40,6 @@ use crate::project_import_copy::{
     the_import_folder_named_after, unpack_a_project_archive_as_a_new_project,
     version_of_the_copied_files,
 };
-use crate::project_nodes_moved_off_tatolab_ops::{
-    TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY,
-    operations_moving_each_tatolab_ops_node_to_core_nodes,
-};
 use crate::project_pyproject_import_sources::{
     PYPROJECT_FILE_NAME, pyproject_with_each_import_as_a_uv_path_source,
 };
@@ -58,7 +54,7 @@ use crate::project_transaction::{
     ProjectTransactionAuthor, ProjectTransactionEnvelopeHeader, ProjectTransactionLineage,
     ProjectTransactionReversal, ProjectTransactionUndoState, StreamGraphOperationOnAStream,
 };
-use crate::stream_graph_document::{StreamGraphDocument, assets_a_node_config_references};
+use crate::stream_graph_document::{StreamGraphDocument, assets_a_nodes_input_values_reference};
 
 mod asset_effects;
 mod asset_operations;
@@ -348,12 +344,12 @@ fn apply_operation_to_assets(
     }
 }
 
-fn refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+fn refuse_input_values_referencing_an_asset_the_project_does_not_hold(
     assets: &BTreeMap<Uuid, ProjectAsset>,
     node: Uuid,
-    config: &Value,
+    input_values: &serde_json::Map<String, Value>,
 ) -> Result<(), ProjectRepositoryRefusal> {
-    match assets_a_node_config_references(config)
+    match assets_a_nodes_input_values_reference(input_values)
         .into_iter()
         .find(|referenced| !assets.contains_key(referenced))
     {

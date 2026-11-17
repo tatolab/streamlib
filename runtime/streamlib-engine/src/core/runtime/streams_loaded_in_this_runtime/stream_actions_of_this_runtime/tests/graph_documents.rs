@@ -234,7 +234,7 @@ fn a_node_referencing_an_asset_the_project_does_not_hold_fails_its_stream_naming
     let (_, failed_because) = the_one_failed_stream_of(&run);
     assert!(
         failed_because.contains(&format!(
-            "has node `overlay` whose config references the asset {image}, which the \
+            "has node `overlay` whose input values reference the asset {image}, which the \
              project does not hold"
         )),
         "{failed_because}"

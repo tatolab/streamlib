@@ -116,13 +116,15 @@ fn an_author(kind: ProjectTransactionAuthorKind, name: &str) -> ProjectTransacti
     }
 }
 
-fn a_node(name: &str, config: serde_json::Value) -> StreamGraphDocumentNode {
+fn a_node(name: &str, input_values: serde_json::Value) -> StreamGraphDocumentNode {
+    let serde_json::Value::Object(input_values) = input_values else {
+        panic!("a node's input values are an object");
+    };
     StreamGraphDocumentNode {
         id: Uuid::new_v4(),
         name: name.to_owned(),
         node_type: format!("nodes.{name}:Node"),
-        config,
-        pins: Map::new(),
+        input_values,
         exposed_config_fields: Vec::new(),
         studio: Default::default(),
         fragment: None,
@@ -201,8 +203,13 @@ fn five_edits_batched_in_one_transaction_are_kept_and_one_undo_reverses_them_all
         .stream_graph_document(project.stream)
         .unwrap();
     let effect_as_kept = reopened.node(effect.id).unwrap();
-    assert_eq!(effect_as_kept.config, json!({ "strength": 0.75 }));
-    assert_eq!(effect_as_kept.pins["threshold"], json!(0.25));
+    assert_eq!(
+        effect_as_kept.input_values,
+        Map::from_iter([
+            ("strength".to_owned(), json!(0.75)),
+            ("threshold".to_owned(), json!(0.25)),
+        ])
+    );
     assert_eq!(reopened.links(), [a_link(&source, &effect)]);
 
     project.undo(&agent).unwrap();
@@ -612,12 +619,12 @@ fn a_fragment_placed_or_refreshed_with_an_inner_node_naming_an_absent_asset_is_r
                     node: look.id,
                     from: StreamGraphFragmentPlacement {
                         generator: look.node_type.clone(),
-                        config: json!({}),
+                        input_values: Map::new(),
                         fragment: first_run.clone(),
                     },
                     to: StreamGraphFragmentPlacement {
                         generator: look.node_type.clone(),
-                        config: json!({}),
+                        input_values: Map::new(),
                         fragment: a_look_fragment_whose_inner_grade_reads(
                             absent_lut,
                             Some(&first_run),

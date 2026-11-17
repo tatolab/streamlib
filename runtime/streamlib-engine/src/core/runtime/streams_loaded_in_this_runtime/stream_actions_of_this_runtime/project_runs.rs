@@ -113,7 +113,6 @@ impl Runner {
             )));
         };
         report_the_step(StreamActionStep::ReadingTheGraphDocuments);
-        self.move_each_tatolab_ops_node_of_the_project_to_core_nodes(&project_directory);
         let project = ProjectAsALoadReadsIt::read(&project_directory)?;
         let every_stream_asset: Vec<StreamAssetRead> = project
             .stream_documents

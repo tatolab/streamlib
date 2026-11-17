@@ -58,7 +58,10 @@ async fn tools_call_add_node_applies_the_node_live_and_answers_its_new_uuid_and_
         );
     };
     assert_eq!(node.node_type, "nodes.grayscale_effect:GrayscaleEffect");
-    assert_eq!(node.config, json!({ "strength": 0.5 }));
+    assert_eq!(
+        Value::Object(node.input_values.clone()),
+        json!({ "strength": 0.5 })
+    );
     assert_eq!(node.name, "Gray");
     assert!(links.is_empty());
     assert_eq!(stated["mode"], "live");
@@ -229,7 +232,7 @@ async fn tools_call_add_node_without_config_or_name_sends_an_empty_object_and_an
     else {
         panic!("expected one add, recorded {:?}", recorded.lock());
     };
-    assert_eq!(node.config, json!({}));
+    assert!(node.input_values.is_empty());
     assert_eq!(node.name, "");
 }
 

@@ -4,6 +4,8 @@
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::stream_document_upgrade::stream_document_in_the_current_shape;
+
 use super::{
     GROUPS_KEY, STUDIO_GROUP_KEY, StreamGraphDocumentGroup, StreamGraphGroupFields, node_name_of,
     node_uuid_of,
@@ -12,8 +14,21 @@ use super::{
 /// `fresh_fragment`, a graph generator's output naming its nodes and link ends by name, with
 /// each node given a UUID and each link end naming its node by it: the UUID the node of the
 /// same name holds in `previous_fragment`, at the same level of nested fragments, and a new
-/// one from `new_node_uuid` for a node no earlier run built.
+/// one from `new_node_uuid` for a node no earlier run built. A generator that writes its nodes
+/// in an older shape has them read in the current one.
 pub fn fragment_with_each_node_uuid_kept_by_its_name(
+    fresh_fragment: &Value,
+    previous_fragment: Option<&Value>,
+    new_node_uuid: &mut dyn FnMut() -> Uuid,
+) -> Result<Value, String> {
+    fragment_level_with_each_node_uuid_kept_by_its_name(
+        &stream_document_in_the_current_shape(fresh_fragment.clone()),
+        previous_fragment,
+        new_node_uuid,
+    )
+}
+
+fn fragment_level_with_each_node_uuid_kept_by_its_name(
     fresh_fragment: &Value,
     previous_fragment: Option<&Value>,
     new_node_uuid: &mut dyn FnMut() -> Uuid,
@@ -53,7 +68,7 @@ pub fn fragment_with_each_node_uuid_kept_by_its_name(
         if let Some(inner_fragment) = fresh_node.get("fragment") {
             kept_node.insert(
                 "fragment".to_owned(),
-                fragment_with_each_node_uuid_kept_by_its_name(
+                fragment_level_with_each_node_uuid_kept_by_its_name(
                     inner_fragment,
                     previous_node.and_then(|previous_node| previous_node.get("fragment")),
                     new_node_uuid,

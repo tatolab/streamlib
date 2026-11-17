@@ -288,7 +288,6 @@
 1 no-inline-test-module runtime/streamlib-project-repository/src/project_file_access.rs
 1 no-inline-test-module runtime/streamlib-project-repository/src/project_files_changed_outside_the_runtime_watch.rs
 1 no-inline-test-module runtime/streamlib-project-repository/src/project_history_repository.rs
-1 no-inline-test-module runtime/streamlib-project-repository/src/project_nodes_moved_off_tatolab_ops.rs
 1 no-inline-test-module runtime/streamlib-project-repository/src/project_repositories_open_in_this_runtime.rs
 1 no-inline-test-module runtime/streamlib-project-repository/src/project_stream_document.rs
 1 no-inline-test-module runtime/streamlib-project-repository/src/sample_project.rs
