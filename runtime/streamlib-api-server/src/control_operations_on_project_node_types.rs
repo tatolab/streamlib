@@ -64,7 +64,7 @@ async fn the_node_type_sources_the_projects_interpreter_lists(
     .map(serde_json::from_value::<NodeTypeSourceReadWithoutRunningIt>)
     .collect::<Result<Vec<_>, _>>()
     .map_err(|not_a_source| {
-        ControlOperationRefusal::Failed(format!(
+        ControlOperationRefusal::failed(format!(
             "list_project_node_types failed: the project's interpreter listed a source this \
              runtime does not read ({not_a_source}); its `tatolab-stream` may differ from \
              the runtime's"

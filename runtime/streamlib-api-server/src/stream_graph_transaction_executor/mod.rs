@@ -163,7 +163,7 @@ fn the_staged_graph_of_the_stream(
     streams: &BTreeMap<String, StreamATransactionEdits>,
     staged_graph_of_each_stream_not_running: &BTreeMap<Uuid, StreamGraphDocument>,
     project_repository: &ProjectRepository,
-) -> Result<StreamGraphDocument, String> {
+) -> Result<StreamGraphDocument, GraphRequestRefusal> {
     if let Some(held) = streams
         .values()
         .find(|held| held.stream_location.stream_asset == stream)
@@ -173,9 +173,7 @@ fn the_staged_graph_of_the_stream(
     if let Some(staged) = staged_graph_of_each_stream_not_running.get(&stream) {
         return Ok(staged.clone());
     }
-    project_repository
-        .stream_graph_document(stream)
-        .map_err(|refusal| refusal.to_string())
+    Ok(project_repository.stream_graph_document(stream)?)
 }
 
 /// The graph document of the stream a stream fragment's `held_stream`, its config's `stream`,
@@ -186,7 +184,7 @@ fn the_document_a_placed_stream_holds(
     streams: &BTreeMap<String, StreamATransactionEdits>,
     staged_graph_of_each_stream_not_running: &BTreeMap<Uuid, StreamGraphDocument>,
     project_repository: &ProjectRepository,
-) -> Result<StreamGraphDocument, String> {
+) -> Result<StreamGraphDocument, GraphRequestRefusal> {
     let stream = held_stream["asset"]
         .as_str()
         .and_then(|asset| Uuid::parse_str(asset).ok())
@@ -209,7 +207,7 @@ fn the_document_a_placed_stream_holds(
                 stream,
             )?;
             asset_references_made_references_into_the_import(&mut document, from);
-            StreamGraphDocument::from_value(document)
+            Ok(StreamGraphDocument::from_value(document)?)
         }
     }
 }
@@ -271,6 +269,7 @@ pub(crate) struct WhatAGraphOperationNames {
 
 /// Why one graph action was refused: its code and the place it names, the runtime's own words,
 /// and the JSON pointer, into the action's own params, of the value refused.
+#[derive(Debug)]
 pub(super) struct GraphRequestRefusal {
     code_and_place: Box<RefusalCodeAndPlace>,
     runtime_words: String,
@@ -337,6 +336,20 @@ impl GraphRequestRefusal {
         )
     }
 
+    /// This refusal's words, for a project repository call that takes a reader answering words;
+    /// the refusal itself is kept in `kept`, so the call's refusal reads back typed.
+    fn words_kept_in(self, kept: &std::cell::RefCell<Option<Self>>) -> String {
+        let runtime_words = self.runtime_words.clone();
+        *kept.borrow_mut() = Some(self);
+        runtime_words
+    }
+
+    /// The refusal of a project repository call that answered `why`: the one its reader kept in
+    /// `kept`, when it kept one.
+    fn kept_in_or(kept: &std::cell::RefCell<Option<Self>>, why: String) -> Self {
+        kept.take().unwrap_or_else(|| why.into())
+    }
+
     /// The refusal naming `input` as the field refused.
     fn of_the_field(mut self, input: &str) -> Self {
         self.code_and_place.refused_field = Some(input.to_owned());
@@ -350,6 +363,24 @@ impl From<String> for GraphRequestRefusal {
             RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused),
             runtime_words,
         )
+    }
+}
+
+impl From<streamlib_project_repository::NodeNotRead> for GraphRequestRefusal {
+    fn from(not_read: streamlib_project_repository::NodeNotRead) -> Self {
+        match not_read {
+            streamlib_project_repository::NodeNotRead::NoSuchNode(why) => Self::coded(
+                RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotFound),
+                why,
+            ),
+            streamlib_project_repository::NodeNotRead::DoesNotRead(why) => why.into(),
+        }
+    }
+}
+
+impl From<&str> for GraphRequestRefusal {
+    fn from(runtime_words: &str) -> Self {
+        runtime_words.to_owned().into()
     }
 }
 
@@ -401,8 +432,8 @@ impl GraphTransactionRefusal {
     }
 
     /// The refusal of the action the tool `tool_name` was sent, as the wire carries it: the
-    /// node, link and field the refused operation names as its caller named them, else the ones
-    /// the refusal names.
+    /// node as the refused operation's caller named it, else as the refusal names it; the input
+    /// the refusal names, else the one the operation names; and the link the operation names.
     pub(crate) fn into_the_refusal_on_the_wire(
         self,
         tool_name: &str,
@@ -671,7 +702,8 @@ impl StreamGraphTransactionExecutor<'_> {
         &self,
         stream_ids: &[String],
         stream_locations: &HashMap<String, StreamLocation>,
-    ) -> Result<streamlib_project_repository::ProjectRepositoryOneWriterAtATime, String> {
+    ) -> Result<streamlib_project_repository::ProjectRepositoryOneWriterAtATime, GraphRequestRefusal>
+    {
         let mut project: Option<&StreamLocation> = None;
         for stream_id in stream_ids {
             let stream_location = match stream_locations.get(stream_id) {
@@ -681,8 +713,8 @@ impl StreamGraphTransactionExecutor<'_> {
                         .runtime_operations_of_the_stream_a_call_names(stream_id)
                         .err()
                         .map_or_else(
-                            || format!("stream `{stream_id}` is not loaded"),
-                            |refusal| refusal.to_string(),
+                            || format!("stream `{stream_id}` is not loaded").into(),
+                            GraphRequestRefusal::from,
                         ));
                 }
                 Some(stream_location) => stream_location,
@@ -693,15 +725,16 @@ impl StreamGraphTransactionExecutor<'_> {
                         "a transaction edits the streams of one project, and `{stream_id}` is \
                          of the project {} while `{}` is of {}",
                         stream_location.project, stream_ids[0], first.project
-                    ));
+                    )
+                    .into());
                 }
                 _ => project = Some(stream_location),
             }
         }
         let project = project.ok_or("a transaction holds at least one operation")?;
-        self.project_repositories
-            .the_project_repository_at(&project.project_directory)
-            .map_err(|refusal| refusal.to_string())
+        Ok(self
+            .project_repositories
+            .the_project_repository_at(&project.project_directory)?)
     }
 }
 
@@ -713,18 +746,19 @@ type GraphGeneratorRunOfTheStream<'stream> =
 /// The placement of an imported stream under the fragment node `(fragment node, held stream)`
 /// names, `held_stream` its config's `stream`: the fragment it places and the stream's name.
 type ImportedStreamPlacement<'repository> =
-    dyn Fn(Uuid, &Value) -> Result<(Value, String), String> + 'repository;
+    dyn Fn(Uuid, &Value) -> Result<(Value, String), GraphRequestRefusal> + 'repository;
 
 /// The graph document of the stream a stream fragment places, from its config's `stream`.
 type DocumentOfAPlacedStream<'repository> =
-    dyn Fn(&Value) -> Result<StreamGraphDocument, String> + 'repository;
+    dyn Fn(&Value) -> Result<StreamGraphDocument, GraphRequestRefusal> + 'repository;
 
 /// The family wire name of an output port of the running stream, read from its `graph`.
 type FamilyOfAnOutputPortOfTheRunningStream<'stream> =
-    dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, String> + 'stream;
+    dyn Fn(&StreamGraphDocumentLinkEnd) -> Result<String, GraphRequestRefusal> + 'stream;
 
 /// The UUID of each node the running stream's `graph` renders as a function node.
-type FunctionNodesOfTheRunningStream<'stream> = dyn Fn() -> Result<HashSet<Uuid>, String> + 'stream;
+type FunctionNodesOfTheRunningStream<'stream> =
+    dyn Fn() -> Result<HashSet<Uuid>, GraphRequestRefusal> + 'stream;
 
 /// The config a node of a type holding some input values takes whole, as the running stream
 /// resolves the type.
@@ -804,7 +838,7 @@ fn the_fragment_an_imported_stream_places(
     project_directory: &std::path::Path,
     fragment_node: Uuid,
     held_stream: &Value,
-) -> Result<(Value, String), String> {
+) -> Result<(Value, String), GraphRequestRefusal> {
     let from = held_stream["from"]
         .as_str()
         .and_then(|from| Uuid::parse_str(from).ok())
@@ -856,7 +890,7 @@ pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
     project_repositories: &ProjectRepositoriesOpenInThisRuntime,
     project_directory: &std::path::Path,
     changed_files: &[PathBuf],
-) -> Result<Vec<StreamGraphAction>, String> {
+) -> Result<Vec<StreamGraphAction>, ProjectRepositoryRefusal> {
     let changed_modules: std::collections::HashSet<String> = changed_files
         .iter()
         .filter_map(|changed_file| {
@@ -866,9 +900,7 @@ pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
     if changed_modules.is_empty() {
         return Ok(Vec::new());
     }
-    let project_repository = project_repositories
-        .the_project_repository_at(project_directory)
-        .map_err(|refusal| refusal.to_string())?;
+    let project_repository = project_repositories.the_project_repository_at(project_directory)?;
     let project_repository = project_repository.lock();
     let project = project_repository.project_file().project;
     let mut refreshes = Vec::new();
@@ -878,9 +910,8 @@ pub(crate) fn the_refresh_of_each_fragment_a_changed_module_defines(
         }) else {
             continue;
         };
-        let staged_graph = project_repository
-            .stream_graph_document(stream_location.stream_asset)
-            .map_err(|refusal| refusal.to_string())?;
+        let staged_graph =
+            project_repository.stream_graph_document(stream_location.stream_asset)?;
         for fragment_node in staged_graph.fragment_nodes() {
             if fragment_node.node_type == STREAM_FRAGMENT_NODE_TYPE {
                 continue;

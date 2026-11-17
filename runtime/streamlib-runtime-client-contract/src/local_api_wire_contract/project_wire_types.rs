@@ -461,7 +461,7 @@ pub enum ControlOperationRefusalCode {
     /// The value sent is not one the input takes: of another type, or outside its range. The
     /// runtime's words say what it takes.
     InputValueNotValid,
-    /// No stream the runtime holds is the one named; the runtime's words list the ones it holds.
+    /// No stream the runtime holds, or no stream asset the project holds, is the one named.
     StreamNotFound,
     /// The stream holds no node of the UUID or `as` label sent; `refused_node` names it, when the
     /// call named one.
@@ -489,7 +489,8 @@ pub enum ControlOperationRefusalCode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectFilePlaceOnTheWire {
-    /// The file's path in the project, `/`-separated.
+    /// The file's path in the project, `/`-separated; its absolute path when the refusal is
+    /// about a file the runtime could not read from disk.
     pub path: String,
     /// The line, from 1, when the place is narrower than the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]

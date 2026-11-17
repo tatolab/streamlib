@@ -224,6 +224,23 @@ pub struct StreamGraphFragmentPlacement {
     pub fragment: Value,
 }
 
+/// Why a graph document answered no node of a UUID, in its own words.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NodeNotRead {
+    /// The document holds no node of that UUID; the words list the ones it holds.
+    #[error("{0}")]
+    NoSuchNode(String),
+    /// The document holds a node of that UUID that does not read as a node.
+    #[error("{0}")]
+    DoesNotRead(String),
+}
+
+impl From<NodeNotRead> for String {
+    fn from(not_read: NodeNotRead) -> Self {
+        not_read.to_string()
+    }
+}
+
 /// A stream's graph document, as the runtime reads and edits it: a JSON object whose keys it
 /// keeps whether or not it reads them.
 #[derive(Clone, Debug, PartialEq)]
@@ -312,19 +329,14 @@ impl StreamGraphDocument {
     }
 
     /// The node whose UUID is `node`, as the document holds it.
-    pub fn node(&self, node: Uuid) -> Result<StreamGraphDocumentNode, String> {
+    pub fn node(&self, node: Uuid) -> Result<StreamGraphDocumentNode, NodeNotRead> {
         let node_object = self
             .node_objects()
             .find(|node_object| node_uuid_of(node_object) == Some(node))
-            .ok_or_else(|| self.why_no_node_has(node))?;
-        serde_json::from_value(Value::Object(node_object.clone()))
-            .map_err(|not_a_node| format!("node {node} does not read: {not_a_node}"))
-    }
-
-    /// Whether the document holds a node whose UUID is `node`.
-    pub fn holds_a_node(&self, node: Uuid) -> bool {
-        self.node_objects()
-            .any(|node_object| node_uuid_of(node_object) == Some(node))
+            .ok_or_else(|| NodeNotRead::NoSuchNode(self.why_no_node_has(node)))?;
+        serde_json::from_value(Value::Object(node_object.clone())).map_err(|not_a_node| {
+            NodeNotRead::DoesNotRead(format!("node {node} does not read: {not_a_node}"))
+        })
     }
 
     /// The top-level node named `name`, as the document holds it, if one is.

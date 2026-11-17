@@ -180,12 +180,7 @@ pub(crate) enum ControlOperationAnswer {
 pub(crate) enum ControlOperationRefusal {
     /// The runtime refused the action, naming what it refused in its own words.
     RefusedAction(Box<ProjectActionRefusalOnTheWire>),
-    /// The operation was understood and not carried out, in the runtime's own words.
-    Failed(String),
-    /// The runtime could not carry the operation out through no doing of the caller, in its own
-    /// words.
-    RuntimeFailed(String),
-    /// The operation was not carried out for a reason a typed refusal coded and placed, in the
+    /// The operation was not carried out, for a reason its code and place name, in the
     /// runtime's own words.
     Coded {
         code_and_place: Box<RefusalCodeAndPlace>,
@@ -203,16 +198,6 @@ impl ControlOperationRefusal {
     ) -> ProjectActionRefusalOnTheWire {
         match self {
             Self::RefusedAction(refused) => *refused,
-            Self::Failed(why) => ProjectActionRefusalOnTheWire::of_the_action(
-                action,
-                ControlOperationRefusalCode::Refused,
-                why,
-            ),
-            Self::RuntimeFailed(why) => ProjectActionRefusalOnTheWire::of_the_action(
-                action,
-                ControlOperationRefusalCode::RuntimeFailed,
-                why,
-            ),
             Self::Coded {
                 code_and_place,
                 why,
@@ -230,8 +215,6 @@ impl ControlOperationRefusal {
     /// This refusal, of the same kind, its words led by `context`.
     pub(crate) fn with_its_words_after(self, context: impl std::fmt::Display) -> Self {
         match self {
-            Self::Failed(why) => Self::Failed(format!("{context}: {why}")),
-            Self::RuntimeFailed(why) => Self::RuntimeFailed(format!("{context}: {why}")),
             Self::Coded {
                 code_and_place,
                 why,
@@ -245,6 +228,24 @@ impl ControlOperationRefusal {
             }
             Self::ContractVersionMismatch(mismatch) => Self::ContractVersionMismatch(mismatch),
         }
+    }
+
+    /// The refusal of an operation understood and not carried out, coded `refused`, in the
+    /// runtime's words `why`.
+    pub(crate) fn failed(why: impl Into<String>) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused),
+            why.into(),
+        )
+    }
+
+    /// The refusal of an operation the runtime could not carry out through no doing of the
+    /// caller, coded `runtime_failed`, in its words `why`.
+    pub(crate) fn runtime_failed(why: impl Into<String>) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::coded(ControlOperationRefusalCode::RuntimeFailed),
+            why.into(),
+        )
     }
 
     /// A refusal coded and placed by `code_and_place`, in the runtime's words `why`.
@@ -283,7 +284,7 @@ impl ControlOperationRefusal {
     pub(crate) fn the_task_did_not_finish(
         task: impl std::fmt::Display,
     ) -> impl FnOnce(tokio::task::JoinError) -> Self {
-        move |join_failure| Self::RuntimeFailed(format!("{task} did not finish: {join_failure}"))
+        move |join_failure| Self::runtime_failed(format!("{task} did not finish: {join_failure}"))
     }
 }
 
@@ -297,9 +298,7 @@ impl std::fmt::Display for ControlOperationRefusal {
                     refused.action, refused.runtime_words
                 )
             }
-            Self::Failed(why) | Self::RuntimeFailed(why) | Self::Coded { why, .. } => {
-                formatter.write_str(why)
-            }
+            Self::Coded { why, .. } => formatter.write_str(why),
             Self::ContractVersionMismatch(mismatch) => mismatch.fmt(formatter),
         }
     }
@@ -307,7 +306,17 @@ impl std::fmt::Display for ControlOperationRefusal {
 
 impl From<String> for ControlOperationRefusal {
     fn from(why_in_the_runtime_words: String) -> Self {
-        Self::Failed(why_in_the_runtime_words)
+        Self::failed(why_in_the_runtime_words)
+    }
+}
+
+impl From<ProjectRepositoryRefusal> for ControlOperationRefusal {
+    /// The project repository's `refusal`, coded and placed, in its own words alone.
+    fn from(refusal: ProjectRepositoryRefusal) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::of_a_project_repository_refusal(&refusal),
+            refusal.to_string(),
+        )
     }
 }
 
@@ -745,7 +754,7 @@ impl ControlOperationDispatcher {
         + 'static,
     ) -> Result<StreamActionQueued, ControlOperationRefusal> {
         refuse_a_relative_project_directory(&project_directory)
-            .map_err(ControlOperationRefusal::Failed)?;
+            .map_err(ControlOperationRefusal::failed)?;
         self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
             queue_the_action(operations_on_the_loaded_streams, project_directory)
         })

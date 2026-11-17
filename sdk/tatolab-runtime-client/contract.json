@@ -5006,7 +5006,7 @@
           {
             "type": "string",
             "const": "stream_not_found",
-            "description": "No stream the runtime holds is the one named; the runtime's words list the ones it holds."
+            "description": "No stream the runtime holds, or no stream asset the project holds, is the one named."
           },
           {
             "type": "string",
@@ -5088,7 +5088,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "The file's path in the project, `/`-separated."
+            "description": "The file's path in the project, `/`-separated; its absolute path when the refusal is\nabout a file the runtime could not read from disk."
           },
           "line": {
             "type": [

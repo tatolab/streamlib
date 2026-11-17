@@ -98,6 +98,41 @@ async fn a_read_of_a_project_file_the_project_does_not_hold_answers_file_not_fou
     );
 }
 
+/// `undo` and `add_dependency` pass on the project repository's typed refusal: a project file
+/// that does not read answers its code and names the file.
+#[tokio::test]
+async fn undo_and_add_dependency_answer_the_code_and_file_of_a_project_file_that_does_not_read() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let project_file = served.project_directory().join("tatolab-project.json");
+    std::fs::write(&project_file, b"not json").unwrap();
+    let source = served.a_file_outside_the_project("imported.zip", b"PK");
+
+    for (tool_name, arguments) in [
+        ("undo", json!({})),
+        ("add_dependency", json!({ "source": source })),
+    ] {
+        let refusal = crate::mcp::tests::the_refusal_of_a_tool_result(
+            &served.tool_call(tool_name, arguments).await,
+        );
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::Refused,
+            "{tool_name}"
+        );
+        assert_eq!(
+            refusal.refused_file.map(|place| place.path),
+            Some(project_file.to_string_lossy().into_owned()),
+            "{tool_name}: {}",
+            refusal.runtime_words
+        );
+        assert!(
+            refusal.runtime_words.contains("could not be read"),
+            "{}",
+            refusal.runtime_words
+        );
+    }
+}
+
 /// A `write_project_file` carrying the `content_sha256` its `read_project_file` answered is
 /// refused in the runtime's words once another write changed the file, leaving the file as the
 /// other write left it; the hash the read and each write answer chains the next save.

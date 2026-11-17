@@ -70,8 +70,19 @@ impl ControlPlaneMcpDispatchStubRuntime {
     /// A stub whose `add_node` refuses with `refusal`, standing in for an
     /// engine-side refusal the front end has to carry back.
     fn refusing_every_add_node(refusal: &str) -> Self {
+        let refusal = refusal.to_owned();
+        Self::refusing_every_add_node_with(move || {
+            streamlib::sdk::error::Error::Configuration(refusal.clone())
+        })
+    }
+
+    /// A stub whose `add_node` refuses with the engine error `the_refusal` makes, standing in
+    /// for a typed engine refusal the front end has to carry back with its code.
+    pub(crate) fn refusing_every_add_node_with(
+        the_refusal: impl Fn() -> streamlib::sdk::error::Error + Send + Sync + 'static,
+    ) -> Self {
         Self {
-            armed_add_node_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
+            armed_add_node_refusal: Arc::new(Mutex::new(Some(Arc::new(the_refusal)))),
             ..Self::new()
         }
     }

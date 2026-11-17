@@ -92,10 +92,12 @@ impl RefusalCodeAndPlace {
                 refused_node: Some(node.to_string()),
                 ..Self::coded(Refused)
             },
-            ProjectRepositoryRefusal::ProjectFileUnreadable { .. }
-            | ProjectRepositoryRefusal::AssetSidecarUnreadable { .. }
-            | ProjectRepositoryRefusal::PyprojectUnreadable { .. }
-            | ProjectRepositoryRefusal::Io(_)
+            ProjectRepositoryRefusal::ProjectFileUnreadable { path, .. }
+            | ProjectRepositoryRefusal::AssetSidecarUnreadable { path, .. }
+            | ProjectRepositoryRefusal::PyprojectUnreadable { path, .. } => {
+                Self::of_the_file(Refused, &path.to_string_lossy())
+            }
+            ProjectRepositoryRefusal::Io(_)
             | ProjectRepositoryRefusal::History(_)
             | ProjectRepositoryRefusal::Json(_) => Self::coded(RuntimeFailed),
             ProjectRepositoryRefusal::NotAProject { .. }
@@ -154,7 +156,12 @@ impl RefusalCodeAndPlace {
     }
 
     /// The code and place of an engine's error. A variant that holds only words answers
-    /// `refused`; one the caller had no hand in answers `runtime_failed`.
+    /// `refused`, `Runtime` and `ShaderCompilation` among them, since the engine words
+    /// refusals a caller can act on with them. The words-only variants that answer
+    /// `runtime_failed` are `GpuError`, `TextureError`, `BufferError`, `ClockError`, `Io`,
+    /// `EngineResourceRefusedAtAStreamsStart`, `ReservedPublisherSubscriberSlotOccupied`,
+    /// `BagDecodeFailed` and `BagEncodeFailed`, each a failure of the runtime's own resources.
+    /// A variant with fields is coded by what it names.
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
             LinkAlreadyExists, NodeNameTaken, NodeNotFound, NodeNotRunning, NodeTypeNotFound,
@@ -201,7 +208,6 @@ impl RefusalCodeAndPlace {
             Error::LinkAlreadyExists(_) => Self::coded(LinkAlreadyExists),
             Error::GpuError(_)
             | Error::EngineResourceRefusedAtAStreamsStart(_)
-            | Error::ShaderCompilation(_)
             | Error::TextureError(_)
             | Error::BufferError(_)
             | Error::SurfaceFrameRecycled { .. }
@@ -213,12 +219,13 @@ impl RefusalCodeAndPlace {
             | Error::FrameAllocationRefusedPastTheMetalWorkingSetBudget { .. }
             | Error::ClockError(_)
             | Error::Io(_)
-            | Error::Runtime(_)
             | Error::ReservedPublisherSubscriberSlotOccupied(_)
             | Error::BagDecodeFailed(_)
             | Error::BagEncodeFailed(_)
             | Error::ChannelSampleStampsAPayloadPastTheSample { .. } => Self::coded(RuntimeFailed),
-            Error::GraphError(_)
+            Error::Runtime(_)
+            | Error::ShaderCompilation(_)
+            | Error::GraphError(_)
             | Error::PortError(_)
             | Error::Link(_)
             | Error::LinkNotFound(_)

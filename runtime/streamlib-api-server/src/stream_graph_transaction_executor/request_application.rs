@@ -184,10 +184,11 @@ impl StreamGraphTransactionExecutor<'_> {
         streams: &BTreeMap<String, StreamATransactionEdits>,
         staged_graph_of_each_stream_not_running: &BTreeMap<Uuid, StreamGraphDocument>,
         project_repository: Option<&ProjectRepository>,
-    ) -> Result<StreamGraphLevelOfAPlacedStream, String> {
+    ) -> Result<StreamGraphLevelOfAPlacedStream, GraphRequestRefusal> {
         let stream = streams
             .get(stream_id)
             .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
+        let kept = std::cell::RefCell::new(None);
         stream
             .staged_graph
             .clone()
@@ -204,8 +205,10 @@ impl StreamGraphTransactionExecutor<'_> {
                         staged_graph_of_each_stream_not_running,
                         project_repository,
                     )
+                    .map_err(|refusal| refusal.words_kept_in(&kept))
                 },
             )
+            .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))
     }
 
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
@@ -294,15 +297,13 @@ impl StreamGraphTransactionExecutor<'_> {
         let family_of_an_output_port = |end: &StreamGraphDocumentLinkEnd| {
             let rendered_graph = self
                 .async_runtime
-                .block_on(stream_operations.to_json_async())
-                .map_err(|refusal| refusal.to_string())?;
-            the_family_of_an_output_port_in(&rendered_graph, end)
+                .block_on(stream_operations.to_json_async())?;
+            Ok(the_family_of_an_output_port_in(&rendered_graph, end)?)
         };
         let function_nodes_of_the_running_stream = || {
             let rendered_graph = self
                 .async_runtime
-                .block_on(stream_operations.to_json_async())
-                .map_err(|refusal| refusal.to_string())?;
+                .block_on(stream_operations.to_json_async())?;
             let mut function_nodes = HashSet::new();
             the_function_nodes_rendered_in(&rendered_graph, &mut function_nodes);
             Ok(function_nodes)
@@ -540,13 +541,12 @@ impl StreamGraphTransactionExecutor<'_> {
         streams: &mut BTreeMap<String, StreamATransactionEdits>,
         staged_graph_of_each_stream_not_running: &mut BTreeMap<Uuid, StreamGraphDocument>,
         project_repository: &ProjectRepository,
-    ) -> Result<Vec<(Uuid, StreamGraphOperation)>, String> {
+    ) -> Result<Vec<(Uuid, StreamGraphOperation)>, GraphRequestRefusal> {
         if reached.is_the_streams_own_level() {
             return Ok(Vec::new());
         }
         let mut stream_assets_of_the_project: BTreeSet<Uuid> = project_repository
-            .assets()
-            .map_err(|refusal| refusal.to_string())?
+            .assets()?
             .into_iter()
             .filter(|asset| asset.kind == ProjectAssetKind::Stream)
             .map(|asset| asset.asset)

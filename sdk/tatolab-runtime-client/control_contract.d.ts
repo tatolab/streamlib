@@ -166,7 +166,8 @@ export interface GraphLinkEndOnTheWire {
  */
 export interface ProjectFilePlaceOnTheWire {
   /**
-   * The file's path in the project, `/`-separated.
+   * The file's path in the project, `/`-separated; its absolute path when the refusal is
+   * about a file the runtime could not read from disk.
    */
   path: string;
   /**

@@ -88,6 +88,15 @@ fn a_project_repository_refusal_names_its_stream_node_or_file_and_its_kind() {
             the_file("../outside.py"),
         ),
         (
+            ProjectRepositoryRefusal::ProjectFileUnreadable {
+                path: "/rig/tatolab-project.json".into(),
+                why: "expected value at line 1".to_owned(),
+            },
+            ControlOperationRefusalCode::Refused,
+            None,
+            the_file("/rig/tatolab-project.json"),
+        ),
+        (
             ProjectRepositoryRefusal::Io(std::io::Error::other("the disk is gone")),
             ControlOperationRefusalCode::RuntimeFailed,
             None,
@@ -158,6 +167,21 @@ fn an_engine_error_reads_back_with_its_code_and_the_input_it_names() {
         (
             Error::Configuration("`radius` is not a number".to_owned()),
             ControlOperationRefusalCode::Refused,
+            None,
+        ),
+        (
+            Error::Runtime("the stream `live` is not started".to_owned()),
+            ControlOperationRefusalCode::Refused,
+            None,
+        ),
+        (
+            Error::ShaderCompilation("`main` is not declared".to_owned()),
+            ControlOperationRefusalCode::Refused,
+            None,
+        ),
+        (
+            Error::ClockError("the clock source went away".to_owned()),
+            ControlOperationRefusalCode::RuntimeFailed,
             None,
         ),
     ];

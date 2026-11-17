@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_project_repository::NodeNotRead;
 
 /// The operation `request` asks of the graph `staged_graph` holds, with everything its inverse
 /// needs read from it; an added node takes a new UUID, recorded under its `as` when it has one.
@@ -420,19 +421,24 @@ pub(super) fn graph_operation_for_the_request(
                 .into_owned();
             let fragment = Uuid::new_v4();
             let placed_stream = Uuid::new_v4();
-            let collapsed = staged_graph.the_collapse_of_nodes_into_a_placed_stream(
-                &nodes,
-                fragment,
-                &name,
-                placed_stream,
-                family_of_an_output_port,
-                &mut Uuid::new_v4,
-            )?;
+            let kept = std::cell::RefCell::new(None);
+            let collapsed = staged_graph
+                .the_collapse_of_nodes_into_a_placed_stream(
+                    &nodes,
+                    fragment,
+                    &name,
+                    placed_stream,
+                    &|end| {
+                        family_of_an_output_port(end)
+                            .map_err(|refusal| refusal.words_kept_in(&kept))
+                    },
+                    &mut Uuid::new_v4,
+                )
+                .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))?;
             let path = ProjectRelativeAssetPath::parse(&format!(
                 "{}/{name}{GRAPH_DOCUMENT_FILE_SUFFIX}",
                 ProjectAssetKind::Stream.standard_folder_in_a_project()
-            ))
-            .map_err(|refusal| refusal.to_string())?;
+            ))?;
             *placed_stream_a_collapse_saves = Some(PlacedStreamACollapseSaves {
                 placed_stream,
                 document: StreamGraphDocument::from_value(
@@ -452,12 +458,18 @@ pub(super) fn graph_operation_for_the_request(
             })
         }
         StreamGraphAction::UnlockSubgraph { fragment, .. } => {
+            let kept = std::cell::RefCell::new(None);
             Ok(StreamGraphOperation::UnfoldFragment {
-                fold: staged_graph.the_fold_a_fragment_unfolds(
-                    node_named(&fragment, node_by_label)?,
-                    document_of_a_placed_stream,
-                    &mut Uuid::new_v4,
-                )?,
+                fold: staged_graph
+                    .the_fold_a_fragment_unfolds(
+                        node_named(&fragment, node_by_label)?,
+                        &|held_stream| {
+                            document_of_a_placed_stream(held_stream)
+                                .map_err(|refusal| refusal.words_kept_in(&kept))
+                        },
+                        &mut Uuid::new_v4,
+                    )
+                    .map_err(|why| GraphRequestRefusal::kept_in_or(&kept, why))?,
             })
         }
     }
@@ -469,7 +481,7 @@ pub(super) fn the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is
     staged_graph: &StreamGraphDocument,
     link: &StreamGraphDocumentLink,
     function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
-) -> Result<bool, String> {
+) -> Result<bool, GraphRequestRefusal> {
     let links = staged_graph.links();
     let nodes_reached_from = |node: Uuid, may_pass_through: &dyn Fn(Uuid) -> bool| {
         let mut reached = HashSet::from([node]);
@@ -559,12 +571,11 @@ fn the_node_the_document_holds(
     document: &StreamGraphDocument,
     node: Uuid,
 ) -> Result<StreamGraphDocumentNode, GraphRequestRefusal> {
-    document.node(node).map_err(|why| {
-        if document.holds_a_node(node) {
-            GraphRequestRefusal::from(why)
-        } else {
+    document.node(node).map_err(|not_read| match not_read {
+        NodeNotRead::NoSuchNode(why) => {
             GraphRequestRefusal::of_a_node_not_found(&node.to_string(), why)
         }
+        NodeNotRead::DoesNotRead(why) => why.into(),
     })
 }
 
