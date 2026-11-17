@@ -175,11 +175,12 @@ async fn a_graph_document_holding_a_view_node_loads_it_with_the_views_ports_and_
         refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
         "{refused_result}"
     );
-    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
-    assert!(
-        refusal.starts_with("write_studio_view_output failed:") && refusal.contains("not running"),
-        "{refusal}"
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["refusal_code"], "node_not_running",
+        "{refused_result}"
     );
+    let refusal = tool_answer(&refused_result).expect_err("a node not running publishes nothing");
+    assert!(refusal.contains("not running"), "{refusal}");
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 
@@ -279,12 +280,13 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
         refused_result["structuredContent"]["refusal"]["not_running_because"], "preparing",
         "{refused_result}"
     );
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["refusal_code"], "node_not_running",
+        "{refused_result}"
+    );
     let refusal = tool_answer(&refused_result)
         .expect_err("an Input whose node does not run reaches no reader");
-    assert!(
-        refusal.starts_with("write_graph_input failed:") && refusal.contains("not running"),
-        "{refusal}"
-    );
+    assert!(refusal.contains("not running"), "{refusal}");
     let refusal = tool_answer(
         &tool_call_result(
             engine.operations_on_the_loaded_streams(),

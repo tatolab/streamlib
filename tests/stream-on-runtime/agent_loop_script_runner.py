@@ -337,7 +337,11 @@ def the_json_a_tool_answered(tool: str, result: CallToolResult) -> Any:
     """The JSON a successful tool call answered; a refusal fails the run with its words."""
     texts = [content.text for content in result.content if isinstance(content, TextContent)]
     if result.is_error:
-        raise AgentLoopScriptRunFailed(f"`{tool}` was refused: {' '.join(texts)}")
+        refusal = (result.structured_content or {}).get("refusal") or {}
+        raise AgentLoopScriptRunFailed(
+            f"`{tool}` was refused ({refusal.get('refusal_code', 'with no code')}): "
+            f"{refusal.get('runtime_words') or ' '.join(texts)}"
+        )
     if not texts:
         raise AgentLoopScriptRunFailed(f"`{tool}` answered no text: {result.content}")
     return json.loads(texts[0])

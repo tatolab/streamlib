@@ -43,7 +43,7 @@ export declare class ControlOperationError extends Error {
   readonly code: number;
   /** The error's `data`, as the runtime sent it. */
   readonly data: unknown;
-  /** The refusal, when the runtime refused the operation and its `data` matches the contract's refusal; `data` keeps what the runtime sent either way. */
+  /** The refusal, when the error's `data` matches the contract's refusal, as every code but a contract version mismatch carries it; `data` keeps what the runtime sent either way. */
   readonly refusal: ProjectActionRefusalOnTheWire | undefined;
 }
 

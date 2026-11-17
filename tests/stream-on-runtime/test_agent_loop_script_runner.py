@@ -131,8 +131,13 @@ class ContractBackedAgentSession:
             if name in self.refused_operations:
                 raise StandInRefusal(f"`{name}` was refused")
             answer = self.answer(name, sent)
-        except StandInRefusal as refusal:
-            return CallToolResult(content=[TextContent(text=str(refusal))], is_error=True)
+        except StandInRefusal as refused:
+            refusal = {"refusal_code": "refused", "action": name, "runtime_words": str(refused)}
+            return CallToolResult(
+                content=[TextContent(text=json.dumps(refusal, indent=2))],
+                structured_content={"refusal": refusal},
+                is_error=True,
+            )
         return CallToolResult(content=[TextContent(text=json.dumps(answer))])
 
     def answer(self, operation: str, arguments: "dict[str, Any]") -> Any:
@@ -342,7 +347,9 @@ def test_an_unexpected_refusal_fails_the_run() -> None:
     session = ContractBackedAgentSession(the_committed_control_contract())
     session.refused_operations.add("transact")
 
-    with pytest.raises(AgentLoopScriptRunFailed, match="`transact` was refused"):
+    with pytest.raises(
+        AgentLoopScriptRunFailed, match=r"^`transact` was refused \(refused\): `transact` was refused$"
+    ):
         played(agent_loop_script_from(build_a_graph_document()), session)
 
 

@@ -15,16 +15,19 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
+use crate::core::graph::legacy_config_of_a_node::{
+    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
+};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
     PendingDeletionComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
-use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl, disconnect_impl, remove_node_impl,
+    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl,
+    describe_the_type_an_add_names_when_it_must, disconnect_impl, remove_node_impl,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -188,6 +191,7 @@ impl LoadedStreamInThisRuntime {
                 }
                 Ok(())
             })?;
+        let node_types = self.node_types_this_stream_resolves();
         let kept_node_uuids: HashSet<Uuid> = kept_live_nodes
             .iter()
             .map(|live_node| live_node.node_uuid)
@@ -197,12 +201,20 @@ impl LoadedStreamInThisRuntime {
             else {
                 continue;
             };
-            let spec = NodeSpec::new(
+            describe_the_type_an_add_names_when_it_must(
+                &self.node_interpreter_launch_record,
+                &document_node.node_type,
+                self.lend_directory(),
+                ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
+            )
+            .await?;
+            let spec = node_spec_holding_the_input_values(
+                node_types,
                 document_node.node_type.clone(),
-                document_node.config.clone(),
+                &document_node.input_values,
+                document_node.studio.clone(),
             )
             .with_display_name(document_node.name.clone())
-            .with_pins_and_studio_fields(document_node.pins.clone(), document_node.studio.clone())
             .with_exposed_config_fields(document_node.exposed_config_fields.clone())
             .with_node_uuid(node_uuid);
             add_node_impl(
@@ -216,10 +228,15 @@ impl LoadedStreamInThisRuntime {
         }
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
-            if live_node.config != document_node.config {
+            let ConfigAndPinValues {
+                config: document_config,
+                pin_values: document_pins,
+            } = LegacyConfigOfANodeType::of(node_types, &document_node.node_type)
+                .split(&document_node.input_values);
+            if live_node.config != document_config {
                 self.update_node_config_compiled_right_away(
                     &live_node.node_run_id,
-                    &document_node.config,
+                    &document_config,
                 )
                 .await?;
             }
@@ -229,14 +246,14 @@ impl LoadedStreamInThisRuntime {
                     document_node.exposed_config_fields.clone(),
                 )?;
             }
-            if live_node.pins != document_node.pins || live_node.studio != document_node.studio {
+            if live_node.pins != document_pins || live_node.studio != document_node.studio {
                 self.compiler.scope(|this_streams_graph, _tx| {
                     if let Some(node) = this_streams_graph
                         .traversal_mut()
                         .v(&live_node.node_run_id)
                         .first_mut()
                     {
-                        node.pins = document_node.pins.clone();
+                        node.pins = document_pins.clone();
                         node.studio = document_node.studio.clone();
                     }
                 });

@@ -10,6 +10,9 @@
 
 import { z } from "zod";
 
+/** @type {z.ZodType<ControlContract.ControlOperationRefusalCode>} */
+const ControlOperationRefusalCode = z.string().pipe(z.union([z.literal("params_do_not_match_schema"), z.literal("operation_not_found"), z.literal("node_not_running"), z.literal("runtime_failed"), z.literal("refused")]).catch("refused"));
+
 /** @type {z.ZodType<ControlContract.GraphLinkEndOnTheWire>} */
 const GraphLinkEndOnTheWire = z.looseObject({
   node: z.string(),
@@ -22,17 +25,34 @@ const RefusedGraphLinkOnTheWire = z.looseObject({
   target: GraphLinkEndOnTheWire,
 });
 
+/** @type {z.ZodType<ControlContract.ProjectFilePlaceOnTheWire>} */
+const ProjectFilePlaceOnTheWire = z.looseObject({
+  path: z.string(),
+  line: z.number().int().min(0).nullable().optional(),
+  column: z.number().int().min(0).nullable().optional(),
+});
+
 /** @type {z.ZodType<ControlContract.NodeNotRunningBecauseOnTheWire>} */
 const NodeNotRunningBecauseOnTheWire = z.union([z.literal("playback_stopped"), z.literal("playback_paused"), z.literal("preparing"), z.literal("node_failed")]);
 
+/** @type {z.ZodType<ControlContract.SuggestedOperationCall>} */
+const SuggestedOperationCall = z.looseObject({
+  operation: z.string(),
+  params: z.record(z.string(), z.unknown()),
+});
+
 /** @type {z.ZodType<ControlContract.ProjectActionRefusalOnTheWire>} */
 const ProjectActionRefusalOnTheWire = z.looseObject({
+  refusal_code: ControlOperationRefusalCode.default("refused"),
   action: z.string(),
   refused_operation_index: z.number().int().min(0).nullable().optional(),
   refused_node: z.string().nullable().optional(),
   refused_link: RefusedGraphLinkOnTheWire.nullable().optional(),
   refused_field: z.string().nullable().optional(),
+  refused_params_pointer: z.string().nullable().optional(),
+  refused_file: ProjectFilePlaceOnTheWire.nullable().optional(),
   not_running_because: NodeNotRunningBecauseOnTheWire.nullable().optional(),
+  suggested_call: SuggestedOperationCall.nullable().optional(),
   runtime_words: z.string(),
 });
 
@@ -1743,9 +1763,12 @@ const NodeUiManifest = z.strictObject({
 export const ControlSchemas = Object.freeze({
   components: Object.freeze({
     ProjectActionRefusalOnTheWire,
+    ControlOperationRefusalCode,
     RefusedGraphLinkOnTheWire,
     GraphLinkEndOnTheWire,
+    ProjectFilePlaceOnTheWire,
     NodeNotRunningBecauseOnTheWire,
+    SuggestedOperationCall,
     ControlContractVersionMismatch,
     DiscoverRequest,
     DiscoverResult,

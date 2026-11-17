@@ -512,7 +512,7 @@ impl LoadedStreamInThisRuntime {
         );
         self.graph_only_nodes_as_drawn
             .lock()
-            .render_into(&mut graph_response);
+            .render_into(&mut graph_response, &self.node_types_this_stream_resolves);
         render_the_current_value_of_each_graph_input_into(
             &mut graph_response.nodes,
             current_value_of_each_graph_input,

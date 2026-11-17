@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_OUTPUT_NODE_TYPE,
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
@@ -134,7 +135,7 @@ impl StreamGraphDocument {
             .filter(|node_object| {
                 node_object.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE)
                     && node_object
-                        .get("config")
+                        .get(NODE_INPUT_VALUES_KEY)
                         .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
                         .is_some_and(|held_stream| {
                             held_stream.get("from").is_none()
@@ -291,7 +292,7 @@ fn the_stream_a_node_of_the_level_places(
     match node_object.get("type").and_then(Value::as_str) {
         Some(STREAM_FRAGMENT_NODE_TYPE) => {
             let held_stream = node_object
-                .get("config")
+                .get(NODE_INPUT_VALUES_KEY)
                 .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY));
             if let Some(from) = held_stream.and_then(|held| held.get("from")) {
                 return Err(format!(
@@ -363,8 +364,8 @@ fn the_operation_with_each_node_and_group_renamed(
 
 /// Each node and group UUID `value` names, at any depth, replaced by its value in `renamed`: a
 /// node's or group's `id`, a link end's or an operation's `node`, a `group`, and each entry of a
-/// `nodes` list. A node's `config`, `pins` and `studio.metadata` are values of its own and are left
-/// as they are.
+/// `nodes` list. A node's `input_values` and `studio.metadata` are values of its own and are left
+/// as they are, and so are the `config` and `pins` an older runtime recorded.
 fn each_node_and_group_reference_renamed(value: &mut Value, renamed: &HashMap<String, String>) {
     let rename = |text: &mut String| {
         if let Some(new_text) = renamed.get(text.as_str()) {
@@ -375,7 +376,7 @@ fn each_node_and_group_reference_renamed(value: &mut Value, renamed: &HashMap<St
         Value::Object(object) => {
             for (key, entry) in object.iter_mut() {
                 match (key.as_str(), entry) {
-                    ("config" | "pins" | "metadata", _) => {}
+                    ("input_values" | "config" | "pins" | "metadata", _) => {}
                     ("id" | "node" | "group", Value::String(text)) => rename(text),
                     ("nodes", Value::Array(entries)) => {
                         for entry in entries {
@@ -438,7 +439,7 @@ impl FragmentPortsDeclaredInside {
                     _ => return None,
                 };
                 let port = node_object
-                    .get("config")?
+                    .get(NODE_INPUT_VALUES_KEY)?
                     .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)?
                     .as_str()?;
                 Some((node_uuid_of(node_object)?, direction, port.to_owned()))

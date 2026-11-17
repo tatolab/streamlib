@@ -111,7 +111,9 @@ pub enum ProjectRepositoryRefusal {
     DisplayNameShowsNothing(String),
     #[error("the graph document {path} refused the change: {why}")]
     GraphOperationRefused { path: String, why: String },
-    #[error("node {node}'s config references the asset {asset}, which the project does not hold")]
+    #[error(
+        "node {node}'s input values reference the asset {asset}, which the project does not hold"
+    )]
     ConfigReferencesNoAsset { node: Uuid, asset: Uuid },
     #[error("{author} has no transaction left to undo")]
     NothingToUndo { author: String },

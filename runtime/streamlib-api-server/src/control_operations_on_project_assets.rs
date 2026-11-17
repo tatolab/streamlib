@@ -229,9 +229,7 @@ impl ControlOperationDispatcher {
                 .preview_png_bytes(&content_sha256, &asset_file_path)
         })
         .await
-        .map_err(|join_failure| {
-            format!("read_asset_preview failed: the read did not finish: {join_failure}")
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish("read_asset_preview failed: the read"))?
         .ok_or_else(|| {
             format!(
                 "read_asset_preview failed: asset {asset}'s preview picture is gone from the project's `.tatolab/`; it is made again after the asset's next `replace_asset`"
@@ -518,10 +516,10 @@ impl ControlOperationDispatcher {
                 })
                 .await
                 .map_err(|not_in_line| {
-                    format!(
+                    not_in_line.with_its_words_after(format_args!(
                         "{method_name} applied its transaction, and the loaded streams were not \
-                         brought in line with it: {not_in_line}"
-                    )
+                         brought in line with it"
+                    ))
                 })?;
             answered.action = loads_queued
                 .into_iter()

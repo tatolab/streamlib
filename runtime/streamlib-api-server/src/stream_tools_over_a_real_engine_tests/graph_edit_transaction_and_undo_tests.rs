@@ -141,7 +141,7 @@ async fn a_graph_input_added_with_no_port_takes_the_next_free_input_name() {
         .into_iter()
         .flatten()
         .filter(|node| node["type"] == "tatolab.stream:GraphInput")
-        .filter_map(|node| node["config"]["port"].as_str())
+        .filter_map(|node| node["input_values"]["port"].as_str())
         .collect();
     ports_declared.sort_unstable();
     assert_eq!(ports_declared, ["input1", "input2", "input3"], "{kept}");

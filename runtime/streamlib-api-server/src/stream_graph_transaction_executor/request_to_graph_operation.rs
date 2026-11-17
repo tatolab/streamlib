@@ -18,6 +18,7 @@ pub(super) fn graph_operation_for_the_request(
         document_of_a_placed_stream,
         family_of_an_output_port,
         function_nodes_of_the_running_stream,
+        config_a_node_takes,
     } = what_the_request_reads;
     let node_named = |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, String> {
         node_by_label
@@ -85,8 +86,7 @@ pub(super) fn graph_operation_for_the_request(
                             id: node,
                             name: placed.name,
                             node_type: placed.generator,
-                            config: placed.config,
-                            pins: Map::new(),
+                            input_values: placed.config.unwrap_or_default(),
                             exposed_config_fields: Vec::new(),
                             studio: Default::default(),
                             fragment: Some(Box::new(fragment)),
@@ -97,7 +97,7 @@ pub(super) fn graph_operation_for_the_request(
                 Some(StreamGraphDocumentNode {
                     id,
                     node_type,
-                    config,
+                    input_values,
                     fragment: Some(previous_fragment),
                     ..
                 }) => {
@@ -111,12 +111,12 @@ pub(super) fn graph_operation_for_the_request(
                         node: id,
                         from: StreamGraphFragmentPlacement {
                             generator: node_type,
-                            config,
+                            input_values,
                             fragment: *previous_fragment,
                         },
                         to: StreamGraphFragmentPlacement {
                             generator: placed.generator,
-                            config: placed.config,
+                            input_values: placed.config.unwrap_or_default(),
                             fragment,
                         },
                     }
@@ -148,13 +148,14 @@ pub(super) fn graph_operation_for_the_request(
                 config.unwrap_or_default(),
                 staged_graph,
             );
+            let mut input_values = Map::new();
+            fold_into_input_values(&mut input_values, pins.unwrap_or_default(), config);
             Ok(StreamGraphOperation::AddNode {
                 node: StreamGraphDocumentNode {
                     id: node,
                     name: name.unwrap_or_default(),
                     node_type,
-                    config: Value::Object(config),
-                    pins: pins.unwrap_or_default(),
+                    input_values,
                     exposed_config_fields: exposed_config_fields.unwrap_or_default(),
                     studio: studio
                         .map(StreamGraphNodeStudioFields::from_a_callers_studio)
@@ -195,22 +196,18 @@ pub(super) fn graph_operation_for_the_request(
         }
         StreamGraphAction::SetNodeConfig { node, config, .. } => {
             let node = node_named(&node, node_by_label)?;
-            Ok(StreamGraphOperation::SetNodeConfig {
-                node,
-                from: staged_graph.node(node)?.config,
-                to: Value::Object(config),
-            })
+            let configured = staged_graph.node(node)?;
+            Ok(StreamGraphOperation::set_node_config_of(
+                &configured,
+                config_a_node_takes(&configured.node_type, &configured.input_values)?,
+                config,
+            ))
         }
         StreamGraphAction::SetPinValue {
             node, input, value, ..
         } => {
             let node = node_named(&node, node_by_label)?;
-            Ok(StreamGraphOperation::SetPinValue {
-                node,
-                from: staged_graph.node(node)?.pins.get(&input).cloned(),
-                input,
-                to: value.filter(|value| !value.is_null()),
-            })
+            StreamGraphOperation::set_pin_value_of(&staged_graph.node(node)?, input, value)
         }
         StreamGraphAction::RenameNode { node, name, .. } => {
             let node = node_named(&node, node_by_label)?;
@@ -299,13 +296,16 @@ pub(super) fn graph_operation_for_the_request(
                 .map_err(|_| format!("`{project}` is no project's UUID"))?;
             let dependency_stream = Uuid::parse_str(&dependency_stream)
                 .map_err(|_| format!("`{dependency_stream}` is no stream asset's UUID"))?;
-            let config = json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: {
+            let held_stream = json!({
                 "asset": dependency_stream.to_string(),
                 "from": project.to_string(),
-            }});
+            });
+            let input_values = Map::from_iter([(
+                STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY.to_owned(),
+                held_stream.clone(),
+            )]);
             let node = Uuid::new_v4();
-            let (fragment, stream_name) =
-                place_the_imported_stream(node, &config[STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY])?;
+            let (fragment, stream_name) = place_the_imported_stream(node, &held_stream)?;
             let name = name.unwrap_or(stream_name);
             let name = streamlib::sdk::graph::cast_exposed_name_to_url_safe(&name)
                 .map_err(|casts_to_nothing| {
@@ -314,7 +314,9 @@ pub(super) fn graph_operation_for_the_request(
                 .into_owned();
             if let Some(held) = staged_graph.node_named(&name) {
                 return Err(
-                    if held.node_type == STREAM_FRAGMENT_NODE_TYPE && held.config == config {
+                    if held.node_type == STREAM_FRAGMENT_NODE_TYPE
+                        && held.input_values == input_values
+                    {
                         format!(
                             "node {} `{name}` already places this stream, and follows its import's \
                          folder as it is on disk, so there is nothing to place again",
@@ -334,8 +336,7 @@ pub(super) fn graph_operation_for_the_request(
                     id: node,
                     name,
                     node_type: STREAM_FRAGMENT_NODE_TYPE.to_owned(),
-                    config,
-                    pins: Map::new(),
+                    input_values,
                     exposed_config_fields: Vec::new(),
                     studio: Default::default(),
                     fragment: Some(Box::new(fragment)),
@@ -507,8 +508,7 @@ pub(super) fn the_previous_value_node_added_on_the_link(
             id: previous_value_node,
             name: String::new(),
             node_type: PREVIOUS_VALUE_NODE_TYPE.to_owned(),
-            config: Value::Object(Map::new()),
-            pins: Map::new(),
+            input_values: Map::new(),
             exposed_config_fields: Vec::new(),
             studio: Box::new(StreamGraphNodeStudioFields {
                 position: position_halfway_along_the_link,
@@ -553,6 +553,7 @@ struct StreamGraphFragmentNodeAGeneratorRunPlaced {
     name: String,
     #[serde(rename = "type")]
     generator: String,
-    config: Value,
+    #[serde(default)]
+    config: Option<Map<String, Value>>,
     fragment: Value,
 }

@@ -29,6 +29,9 @@ serde = { version = "1.0", features = ["derive"] }
 streamlib-control-contract = { path = "../runtime/streamlib-control-contract" }
 # The local API routes and headers `generate-runtime-client` writes into the TypeScript client.
 streamlib-runtime-client-contract = { path = "../runtime/streamlib-runtime-client-contract" }
+# The upgrade of a stream document, which `check-graph-document-node-types` finds no work for in
+# an in-tree document.
+streamlib-project-repository = { path = "../runtime/streamlib-project-repository", default-features = false }
 
 # Error handling
 anyhow = "1.0"

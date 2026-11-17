@@ -119,6 +119,15 @@ pub struct PlaceholderOfANodeTypeNotDescribed {
     /// Why its node code did not describe it, in the runtime's words.
     pub why_its_node_code_did_not_describe_it: String,
     input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
+    config_fields_its_nodes_expose: Vec<String>,
+}
+
+impl PlaceholderOfANodeTypeNotDescribed {
+    /// Each config field a node of the type exposes as an input, which is config though no
+    /// schema lists it.
+    pub(crate) fn config_fields_its_nodes_expose(&self) -> impl Iterator<Item = String> + '_ {
+        self.config_fields_its_nodes_expose.iter().cloned()
+    }
 }
 
 impl NodeTypesOneStreamResolves {
@@ -349,9 +358,11 @@ impl NodeTypesOneStreamResolves {
 
     /// Hold a placeholder of each node type `graph` names that this stream resolves no other
     /// way, `why_its_node_code_did_not_describe_them` kept for each: each input is a port a
-    /// link of the graph reads into, a pin or an exposed config field of a node of that type,
-    /// and each output a port a link reads from, each taking the family of the port at its
-    /// link's other end, else Records.
+    /// link of the graph reads into, an exposed config field of a node of that type, or an
+    /// input value of one that is not known to be config, which no schema says, so the value
+    /// stays on an input as it was before a node held one map of them; each output is a port
+    /// a link reads from. Each takes the family of the port at its link's other end, else
+    /// Records, and an exposed field Channels.
     pub(crate) fn hold_a_placeholder_of_each_node_type_not_described(
         &self,
         graph: &crate::core::graph::graph_snapshot::GraphSnapshot,
@@ -416,8 +427,13 @@ impl NodeTypesOneStreamResolves {
                         .then(|| NODE_REGISTRY.port_info(node_type))
                         .flatten()
                         .unwrap_or_default(),
+                    config_fields_its_nodes_expose: Vec::new(),
                 }
             });
+            let fields_its_config_schema_lists =
+                crate::core::graph::legacy_config_of_a_node::fields_the_config_schema_of_a_node_type_lists(
+                    self, node_type,
+                );
             let (inputs, outputs) = &mut placeholder.input_and_output_port_info;
             let add_once = |ports: &mut Vec<PortInfo>, port: PortInfo| {
                 if !ports.iter().any(|held| held.name == port.name) {
@@ -441,11 +457,14 @@ impl NodeTypesOneStreamResolves {
                 .iter()
                 .filter(|node| &node.node_type == node_type)
             {
-                for pinned in node.pins.keys() {
+                for input in node.input_values.keys().filter(|input| {
+                    !fields_its_config_schema_lists.contains(*input)
+                        && !node.exposed_config_fields.contains(*input)
+                }) {
                     add_once(
                         inputs,
                         a_port(
-                            pinned,
+                            input,
                             PortFamilyDeclaration::of_family(PortFamily::Records),
                             true,
                         ),
@@ -460,6 +479,11 @@ impl NodeTypesOneStreamResolves {
                             true,
                         ),
                     );
+                    if !placeholder.config_fields_its_nodes_expose.contains(exposed) {
+                        placeholder
+                            .config_fields_its_nodes_expose
+                            .push(exposed.clone());
+                    }
                 }
             }
         }

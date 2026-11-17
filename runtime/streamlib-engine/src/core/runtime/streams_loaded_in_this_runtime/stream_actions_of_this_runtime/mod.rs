@@ -14,10 +14,11 @@ use std::sync::{Arc, OnceLock};
 use parking_lot::Mutex;
 use streamlib_consumer_rhi::runtime_unit_layout::sample_projects_directory_beside_the_lend;
 use streamlib_project_repository::{
-    PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile, assets_a_node_config_references,
-    every_asset_uuid_the_project_holds, every_sample_project_in,
-    graph_document_with_each_stream_fragment_reference_resolved, project_stream_documents,
-    stream_assets_another_stream_of_the_project_places, the_sample_project_named,
+    PROJECT_FILE_NAME, ProjectStreamDocument, TatolabProjectFile,
+    assets_a_nodes_input_values_reference, every_asset_uuid_the_project_holds,
+    every_sample_project_in, graph_document_with_each_stream_fragment_reference_resolved,
+    project_stream_documents, stream_assets_another_stream_of_the_project_places,
+    the_sample_project_named,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ListSamplesToolResult, ListSamplesToolResultSample,
@@ -271,13 +272,13 @@ fn the_graph_a_stream_document_holds(
         )));
     }
     for (node_path, node) in &nodes_at_every_level {
-        if let Some(asset) = assets_a_node_config_references(&node.config)
+        if let Some(asset) = assets_a_nodes_input_values_reference(&node.input_values)
             .into_iter()
             .find(|asset| !asset_uuids_the_project_holds.contains(asset))
         {
             return Err(why_it_holds_no_graph(format!(
-                "has node `{node_path}` whose config references the asset {asset}, which the \
-                 project does not hold"
+                "has node `{node_path}` whose input values reference the asset {asset}, which \
+                 the project does not hold"
             )));
         }
     }

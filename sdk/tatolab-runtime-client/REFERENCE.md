@@ -13,7 +13,7 @@ List a project's assets, ordered by path: each by its `asset` UUID, its `kind` (
 - Since contract version 1, stable.
 - Params: `ListAssetsRequest`
 - Result: `ListAssetsToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `describe_asset`
 
@@ -24,7 +24,7 @@ Describe one asset of a project: its UUID, kind, path, the SHA-256 and size of i
 - Since contract version 1, stable.
 - Params: `DescribeAssetRequest`
 - Result: `DescribeAssetToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `read_asset_preview`
 
@@ -35,7 +35,7 @@ Read an asset's preview picture, which the runtime makes from its bytes and keep
 - Since contract version 1, stable.
 - Params: `ReadAssetPreviewRequest`
 - Result: `ReadAssetPreviewToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `import_asset`
 
@@ -46,7 +46,7 @@ Import a file as a new asset of the project at `asset_path`, or, with no `asset_
 - Since contract version 1, stable.
 - Params: `ImportAssetRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `relocate_asset`
 
@@ -57,7 +57,7 @@ Put an asset at another path of the project, renaming it, moving it to another f
 - Since contract version 1, stable.
 - Params: `RelocateAssetRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `delete_asset`
 
@@ -68,7 +68,7 @@ Stop tracking an asset as one transaction: its file and sidecar leave the projec
 - Since contract version 1, stable.
 - Params: `DeleteAssetRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_asset_settings`
 
@@ -79,7 +79,7 @@ Replace an asset's import settings whole, as one transaction. Answers the asset 
 - Since contract version 1, stable.
 - Params: `SetAssetSettingsRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `replace_asset`
 
@@ -90,7 +90,7 @@ Put new bytes at an asset's path as one transaction: the asset keeps its UUID, p
 - Since contract version 1, stable.
 - Params: `ReplaceAssetRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `create_stream`
 
@@ -101,7 +101,7 @@ Create a stream in the project as one transaction: a new stream asset, its graph
 - Since contract version 1, stable.
 - Params: `CreateStreamRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `delete_stream`
 
@@ -112,7 +112,7 @@ Delete a stream from the project as one transaction: its graph document leaves t
 - Since contract version 1, stable.
 - Params: `DeleteStreamRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_stream_display_name`
 
@@ -123,7 +123,7 @@ Show a stream under another display name as one transaction, written in its grap
 - Since contract version 1, stable.
 - Params: `SetStreamDisplayNameRequest`
 - Result: `AssetTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## dependency
 
@@ -136,7 +136,7 @@ Import another project, as one transaction by `author`: the project `source` hol
 - Since contract version 1, stable.
 - Params: `AddDependencyRequest`
 - Result: `DependencyTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `update_dependency`
 
@@ -147,7 +147,7 @@ Copy an import again, whole, as one transaction by `author`, from `source` or fr
 - Since contract version 1, stable.
 - Params: `UpdateDependencyRequest`
 - Result: `UpdateDependencyToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `list_dependencies`
 
@@ -158,7 +158,7 @@ List the projects this one imports, each with its `folder`, `source` and `versio
 - Since contract version 1, stable.
 - Params: `ListDependenciesRequest`
 - Result: `ListDependenciesToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `remove_dependency`
 
@@ -169,7 +169,7 @@ Stop importing a project, as one transaction by `author`: its folder leaves `imp
 - Since contract version 1, stable.
 - Params: `RemoveDependencyRequest`
 - Result: `DependencyTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `use_dependency_stream`
 
@@ -180,7 +180,7 @@ Place a stream of an imported project in a loaded stream's graph, as one committ
 - Since contract version 1, stable.
 - Params: `UseDependencyStreamRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## file
 
@@ -193,7 +193,7 @@ List the project's files, or those under `under`, each by its path and length in
 - Since contract version 1, stable.
 - Params: `ListProjectFilesRequest`
 - Result: `ListProjectFilesToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `read_project_file`
 
@@ -204,7 +204,7 @@ Read one of the project's files whole, answering its bytes as `content_base64`, 
 - Since contract version 1, stable.
 - Params: `ReadProjectFileRequest`
 - Result: `ReadProjectFileToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `create_node_file`
 
@@ -215,7 +215,7 @@ Create a new node file of the project from the runtime's node template, as one t
 - Since contract version 1, stable.
 - Params: `CreateNodeFileRequest`
 - Result: `CreateNodeFileToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `write_project_file`
 
@@ -226,7 +226,7 @@ Write one of the project's files whole, as one transaction: a new file is create
 - Since contract version 1, stable.
 - Params: `WriteProjectFileRequest`
 - Result: `ProjectFileTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## graph
 
@@ -239,7 +239,7 @@ Apply operations on the graphs of one project's loaded streams as one transactio
 - Since contract version 1, stable.
 - Params: `TransactRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `add_node`
 
@@ -250,7 +250,7 @@ Add a node to a loaded stream's graph by its type's import path, as one transact
 - Since contract version 1, stable.
 - Params: `AddNodeRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `connect`
 
@@ -261,7 +261,7 @@ Link an output port to an input port in one loaded stream, as one transaction, e
 - Since contract version 1, stable.
 - Params: `OneLinkGraphEditRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `import_graph_generator`
 
@@ -272,7 +272,7 @@ Run one of the project's `@graph_generator` functions in the stream's own interp
 - Since contract version 1, stable.
 - Params: `ImportGraphGeneratorRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `remove_node`
 
@@ -283,7 +283,7 @@ Remove a node from a loaded stream's graph by its UUID, as one transaction, stop
 - Since contract version 1, stable.
 - Params: `OneNodeGraphEditRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `disconnect`
 
@@ -294,7 +294,7 @@ Take out the link between an output port and an input port in one loaded stream,
 - Since contract version 1, stable.
 - Params: `OneLinkGraphEditRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_node_config`
 
@@ -305,7 +305,7 @@ Replace a node's config whole, as one transaction, applied to the running node a
 - Since contract version 1, stable.
 - Params: `SetNodeConfigRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_pin_value`
 
@@ -316,7 +316,7 @@ Set the value one of a node's inputs holds while no link feeds it, as one transa
 - Since contract version 1, stable.
 - Params: `SetPinValueRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `rename_node`
 
@@ -327,7 +327,7 @@ Give a node another name, a label, as one transaction; the node keeps its UUID, 
 - Since contract version 1, stable.
 - Params: `RenameNodeRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_studio_fields`
 
@@ -338,7 +338,7 @@ Replace what Tato Studio draws a node with — canvas position, group, comment, 
 - Since contract version 1, stable.
 - Params: `SetStudioFieldsRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_exposed_config_fields`
 
@@ -349,7 +349,7 @@ Replace the config fields a node takes as inputs, as one transaction. Each is a 
 - Since contract version 1, stable.
 - Params: `SetExposedConfigFieldsRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `add_group`
 
@@ -360,7 +360,7 @@ Make a labelled group of nodes of one level of a loaded stream, its own or the s
 - Since contract version 1, stable.
 - Params: `AddGroupRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_group_fields`
 
@@ -371,7 +371,7 @@ Set a labelled group's title, description or colour, as one transaction; a field
 - Since contract version 1, stable.
 - Params: `SetGroupFieldsRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `collapse_selection_into_subgraph`
 
@@ -382,7 +382,7 @@ Collapse nodes of one level of a loaded stream, its own or the subgraph `level` 
 - Since contract version 1, stable.
 - Params: `CollapseSelectionIntoSubgraphRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `unlock_subgraph`
 
@@ -393,7 +393,7 @@ Unlock a subgraph node of one level of a loaded stream, its own or the subgraph 
 - Since contract version 2, stable.
 - Params: `UnlockSubgraphRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `add_note`
 
@@ -404,7 +404,7 @@ Place a canvas note on a loaded stream's graph, as one transaction: text at a po
 - Since contract version 1, stable.
 - Params: `AddNoteRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_note_fields`
 
@@ -415,7 +415,7 @@ Set a canvas note's text, position or size, as one transaction; a field omitted 
 - Since contract version 1, stable.
 - Params: `SetNoteFieldsRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `remove_note`
 
@@ -426,7 +426,7 @@ Take a canvas note off a loaded stream's graph, as one transaction. Undo puts it
 - Since contract version 1, stable.
 - Params: `RemoveNoteRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `remove_group`
 
@@ -437,7 +437,7 @@ Take out a labelled group, as one transaction: its nodes stay, ungrouped. Undo b
 - Since contract version 1, stable.
 - Params: `RemoveGroupRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `refresh_fragments`
 
@@ -448,7 +448,7 @@ Refresh, as one transaction, every fragment of the project's loaded streams whos
 - Since contract version 1, stable.
 - Params: `RefreshFragmentsRequest`
 - Result: `GraphTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `undo`
 
@@ -459,7 +459,7 @@ Undo the latest transaction by `author` in the project that is not undone yet, a
 - Since contract version 1, stable.
 - Params: `UndoOrRedoRequest`
 - Result: `ProjectTransactionOnTheWire`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `redo`
 
@@ -470,7 +470,7 @@ Redo what `author`'s latest undo in the project reversed, as a new transaction; 
 - Since contract version 1, stable.
 - Params: `UndoOrRedoRequest`
 - Result: `ProjectTransactionOnTheWire`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## node_type
 
@@ -483,7 +483,7 @@ List the node types and graph generators a project offers, read from source with
 - Since contract version 1, stable.
 - Params: `ListProjectNodeTypesRequest`
 - Result: `ListProjectNodeTypesToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## observe
 
@@ -496,7 +496,7 @@ Answer `contract_version`, the version of the contract this runtime serves, its 
 - Since contract version 1, stable.
 - Params: `DiscoverRequest`
 - Result: `DiscoverResult`
-- Errors: `1` refused, `2` failed, `3` contract version mismatch
+- Errors: `1` refused, `2` failed, `-32602` params do not match, `3` contract version mismatch
 
 ### `subscribe_stream_graph_changes`
 
@@ -507,7 +507,7 @@ Subscribe the connection to the live graphs of `streams`, by stream id, each loa
 - Since contract version 2, experimental.
 - Params: `SubscribeStreamGraphChangesRequest`
 - Result: `SubscribeStreamGraphChangesResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `subscribe_project_log_records`
 
@@ -518,7 +518,7 @@ Subscribe the connection to the logs of the projects in `project_directories`, e
 - Since contract version 2, experimental.
 - Params: `SubscribeProjectLogRecordsRequest`
 - Result: `SubscribeProjectLogRecordsResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `describe_runtime`
 
@@ -529,7 +529,7 @@ Describe this runtime: its crate `version`, its `build_id` (`<version>+<git sha>
 - Since contract version 1, stable.
 - Params: `DescribeRuntimeRequest`
 - Result: `DescribeRuntimeToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `graph`
 
@@ -540,7 +540,7 @@ Export a loaded stream's current graph as JSON: the stream it was loaded as, its
 - Since contract version 1, experimental.
 - Params: `GraphRequest`
 - Result: `unknown`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `logs`
 
@@ -551,7 +551,7 @@ Read a project's log records after the cursor `after`, oldest first, each as the
 - Since contract version 1, stable.
 - Params: `LogsRequest`
 - Result: `LogsToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `open_viewer`
 
@@ -562,7 +562,7 @@ Open a viewer of any output port of a running node, adding no node and changing 
 - Since contract version 1, stable.
 - Params: `OpenViewerRequest`
 - Result: `OpenViewerToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `close_viewer`
 
@@ -573,7 +573,7 @@ Close a viewer this connection opened, letting go of its port's channel.
 - Since contract version 1, stable.
 - Params: `CloseViewerRequest`
 - Result: `CloseViewerToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## project
 
@@ -586,7 +586,7 @@ Subscribe the connection to the change feeds of `projects`, by UUID: from then o
 - Since contract version 1, experimental.
 - Params: `SubscribeProjectChangesRequest`
 - Result: `SubscribeProjectChangesResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `open_project`
 
@@ -597,7 +597,7 @@ Open the project in `project_directory`: queue its open on its own stream action
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectStreamActionQueuedToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `reload_project`
 
@@ -608,7 +608,7 @@ Softly reload the open project in `project_directory` from disk: queue the load 
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectStreamActionQueuedToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `close_project`
 
@@ -619,7 +619,7 @@ Close the open project in `project_directory`: queue the close on its stream act
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectStreamActionQueuedToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `remove_project`
 
@@ -630,7 +630,7 @@ Queue the removal of the whole project in `project_directory` on its stream acti
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `RemoveProjectToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `start_playback`
 
@@ -641,7 +641,7 @@ Start the playback of the open project in `project_directory`: queue it on the p
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectStreamActionQueuedToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `stop_playback`
 
@@ -652,7 +652,7 @@ Stop the playback of the whole project in `project_directory`: queue the stop on
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectStreamActionQueuedToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `pause_playback`
 
@@ -663,7 +663,7 @@ Pause the playback of the whole project in `project_directory` at once, never wa
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `PausePlaybackToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `resume_playback`
 
@@ -674,7 +674,7 @@ Resume the paused playback of the project in `project_directory` at once and ans
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ResumePlaybackToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `rename_project`
 
@@ -685,7 +685,7 @@ Rename a project, as one transaction by `author` on its history that undoes like
 - Since contract version 1, stable.
 - Params: `RenameProjectRequest`
 - Result: `ProjectSettingsTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_project_description`
 
@@ -696,7 +696,7 @@ Describe a project, or clear its description, as one transaction by `author` on 
 - Since contract version 1, stable.
 - Params: `SetProjectDescriptionRequest`
 - Result: `ProjectSettingsTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_project_cover`
 
@@ -707,7 +707,7 @@ Give a project a cover, or take it away, as one transaction by `author` on its h
 - Since contract version 1, stable.
 - Params: `SetProjectCoverRequest`
 - Result: `ProjectSettingsTransactionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `duplicate_project`
 
@@ -718,7 +718,7 @@ Duplicate a project into `into`, a folder that does not exist yet, as a project 
 - Since contract version 1, stable.
 - Params: `DuplicateProjectRequest`
 - Result: `DuplicateProjectToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `delete_project`
 
@@ -729,7 +729,7 @@ Delete the whole project in `project_directory`: queue its deletion on its strea
 - Since contract version 1, stable.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `DeleteProjectToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `read_project_changes`
 
@@ -740,7 +740,7 @@ Read the change feed of the project in `project_directory`, opening it as `list_
 - Since contract version 2, experimental.
 - Params: `OneProjectByItsDirectoryRequest`
 - Result: `ProjectTransactionsResourceContents`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `import_project`
 
@@ -751,7 +751,7 @@ Make a new project in `project_directory` from the `.zip` of a project at `sourc
 - Since contract version 1, stable.
 - Params: `ImportProjectRequest`
 - Result: `ImportProjectToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `create_project`
 
@@ -762,7 +762,7 @@ Create a project — the one `tatolab new` creates: the starter, its `tatolab-pr
 - Since contract version 1, stable.
 - Params: `CreateProjectRequest`
 - Result: `CreateProjectToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `list_samples`
 
@@ -773,7 +773,7 @@ List the sample projects the runtime unit carries at its own version, each by th
 - Since contract version 1, stable.
 - Params: `ListSamplesRequest`
 - Result: `ListSamplesToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## stream
 
@@ -786,7 +786,7 @@ Subscribe the connection to every stream action: from then on, each time one is 
 - Since contract version 2, experimental.
 - Params: `SubscribeStreamActionChangesRequest`
 - Result: `SubscribeStreamActionChangesResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `list_streams`
 
@@ -797,7 +797,7 @@ List every stream the runtime holds: its stream id as `stream`, its `display_nam
 - Since contract version 1, stable.
 - Params: `ListStreamsRequest`
 - Result: `ListStreamsToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `describe_stream_action`
 
@@ -808,7 +808,7 @@ Describe the stream action `action`: its project, `kind` (`open`, `load`, `start
 - Since contract version 1, stable.
 - Params: `OneStreamActionRequest`
 - Result: `DescribeStreamActionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `cancel_stream_action`
 
@@ -819,7 +819,7 @@ Cancel the stream action `action`, the only way an action ends early; nothing re
 - Since contract version 1, stable.
 - Params: `OneStreamActionRequest`
 - Result: `CancelStreamActionToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `set_stream_clock_scale`
 
@@ -830,7 +830,7 @@ Run a started stream's scaled clock at `scale` from now on: its stream time carr
 - Since contract version 1, stable.
 - Params: `SetStreamClockScaleRequest`
 - Result: `SetStreamClockScaleToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## view
 
@@ -843,7 +843,7 @@ List every Tato Studio view a project brings — each folder of its own `views/`
 - Since contract version 1, stable.
 - Params: `ListProjectViewsRequest`
 - Result: `ListProjectViewsToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `write_studio_view_output`
 
@@ -854,7 +854,7 @@ Hand a value a Tato Studio panel wrote to the view node `node` of the stream `st
 - Since contract version 1, stable.
 - Params: `WriteStudioViewOutputRequest`
 - Result: `WriteStudioViewOutputToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ### `write_graph_input`
 
@@ -865,7 +865,7 @@ Hand a value to the Input `input` of the stream `stream`: the stream's top-level
 - Since contract version 1, stable.
 - Params: `WriteGraphInputRequest`
 - Result: `WriteGraphInputToolResult`
-- Errors: `1` refused, `2` failed
+- Errors: `1` refused, `2` failed, `-32602` params do not match
 
 ## Notifications
 

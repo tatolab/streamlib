@@ -431,17 +431,18 @@ fn serialized_on_the_wire(recorded: &impl serde::Serialize) -> serde_json::Value
 
 #[cfg(test)]
 mod tests {
+    use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
+
     use super::*;
 
     fn a_refusal_of(runtime_words: &str) -> ProjectActionRefusalOnTheWire {
         ProjectActionRefusalOnTheWire {
-            action: "remove_node".to_owned(),
             refused_operation_index: Some(0),
-            refused_node: None,
-            refused_link: None,
-            refused_field: None,
-            not_running_because: None,
-            runtime_words: runtime_words.to_owned(),
+            ..ProjectActionRefusalOnTheWire::of_the_action(
+                "remove_node",
+                ControlOperationRefusalCode::Refused,
+                runtime_words,
+            )
         }
     }
 

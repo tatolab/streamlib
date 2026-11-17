@@ -19,11 +19,15 @@ use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
+use crate::core::graph::legacy_config_of_a_node::{
+    LegacyConfigOfANodeType, config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
+};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
 };
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
@@ -61,10 +65,10 @@ pub struct GraphVariablesAsDrawn {
 /// A node's config that named a get: as drawn, and as the runtime runs it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfigNamingAGet {
-    /// The config as the graph wrote it, naming the get.
-    pub as_drawn: serde_json::Value,
-    /// The config the runtime runs, naming the setter's node.
-    pub as_resolved: serde_json::Value,
+    /// The input values as the graph wrote them, naming the get.
+    pub as_drawn: serde_json::Map<String, serde_json::Value>,
+    /// The input values the runtime runs, naming the setter's node.
+    pub as_resolved: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The component key a variable node, and a drawn link with an end on one,
@@ -112,7 +116,7 @@ impl GraphVariablesAsDrawn {
             .variable_nodes
             .iter()
             .filter_map(|node| {
-                node.config
+                node.input_values
                     .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
                     .and_then(serde_json::Value::as_str)
                     .map(|variable| (cast(&node.name), variable))
@@ -192,9 +196,17 @@ impl GraphVariablesAsDrawn {
             else {
                 continue;
             };
-            if node.config.as_ref() == Some(&config_naming_a_get.as_resolved) {
-                node.config_checksum = compute_json_checksum(&config_naming_a_get.as_drawn);
-                node.config = Some(config_naming_a_get.as_drawn.clone());
+            let running_config = node
+                .config
+                .clone()
+                .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+            if config_of_a_node_as_drawn(&config_naming_a_get.as_resolved, &node.pins)
+                == running_config
+            {
+                let config_as_drawn =
+                    config_of_a_node_as_drawn(&config_naming_a_get.as_drawn, &node.pins);
+                node.config_checksum = compute_json_checksum(&config_as_drawn);
+                node.config = Some(config_as_drawn);
             }
         }
         for (variable_node, drawn_position) in self
@@ -223,6 +235,7 @@ impl GraphVariablesAsDrawn {
                 pin_default: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
+            let config = config_of_a_node_holding_no_pin_value(&variable_node.input_values);
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,
@@ -235,9 +248,9 @@ impl GraphVariablesAsDrawn {
                     kind: None,
                     language: None,
                     name: variable_node_cast,
-                    config: Some(variable_node.config.clone()),
-                    config_checksum: compute_json_checksum(&variable_node.config),
-                    pins: variable_node.pins.clone(),
+                    config_checksum: compute_json_checksum(&config),
+                    config: Some(config),
+                    pins: serde_json::Map::new(),
                     exposed_config_fields: variable_node.exposed_config_fields.clone(),
                     studio: variable_node.studio.clone(),
                     inputs_waiting_for_a_value: Vec::new(),
@@ -327,6 +340,7 @@ impl GraphSnapshot {
     pub fn with_graph_variables_resolved(
         &self,
         fragments_flattened: &GraphFragmentsAsDrawn,
+        node_types: &NodeTypesOneStreamResolves,
     ) -> Result<GraphSnapshotWithVariablesResolved> {
         let variable_nodes: Vec<&GraphSnapshotNode> = self
             .nodes
@@ -493,54 +507,56 @@ impl GraphSnapshot {
             if is_a_graph_variable_node_type(&node.node_type) {
                 continue;
             }
-            let Some(config_object) = node.config.as_object() else {
-                runtime_nodes.push(node.clone());
-                continue;
-            };
-            let mut resolved_config = serde_json::Value::Object(config_object.clone());
+            let mut resolved_input_values = node.input_values.clone();
             let mut named_a_get = false;
-            resolve_each_config_value_naming_a_get(
-                &mut resolved_config,
-                "config",
-                &mut |config_key_path, referenced| {
-                    let Ok(referenced_cast) = cast_of(referenced) else {
-                        return Ok(None);
-                    };
-                    if is_a_set(&referenced_cast) {
-                        return Err(Error::GraphError(format!(
-                            "node `{}`'s `{config_key_path}` names `SetVariable` node \
+            let mut resolve_a_get = |config_key_path: &str, referenced: &str| {
+                let Ok(referenced_cast) = cast_of(referenced) else {
+                    return Ok(None);
+                };
+                if is_a_set(&referenced_cast) {
+                    return Err(Error::GraphError(format!(
+                        "node `{}`'s `{config_key_path}` names `SetVariable` node \
                              `{referenced}`: read a variable through a `GetVariable` node",
-                            node.name
-                        )));
-                    }
-                    let Some(variable) = variable_of_each_get_by_cast.get(&referenced_cast) else {
-                        return Ok(None);
-                    };
-                    let setter = setter_of(referenced, variable)?;
-                    let ValueASetVariableHolds::NodeReference(referenced_node) = &setter.holds
-                    else {
-                        return Err(Error::GraphError(format!(
-                            "node `{}`'s `{config_key_path}` reads `GetVariable` node \
+                        node.name
+                    )));
+                }
+                let Some(variable) = variable_of_each_get_by_cast.get(&referenced_cast) else {
+                    return Ok(None);
+                };
+                let setter = setter_of(referenced, variable)?;
+                let ValueASetVariableHolds::NodeReference(referenced_node) = &setter.holds else {
+                    return Err(Error::GraphError(format!(
+                        "node `{}`'s `{config_key_path}` reads `GetVariable` node \
                              `{referenced}`, and its variable `{variable}` holds a port's \
                              output, which a link reads, never a config value",
-                            node.name
-                        )));
-                    };
-                    named_a_get = true;
-                    Ok(Some(referenced_node.clone()))
-                },
-            )?;
+                        node.name
+                    )));
+                };
+                named_a_get = true;
+                Ok(Some(referenced_node.clone()))
+            };
+            let legacy_config = LegacyConfigOfANodeType::of(node_types, &node.node_type);
+            for (input, value) in resolved_input_values
+                .iter_mut()
+                .filter(|(input, _)| legacy_config.is_a_config_field(input))
+            {
+                resolve_each_config_value_naming_a_get(
+                    value,
+                    &format!("config[{input:?}]"),
+                    &mut resolve_a_get,
+                )?;
+            }
             if named_a_get {
                 configs_naming_a_get_by_node_name.insert(
                     cast_of(&node.name)?,
                     ConfigNamingAGet {
-                        as_drawn: node.config.clone(),
-                        as_resolved: resolved_config.clone(),
+                        as_drawn: node.input_values.clone(),
+                        as_resolved: resolved_input_values.clone(),
                     },
                 );
             }
             runtime_nodes.push(GraphSnapshotNode {
-                config: resolved_config,
+                input_values: resolved_input_values,
                 ..node.clone()
             });
         }
@@ -611,7 +627,7 @@ fn value_one_setter_holds(
         }
     }
     let node_reference = setter
-        .config
+        .input_values
         .get(SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY)
         .filter(|value| !value.is_null());
     match (links_in.as_slice(), node_reference) {
@@ -705,7 +721,7 @@ fn resolve_each_config_value_naming_a_get(
 }
 
 fn variable_a_node_names(node: &GraphSnapshotNode) -> Result<String> {
-    node.config
+    node.input_values
         .get(GRAPH_VARIABLE_NAME_CONFIG_KEY)
         .and_then(serde_json::Value::as_str)
         .filter(|variable| !variable.is_empty())
@@ -723,10 +739,8 @@ fn refuse_a_key_a_variable_node_does_not_take(
     node: &GraphSnapshotNode,
     keys_it_takes: &[&str],
 ) -> Result<()> {
-    let Some(config) = node.config.as_object() else {
-        return Ok(());
-    };
-    let Some(unread_key) = config
+    let Some(unread_key) = node
+        .input_values
         .keys()
         .find(|key| !keys_it_takes.contains(&key.as_str()))
     else {

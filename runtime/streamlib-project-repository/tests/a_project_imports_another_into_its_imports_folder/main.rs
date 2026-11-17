@@ -63,7 +63,10 @@ impl ProjectWithOneStream {
         self.repository.project_file().project
     }
 
-    fn add_a_node(&mut self, name: &str, node_type: &str, config: Value) -> Uuid {
+    fn add_a_node(&mut self, name: &str, node_type: &str, input_values: Value) -> Uuid {
+        let Value::Object(input_values) = input_values else {
+            panic!("a node's input values are an object");
+        };
         let node = Uuid::new_v4();
         self.repository
             .apply_project_operations(
@@ -78,8 +81,7 @@ impl ProjectWithOneStream {
                                 id: node,
                                 name: name.to_owned(),
                                 node_type: node_type.to_owned(),
-                                config,
-                                pins: Map::new(),
+                                input_values,
                                 exposed_config_fields: Vec::new(),
                                 studio: Default::default(),
                                 fragment: None,

@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::contract_component_references::{
-    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_schemas_of,
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names, component_schemas_of,
 };
 use crate::runtime_client_node_ui_manifest::{
     NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
@@ -23,6 +23,7 @@ use serde_json::{Map, Value};
 use streamlib_control_contract::{
     CONTROL_CONTRACT_FILE_WORKSPACE_PATH, CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
     CONTROL_OPERATION_FAILED_ERROR_CODE, CONTROL_OPERATION_REFUSED_ERROR_CODE,
+    JSON_RPC_INVALID_PARAMS_ERROR_CODE,
 };
 
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -83,6 +84,10 @@ const CONTROL_ERROR_CODE_CONSTANT_NAMES: &[(i64, &str)] = &[
     (
         CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE,
         "CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE",
+    ),
+    (
+        JSON_RPC_INVALID_PARAMS_ERROR_CODE,
+        "JSON_RPC_INVALID_PARAMS_ERROR_CODE",
     ),
 ];
 
@@ -179,6 +184,7 @@ pub fn runtime_client_generated_files(
     contract: &Value,
     contract_file_contents: &str,
 ) -> Result<Vec<(&'static str, String)>> {
+    let contract = &the_contract_with_its_may_grow_defaults_marked(contract);
     let control_contract = ControlContractRead::of(contract)?;
     Ok(vec![
         (
@@ -666,6 +672,63 @@ pub(crate) fn write_component_declaration(declarations: &mut String, name: &str,
     }
 }
 
+/// Marks a property the client reads its `default` into: one whose `default` is a member of a
+/// set marked `x-may-grow`, which a runtime that predates the property leaves out. The client
+/// then reads such a property as present, as the runtime's `#[serde(default)]` does.
+pub(crate) const READS_ITS_DEFAULT_MARK: &str = "x-generated-reads-its-default";
+
+/// `contract` with `READS_ITS_DEFAULT_MARK` on each property it applies to.
+fn the_contract_with_its_may_grow_defaults_marked(contract: &Value) -> Value {
+    fn mark(schema: &mut Value, component_schemas: &Map<String, Value>) {
+        match schema {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get_mut("properties") {
+                    for property_schema in properties.values_mut() {
+                        let names_a_set_that_may_grow = property_schema.get("$ref").is_some()
+                            && component_names_a_schema_names(property_schema)
+                                .into_iter()
+                                .any(|name| {
+                                    component_schemas
+                                        .get(name)
+                                        .is_some_and(|set| set["x-may-grow"] == Value::Bool(true))
+                                });
+                        if names_a_set_that_may_grow && property_schema.get("default").is_some() {
+                            property_schema[READS_ITS_DEFAULT_MARK] = Value::Bool(true);
+                        }
+                    }
+                }
+                for value in object.values_mut() {
+                    mark(value, component_schemas);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    mark(value, component_schemas);
+                }
+            }
+            _ => {}
+        }
+    }
+    let component_schemas = contract["components"]["schemas"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let mut marked = contract.clone();
+    mark(&mut marked, &component_schemas);
+    marked
+}
+
+/// Whether a client reads `property_name` of an object as present: it is required, or it is
+/// marked to read its default when absent.
+pub(crate) fn is_read_as_present(
+    required: &[&str],
+    property_name: &str,
+    property_schema: &Value,
+) -> bool {
+    required.contains(&property_name)
+        || property_schema[READS_ITS_DEFAULT_MARK] == Value::Bool(true)
+}
+
 fn description_of(schema: &Value) -> String {
     schema["description"]
         .as_str()
@@ -797,7 +860,7 @@ fn object_type_of(schema: &Value, indent_level: usize) -> String {
             &member_indent,
             &[description_of(property_schema)],
         );
-        let optional_marker = if required.contains(&property_name.as_str()) {
+        let optional_marker = if is_read_as_present(&required, property_name, property_schema) {
             ""
         } else {
             "?"
@@ -886,110 +949,4 @@ pub(crate) fn json_string_literal(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn a_schema_object_becomes_an_interface_with_its_optional_and_nullable_fields() {
-        let schema = json!({
-            "type": "object",
-            "properties": {
-                "stream": { "type": "string", "format": "uuid", "description": "The stream." },
-                "name": { "type": ["string", "null"] },
-                "pins": { "type": ["object", "null"], "additionalProperties": true }
-            },
-            "required": ["stream"],
-            "additionalProperties": false
-        });
-        assert_eq!(
-            object_type_of(&schema, 0),
-            "{\n  /**\n   * The stream.\n   */\n  stream: string;\n  name?: string | null;\n  pins?: { [key: string]: unknown } | null;\n}"
-        );
-    }
-
-    #[test]
-    fn a_tagged_union_a_reference_and_a_fixed_length_array_keep_their_shape() {
-        assert_eq!(
-            typescript_type_of(
-                &json!({ "oneOf": [
-                    { "type": "object", "properties": { "operation": { "const": "add_node", "type": "string" } }, "required": ["operation"] },
-                    { "$ref": "#/components/schemas/StreamGraphActionLinkEnd" }
-                ] }),
-                0
-            ),
-            "{\n  operation: \"add_node\";\n} | StreamGraphActionLinkEnd"
-        );
-        assert_eq!(
-            typescript_type_of(
-                &json!({ "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }),
-                0
-            ),
-            "[number, number]"
-        );
-        assert_eq!(
-            typescript_type_of(
-                &json!({ "type": "object", "additionalProperties": false }),
-                0
-            ),
-            "Record<string, never>"
-        );
-    }
-
-    #[test]
-    fn the_committed_contract_file_generates_every_method_and_notification() {
-        let contract_file_contents =
-            include_str!("../../runtime/streamlib-control-contract/contract.json");
-        let contract: Value = serde_json::from_str(contract_file_contents).unwrap();
-        let generated_files =
-            runtime_client_generated_files(&contract, contract_file_contents).unwrap();
-        let declarations = &generated_files[0].1;
-        for method in contract["methods"].as_array().unwrap() {
-            let method_name = method["name"].as_str().unwrap();
-            assert!(
-                declarations.contains(&format!("  {method_name}: {{\n")),
-                "{method_name}"
-            );
-        }
-        assert!(declarations.contains("  project_changed: ProjectChangedNotificationParams;"));
-    }
-
-    #[test]
-    fn the_client_has_one_method_per_operation_and_one_listener_per_notification() {
-        let contract_file_contents =
-            include_str!("../../runtime/streamlib-control-contract/contract.json");
-        let contract: Value = serde_json::from_str(contract_file_contents).unwrap();
-        let generated_files =
-            runtime_client_generated_files(&contract, contract_file_contents).unwrap();
-        let client_source = &generated_files
-            .iter()
-            .find(|(file_name, _)| *file_name == GENERATED_CLIENT_FILE_NAME)
-            .unwrap()
-            .1;
-        assert!(client_source.contains(
-            "  open_project(params, callOptions) {\n    return this.call(\"open_project\", params, callOptions);\n  }"
-        ));
-        assert!(client_source.contains("  describe_runtime(params = {}, callOptions) {"));
-        assert!(client_source.contains(
-            "  on_project_changed(listener) {\n    return this.onNotification(\"project_changed\", listener);\n  }"
-        ));
-    }
-
-    #[test]
-    fn an_operation_named_like_a_member_of_the_client_is_refused() {
-        let contract = json!({
-            "info": { "x-contract-version": 1 },
-            "components": { "schemas": {} },
-            "methods": [{ "name": "close", "params": [{ "schema": {} }] }],
-            "x-notifications": []
-        });
-        let refusal = runtime_client_generated_files(&contract, "")
-            .err()
-            .unwrap()
-            .to_string();
-        assert!(
-            refusal.contains("`close` is the name of a member"),
-            "{refusal}"
-        );
-    }
-}
+mod tests;

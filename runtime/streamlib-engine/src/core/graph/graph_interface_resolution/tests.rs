@@ -258,11 +258,16 @@ fn an_interface_node_naming_no_family_takes_the_family_of_the_first_port_linked_
         .find(|node| node.name == "cue")
         .expect("a top-level Channels input runs");
     assert_eq!(
-        cue_as_it_runs.config,
+        serde_json::Value::Object(cue_as_it_runs.input_values.clone()),
         serde_json::json!({"port": "cue", "family": "channels"})
     );
     assert_eq!(
-        resolution.interface_as_drawn.interface_nodes[0].node.config,
+        serde_json::Value::Object(
+            resolution.interface_as_drawn.interface_nodes[0]
+                .node
+                .input_values
+                .clone()
+        ),
         serde_json::json!({"port": "cue"}),
         "the node renders back as drawn"
     );

@@ -9,6 +9,9 @@ use serde::Serialize;
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
 use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
+use crate::core::graph::legacy_config_of_a_node::{
+    input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
+};
 use crate::core::graph::{LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
@@ -265,8 +268,10 @@ impl LoadedStreamInThisRuntime {
                             id: Some(node.node_uuid),
                             name: node.display_name.clone(),
                             node_type: node.node_type.clone(),
-                            config: node.config.clone().unwrap_or_default(),
-                            pins: node.pins.clone(),
+                            input_values: input_values_of_a_config_and_pin_values(
+                                node.config.as_ref(),
+                                &node.pins,
+                            ),
                             exposed_config_fields: node.exposed_config_fields.clone(),
                             studio: node.studio.clone(),
                             fragment: None,
@@ -412,10 +417,14 @@ impl LoadedStreamInThisRuntime {
 
         let mut node_run_id_by_node_name: HashMap<String, NodeRunId> = HashMap::new();
         for node in &graph.nodes {
-            let mut spec = NodeSpec::new(node.node_type.clone(), node.config.clone())
-                .with_display_name(node.name.clone())
-                .with_pins_and_studio_fields(node.pins.clone(), node.studio.clone())
-                .with_exposed_config_fields(node.exposed_config_fields.clone());
+            let mut spec = node_spec_holding_the_input_values(
+                &self.node_types_this_stream_resolves,
+                node.node_type.clone(),
+                &node.input_values,
+                node.studio.clone(),
+            )
+            .with_display_name(node.name.clone())
+            .with_exposed_config_fields(node.exposed_config_fields.clone());
             if let Some(node_uuid) = node.id {
                 spec = spec.with_node_uuid(node_uuid);
             }

@@ -114,11 +114,7 @@ fn node_types_in(graph: &Value) -> Vec<String> {
 }
 
 fn tool_error_text(tool_result: &Value) -> String {
-    assert_eq!(tool_result["isError"], true, "{tool_result}");
-    tool_result["content"][0]["text"]
-        .as_str()
-        .expect("a text block")
-        .to_string()
+    crate::mcp::tests::the_refusal_of_a_tool_result(tool_result).runtime_words
 }
 
 #[tokio::test(flavor = "multi_thread")]

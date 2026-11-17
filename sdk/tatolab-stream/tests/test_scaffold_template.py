@@ -86,7 +86,9 @@ def test_the_graph_document_holds_only_nodes_and_links_for_the_runtime_to_mint_u
     document = the_main_graph_document()
 
     assert set(document) == {"nodes", "links"}, document
-    assert all(set(node) == {"name", "type", "config"} for node in document["nodes"]), document
+    assert all(
+        {"name", "type"} <= set(node) <= {"name", "type", "input_values"} for node in document["nodes"]
+    ), document
 
 
 def test_the_stream_is_one_test_pattern_source_and_nothing_else():

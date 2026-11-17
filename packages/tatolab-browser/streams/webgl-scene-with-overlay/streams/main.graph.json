@@ -64,30 +64,31 @@
   ],
   "nodes": [
     {
-      "config": {
+      "id": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
+      "input_values": {
         "frame_rate": 60,
         "height": 1080,
         "url": "scene_page.html",
         "width": 1920
       },
-      "id": "b4be01ff-9633-4b42-ac0b-24cf8e327628",
       "name": "scene-page",
       "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
-      "config": {
+      "id": "43275df6-0ede-4889-9e87-22932a299a39",
+      "input_values": {
         "frame_rate": 60,
         "height": 240,
         "transparent_background": true,
         "url": "overlay_page.html",
         "width": 1760
       },
-      "id": "43275df6-0ede-4889-9e87-22932a299a39",
       "name": "overlay-page",
       "type": "tatolab.browser.browser_source:BrowserSource"
     },
     {
-      "config": {
+      "id": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
+      "input_values": {
         "height": 1080,
         "layers": [
           {},
@@ -98,12 +99,10 @@
         ],
         "width": 1920
       },
-      "id": "2c51e17f-efa1-4ee5-a615-1dd217babd4f",
       "name": "alphaovercompositor",
       "type": "tatolab.compositor.alpha_over_compositor:AlphaOverCompositor"
     },
     {
-      "config": {},
       "id": "b67873bd-ee1e-4573-bef8-0af1c4ec4fe4",
       "name": "browsersourceoutputprobe",
       "type": "tatolab.browser.browser_source_output_probe:BrowserSourceOutputProbe"

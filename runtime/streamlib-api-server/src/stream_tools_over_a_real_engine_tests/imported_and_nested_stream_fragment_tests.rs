@@ -33,8 +33,7 @@ impl ProjectWithGraphDocuments {
                                     node_type: StreamToolsTestSink::node_class_import_path()
                                         .as_str()
                                         .to_owned(),
-                                    config: json!({}),
-                                    pins: serde_json::Map::new(),
+                                    input_values: serde_json::Map::new(),
                                     exposed_config_fields: Vec::new(),
                                     studio: Default::default(),
                                     fragment: None,
@@ -106,7 +105,7 @@ async fn an_imported_stream_placed_as_a_fragment_follows_its_folder_through_an_u
         .to_owned();
     let stored = the_node_named(&cell.the_graph_document_of("main"), "arm");
     assert_eq!(
-        stored["config"],
+        stored["input_values"],
         json!({ "stream": { "asset": arm_stream, "from": arm.project } }),
         "{stored}"
     );

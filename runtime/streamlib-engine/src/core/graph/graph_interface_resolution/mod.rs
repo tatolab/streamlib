@@ -22,6 +22,9 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
 };
+use crate::core::graph::legacy_config_of_a_node::{
+    config_of_a_node, config_of_a_node_holding_no_pin_value,
+};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
@@ -163,6 +166,7 @@ impl GraphInterfaceNodeAsDrawn {
             GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
             declared.as_component(),
         );
+        let config = config_of_a_node_holding_no_pin_value(&self.node.input_values);
         GraphNodeOutput {
             id: self
                 .node
@@ -173,9 +177,9 @@ impl GraphInterfaceNodeAsDrawn {
             kind: None,
             language: None,
             name: cast_or_as_written(&self.node.name),
-            config: Some(self.node.config.clone()),
-            config_checksum: compute_json_checksum(&self.node.config),
-            pins: self.node.pins.clone(),
+            config_checksum: compute_json_checksum(&config),
+            config: Some(config),
+            pins: serde_json::Map::new(),
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
@@ -498,8 +502,8 @@ pub fn the_family_a_port_linked_to_an_interface_node_carries(
         }
         let output = outputs.into_iter().find(|port| port.name == port_cast)?;
         let Some(followed_input) = output.family.family_follows_input_port.clone() else {
-            return output_port_family_resolved_against_config(&output.family, Some(&node.config))
-                .ok();
+            let config = config_of_a_node(node_types, &node.node_type, &node.input_values);
+            return output_port_family_resolved_against_config(&output.family, Some(&config)).ok();
         };
         let followed_input_cast = cast_of(&followed_input).ok()?;
         port_to_read = graph
@@ -521,12 +525,10 @@ fn node_with_the_family_a_link_resolved(
     resolved_family: PortFamily,
 ) -> GraphSnapshotNode {
     let mut node_with_the_family = node.clone();
-    if let Some(config) = node_with_the_family.config.as_object_mut() {
-        config.insert(
-            GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string(),
-            serde_json::Value::String(resolved_family.wire_name().to_string()),
-        );
-    }
+    node_with_the_family.input_values.insert(
+        GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string(),
+        serde_json::Value::String(resolved_family.wire_name().to_string()),
+    );
     node_with_the_family
 }
 
@@ -572,7 +574,11 @@ impl GraphInterfaceAsDrawn {
                     node_types,
                     linked_node,
                     linked_port,
-                    &linked_node.config,
+                    &config_of_a_node(
+                        node_types,
+                        &linked_node.node_type,
+                        &linked_node.input_values,
+                    ),
                 )?;
             }
         }
@@ -823,7 +829,7 @@ fn port_and_family_an_interface_nodes_config_declares(
 ) -> Result<(String, Option<PortFamily>)> {
     let kind = interface_node_kind(node);
     let port = node
-        .config
+        .input_values
         .get(GRAPH_INTERFACE_PORT_CONFIG_KEY)
         .and_then(serde_json::Value::as_str)
         .filter(|port| !port.is_empty())
@@ -834,7 +840,7 @@ fn port_and_family_an_interface_nodes_config_declares(
                 node.name
             ))
         })?;
-    let family = match node.config.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY) {
+    let family = match node.input_values.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY) {
         None | Some(serde_json::Value::Null) => None,
         Some(named) => {
             let family_wire_name = named.as_str();
@@ -884,11 +890,11 @@ fn refuse_a_config_key_the_interface_node_does_not_take(
             GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
         ]
     };
-    if let Some(unread_key) = node.config.as_object().and_then(|config| {
-        config
-            .keys()
-            .find(|key| !keys_it_takes.contains(&key.as_str()))
-    }) {
+    if let Some(unread_key) = node
+        .input_values
+        .keys()
+        .find(|key| !keys_it_takes.contains(&key.as_str()))
+    {
         let where_it_would_be_taken = if kind == "GraphInput"
             && [
                 GRAPH_INPUT_DEFAULT_CONFIG_KEY,
@@ -925,9 +931,11 @@ fn refuse_a_default_or_range_its_family_does_not_take(
     node: &GraphSnapshotNode,
     family: PortFamily,
 ) -> Result<()> {
-    the_value_lifetime_a_graph_input_config_declares(Some(&node.config))
-        .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
-    if let Some(default) = node.config.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
+    the_value_lifetime_a_graph_input_config_declares(Some(&serde_json::Value::Object(
+        node.input_values.clone(),
+    )))
+    .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
+    if let Some(default) = node.input_values.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
         && let Err(why) =
             crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, default, 0)
     {
@@ -938,7 +946,7 @@ fn refuse_a_default_or_range_its_family_does_not_take(
             family.declaration_name()
         )));
     }
-    let Some(range) = node.config.get(GRAPH_INPUT_RANGE_CONFIG_KEY) else {
+    let Some(range) = node.input_values.get(GRAPH_INPUT_RANGE_CONFIG_KEY) else {
         return Ok(());
     };
     if family == PortFamily::Records {

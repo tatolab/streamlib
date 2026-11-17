@@ -323,3 +323,89 @@ fn an_imports_source_listed_with_no_project_name_reads_with_none() {
         }
     ));
 }
+
+#[test]
+fn a_refusal_carries_its_code_and_leaves_out_every_place_it_does_not_name() {
+    let refusal = ProjectActionRefusalOnTheWire::of_the_action(
+        "transact",
+        ControlOperationRefusalCode::ParamsDoNotMatchSchema,
+        "missing field `stream`",
+    );
+
+    assert_eq!(
+        serde_json::to_value(&refusal).unwrap(),
+        serde_json::json!({
+            "refusal_code": "params_do_not_match_schema",
+            "action": "transact",
+            "runtime_words": "missing field `stream`",
+        })
+    );
+}
+
+#[test]
+fn a_refusal_code_a_client_does_not_know_reads_as_refused() {
+    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+        "refusal_code": "a_code_added_after_this_client",
+        "action": "transact",
+        "runtime_words": "no",
+    }))
+    .unwrap();
+
+    assert_eq!(refusal.refusal_code, ControlOperationRefusalCode::Refused);
+}
+
+#[test]
+fn a_refusal_from_a_runtime_that_sends_no_code_reads_as_refused() {
+    let refusal: ProjectActionRefusalOnTheWire = serde_json::from_value(serde_json::json!({
+        "action": "transact",
+        "refused_operation_index": 1,
+        "runtime_words": "no",
+    }))
+    .unwrap();
+
+    assert_eq!(refusal.refusal_code, ControlOperationRefusalCode::Refused);
+    assert_eq!(refusal.refused_operation_index, Some(1));
+}
+
+#[test]
+fn a_refusal_names_a_file_place_and_a_suggested_call_as_the_wire_spells_them() {
+    let refusal = ProjectActionRefusalOnTheWire {
+        refused_params_pointer: Some("/operations/0/stream".to_owned()),
+        refused_file: Some(ProjectFilePlaceOnTheWire {
+            path: "nodes/blur.py".to_owned(),
+            line: Some(4),
+            column: None,
+        }),
+        suggested_call: Some(SuggestedOperationCall {
+            operation: "read_project_file".to_owned(),
+            params: serde_json::Map::from_iter([(
+                "path".to_owned(),
+                serde_json::Value::from("nodes/blur.py"),
+            )]),
+        }),
+        ..ProjectActionRefusalOnTheWire::of_the_action(
+            "write_project_file",
+            ControlOperationRefusalCode::Refused,
+            "changed since it was read",
+        )
+    };
+
+    let on_the_wire = serde_json::to_value(&refusal).unwrap();
+
+    assert_eq!(
+        on_the_wire["refused_params_pointer"],
+        "/operations/0/stream"
+    );
+    assert_eq!(
+        on_the_wire["refused_file"],
+        serde_json::json!({"path": "nodes/blur.py", "line": 4})
+    );
+    assert_eq!(
+        on_the_wire["suggested_call"],
+        serde_json::json!({"operation": "read_project_file", "params": {"path": "nodes/blur.py"}})
+    );
+    assert_eq!(
+        serde_json::from_value::<ProjectActionRefusalOnTheWire>(on_the_wire).unwrap(),
+        refusal
+    );
+}

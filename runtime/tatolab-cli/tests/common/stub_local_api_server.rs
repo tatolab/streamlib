@@ -201,6 +201,7 @@ struct StubLocalApiState {
     queued_tool_answers: Mutex<VecDeque<StubToolAnswer>>,
     refuse_every_tool_call_with: Option<String>,
     recorded_tool_calls: Mutex<Vec<RecordedToolCall>>,
+    tool_names_called: Mutex<Vec<String>>,
     listed_tool_names: Vec<String>,
     mcp_stdio_upgrade_answer: StubMcpStdioUpgradeAnswer,
     recorded_mcp_stdio_request_heads: Mutex<Vec<RecordedHttpRequestHead>>,
@@ -257,6 +258,11 @@ impl ServerHandler for StubLocalApiMcpServerHandler {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
+        self.stub_state
+            .tool_names_called
+            .lock()
+            .unwrap()
+            .push(request.name.to_string());
         let request = the_operation_a_tool_call_runs(request);
         self.stub_state
             .recorded_tool_calls
@@ -607,6 +613,7 @@ impl StubLocalApiServer {
             queued_tool_answers: Mutex::new(stub_local_api_script.queued_tool_answers.into()),
             refuse_every_tool_call_with: stub_local_api_script.refuse_every_tool_call_with,
             recorded_tool_calls: Mutex::new(Vec::new()),
+            tool_names_called: Mutex::new(Vec::new()),
             listed_tool_names: stub_local_api_script.listed_tool_names,
             mcp_stdio_upgrade_answer: stub_local_api_script.mcp_stdio_upgrade_answer,
             recorded_mcp_stdio_request_heads: Mutex::new(Vec::new()),
@@ -673,6 +680,12 @@ impl StubLocalApiServer {
     /// Every tool call received so far, in arrival order.
     pub(crate) fn recorded_tool_calls(&self) -> Vec<RecordedToolCall> {
         self.stub_state.recorded_tool_calls.lock().unwrap().clone()
+    }
+
+    /// The name each `tools/call` named, before a `call_operation` is unwrapped, in arrival
+    /// order.
+    pub(crate) fn recorded_tool_names_called(&self) -> Vec<String> {
+        self.stub_state.tool_names_called.lock().unwrap().clone()
     }
 
     /// The transport of every call to `tool_name` received so far, in arrival order.

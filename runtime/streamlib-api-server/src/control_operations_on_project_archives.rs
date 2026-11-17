@@ -44,9 +44,9 @@ impl ControlOperationDispatcher {
             })
         })
         .await
-        .map_err(|join_failure| {
-            format!("import_project failed: the call did not finish: {join_failure}")
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "import_project failed: the call",
+        ))?
         .map_err(|refusal| format!("import_project failed: {refusal}"))?;
         Ok(answered)
     }

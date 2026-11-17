@@ -57,9 +57,9 @@ impl ControlOperationDispatcher {
             )
         })
         .await
-        .map_err(|join_failure| {
-            format!("refresh_fragments failed: the refresh did not finish: {join_failure}")
-        })?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(
+            "refresh_fragments failed: the refresh",
+        ))?
         .map_err(|refusal| format!("refresh_fragments failed: {refusal}"))?;
         if refreshes.is_empty() {
             return Ok(GraphTransactionToolResult {
@@ -179,9 +179,9 @@ impl ControlOperationDispatcher {
             })
         })
         .await
-        .map_err(|join_failure| {
-            format!("{method_name} failed: the transaction did not finish: {join_failure}")
-        })?;
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+            "{method_name} failed: the transaction"
+        )))?;
         applied.map_err(ControlOperationRefusal::RefusedAction)
     }
 }

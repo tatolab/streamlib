@@ -114,6 +114,52 @@ pub(super) enum ConfigReferencesOfTheAddedNode {
     ValidatedWithTheWholeGraphBeforeTheAdd,
 }
 
+fn a_load_holds_the_type_as_a_placeholder(
+    node_interpreter_launch_record: &NodeInterpreterLaunchRecordOfOneStream,
+    node_type: &NodeClassImportPath,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
+) -> bool {
+    config_references_of_the_added_node
+        == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
+        && node_interpreter_launch_record
+            .node_types_this_stream_resolves()
+            .placeholder_of_the_node_type_not_described(node_type)
+            .is_some()
+}
+
+/// Describe `node_type` in the stream's own interpreter when the stream does not resolve it
+/// yet, off the async worker, since a describe runs for as long as the module's import does;
+/// a type a load holds as a placeholder is not described. Once the type is described a later
+/// call does nothing, so an add that splits a node's input values by its type describes it
+/// first, and the add itself describes nothing again.
+pub(super) async fn describe_the_type_an_add_names_when_it_must(
+    node_interpreter_launch_record: &Arc<NodeInterpreterLaunchRecordOfOneStream>,
+    node_type: &NodeClassImportPath,
+    lend_directory: Option<PathBuf>,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
+) -> Result<()> {
+    if a_load_holds_the_type_as_a_placeholder(
+        node_interpreter_launch_record,
+        node_type,
+        config_references_of_the_added_node,
+    ) || !node_interpreter_launch_record.a_live_add_must_describe(node_type)
+    {
+        return Ok(());
+    }
+    let node_type = node_type.clone();
+    let launch_record = Arc::clone(node_interpreter_launch_record);
+    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
+        launch_record
+            .describe_and_register_a_type_a_live_add_names(&node_type, lend_directory.as_deref())
+    }))
+    .await
+    .map_err(|join_failure| {
+        Error::Runtime(format!(
+            "the describe of a node type did not finish: {join_failure}"
+        ))
+    })?
+}
+
 pub(super) async fn add_node_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     node_interpreter_launch_record: Arc<NodeInterpreterLaunchRecordOfOneStream>,
@@ -138,33 +184,18 @@ pub(super) async fn add_node_impl(
         });
     };
 
-    // A type this stream does not resolve yet is described in the stream's
-    // own interpreter, off the async worker: a describe runs for as long as
-    // the module's import does.
-    let a_load_holds_its_type_as_a_placeholder = config_references_of_the_added_node
-        == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
-        && node_interpreter_launch_record
-            .node_types_this_stream_resolves()
-            .placeholder_of_the_node_type_not_described(&spec.name)
-            .is_some();
-    if !a_load_holds_its_type_as_a_placeholder
-        && node_interpreter_launch_record.a_live_add_must_describe(&spec.name)
-    {
-        let node_type = spec.name.clone();
-        let launch_record = Arc::clone(&node_interpreter_launch_record);
-        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-            launch_record.describe_and_register_a_type_a_live_add_names(
-                &node_type,
-                lend_directory.as_deref(),
-            )
-        }))
-        .await
-        .map_err(|join_failure| {
-            Error::Runtime(format!(
-                "the describe of a node type did not finish: {join_failure}"
-            ))
-        })??;
-    }
+    let a_load_holds_its_type_as_a_placeholder = a_load_holds_the_type_as_a_placeholder(
+        &node_interpreter_launch_record,
+        &spec.name,
+        config_references_of_the_added_node,
+    );
+    describe_the_type_an_add_names_when_it_must(
+        &node_interpreter_launch_record,
+        &spec.name,
+        lend_directory,
+        config_references_of_the_added_node,
+    )
+    .await?;
 
     let ident_for_err = spec.name.clone();
 
@@ -675,18 +706,34 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
     }
 
+    fn the_config_a_node_holding_the_input_values_takes(
+        &self,
+        node_type: &str,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let node_type = NodeClassImportPath::new(node_type)
+            .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")))?;
+        Ok(
+            crate::core::graph::legacy_config_of_a_node::config_of_a_node(
+                self.node_types_this_stream_resolves(),
+                &node_type,
+                input_values,
+            ),
+        )
+    }
+
     fn refuse_a_node_a_live_add_would_refuse(
         &self,
         node_type: &str,
         node_name: &str,
-        config: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'_, Result<()>> {
         let launch_record = Arc::clone(&self.node_interpreter_launch_record);
         let lend_directory = self.lend_directory();
         let node_type = NodeClassImportPath::new(node_type)
             .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")));
         let node_name = node_name.to_owned();
-        let config = config.clone();
+        let input_values = input_values.clone();
         self.in_this_streams_log_route(async move {
             let node_type = node_type?;
             if launch_record.a_live_add_must_describe(&node_type) {
@@ -711,6 +758,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             if node_types.port_info(&node_type).is_none() {
                 return Err(Error::UnknownNodeType { ident: node_type });
             }
+            let config = crate::core::graph::legacy_config_of_a_node::config_of_a_node(
+                node_types,
+                &node_type,
+                &input_values,
+            );
             node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &config)?;
             crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
                 &node_name, &node_type, node_types, &config,

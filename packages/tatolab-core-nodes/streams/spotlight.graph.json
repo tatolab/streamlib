@@ -85,11 +85,11 @@
   ],
   "nodes": [
     {
-      "config": {
+      "id": "b45ed153-5e84-5d27-b97e-bb9a9a6c58bd",
+      "input_values": {
         "height": 720,
         "width": 1280
       },
-      "id": "b45ed153-5e84-5d27-b97e-bb9a9a6c58bd",
       "name": "canvas",
       "studio": {
         "contract": 1,
@@ -101,10 +101,8 @@
       "type": "core_nodes.solid_color:SolidColor"
     },
     {
-      "config": {},
       "id": "ae617918-94f5-5ea7-bd38-8c7490eff662",
-      "name": "gradient",
-      "pins": {
+      "input_values": {
         "angle": 0.25,
         "end_blue": 0.0,
         "end_green": 0.0,
@@ -113,6 +111,7 @@
         "start_green": 0.0,
         "start_red": 0.05
       },
+      "name": "gradient",
       "studio": {
         "contract": 1,
         "position": [
@@ -123,12 +122,11 @@
       "type": "core_nodes.generators:Gradient"
     },
     {
-      "config": {},
       "id": "13370e37-bb86-577d-adc5-a4aabd910d84",
-      "name": "swing",
-      "pins": {
+      "input_values": {
         "rate_hz": 0.25
       },
+      "name": "swing",
       "studio": {
         "contract": 1,
         "position": [
@@ -139,13 +137,12 @@
       "type": "core_nodes.animation:Lfo"
     },
     {
-      "config": {},
       "id": "3f16f6b3-fc38-5cc8-967a-6d286b590c0e",
-      "name": "swing_range",
-      "pins": {
+      "input_values": {
         "to_high": 0.75,
         "to_low": 0.25
       },
+      "name": "swing_range",
       "studio": {
         "contract": 1,
         "position": [
@@ -156,16 +153,15 @@
       "type": "core_nodes.math_nodes:Remap"
     },
     {
-      "config": {},
       "id": "8872965a-fb32-5837-83ec-83ed4ce66bd9",
-      "name": "circle",
-      "pins": {
+      "input_values": {
         "blue": 0.6,
         "green": 0.9,
         "radius": 0.18,
         "red": 1.0,
         "softness": 0.08
       },
+      "name": "circle",
       "studio": {
         "contract": 1,
         "position": [
@@ -176,7 +172,6 @@
       "type": "core_nodes.generators:Circle"
     },
     {
-      "config": {},
       "id": "0ae692fa-b298-5b9e-b00d-7171b44a8d22",
       "name": "over",
       "studio": {
@@ -189,7 +184,6 @@
       "type": "core_nodes.composite:Over"
     },
     {
-      "config": {},
       "id": "ed7963a2-705f-517e-a8c8-eb4f820b5725",
       "name": "vignette",
       "studio": {
@@ -202,7 +196,6 @@
       "type": "core_nodes.filters:Vignette"
     },
     {
-      "config": {},
       "id": "b838f09c-f46b-57a3-bde4-82bbaeead760",
       "name": "program",
       "studio": {

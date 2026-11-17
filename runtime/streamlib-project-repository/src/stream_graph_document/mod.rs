@@ -7,13 +7,27 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
+use crate::stream_document_upgrade::{
+    NODE_INPUT_VALUES_KEY, fold_the_retired_fields_into, put_input_values,
+    stream_document_in_the_current_shape, the_retired_field_holding_no_object,
+    upgrade_a_node_in_place, upgrade_stream_document_in_place,
+};
 use crate::stream_graph_studio_contract::{
     StreamGraphDocumentNote, StreamGraphNodeStudioFields, a_documents_studio_holding,
     the_notes_of_a_documents_studio,
 };
 
 mod fragment_node_uuids_kept_by_name;
+mod input_values_and_asset_references_at_every_level;
 mod stream_graph_operation;
+
+pub use input_values_and_asset_references_at_every_level::{
+    asset_references_made_references_into_the_import, assets_a_nodes_input_values_reference,
+};
+use input_values_and_asset_references_at_every_level::{
+    push_the_input_values_of_each_node_at_every_level,
+    push_the_input_values_of_each_of_the_nodes_at_every_level,
+};
 
 pub use fragment_node_uuids_kept_by_name::fragment_with_each_node_uuid_kept_by_its_name;
 pub use stream_graph_operation::StreamGraphOperation;
@@ -39,8 +53,11 @@ pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
     matches!(node_type, GRAPH_INPUT_NODE_TYPE | GRAPH_OUTPUT_NODE_TYPE)
 }
 
-/// One node as a stream's graph document holds it: the spec keys a load reads.
+/// One node as a stream's graph document holds it: the spec keys a load reads. A node an older
+/// runtime recorded, with `config` and `pins`, reads with them folded into `input_values`, and
+/// one holding either as anything but an object is refused naming the node and the key.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "StreamGraphDocumentNodeAsRecorded")]
 pub struct StreamGraphDocumentNode {
     /// The node's UUID, the runtime's from its placement on.
     pub id: Uuid,
@@ -49,12 +66,10 @@ pub struct StreamGraphDocumentNode {
     /// The import path of the node's type.
     #[serde(rename = "type")]
     pub node_type: String,
-    /// The node's config.
-    #[serde(default = "a_config_naming_no_setting")]
-    pub config: Value,
-    /// The value set on each unlinked input, by input name.
+    /// The value the node holds for each input, by input name; an input it names no value for
+    /// reads its declared default.
     #[serde(default, skip_serializing_if = "Map::is_empty")]
-    pub pins: Map<String, Value>,
+    pub input_values: Map<String, Value>,
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposed_config_fields: Vec<String>,
@@ -89,8 +104,58 @@ impl StreamGraphDocumentNode {
     }
 }
 
-fn a_config_naming_no_setting() -> Value {
-    Value::Object(Map::new())
+/// A node as any runtime recorded it, before its retired fields are folded into `input_values`.
+#[derive(Deserialize)]
+struct StreamGraphDocumentNodeAsRecorded {
+    id: Uuid,
+    name: String,
+    #[serde(rename = "type")]
+    node_type: String,
+    #[serde(default)]
+    input_values: Map<String, Value>,
+    #[serde(default)]
+    pins: Option<Value>,
+    #[serde(default)]
+    config: Option<Value>,
+    #[serde(default)]
+    exposed_config_fields: Vec<String>,
+    #[serde(default)]
+    studio: Box<StreamGraphNodeStudioFields>,
+    #[serde(default)]
+    fragment: Option<Box<Value>>,
+}
+
+impl TryFrom<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
+    type Error = String;
+
+    fn try_from(recorded: StreamGraphDocumentNodeAsRecorded) -> Result<Self, String> {
+        let StreamGraphDocumentNodeAsRecorded {
+            id,
+            name,
+            node_type,
+            mut input_values,
+            pins,
+            config,
+            exposed_config_fields,
+            studio,
+            fragment,
+        } = recorded;
+        if let Some(key) = the_retired_field_holding_no_object(pins.as_ref(), config.as_ref()) {
+            return Err(format!(
+                "node {id} `{name}` holds its `{key}` as no object, so its values do not read"
+            ));
+        }
+        fold_the_retired_fields_into(&mut input_values, pins, config);
+        Ok(Self {
+            id,
+            name,
+            node_type,
+            input_values,
+            exposed_config_fields,
+            studio,
+            fragment,
+        })
+    }
 }
 
 /// One end of a link, its node by UUID.
@@ -151,8 +216,10 @@ pub struct StreamGraphFragmentPlacement {
     /// The graph generator's import path, the fragment node's `type`.
     #[serde(rename = "type")]
     pub generator: String,
-    /// The promoted settings the generator ran with, the fragment node's `config`.
-    pub config: Value,
+    /// The promoted settings the generator ran with, the fragment node's `input_values`; an
+    /// older runtime recorded them as `config`.
+    #[serde(alias = "config", default)]
+    pub input_values: Map<String, Value>,
     /// The stored output, its nodes each holding its UUID and its links naming them by UUID.
     pub fragment: Value,
 }
@@ -192,6 +259,7 @@ impl StreamGraphDocument {
 
     /// Read a graph document, or a `graph` render of one, from its parsed JSON.
     pub fn from_value(document: Value) -> Result<Self, String> {
+        let document = stream_document_in_the_current_shape(document);
         let Value::Object(mut every_other_key) = document else {
             return Err("a graph document is a JSON object".to_owned());
         };
@@ -385,11 +453,15 @@ impl StreamGraphDocument {
             .collect()
     }
 
-    /// Each node's config by its UUID, at every level of the fragments the document stores.
-    pub fn configs_of_every_node_at_every_level(&self) -> Vec<(Uuid, &Value)> {
-        let mut configs = Vec::new();
-        push_the_config_of_each_of_the_nodes_at_every_level(&self.node_values, &mut configs);
-        configs
+    /// Each node's input values by its UUID, at every level of the fragments the document
+    /// stores.
+    pub fn input_values_of_every_node_at_every_level(&self) -> Vec<(Uuid, &Map<String, Value>)> {
+        let mut input_values = Vec::new();
+        push_the_input_values_of_each_of_the_nodes_at_every_level(
+            &self.node_values,
+            &mut input_values,
+        );
+        input_values
     }
 
     /// The name of each top-level node holding no UUID, with the node as the document holds it.
@@ -432,7 +504,9 @@ impl StreamGraphDocument {
     }
 
     /// Apply `operation`, refused in its own words when the document does not hold what it
-    /// names or already holds what it adds.
+    /// names or already holds what it adds. A node it places in an older shape, such as a graph
+    /// generator's stored output or a node an edit recorded before this runtime, takes the
+    /// current one.
     pub fn apply(&mut self, operation: &StreamGraphOperation) -> Result<(), String> {
         self.apply_the_operation(operation)?;
         self.drop_the_graph_each_stream_fragment_places();
@@ -459,9 +533,10 @@ impl StreamGraphDocument {
                         node_uuid_of(holder).map_or_else(String::new, |uuid| uuid.to_string())
                     ));
                 }
-                let node_value = serde_json::to_value(node).map_err(|not_written| {
+                let mut node_value = serde_json::to_value(node).map_err(|not_written| {
                     format!("node {} does not write: {not_written}", node.id)
                 })?;
+                upgrade_a_node_in_place(&mut node_value);
                 self.node_values_mut().push(node_value);
                 for link in links {
                     self.connect(link)?;
@@ -520,34 +595,27 @@ impl StreamGraphDocument {
                 self.link_values_mut().remove(index);
                 Ok(())
             }
-            StreamGraphOperation::SetNodeConfig { node, to, .. } => {
-                self.node_object_mut(*node)?
-                    .insert("config".to_owned(), to.clone());
-                Ok(())
-            }
+            StreamGraphOperation::SetNodeConfig { node, from, to } => self
+                .change_the_input_values_of(*node, |input_values| {
+                    for field in from.as_object().into_iter().flat_map(Map::keys) {
+                        input_values.remove(field);
+                    }
+                    for (field, value) in to.as_object().into_iter().flatten() {
+                        if !value.is_null() {
+                            input_values.insert(field.clone(), value.clone());
+                        }
+                    }
+                }),
             StreamGraphOperation::SetPinValue {
                 node, input, to, ..
-            } => {
-                let node_object = self.node_object_mut(*node)?;
-                let pins = node_object
-                    .entry("pins")
-                    .or_insert_with(|| Value::Object(Map::new()));
-                let Value::Object(pins) = pins else {
-                    return Err(format!("node {node}'s `pins` is not an object"));
-                };
-                match to {
-                    Some(value) => {
-                        pins.insert(input.clone(), value.clone());
-                    }
-                    None => {
-                        pins.remove(input);
-                    }
+            } => self.change_the_input_values_of(*node, |input_values| match to {
+                Some(value) => {
+                    input_values.insert(input.clone(), value.clone());
                 }
-                if pins.is_empty() {
-                    node_object.remove("pins");
+                None => {
+                    input_values.remove(input);
                 }
-                Ok(())
-            }
+            }),
             StreamGraphOperation::RenameNode { node, to, from } => {
                 if let Some(holder) = self.node_objects().find(|node_object| {
                     node_name_of(node_object) == Some(to.as_str())
@@ -591,8 +659,10 @@ impl StreamGraphDocument {
                     ));
                 }
                 node_object.insert("type".to_owned(), Value::String(to.generator.clone()));
-                node_object.insert("config".to_owned(), to.config.clone());
-                node_object.insert("fragment".to_owned(), to.fragment.clone());
+                put_input_values(node_object, to.input_values.clone());
+                let mut fragment = to.fragment.clone();
+                upgrade_stream_document_in_place(&mut fragment);
+                node_object.insert("fragment".to_owned(), fragment);
                 Ok(())
             }
             StreamGraphOperation::SetExposedConfigFields { node, to, .. } => {
@@ -686,6 +756,28 @@ impl StreamGraphDocument {
                 self.set_the_notes(&notes)
             }
         }
+    }
+
+    /// Change the input values the node whose UUID is `node` holds with `change`, its key left
+    /// out when it holds none.
+    fn change_the_input_values_of(
+        &mut self,
+        node: Uuid,
+        change: impl FnOnce(&mut Map<String, Value>),
+    ) -> Result<(), String> {
+        let node_object = self.node_object_mut(node)?;
+        let mut input_values = match node_object.remove(NODE_INPUT_VALUES_KEY) {
+            None => Map::new(),
+            Some(Value::Object(input_values)) => input_values,
+            Some(_) => {
+                return Err(format!(
+                    "node {node}'s `{NODE_INPUT_VALUES_KEY}` is not an object"
+                ));
+            }
+        };
+        change(&mut input_values);
+        put_input_values(node_object, input_values);
+        Ok(())
     }
 
     fn connect(&mut self, link: &StreamGraphDocumentLink) -> Result<(), String> {
@@ -856,91 +948,8 @@ fn refuse_a_node_of_a_tatolab_type_holding_an_inline_graph(
     Ok(())
 }
 
-/// The config key of a stream's fragment node naming the stream it holds.
+/// The input of a stream's fragment node naming the stream it holds.
 pub const STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: &str = "stream";
-
-/// Make each reference in `value` to an asset of the project it was written in,
-/// `{"asset": "<uuid>"}`, a reference into that project as an import, adding
-/// `"from": "<project>"`; a reference already naming a project is left as it is.
-pub fn asset_references_made_references_into_the_import(value: &mut Value, project: Uuid) {
-    match value {
-        Value::Object(object) => {
-            let names_an_asset = object
-                .get("asset")
-                .and_then(Value::as_str)
-                .is_some_and(|asset| Uuid::parse_str(asset).is_ok());
-            if names_an_asset {
-                object
-                    .entry("from")
-                    .or_insert_with(|| Value::String(project.to_string()));
-            }
-            for entry in object.values_mut() {
-                asset_references_made_references_into_the_import(entry, project);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                asset_references_made_references_into_the_import(item, project);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn push_the_config_of_each_node_at_every_level<'fragment>(
-    fragment: &'fragment Value,
-    configs: &mut Vec<(Uuid, &'fragment Value)>,
-) {
-    if let Some(nodes) = fragment.get("nodes").and_then(Value::as_array) {
-        push_the_config_of_each_of_the_nodes_at_every_level(nodes, configs);
-    }
-}
-
-fn push_the_config_of_each_of_the_nodes_at_every_level<'fragment>(
-    nodes: &'fragment [Value],
-    configs: &mut Vec<(Uuid, &'fragment Value)>,
-) {
-    for node in nodes.iter().filter_map(Value::as_object) {
-        if let (Some(node_uuid), Some(config)) = (node_uuid_of(node), node.get("config")) {
-            configs.push((node_uuid, config));
-        }
-        if let Some(inner_fragment) = node.get("fragment") {
-            push_the_config_of_each_node_at_every_level(inner_fragment, configs);
-        }
-    }
-}
-
-/// Every asset of this project a node's config references, `{"asset": "<uuid>"}`, by UUID;
-/// a reference naming another project with `from` is that project's to check.
-pub fn assets_a_node_config_references(config: &Value) -> Vec<Uuid> {
-    let mut referenced = Vec::new();
-    collect_asset_references(config, &mut referenced);
-    referenced
-}
-
-fn collect_asset_references(value: &Value, referenced: &mut Vec<Uuid>) {
-    match value {
-        Value::Object(object) => {
-            if !object.contains_key("from")
-                && let Some(asset) = object
-                    .get("asset")
-                    .and_then(Value::as_str)
-                    .and_then(|asset| Uuid::parse_str(asset).ok())
-            {
-                referenced.push(asset);
-            }
-            for entry in object.values() {
-                collect_asset_references(entry, referenced);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_asset_references(item, referenced);
-            }
-        }
-        _ => {}
-    }
-}
 
 #[cfg(test)]
 mod tests;

@@ -98,7 +98,7 @@ fn a_reference_to_a_node_of_the_type_its_key_takes_validates_and_round_trips() {
     let reread = GraphSnapshot::from_json_str(&graph.to_json_string().unwrap()).unwrap();
     assert_eq!(reread, graph);
     assert_eq!(
-        reread.nodes[2].config["gateway"],
+        reread.nodes[2].input_values["gateway"],
         serde_json::json!({"node": "cloudflare"})
     );
 }
@@ -366,7 +366,7 @@ fn every_64_bit_integer_a_float_and_digits_inside_a_string_still_parse() {
             }}]}"#,
     )
     .expect("each value fits");
-    let config = &graph.nodes[0].config;
+    let config = &graph.nodes[0].input_values;
     assert_eq!(config["largest"], serde_json::json!(u64::MAX));
     assert_eq!(config["smallest"], serde_json::json!(i64::MIN));
     assert_eq!(config["digits"], "18446744073709551616");
