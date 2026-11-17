@@ -35,6 +35,7 @@ use crate::core::runtime::{
 };
 use crate::core::{Error, Result};
 
+mod input_values_set_live;
 mod live_graph_edits;
 mod shutdown_and_teardown;
 mod start_and_stop;
@@ -114,6 +115,10 @@ pub struct LoadedStreamInThisRuntime {
     /// Held for the whole of a start or a stop, so a stop that lands while
     /// the stream starts waits for the start rather than missing its context.
     one_start_or_stop_at_a_time: Mutex<()>,
+    /// Held across each change of an input's value, live or saved, from its check to its
+    /// announcement, so the values each helper and island holds, the live values `graph`
+    /// renders and the order the changes are announced in all end on the last change made.
+    one_input_value_change_at_a_time: Mutex<()>,
     /// Set by the one request that starts this stream's shutdown thread.
     shutdown_thread_started: AtomicBool,
     /// The step barrier while a stepped stream runs.
@@ -310,6 +315,7 @@ impl LoadedStreamInThisRuntime {
             _graph_change_listener: graph_change_listener,
             teardown_watchdog_budget,
             one_start_or_stop_at_a_time: Mutex::new(()),
+            one_input_value_change_at_a_time: Mutex::new(()),
             shutdown_thread_started: AtomicBool::new(false),
             step_coordinator: Mutex::new(None),
             end_claimed: AtomicBool::new(false),
@@ -463,10 +469,14 @@ impl LoadedStreamInThisRuntime {
     /// How many nodes this stream's live graph holds.
     pub fn node_count(&self) -> usize {
         self.compiler
-            .scope(|graph, _tx| graph.traversal().v(()).iter().count())
+            .scope_reading(|graph| graph.traversal().v(()).iter().count())
     }
 
     pub fn to_json(&self) -> Result<serde_json::Value> {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_graph_render_of(
+            self.loaded_stream_identity(),
+        );
         let machine_name = self
             .engine_resources_shared_by_every_stream
             .machine_name

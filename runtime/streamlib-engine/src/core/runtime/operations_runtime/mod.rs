@@ -16,6 +16,9 @@ use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
+use crate::core::graph::input_values::{
+    InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
     NodeRunId, PendingDeletionComponent, StateComponent, node_named_or_refused,
@@ -100,7 +103,9 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
         for node_run_id in &nodes_pending_deletion {
-            this_streams_graph.traversal_mut().v(node_run_id).drop();
+            if !this_streams_graph.drop_the_node(node_run_id) {
+                tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
+            }
         }
     });
 }
@@ -291,7 +296,9 @@ pub(super) async fn add_node_impl(
                     )
                 })
             {
-                graph.traversal_mut().v(&node_id).drop();
+                if !graph.drop_the_node(&node_id) {
+                    tracing::warn!("`{node_id}`, whose add was refused, was not dropped");
+                }
                 return Err(refusal);
             }
         }
@@ -786,6 +793,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.node_types_this_stream_resolves(),
             node_type,
         )
+    }
+
+    fn set_input_values_live(
+        &self,
+        sets: &[InputValueToSetLive],
+    ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
+        LoadedStreamInThisRuntime::set_input_values_live(self, sets)
     }
 
     fn an_exposure_of_config_fields_is_recorded_on(

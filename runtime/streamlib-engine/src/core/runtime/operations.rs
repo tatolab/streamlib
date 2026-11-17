@@ -3,6 +3,9 @@
 
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::Result;
+use crate::core::graph::input_values::{
+    InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::nodes::NodeSpec;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
@@ -107,6 +110,16 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &NodeClassImportPath,
         exposed_config_fields: &[String],
     ) -> Result<bool>;
+
+    /// Set each of `sets` live, apart from the graph, when each is on an input its node reads
+    /// each run: every value checked before any is set, then each handed to the helper and the
+    /// islands reading it and announced as `InputValueDidChange`, with no graph edit and no
+    /// compile; whole or not at all. None is set when one is held on the graph, so the set takes
+    /// the path a graph edit takes.
+    fn set_input_values_live(
+        &self,
+        sets: &[InputValueToSetLive],
+    ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal>;
 
     /// Bring each stream fragment of this stream's live graph to the stream it references, as
     /// that stream's graph document, or its import's, is on disk now.

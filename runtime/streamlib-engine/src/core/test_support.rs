@@ -526,6 +526,11 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
         Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
     /// Every set of exposed config fields handed over, in order.
     pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
+    /// Whether the far side refuses the pin values handed over, as a helper that died does.
+    pub(crate) refuses_pin_values: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the far side refuses the function node islands handed over, as a helper that died
+    /// does.
+    pub(crate) refuses_function_node_islands: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
@@ -563,6 +568,14 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         function_node_island: &serde_json::Value,
         answer_cell: Arc<crate::core::nodes::OutOfProcessLinkWireReply>,
     ) -> crate::core::Result<()> {
+        if self
+            .refuses_function_node_islands
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(crate::core::Error::Configuration(
+                "the far side refuses function node islands in this test".to_string(),
+            ));
+        }
         self.late_fed_function_node_islands
             .lock()
             .push(function_node_island.clone());
@@ -585,6 +598,14 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         &self,
         pin_values: &serde_json::Map<String, serde_json::Value>,
     ) -> crate::core::Result<()> {
+        if self
+            .refuses_pin_values
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(crate::core::Error::Configuration(
+                "the far side refuses pin values in this test".to_string(),
+            ));
+        }
         self.pin_values_handed_over.lock().push(pin_values.clone());
         Ok(())
     }

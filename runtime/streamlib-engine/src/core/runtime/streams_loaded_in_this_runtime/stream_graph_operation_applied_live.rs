@@ -283,7 +283,9 @@ impl LoadedStreamInThisRuntime {
         };
         if matches!(refusal, Error::UnknownNodeType { .. }) {
             self.compiler.scope(|graph, _tx| {
-                graph.traversal_mut().v(&node_run_id).drop();
+                if !graph.drop_the_node(&node_run_id) {
+                    tracing::warn!("`{node_run_id}`, which a refused add left, was not dropped");
+                }
             });
             self.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidRemoveNode { node_run_id });
             self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);

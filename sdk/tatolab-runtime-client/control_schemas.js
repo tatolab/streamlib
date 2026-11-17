@@ -95,6 +95,16 @@ const SubscribeStreamGraphChangesResult = z.looseObject({
   streams: z.array(z.string()),
 });
 
+/** @type {z.ZodType<ControlContract.SubscribeInputValueChangesRequest>} */
+const SubscribeInputValueChangesRequest = z.strictObject({
+  streams: z.array(z.string()),
+});
+
+/** @type {z.ZodType<ControlContract.SubscribeInputValueChangesResult>} */
+const SubscribeInputValueChangesResult = z.looseObject({
+  streams: z.array(z.string()),
+});
+
 /** @type {z.ZodType<ControlContract.SubscribeStreamActionChangesRequest>} */
 const SubscribeStreamActionChangesRequest = z.strictObject({});
 
@@ -1459,6 +1469,18 @@ const StreamGraphChangedNotificationParams = z.looseObject({
   node_state: NodeStateOnTheWire.nullable().optional(),
 });
 
+/** @type {z.ZodType<ControlContract.InputValueComesFromOnTheWire>} */
+const InputValueComesFromOnTheWire = z.union([z.literal("live"), z.literal("saved"), z.literal("default"), z.literal("wire")]);
+
+/** @type {z.ZodType<ControlContract.InputValueChangedNotificationParams>} */
+const InputValueChangedNotificationParams = z.looseObject({
+  stream: z.string(),
+  node: z.string(),
+  input: z.string(),
+  value: z.unknown().optional(),
+  value_comes_from: InputValueComesFromOnTheWire.nullable().optional(),
+});
+
 /** @type {z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>} */
 const StreamActionChangeKindOnTheWire = z.union([z.literal("changed"), z.literal("missed")]);
 
@@ -1812,6 +1834,8 @@ export const ControlSchemas = Object.freeze({
     SubscribeProjectChangesResult,
     SubscribeStreamGraphChangesRequest,
     SubscribeStreamGraphChangesResult,
+    SubscribeInputValueChangesRequest,
+    SubscribeInputValueChangesResult,
     SubscribeStreamActionChangesRequest,
     SubscribeStreamActionChangesResult,
     SubscribeProjectLogRecordsRequest,
@@ -1969,6 +1993,8 @@ export const ControlSchemas = Object.freeze({
     StreamGraphChangedNotificationParams,
     StreamGraphChangeKindOnTheWire,
     NodeStateOnTheWire,
+    InputValueChangedNotificationParams,
+    InputValueComesFromOnTheWire,
     StreamActionChangedNotificationParams,
     StreamActionChangeKindOnTheWire,
     ProjectLogRecordsWrittenNotificationParams,
@@ -2033,6 +2059,10 @@ export const ControlSchemas = Object.freeze({
     subscribe_stream_graph_changes: Object.freeze({
       params: SubscribeStreamGraphChangesRequest,
       result: SubscribeStreamGraphChangesResult,
+    }),
+    subscribe_input_value_changes: Object.freeze({
+      params: SubscribeInputValueChangesRequest,
+      result: SubscribeInputValueChangesResult,
     }),
     subscribe_stream_action_changes: Object.freeze({
       params: SubscribeStreamActionChangesRequest,
@@ -2338,6 +2368,7 @@ export const ControlSchemas = Object.freeze({
   notifications: Object.freeze({
     project_changed: ProjectChangedNotificationParams,
     stream_graph_changed: StreamGraphChangedNotificationParams,
+    input_value_changed: InputValueChangedNotificationParams,
     stream_action_changed: StreamActionChangedNotificationParams,
     project_log_records_written: ProjectLogRecordsWrittenNotificationParams,
   }),

@@ -59,6 +59,15 @@ pub struct SubscribeStreamGraphChangesRequest {
     pub streams: Vec<String>,
 }
 
+/// `subscribe_input_value_changes`' params.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SubscribeInputValueChangesRequest {
+    /// The loaded streams, by stream id, whose input value changes the connection is sent;
+    /// refused when empty or when one is not loaded.
+    pub streams: Vec<String>,
+}
+
 /// `subscribe_project_log_records`' params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

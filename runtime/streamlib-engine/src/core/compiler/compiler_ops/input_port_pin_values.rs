@@ -12,25 +12,36 @@ use crate::core::graph::{
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
-use crate::core::graph::input_values::refuse_a_value_the_input_port_does_not_take;
+use crate::core::graph::input_values::{
+    refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
+};
 
 /// Hand each helper the pin values its input ports read while unlinked, when
 /// they differ from those it holds.
 pub(crate) fn hand_each_helper_the_pin_values_its_input_ports_read(graph: &Graph) -> Result<()> {
     for node in graph.traversal().v(()).iter() {
-        if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
-            continue;
-        }
-        let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
-            continue;
-        };
-        link_wiring
-            .0
-            .record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
-                the_pin_values_its_input_ports_read(node),
-            )?;
+        hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)?;
     }
     Ok(())
+}
+
+/// Hand the helper `node` runs in, when it runs in one of its own, the pin values its input
+/// ports read while unlinked, when they differ from those it holds.
+pub(crate) fn hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(
+    graph: &Graph,
+    node: &GraphNode,
+) -> Result<()> {
+    if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
+        return Ok(());
+    }
+    let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
+        return Ok(());
+    };
+    link_wiring
+        .0
+        .record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
+            the_pin_values_its_input_ports_read(graph, node),
+        )
 }
 
 /// Hand each helper the config fields its node takes as inputs, when they
@@ -54,15 +65,20 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
     Ok(())
 }
 
-/// The value each Channels input of `node` reads while unlinked, by port: the
-/// pin value set on it, else its declared default, as a number.
-fn the_pin_values_its_input_ports_read(node: &GraphNode) -> serde_json::Map<String, JsonValue> {
+/// The value each Channels input of `node` in `graph` reads while unlinked, by
+/// port: the value set on it live, else its pin value, else its declared
+/// default, as a number.
+fn the_pin_values_its_input_ports_read(
+    graph: &Graph,
+    node: &GraphNode,
+) -> serde_json::Map<String, JsonValue> {
+    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
     node.ports
         .inputs
         .iter()
         .filter(|port| port.family.family == PortFamily::Channels)
         .filter_map(|port| {
-            let pin_value = node.pins.get(&port.name).or(port.pin_default.as_ref())?;
+            let pin_value = pin_values.get(&port.name).or(port.pin_default.as_ref())?;
             the_control_value_of_a_pin(pin_value)
                 .map(|control_value| (port.name.clone(), JsonValue::from(control_value)))
         })
@@ -98,13 +114,14 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .filter(|link| link.to_port().node_run_id() == &node.id)
         .map(|link| link.to_port().port_name().to_string())
         .collect();
+    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
     node.ports
         .inputs
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
                 && !node.is_an_exposed_config_field_input(&port.name)
-                && !node.pins.contains_key(&port.name)
+                && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
         })
         .map(|port| port.name.clone())
@@ -144,7 +161,7 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     input: &str,
     pin_value: &JsonValue,
 ) -> Result<()> {
-    let Some(port) = node.ports.inputs.iter().find(|port| port.name == input) else {
+    let Some(port) = node.input_port(input) else {
         return Ok(());
     };
     refuse_a_value_the_input_port_does_not_take(
@@ -157,7 +174,7 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
 
     use super::*;
@@ -178,7 +195,7 @@ mod tests {
 
     /// A graph resolving a process node type reading `level`, which declares
     /// a default of 0.5, `gain`, which declares none, and `frames`, Records.
-    fn a_graph_resolving_a_process_node_type_with_channels_inputs() -> Graph {
+    pub(crate) fn a_graph_resolving_a_process_node_type_with_channels_inputs() -> Graph {
         let import_path = NodeClassImportPath::new(LEVEL_METER_NODE_TYPE).unwrap();
         let descriptor = NodeDescriptor::new(
             NodeClassShortName::new("LevelMeter").unwrap(),
@@ -222,7 +239,7 @@ mod tests {
         Graph::new_resolving_node_types_through(Arc::new(node_types))
     }
 
-    fn a_level_meter_in_a_helper(graph: &mut Graph) -> NodeRunId {
+    pub(crate) fn a_level_meter_in_a_helper(graph: &mut Graph) -> NodeRunId {
         let level_meter = graph
             .traversal_mut()
             .add_v(NodeSpec::new(
@@ -247,7 +264,7 @@ mod tests {
         level_meter
     }
 
-    fn the_link_wiring_of(
+    pub(crate) fn the_link_wiring_of(
         graph: &Graph,
         node_id: &NodeRunId,
     ) -> Arc<OutOfProcessLinkWiringEnvelope> {

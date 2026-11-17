@@ -11,6 +11,7 @@ use serde_json::json;
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
+use crate::core::descriptors::PortFamily;
 use crate::core::descriptors::{
     NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
     PortFamilyDeclaration,
@@ -282,4 +283,189 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
             the_pins_of(node)
         );
     }
+}
+
+/// A value set live on a function node's input is held apart from the graph, so `graph` renders
+/// it live and its saved pins are unchanged; one set on a shader node's input is held on the
+/// graph, as its evaluator is built from the values the graph holds.
+///
+/// Mental-revert: holding a shader node's value live renders it `live` while the shader's
+/// evaluator, built from its pins, reads another.
+#[test]
+#[serial_test::serial]
+fn a_live_set_on_a_function_node_is_held_apart_and_one_on_a_shader_node_on_the_graph() {
+    use crate::core::graph::input_values::{InputValueToSetLive, InputValuesSetLive};
+    use crate::core::nodes::NodeSpec;
+    use crate::core::runtime::Runner;
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    register_a_function_and_a_shader_node_type(stream.node_types_this_stream_resolves());
+    let added = |node_type: &str| {
+        let node = uuid::Uuid::new_v4();
+        stream
+            .add_node(
+                NodeSpec::new(NodeClassImportPath::new(node_type).unwrap(), Value::Null)
+                    .with_node_uuid(node),
+            )
+            .unwrap_or_else(|refusal| panic!("a `{node_type}` node is added: {refusal}"));
+        node
+    };
+    let scale = added(SCALE);
+    let tint = added(TINT);
+    let set_live = |node, input: &str, value| {
+        stream
+            .set_input_values_live(&[InputValueToSetLive {
+                node,
+                input: input.to_owned(),
+                value: Some(value),
+            }])
+            .unwrap_or_else(|refusal| panic!("`{input}` is set: {refusal:?}"))
+    };
+
+    assert!(matches!(
+        set_live(scale, "x", json!(0.5)),
+        InputValuesSetLive::ApartFromTheGraph(_)
+    ));
+    assert_eq!(
+        set_live(tint, "amount", json!(0.25)),
+        InputValuesSetLive::OnTheGraph
+    );
+
+    let graph = stream.to_json().expect("the graph serializes");
+    let rendered_scale = graph["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.iter().find(|node| node["id"] == scale.to_string()))
+        .unwrap_or_else(|| panic!("the graph holds `scale`: {graph}"));
+    let x = rendered_scale["ports"]["inputs"]
+        .as_array()
+        .and_then(|inputs| inputs.iter().find(|port| port["name"] == "x"))
+        .unwrap_or_else(|| panic!("`scale` renders `x`: {rendered_scale}"));
+    assert_eq!(
+        (&x["value"], &x["value_comes_from"]),
+        (&json!(0.5), &json!("live"))
+    );
+    assert!(
+        rendered_scale["pins"].get("x").is_none(),
+        "{rendered_scale}"
+    );
+}
+
+/// A saved value set on a shader node's input announces one graph change, which begins a commit,
+/// as its evaluator is built from the values the graph holds; one set on a function node's input,
+/// read each run, announces none, and only its input value change.
+///
+/// Mental-revert: a saved set that never announces a graph change leaves a shader's evaluator on
+/// the value it was built with; one that always does begins a commit on every set of a value read
+/// each run.
+#[test]
+#[serial_test::serial]
+fn a_saved_set_on_a_shader_input_announces_one_graph_change_and_one_read_each_run_none() {
+    use std::sync::Arc;
+
+    use parking_lot::Mutex;
+
+    use crate::core::nodes::NodeSpec;
+    use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+    use crate::core::runtime::{Runner, RuntimeOperations};
+    use streamlib_project_repository::StreamGraphOperation;
+
+    #[derive(Default)]
+    struct ChangesCounted {
+        graph_changes: u64,
+        input_value_changes: u64,
+    }
+    impl EventListener for ChangesCounted {
+        fn on_event(&mut self, event: &Event) -> crate::core::error::Result<()> {
+            if let Event::OfALoadedStream { event, .. } = event {
+                match event {
+                    RuntimeEvent::GraphDidChange => self.graph_changes += 1,
+                    RuntimeEvent::InputValueDidChange { .. } => self.input_value_changes += 1,
+                    _ => {}
+                }
+            }
+            Ok(())
+        }
+
+        fn on_events_lost(&mut self, lost_event_count: u64) -> crate::core::error::Result<()> {
+            panic!("the stream's topic lost {lost_event_count} events, which this count needs");
+        }
+    }
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    register_a_function_and_a_shader_node_type(stream.node_types_this_stream_resolves());
+    let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a current-thread runtime");
+    let added = |node_type: &str| {
+        let node = uuid::Uuid::new_v4();
+        stream
+            .add_node(
+                NodeSpec::new(NodeClassImportPath::new(node_type).unwrap(), Value::Null)
+                    .with_node_uuid(node),
+            )
+            .unwrap_or_else(|refusal| panic!("a `{node_type}` node is added: {refusal}"));
+        node
+    };
+    let scale = added(SCALE);
+    let tint = added(TINT);
+    let counted = Arc::new(Mutex::new(ChangesCounted::default()));
+    PUBSUB
+        .subscribe(
+            &topics::loaded_stream(stream.loaded_stream_identity()),
+            Arc::clone(&counted) as Arc<Mutex<dyn EventListener>>,
+        )
+        .expect("the stream's topic is subscribed");
+    let changes_once_delivered = |input_value_changes: u64| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while counted.lock().input_value_changes < input_value_changes
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let counted = counted.lock();
+        (counted.graph_changes, counted.input_value_changes)
+    };
+    let save = |node, input: &str, value| {
+        tokio_runtime
+            .block_on(stream.apply_a_stream_graph_operation_live(
+                StreamGraphOperation::SetNodeInputValue {
+                    node,
+                    input: input.to_owned(),
+                    from: None,
+                    to: Some(value),
+                },
+            ))
+            .unwrap_or_else(|refusal| panic!("`{input}` is saved: {refusal}"));
+    };
+
+    save(scale, "x", json!(0.5));
+    assert_eq!(
+        changes_once_delivered(1),
+        (0, 1),
+        "a saved set read each run announces its input and no graph change"
+    );
+    save(tint, "amount", json!(0.25));
+    assert_eq!(
+        changes_once_delivered(2),
+        (1, 2),
+        "a saved set on a shader input announces one graph change"
+    );
 }

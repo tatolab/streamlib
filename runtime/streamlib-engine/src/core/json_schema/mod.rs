@@ -120,8 +120,9 @@ pub struct GraphNodeOutput {
     pub config_checksum: u64,
     /// Input and output ports.
     pub ports: GraphNodePortsOutput,
-    /// The values set on the node's unlinked inputs, by input name.
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    /// The values saved on the node's unlinked inputs, by input name; empty when none is saved.
+    /// A value set live shows only as its input's `value`.
+    #[serde(default)]
     pub pins: serde_json::Map<String, serde_json::Value>,
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -209,6 +210,11 @@ pub struct PortInfoOutput {
     /// code does not state exactly, which links by its family alone.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
+    /// On an input of a node of a live graph, the value it reads while unlinked, as `value`,
+    /// and where that value comes from, as `value_comes_from`. Both are absent from the
+    /// rendering on an input that takes no stored value and on a catalog port.
+    #[serde(flatten)]
+    pub value_read: Option<crate::core::graph::input_values::InputValueRead>,
 }
 
 /// The kind of port - determines how data flows.
@@ -671,6 +677,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
+            value_read: None,
         }
     }
 }

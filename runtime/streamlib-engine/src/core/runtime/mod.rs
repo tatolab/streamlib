@@ -4,6 +4,8 @@
 #[cfg(any(test, feature = "test-support"))]
 pub mod a_project_on_disk_for_a_test;
 pub(crate) mod address_chunk;
+#[cfg(any(test, feature = "test-support"))]
+pub mod graph_renders_and_commits_counted_for_a_test;
 mod operations;
 mod operations_runtime;
 pub(crate) use operations_runtime::mark_this_thread_as_a_node_execution_thread;

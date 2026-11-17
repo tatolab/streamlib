@@ -56,7 +56,7 @@ pub(super) const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
 
 /// A project whose stream `main` holds an [`InputValueTestNode`] `mixer`, by
 /// [`MIXER_NODE_UUID`], and a [`StreamToolsTestSink`] `monitor`.
-fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
+pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
     register_the_input_value_test_node_once();
     register_the_stream_tools_test_sink_once();
     ProjectWithGraphDocuments::holding(json!({
@@ -107,12 +107,24 @@ pub(super) fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
         .unwrap_or_else(|| panic!("the document holds no node {node}: {graph_document}"))
 }
 
-/// The pin values `rendered_node`, a node of a `graph` render, holds; none when it renders none.
+/// The input `input` of `rendered_node`, a node of a `graph` render.
+pub(super) fn the_input_named(rendered_node: &Value, input: &str) -> Value {
+    rendered_node["ports"]["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|port| port["name"] == input)
+        .cloned()
+        .unwrap_or_else(|| panic!("the node renders no input `{input}`: {rendered_node}"))
+}
+
+/// The pin values `rendered_node`, a node of a `graph` render, holds, which it always renders.
 pub(super) fn the_pin_values_of(rendered_node: &Value) -> Value {
-    match &rendered_node["pins"] {
-        Value::Null => json!({}),
-        pins => pins.clone(),
-    }
+    rendered_node
+        .get("pins")
+        .filter(|pins| pins.is_object())
+        .cloned()
+        .unwrap_or_else(|| panic!("the node renders no `pins`: {rendered_node}"))
 }
 
 /// Each operation `answer`, a graph edit's answer, reports it applied, without the stream it
@@ -220,10 +232,16 @@ async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_save
     assert!(applied.get("transaction").is_none(), "{applied}");
     assert_eq!(project.the_graph_document_of("main"), saved_before);
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    let gain = the_input_named(&mixer, "gain");
+    assert_eq!(
+        (&gain["value"], &gain["value_comes_from"]),
+        (&json!(0.25), &json!("live")),
+        "{gain}"
+    );
     assert_eq!(
         the_pin_values_of(&mixer),
-        json!({ "gain": 0.25 }),
-        "{mixer}"
+        json!({}),
+        "pins stay saved: {mixer}"
     );
 
     engine
@@ -246,7 +264,11 @@ async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_save
         .await
         .expect("the live value is taken off");
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-    assert_eq!(the_pin_values_of(&mixer), json!({}), "{mixer}");
+    assert_ne!(
+        the_input_named(&mixer, "gain")["value_comes_from"],
+        "live",
+        "{mixer}"
+    );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
@@ -634,8 +656,11 @@ async fn the_operations_it_replaces_record_what_it_records() {
 }
 
 /// What a node holds live alone is kept by a committed transaction refused part-way, whose
-/// sets are reversed to what the running node held, and is taken off by a `set_node_config`
-/// that replaces the config whole.
+/// sets are reversed to the saved value with the live one set live again, and is taken off by a
+/// `set_node_config` that replaces the config whole.
+///
+/// Mental-revert: reversing a set to the live value it replaced saves that value as a pin the
+/// document does not hold, and `graph` renders it `saved`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_by_a_whole_config() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -670,10 +695,16 @@ async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_b
         .expect_err("the rename of a node the stream does not hold is refused");
     assert_eq!(project.the_graph_document_of("main"), saved_before);
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    let gain = the_input_named(&mixer, "gain");
+    assert_eq!(
+        (&gain["value"], &gain["value_comes_from"]),
+        (&json!(0.25), &json!("live")),
+        "the reversal sets the live value live again: {gain}"
+    );
     assert_eq!(
         the_pin_values_of(&mixer),
-        json!({ "gain": 0.25 }),
-        "{mixer}"
+        json!({}),
+        "the pins are what the document holds: {mixer}"
     );
     assert_eq!(mixer["config"], json!({ "frame_width": 800 }), "{mixer}");
 

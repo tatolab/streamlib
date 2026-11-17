@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
@@ -84,7 +85,7 @@ impl StreamGraphTransactionExecutor<'_> {
         )?;
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
-        let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
+        let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
@@ -400,30 +401,30 @@ impl StreamGraphTransactionExecutor<'_> {
                         node, input, to, ..
                     },
                     Some(held),
-                ) => StreamGraphOperation::SetNodeInputValue {
-                    node: *node,
-                    input: input.clone(),
-                    from: held,
-                    to: to.clone(),
+                ) => OneOperationAppliedLive {
+                    operation: StreamGraphOperation::SetNodeInputValue {
+                        node: *node,
+                        input: input.clone(),
+                        from: held.saved,
+                        to: to.clone(),
+                    },
+                    live_value_it_replaced: held.live.map(|value| InputValueToSetLive {
+                        node: *node,
+                        input: input.clone(),
+                        value: Some(value),
+                    }),
                 },
-                _ => applied.clone(),
+                _ => OneOperationAppliedLive::replacing_no_live_value(applied.clone()),
             };
             let stream = streams
                 .get_mut(stream_id)
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
             if let Err(why) = stream.staged_graph.apply(&applied) {
-                if let Err(not_reversed) = self.async_runtime.block_on(
-                    stream_operations.apply_a_stream_graph_operation_live(
-                        applied_on_the_running_stream.inverse(),
-                    ),
-                ) {
-                    tracing::error!(
-                        stream = %stream_id,
-                        %not_reversed,
-                        "could not reverse part of a refused graph transaction on its running \
-                         stream"
-                    );
-                }
+                self.reverse_one_operation_applied_live(
+                    stream_id,
+                    stream_operations.as_ref(),
+                    &applied_on_the_running_stream,
+                );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \
                      does: {why}"

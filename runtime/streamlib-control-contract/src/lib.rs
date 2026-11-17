@@ -31,7 +31,8 @@ pub use control_contract_document::{
     OPENRPC_DOCUMENT_VERSION, control_contract_document, control_contract_file_contents,
 };
 pub use control_notification::{
-    CONTROL_NOTIFICATIONS, ControlNotification, ControlNotificationDeclaration, NodeStateOnTheWire,
+    CONTROL_NOTIFICATIONS, ControlNotification, ControlNotificationDeclaration, InputValueChanged,
+    InputValueChangedNotificationParams, InputValueComesFromOnTheWire, NodeStateOnTheWire,
     PROJECT_LOG_RECORDS_PER_NOTIFICATION, ProjectChangeKindOnTheWire, ProjectChanged,
     ProjectChangedNotificationParams, ProjectLogRecordsWritten,
     ProjectLogRecordsWrittenNotificationParams, StreamActionChangeKindOnTheWire,
@@ -73,16 +74,16 @@ pub use control_operation_requests::{
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
     SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
-    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeProjectChangesRequest,
-    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
+    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 pub use control_operation_results::{
-    ControlContractVersionMismatch, DiscoverResult, SubscribeProjectChangesResult,
-    SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesResult,
-    SubscribeStreamGraphChangesResult,
+    ControlContractVersionMismatch, DiscoverResult, SubscribeInputValueChangesResult,
+    SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
+    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
 };
 pub use control_operations::{
     AddDependency, AddGroup, AddNode, AddNote, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS,
@@ -97,8 +98,8 @@ pub use control_operations::{
     RemoveNote, RemoveProject, RenameNode, RenameProject, ReplaceAsset, ResumePlayback,
     SetAssetSettings, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
     SetNoteFields, SetPinValue, SetProjectCover, SetProjectDescription, SetStreamClockScale,
-    SetStreamDisplayName, SetStudioFields, StartPlayback, StopPlayback, SubscribeProjectChanges,
-    SubscribeProjectLogRecords, SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
-    Transact, Undo, UnlockSubgraph, UpdateDependency, UseDependencyStream, WriteGraphInput,
-    WriteProjectFile, WriteStudioViewOutput,
+    SetStreamDisplayName, SetStudioFields, StartPlayback, StopPlayback, SubscribeInputValueChanges,
+    SubscribeProjectChanges, SubscribeProjectLogRecords, SubscribeStreamActionChanges,
+    SubscribeStreamGraphChanges, Transact, Undo, UnlockSubgraph, UpdateDependency,
+    UseDependencyStream, WriteGraphInput, WriteProjectFile, WriteStudioViewOutput,
 };

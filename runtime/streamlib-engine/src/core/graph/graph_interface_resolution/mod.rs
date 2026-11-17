@@ -798,6 +798,7 @@ impl GraphInterfacePort {
             family,
             pin_default: None,
             pin,
+            value_read: None,
         }
     }
 

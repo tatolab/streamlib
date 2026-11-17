@@ -21,7 +21,8 @@ use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
     CONTROL_CONTRACT_VERSION_MISMATCH_ERROR_CODE, CONTROL_OPERATION_FAILED_ERROR_CODE,
     CONTROL_OPERATION_REFUSED_ERROR_CODE, ControlContractVersionMismatch, ControlNotification,
-    ControlOperationCall, ControlOperationCallParseRefusal, JSON_RPC_INVALID_PARAMS_ERROR_CODE,
+    ControlOperationCall, ControlOperationCallParseRefusal, InputValueChanged,
+    InputValueChangedNotificationParams, JSON_RPC_INVALID_PARAMS_ERROR_CODE,
     JSON_RPC_METHOD_NOT_FOUND_ERROR_CODE, PROJECT_LOG_RECORDS_PER_NOTIFICATION,
     ProjectChangeKindOnTheWire, ProjectChanged, ProjectChangedNotificationParams,
     ProjectLogRecordsWritten, ProjectLogRecordsWrittenNotificationParams,
@@ -48,9 +49,14 @@ use crate::control_operation_dispatcher::{
     ControlRequestOrigin, refuse_another_contract_version,
 };
 use crate::control_subscriptions_of_one_connection::{
-    ControlSubscriptionsOfOneConnection, ProjectLogNextPush,
+    ControlSubscriptionsOfOneConnection, HeardOfAFollowedStream, ProjectLogNextPush,
+    WhatAConnectionFollowsOfAStream,
 };
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
+use crate::notifications_sent_at_most_once_each_interval::{
+    A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY, NotificationsSentAtMostOnceEachInterval,
+    ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY,
+};
 use crate::stream_graph_drops_raises_and_link_states::{
     STREAM_GRAPH_DROPS_RAISES_AND_LINK_STATES_SAMPLED_EVERY,
     StreamGraphDropsRaisesAndLinkStatesLastSampled,
@@ -64,9 +70,9 @@ const JSON_RPC_INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 /// How many answers and notifications one WebSocket may have waiting to be written.
 const CONTROL_WEBSOCKET_OUTGOING_MESSAGE_CAPACITY: usize = 256;
 
-/// How many stream graph changes heard for one WebSocket may wait to become notifications; past
-/// it, its `PUBSUB` listeners wait, and their queues lose events.
-const CONTROL_WEBSOCKET_STREAM_GRAPH_CHANGES_HEARD_CAPACITY: usize = 64;
+/// How many stream graph and input value changes heard for one WebSocket may wait to become
+/// notifications; past it, its `PUBSUB` listeners wait, and their queues lose events.
+const CONTROL_WEBSOCKET_STREAM_CHANGES_HEARD_CAPACITY: usize = 64;
 
 /// `POST /control`'s route: each request body is one JSON-RPC message, answered in the response.
 pub(crate) fn control_json_rpc_route<S>(dispatcher: ControlOperationDispatcher) -> MethodRouter<S>
@@ -161,12 +167,12 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
         Ok(()) => {}
         Err(refused) => return refused.into_response(),
     }
-    let (stream_graph_changes_to_the_connection, stream_graph_changes_heard) =
-        mpsc::channel(CONTROL_WEBSOCKET_STREAM_GRAPH_CHANGES_HEARD_CAPACITY);
+    let (stream_changes_to_the_connection, stream_changes_heard) =
+        mpsc::channel(CONTROL_WEBSOCKET_STREAM_CHANGES_HEARD_CAPACITY);
     let request_origin = ControlRequestOrigin {
         client_name: the_client_name_a_request_sent(&request_headers),
         subscriptions: Some(Arc::new(ControlSubscriptionsOfOneConnection::new(
-            stream_graph_changes_to_the_connection,
+            stream_changes_to_the_connection,
         ))),
         viewers_held_open: Some(Arc::default()),
     };
@@ -175,7 +181,7 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
             dispatcher,
             project_repositories,
             request_origin,
-            stream_graph_changes_heard,
+            stream_changes_heard,
             websocket,
             local_api_stopping_token,
         )
@@ -210,7 +216,7 @@ async fn serve_control_json_rpc_over_a_websocket(
     dispatcher: ControlOperationDispatcher,
     project_repositories: Arc<ProjectRepositoriesOpenInThisRuntime>,
     request_origin: ControlRequestOrigin,
-    stream_graph_changes_heard: mpsc::Receiver<StreamGraphChangedNotificationParams>,
+    stream_changes_heard: mpsc::Receiver<HeardOfAFollowedStream>,
     websocket: WebSocket,
     local_api_stopping_token: CancellationToken,
 ) {
@@ -238,7 +244,7 @@ async fn serve_control_json_rpc_over_a_websocket(
         send_stream_graph_and_action_changes_until_the_connection_ends(
             Arc::clone(&dispatcher.operations_on_the_loaded_streams),
             subscriptions,
-            stream_graph_changes_heard,
+            stream_changes_heard,
             outgoing_message_sender.clone(),
             connection_ended.clone(),
         ),
@@ -503,6 +509,18 @@ async fn send_the_new_records_of_a_project_log(
     }
 }
 
+/// Send `Notification` with each of `each_params` to the client, in order; an error once the
+/// connection has ended.
+async fn send_each_notification<Notification: ControlNotification>(
+    outgoing_message_sender: &mpsc::Sender<Value>,
+    each_params: impl IntoIterator<Item = Notification::Params>,
+) -> Result<(), ()> {
+    for params in each_params {
+        send_a_notification::<Notification>(outgoing_message_sender, params).await?;
+    }
+    Ok(())
+}
+
 /// Send `Notification` with `params` to the client; an error once the connection has ended.
 async fn send_a_notification<Notification: ControlNotification>(
     outgoing_message_sender: &mpsc::Sender<Value>,
@@ -520,14 +538,17 @@ async fn send_a_notification<Notification: ControlNotification>(
 
 /// Send each change heard in a followed stream's graph as a `stream_graph_changed`
 /// notification, each followed stream whose drops, raises or link states changed since the last
-/// sample as one too, and each stream action change as a `stream_action_changed` once the
-/// connection subscribed to them, until the connection ends. Each stream action change also
-/// moves each followed stream to the load it has now, sending `missed` for one whose load
-/// changed.
+/// sample as one too, each input value change of a stream whose input values the connection
+/// follows as an `input_value_changed`, at most once each
+/// [`ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY`] for one input, and one of a stream whose graph
+/// alone it follows as `edited`, at most once each [`A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY`]
+/// for the stream, and each stream action change as a `stream_action_changed` once the connection subscribed to
+/// them, until the connection ends. Each stream action change also moves each followed stream to
+/// the load it has now, sending `missed` for one whose load changed.
 async fn send_stream_graph_and_action_changes_until_the_connection_ends(
     operations_on_the_loaded_streams: Arc<dyn OperationsOnTheStreamsLoadedInThisRuntime>,
     subscriptions: Arc<ControlSubscriptionsOfOneConnection>,
-    mut stream_graph_changes_heard: mpsc::Receiver<StreamGraphChangedNotificationParams>,
+    mut stream_changes_heard: mpsc::Receiver<HeardOfAFollowedStream>,
     outgoing_message_sender: mpsc::Sender<Value>,
     connection_ended: CancellationToken,
 ) {
@@ -539,9 +560,42 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut drops_raises_and_link_states_last_sampled =
         StreamGraphDropsRaisesAndLinkStatesLastSampled::default();
+    let mut input_value_changes = NotificationsSentAtMostOnceEachInterval::<
+        OneInputOfAStream,
+        InputValueChangedNotificationParams,
+    >::new(ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY);
+    let mut value_changes_told_as_edited = NotificationsSentAtMostOnceEachInterval::<
+        String,
+        StreamGraphChangedNotificationParams,
+    >::new(A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY);
     loop {
+        let next_held_change_due_at = [
+            input_value_changes.next_due_at(),
+            value_changes_told_as_edited.next_due_at(),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         tokio::select! {
             () = connection_ended.cancelled() => return,
+            () = sleep_until_due(next_held_change_due_at) => {
+                let now = std::time::Instant::now();
+                if send_each_notification::<InputValueChanged>(
+                    &outgoing_message_sender,
+                    input_value_changes.take_the_due(now),
+                )
+                .await
+                .is_err()
+                    || send_each_notification::<StreamGraphChanged>(
+                        &outgoing_message_sender,
+                        value_changes_told_as_edited.take_the_due(now),
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
             _ = drops_raises_and_link_states_sampling.tick() => {
                 let sampled_by_stream = the_drops_raises_and_link_states_of_each_followed_stream(
                     operations_on_the_loaded_streams.as_ref(),
@@ -565,14 +619,51 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                     }
                 }
             }
-            stream_graph_change = stream_graph_changes_heard.recv() => {
-                let Some(stream_graph_change) = stream_graph_change else {
-                    return;
+            stream_change = stream_changes_heard.recv() => {
+                let sent = match stream_change {
+                    None => return,
+                    Some(HeardOfAFollowedStream::GraphChanged(stream_graph_change)) => {
+                        if !subscriptions.is_sent_the_graph_change(&stream_graph_change) {
+                            continue;
+                        }
+                        send_a_notification::<StreamGraphChanged>(
+                            &outgoing_message_sender,
+                            stream_graph_change,
+                        )
+                        .await
+                    }
+                    Some(HeardOfAFollowedStream::InputValueChanged(input_value_change)) => {
+                        let now = std::time::Instant::now();
+                        let stream = input_value_change.stream.clone();
+                        if subscriptions.follows(&stream, WhatAConnectionFollowsOfAStream::InputValues) {
+                            let key = OneInputOfAStream {
+                                stream,
+                                node: input_value_change.node.clone(),
+                                input: input_value_change.input.clone(),
+                            };
+                            send_each_notification::<InputValueChanged>(
+                                &outgoing_message_sender,
+                                input_value_changes.heard(key, input_value_change, now),
+                            )
+                            .await
+                        } else if subscriptions.follows(&stream, WhatAConnectionFollowsOfAStream::Graph) {
+                            let edited = StreamGraphChangedNotificationParams {
+                                stream: stream.clone(),
+                                change: StreamGraphChangeKindOnTheWire::Edited,
+                                node: None,
+                                node_state: None,
+                            };
+                            send_each_notification::<StreamGraphChanged>(
+                                &outgoing_message_sender,
+                                value_changes_told_as_edited.heard(stream, edited, now),
+                            )
+                            .await
+                        } else {
+                            Ok(())
+                        }
+                    }
                 };
-                if send_a_notification::<StreamGraphChanged>(&outgoing_message_sender, stream_graph_change)
-                    .await
-                    .is_err()
-                {
+                if sent.is_err() {
                     return;
                 }
             }
@@ -631,6 +722,23 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                 }
             }
         }
+    }
+}
+
+/// One input of a stream, which changes of its value are sent at most once each interval for:
+/// the stream, by stream id, the node, by its graph `id`, and the input, by name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OneInputOfAStream {
+    stream: String,
+    node: String,
+    input: String,
+}
+
+/// Wait until `due_at`, or for ever when nothing is due.
+async fn sleep_until_due(due_at: Option<std::time::Instant>) {
+    match due_at {
+        Some(due_at) => tokio::time::sleep_until(tokio::time::Instant::from_std(due_at)).await,
+        None => std::future::pending().await,
     }
 }
 

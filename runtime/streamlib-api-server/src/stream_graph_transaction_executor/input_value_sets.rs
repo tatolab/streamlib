@@ -346,23 +346,45 @@ pub(super) fn the_link_overriding_the_input(
         })
 }
 
-/// The value node `node` of `rendered_graph`, a running stream's `graph` render, holds on its
-/// input `input`: its pin value, else its config field; `None` when it holds none, so a set
-/// made on the running node is reversed to what the node held, saved or live.
+/// What node `node` of a running stream holds on its input `input`: its saved value, its pin
+/// value else its config field, and the value set live over it; so a set made on the running
+/// node is reversed to the saved value with the live one set live again.
+pub(super) struct ValueARunningInputHolds {
+    pub(super) saved: Option<Value>,
+    pub(super) live: Option<Value>,
+}
+
+/// What node `node` of `rendered_graph`, a running stream's `graph` render, holds on its input
+/// `input`, saved and live; neither when the render holds no such node.
 pub(super) fn the_value_a_running_node_holds_on_the_input(
     rendered_graph: &Value,
     node: Uuid,
     input: &str,
-) -> Option<Value> {
-    let rendered_node = rendered_graph["nodes"]
-        .as_array()?
-        .iter()
-        .find(|rendered| rendered["id"] == node.to_string())?;
-    rendered_node["pins"]
-        .get(input)
-        .or_else(|| rendered_node["config"].get(input))
-        .filter(|value| !value.is_null())
-        .cloned()
+) -> ValueARunningInputHolds {
+    let Some(rendered_node) = rendered_graph["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|rendered| rendered["id"] == node.to_string())
+    else {
+        return ValueARunningInputHolds {
+            saved: None,
+            live: None,
+        };
+    };
+    let not_null = |value: &Value| (!value.is_null()).then(|| value.clone());
+    ValueARunningInputHolds {
+        saved: rendered_node["pins"]
+            .get(input)
+            .or_else(|| rendered_node["config"].get(input))
+            .and_then(not_null),
+        live: rendered_node["ports"]["inputs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|port| port["name"] == input && port["value_comes_from"] == "live")
+            .and_then(|port| not_null(&port["value"])),
+    }
 }
 
 /// The config node `node` of `rendered_graph`, a running stream's `graph` render, holds; `None`

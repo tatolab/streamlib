@@ -197,7 +197,7 @@ pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
             {
                 state.transition_to(NodeState::Stopped);
             }
-            if graph.traversal_mut().v(node_run_id).drop().exists() {
+            if !graph.drop_the_node(node_run_id) {
                 first_node_left_behind.get_or_insert_with(|| node_run_id.clone());
                 continue;
             }

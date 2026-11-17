@@ -25,11 +25,11 @@ use crate::control_operation_requests::{
     SetAssetSettingsRequest, SetExposedConfigFieldsRequest, SetGroupFieldsRequest,
     SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest, SetPinValueRequest,
     SetProjectCoverRequest, SetProjectDescriptionRequest, SetStreamClockScaleRequest,
-    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeProjectChangesRequest,
-    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    UpdateDependencyRequest, UseDependencyStreamRequest, WriteGraphInputRequest,
-    WriteProjectFileRequest, WriteStudioViewOutputRequest,
+    SetStreamDisplayNameRequest, SetStudioFieldsRequest, SubscribeInputValueChangesRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest, TransactRequest,
+    UndoOrRedoRequest, UnlockSubgraphRequest, UpdateDependencyRequest, UseDependencyStreamRequest,
+    WriteGraphInputRequest, WriteProjectFileRequest, WriteStudioViewOutputRequest,
 };
 
 mod assets_and_streams;
@@ -50,8 +50,8 @@ pub use dependencies::{
 };
 pub use discovery_and_subscriptions::{
     DescribeRuntime, Discover, Graph, ListStreams, Logs, ReadProjectChanges,
-    SubscribeProjectChanges, SubscribeProjectLogRecords, SubscribeStreamActionChanges,
-    SubscribeStreamGraphChanges,
+    SubscribeInputValueChanges, SubscribeProjectChanges, SubscribeProjectLogRecords,
+    SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
 };
 pub use graph_edits::{
     AddGroup, AddNode, AddNote, CollapseSelectionIntoSubgraph, Connect, Disconnect,
@@ -92,6 +92,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<Discover>(),
     ControlOperationDeclaration::of::<SubscribeProjectChanges>(),
     ControlOperationDeclaration::of::<SubscribeStreamGraphChanges>(),
+    ControlOperationDeclaration::of::<SubscribeInputValueChanges>(),
     ControlOperationDeclaration::of::<SubscribeStreamActionChanges>(),
     ControlOperationDeclaration::of::<SubscribeProjectLogRecords>(),
     ControlOperationDeclaration::of::<DescribeRuntime>(),
@@ -179,6 +180,8 @@ pub enum ControlOperationCall {
     SubscribeProjectChanges(SubscribeProjectChangesRequest),
     /// A `subscribe_stream_graph_changes` call.
     SubscribeStreamGraphChanges(SubscribeStreamGraphChangesRequest),
+    /// A `subscribe_input_value_changes` call.
+    SubscribeInputValueChanges(SubscribeInputValueChangesRequest),
     /// A `subscribe_stream_action_changes` call.
     SubscribeStreamActionChanges(SubscribeStreamActionChangesRequest),
     /// A `subscribe_project_log_records` call.
@@ -387,6 +390,10 @@ impl ControlOperationCall {
             SubscribeStreamGraphChanges::METHOD_NAME => {
                 the_request_of::<SubscribeStreamGraphChanges>(params)
                     .map(Self::SubscribeStreamGraphChanges)
+            }
+            SubscribeInputValueChanges::METHOD_NAME => {
+                the_request_of::<SubscribeInputValueChanges>(params)
+                    .map(Self::SubscribeInputValueChanges)
             }
             SubscribeStreamActionChanges::METHOD_NAME => {
                 the_request_of::<SubscribeStreamActionChanges>(params)
@@ -599,6 +606,7 @@ impl ControlOperationCall {
             Self::SubscribeProjectChanges(_) => SubscribeProjectChanges::METHOD_NAME,
             Self::SubscribeProjectLogRecords(_) => SubscribeProjectLogRecords::METHOD_NAME,
             Self::SubscribeStreamGraphChanges(_) => SubscribeStreamGraphChanges::METHOD_NAME,
+            Self::SubscribeInputValueChanges(_) => SubscribeInputValueChanges::METHOD_NAME,
             Self::SubscribeStreamActionChanges(_) => SubscribeStreamActionChanges::METHOD_NAME,
             Self::DescribeRuntime(_) => DescribeRuntime::METHOD_NAME,
             Self::ListStreams(_) => ListStreams::METHOD_NAME,

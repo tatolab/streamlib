@@ -14,13 +14,14 @@ use crate::control_operation::{
 };
 use crate::control_operation_requests::{
     DescribeRuntimeRequest, DiscoverRequest, GraphRequest, ListStreamsRequest, LogsRequest,
-    OneProjectByItsDirectoryRequest, SubscribeProjectChangesRequest,
-    SubscribeProjectLogRecordsRequest, SubscribeStreamActionChangesRequest,
-    SubscribeStreamGraphChangesRequest,
+    OneProjectByItsDirectoryRequest, SubscribeInputValueChangesRequest,
+    SubscribeProjectChangesRequest, SubscribeProjectLogRecordsRequest,
+    SubscribeStreamActionChangesRequest, SubscribeStreamGraphChangesRequest,
 };
 use crate::control_operation_results::{
-    DiscoverResult, SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
-    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
+    DiscoverResult, SubscribeInputValueChangesResult, SubscribeProjectChangesResult,
+    SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesResult,
+    SubscribeStreamGraphChangesResult,
 };
 
 /// `discover`: the contract a runtime serves, which a client checks before any other call.
@@ -107,6 +108,25 @@ impl ControlOperation for SubscribeStreamGraphChanges {
     const ONE_LINE_DOC: &'static str = "Send this connection a `stream_graph_changed` notification for each change in the named loaded streams' live graphs.";
     const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the live graphs of `streams`, by stream id, each loaded: from then on, each edit of one's graph is sent as a `stream_graph_changed` notification with `change` `edited`, each change of a node's state with `node_state_changed`, its `node` by graph `id` and its `node_state`, and each start, stop, pause or resume of its playback, or failure of one, with `playback_state_changed`, until the connection closes. A connection that falls behind, and a stream loaded again or unloaded, is sent `missed`, and the client reads the stream's `graph` again; the subscription follows the stream id across a reload. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
     const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
+    const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;
+    const EFFECT: ControlOperationEffect = ControlOperationEffect::ReadsOnly;
+    const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
+        ControlOperationAgentToolListing::ReachedThroughCallOperation;
+}
+
+/// `subscribe_input_value_changes`: the connection is sent each change of the value an input of
+/// some loaded streams reads.
+pub struct SubscribeInputValueChanges;
+
+impl ControlOperation for SubscribeInputValueChanges {
+    type Request = SubscribeInputValueChangesRequest;
+    type Result = SubscribeInputValueChangesResult;
+    const METHOD_NAME: &'static str = "subscribe_input_value_changes";
+    const ONE_LINE_DOC: &'static str = "Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.";
+    const AGENT_USAGE_NOTE: &'static str = "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;
     const EXPOSURES: &'static [ControlOperationExposure] = EVERY_SURFACE_BUT_THE_AGENT_SURFACE;

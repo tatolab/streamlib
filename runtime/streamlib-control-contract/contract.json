@@ -174,6 +174,59 @@
       "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
+      "name": "subscribe_input_value_changes",
+      "summary": "Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.",
+      "description": "Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node` and `input`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live, and `stream_graph_changed` `missed` when it may have missed changes, so it reads `graph` again. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscribeInputValueChangesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "subscribe_input_value_changes_result",
+        "schema": {
+          "$ref": "#/components/schemas/SubscribeInputValueChangesResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "observe",
+      "x-exposures": [
+        "studio",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
       "name": "subscribe_stream_action_changes",
       "summary": "Send this connection a `stream_action_changed` notification each time a stream action changes.",
       "description": "Subscribe the connection to every stream action: from then on, each time one is queued, moves on or ends, its id is sent as a `stream_action_changed` notification with `change` `changed`, and `describe_stream_action` describes it, until the connection closes. A connection that falls behind is sent `missed`, and the client describes each action it follows again. Served only on a connection that stays open. Answers `actions_under_way`, the id of each action queued or running as the subscription began.",
@@ -4265,6 +4318,27 @@
       ]
     },
     {
+      "name": "input_value_changed",
+      "summary": "The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/InputValueChangedNotificationParams"
+          }
+        }
+      ],
+      "x-subscribed-by": "subscribe_input_value_changes",
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-exposures": [
+        "studio",
+        "public"
+      ]
+    },
+    {
       "name": "stream_action_changed",
       "summary": "A stream action changed, which `describe_stream_action` describes, or `missed`.",
       "paramStructure": "by-name",
@@ -5186,6 +5260,39 @@
           "streams"
         ],
         "description": "What `subscribe_stream_graph_changes` answers: the streams the connection is now sent graph\nchanges of."
+      },
+      "SubscribeInputValueChangesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "streams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The loaded streams, by stream id, whose input value changes the connection is sent;\nrefused when empty or when one is not loaded."
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "description": "`subscribe_input_value_changes`' params."
+      },
+      "SubscribeInputValueChangesResult": {
+        "type": "object",
+        "properties": {
+          "streams": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every stream the connection is subscribed to the input value changes of, by stream id,\nthis call's among them."
+          }
+        },
+        "required": [
+          "streams"
+        ],
+        "description": "What `subscribe_input_value_changes` answers: the streams the connection is now sent input\nvalue changes of."
       },
       "SubscribeStreamActionChangesRequest": {
         "type": "object",
@@ -11905,7 +12012,7 @@
           {
             "type": "string",
             "const": "edited",
-            "description": "A node or a link was added, removed or reconfigured."
+            "description": "A node or a link was added, removed or reconfigured; or an input's value changed, told\nat most once each 500 ms for each stream to a connection not subscribed to the stream's\ninput value changes."
           },
           {
             "type": "string",
@@ -11974,6 +12081,68 @@
           }
         ],
         "description": "A node's state as `graph` renders it."
+      },
+      "InputValueChangedNotificationParams": {
+        "type": "object",
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream, by stream id."
+          },
+          "node": {
+            "type": "string",
+            "description": "The node, by its graph `id`."
+          },
+          "input": {
+            "type": "string",
+            "description": "The input, by name."
+          },
+          "value": {
+            "description": "The value the input reads now, as `graph` renders it: null when a link feeds it or it\nreads nothing."
+          },
+          "value_comes_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputValueComesFromOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where `value` comes from; `wire` when a link feeds the input, absent when it reads\nnothing."
+          }
+        },
+        "required": [
+          "stream",
+          "node",
+          "input"
+        ],
+        "description": "`input_value_changed`'s params."
+      },
+      "InputValueComesFromOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "live",
+            "description": "A value set live, which no document holds."
+          },
+          {
+            "type": "string",
+            "const": "saved",
+            "description": "The value the stream's graph document holds."
+          },
+          {
+            "type": "string",
+            "const": "default",
+            "description": "The default the input declares."
+          },
+          {
+            "type": "string",
+            "const": "wire",
+            "description": "A link feeds the input; it holds no value."
+          }
+        ],
+        "description": "Where the value an input reads comes from, as `graph` renders it."
       },
       "StreamActionChangedNotificationParams": {
         "type": "object",
