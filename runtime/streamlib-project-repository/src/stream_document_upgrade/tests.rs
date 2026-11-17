@@ -4,6 +4,12 @@
 use super::*;
 use serde_json::json;
 
+/// `document` upgraded, `None` when it is already in the current shape.
+fn upgraded_stream_document(document: &Value) -> Option<Value> {
+    let mut upgraded = document.clone();
+    upgrade_stream_document_in_place(&mut upgraded).then_some(upgraded)
+}
+
 #[test]
 fn a_document_already_in_the_current_shape_needs_no_upgrade() {
     let document = json!({

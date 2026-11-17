@@ -10,7 +10,7 @@ use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
 use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::legacy_config_of_a_node::{
-    LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,
+    input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
 use crate::core::nodes::NodeSpec;
@@ -417,17 +417,13 @@ impl LoadedStreamInThisRuntime {
 
         let mut node_run_id_by_node_name: HashMap<String, NodeRunId> = HashMap::new();
         for node in &graph.nodes {
-            let legacy_config =
-                LegacyConfigOfANodeType::of(&self.node_types_this_stream_resolves, &node.node_type);
-            let mut spec = NodeSpec::new(
+            let mut spec = node_spec_holding_the_input_values(
+                &self.node_types_this_stream_resolves,
                 node.node_type.clone(),
-                legacy_config.config_of(&node.input_values),
-            )
-            .with_display_name(node.name.clone())
-            .with_pins_and_studio_fields(
-                legacy_config.pin_values_of(&node.input_values),
+                &node.input_values,
                 node.studio.clone(),
             )
+            .with_display_name(node.name.clone())
             .with_exposed_config_fields(node.exposed_config_fields.clone());
             if let Some(node_uuid) = node.id {
                 spec = spec.with_node_uuid(node_uuid);

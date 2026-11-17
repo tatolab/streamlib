@@ -11,11 +11,10 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use crate::core::descriptors::NodeClassImportPath;
-use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
+use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_values;
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe, the_default_name_a_new_node_takes,
 };
-use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations::RuntimeOperations;
@@ -36,16 +35,14 @@ impl LoadedStreamInThisRuntime {
                 let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
                     Error::GraphError(format!("node {} `type`: {refusal}", node.id))
                 })?;
-                let legacy_config =
-                    LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
-                let mut spec =
-                    NodeSpec::new(node_type, legacy_config.config_of(&node.input_values))
-                        .with_pins_and_studio_fields(
-                            legacy_config.pin_values_of(&node.input_values),
-                            node.studio.to_map(),
-                        )
-                        .with_exposed_config_fields(node.exposed_config_fields.clone())
-                        .with_node_uuid(node.id);
+                let mut spec = node_spec_holding_the_input_values(
+                    self.node_types_this_stream_resolves(),
+                    node_type,
+                    &node.input_values,
+                    node.studio.to_map(),
+                )
+                .with_exposed_config_fields(node.exposed_config_fields.clone())
+                .with_node_uuid(node.id);
                 if !node.name.is_empty() {
                     spec = spec.with_display_name(node.name.clone());
                 }

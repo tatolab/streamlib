@@ -101,6 +101,44 @@ fn a_link_between_two_nodes_of_types_not_described_is_held_with_its_exposed_fiel
     assert!(the_record_of(state_directory.path(), &camera).is_failed());
 }
 
+/// A node of a type its node code did not describe renders the value on each input apart from
+/// its config as it did before a node held one map of input values: an exposed config field is
+/// config, and every other value is on an input the placeholder gives it.
+#[test]
+#[serial]
+fn a_node_of_a_type_not_described_renders_each_value_not_known_as_config_on_an_input() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let mut graph = the_graph_of_a_stream_naming_a_type_not_described("camera");
+    graph["nodes"][1]["exposed_config_fields"] = serde_json::json!(["strength"]);
+    graph["nodes"][1]["pins"] = serde_json::json!({"gain": 2});
+    let project = ProjectWithGraphDocuments::holding(graph);
+    let camera = project.stream_id_of("camera");
+
+    a_project_opened_on(&runner, &project);
+
+    let render = runner
+        .loaded_stream_of_the_id(&camera)
+        .unwrap()
+        .to_json()
+        .unwrap();
+    let absent = render["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["name"] == "absent")
+        .expect("the node of the type not described renders");
+    assert_eq!(absent["config"], serde_json::json!({"strength": 3}));
+    assert_eq!(absent["pins"], serde_json::json!({"gain": 2}));
+    let inputs: Vec<&str> = absent["ports"]["inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|port| port["name"].as_str())
+        .collect();
+    assert_eq!(inputs, ["gain", "strength"]);
+}
+
 #[test]
 #[serial]
 fn a_play_of_a_stream_held_from_its_document_is_refused_and_keeps_it_held() {

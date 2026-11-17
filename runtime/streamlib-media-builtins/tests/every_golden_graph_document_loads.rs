@@ -32,6 +32,10 @@ const GOLDEN_GRAPH_DOCUMENT_SHA256_BY_FILE_NAME: &[(&str, &str)] = &[
         "0003-every-value-of-a-node-in-its-input-values.graph.json",
         "ac6aee4e2959aaedbecc8ede1c09203f4c319d81f3ec8385fafc1a98196389c7",
     ),
+    (
+        "0004-an-exposed-config-field-and-a-fragment-holding-input-values.graph.json",
+        "41ba25ac58f53aa28dade98a5ea048f6577a366159d0f9cf3e5b21215f42589f",
+    ),
 ];
 
 fn golden_graph_document_paths() -> Vec<PathBuf> {
@@ -118,13 +122,15 @@ fn every_golden_graph_document_reads_canonically_and_loads_on_this_floor() {
             "{path:?} holds a node with no UUID"
         );
         let recorded_graph_document = golden_graph_document(&path);
+        let mut upgraded_graph_document = recorded_graph_document.clone();
         let document_in_the_current_shape =
-            match streamlib_project_repository::upgraded_stream_document(&recorded_graph_document) {
-                Some(upgraded) => {
-                    streamlib_project_repository::canonical_project_json_bytes(&upgraded)
-                        .expect("an upgraded golden serializes")
-                }
-                None => document_bytes,
+            if streamlib_project_repository::upgrade_stream_document_in_place(
+                &mut upgraded_graph_document,
+            ) {
+                streamlib_project_repository::canonical_project_json_bytes(&upgraded_graph_document)
+                    .expect("an upgraded golden serializes")
+            } else {
+                document_bytes
             };
         assert_eq!(
             String::from_utf8(graph.graph_document_bytes().expect("the graph writes")).unwrap(),

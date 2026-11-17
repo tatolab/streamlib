@@ -85,7 +85,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         .chain(report.graph_documents_in_an_older_shape.iter().map(|path| {
             format!(
                 "{path}: written in a shape an older runtime wrote; rewrite it with \
-                 `streamlib_project_repository::upgraded_stream_document`"
+                 `streamlib_project_repository::upgrade_stream_document_in_place`"
             )
         }))
         .collect();
@@ -152,7 +152,9 @@ pub fn scan(workspace_root: &Path) -> Result<GraphDocumentNodeTypeScanReport> {
         let graph_document: serde_json::Value = serde_json::from_str(&graph_document_text)
             .with_context(|| format!("parsing {graph_document_path}"))?;
         report.graph_documents_scanned += 1;
-        if streamlib_project_repository::upgraded_stream_document(&graph_document).is_some() {
+        if streamlib_project_repository::upgrade_stream_document_in_place(
+            &mut graph_document.clone(),
+        ) {
             report
                 .graph_documents_in_an_older_shape
                 .push(graph_document_path.clone());

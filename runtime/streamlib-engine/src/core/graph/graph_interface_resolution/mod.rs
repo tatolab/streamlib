@@ -22,7 +22,9 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
 };
-use crate::core::graph::legacy_config_of_a_node::{config_of_a_node, config_of_a_node_as_drawn};
+use crate::core::graph::legacy_config_of_a_node::{
+    config_of_a_node, config_of_a_node_holding_no_pin_value,
+};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
@@ -164,7 +166,7 @@ impl GraphInterfaceNodeAsDrawn {
             GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
             declared.as_component(),
         );
-        let config = config_of_a_node_as_drawn(&self.node.input_values, &serde_json::Map::new());
+        let config = config_of_a_node_holding_no_pin_value(&self.node.input_values);
         GraphNodeOutput {
             id: self
                 .node

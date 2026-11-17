@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! A stream document saved by an older runtime, read in the shape this runtime writes. Both
-//! document readers pass what they are given through [`upgraded_stream_document`] first, so
+//! document readers pass what they are given through [`upgrade_stream_document_in_place`] first, so
 //! the readers after it know only the current keys. It finds an old shape by its content and
 //! holds no state, so it covers a document however it reached the project; nothing is
 //! rewritten on disk until the document's next committed edit.
@@ -146,20 +146,22 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
     ),
 ];
 
-/// `document` in the shape this runtime writes; `None` when it already is.
+/// Upgrade `document` in place to the shape this runtime writes; whether it was in an older one.
 ///
 /// At every level of a fragment, each node of a renamed type takes its new type, and its
 /// `config` and `pins` fold into `input_values`: a name `input_values` already holds wins, then
 /// `pins`, then `config`. It never refuses: a node it has nothing to do for is left as written.
-pub fn upgraded_stream_document(document: &Value) -> Option<Value> {
-    let mut upgraded = document.clone();
-    let nodes = upgraded.get_mut("nodes")?.as_array_mut()?;
-    each_node_of_the_level_upgraded(nodes).then_some(upgraded)
+pub fn upgrade_stream_document_in_place(document: &mut Value) -> bool {
+    match document.get_mut("nodes").and_then(Value::as_array_mut) {
+        Some(nodes) => each_node_of_the_level_upgraded(nodes),
+        None => false,
+    }
 }
 
 /// `document` in the shape this runtime writes, upgraded when it is not.
-pub fn stream_document_in_the_current_shape(document: Value) -> Value {
-    upgraded_stream_document(&document).unwrap_or(document)
+pub fn stream_document_in_the_current_shape(mut document: Value) -> Value {
+    upgrade_stream_document_in_place(&mut document);
+    document
 }
 
 /// Fold a node's `pins` and then its `config` into `input_values`, each name `input_values`
@@ -178,19 +180,74 @@ pub fn fold_into_input_values(
     input_values.retain(|_, value| !value.is_null());
 }
 
+/// Which of a node's retired `pins` and `config`, as recorded, holds neither an object nor
+/// `null`, which no fold reads; `None` when both fold.
+pub(crate) fn the_retired_field_holding_no_object(
+    pins: Option<&Value>,
+    config: Option<&Value>,
+) -> Option<&'static str> {
+    [
+        (RETIRED_NODE_PINS_KEY, pins),
+        (RETIRED_NODE_CONFIG_KEY, config),
+    ]
+    .into_iter()
+    .find(|(_, recorded)| !holds_an_object_or_nothing(*recorded))
+    .map(|(key, _)| key)
+}
+
+/// Fold a node's retired `pins` and `config`, as recorded, into `input_values`, as
+/// [`fold_into_input_values`] does; one [`the_retired_field_holding_no_object`] names folds
+/// nothing, so a reader refuses it first.
+pub(crate) fn fold_the_retired_fields_into(
+    input_values: &mut Map<String, Value>,
+    pins: Option<Value>,
+    config: Option<Value>,
+) {
+    fold_into_input_values(input_values, object_or_empty(pins), object_or_empty(config));
+}
+
+/// Put `input_values` on `node` under [`NODE_INPUT_VALUES_KEY`], the key left out when it
+/// holds none.
+pub(crate) fn put_input_values(node: &mut Map<String, Value>, input_values: Map<String, Value>) {
+    if input_values.is_empty() {
+        node.remove(NODE_INPUT_VALUES_KEY);
+    } else {
+        node.insert(
+            NODE_INPUT_VALUES_KEY.to_owned(),
+            Value::Object(input_values),
+        );
+    }
+}
+
+fn holds_an_object_or_nothing(recorded: Option<&Value>) -> bool {
+    matches!(recorded, None | Some(Value::Null | Value::Object(_)))
+}
+
+fn object_or_empty(recorded: Option<Value>) -> Map<String, Value> {
+    match recorded {
+        Some(Value::Object(object)) => object,
+        _ => Map::new(),
+    }
+}
+
 /// Upgrade each node of one level and of every fragment under it; whether any changed.
-pub(crate) fn each_node_of_the_level_upgraded(nodes: &mut [Value]) -> bool {
+fn each_node_of_the_level_upgraded(nodes: &mut [Value]) -> bool {
     let mut any_changed = false;
-    for node in nodes.iter_mut().filter_map(Value::as_object_mut) {
-        any_changed |= the_node_type_renamed(node);
-        any_changed |= the_nodes_old_fields_folded(node);
-        if let Some(inner_nodes) = node
-            .get_mut("fragment")
-            .and_then(|fragment| fragment.get_mut("nodes"))
-            .and_then(Value::as_array_mut)
-        {
-            any_changed |= each_node_of_the_level_upgraded(inner_nodes);
-        }
+    for node in nodes {
+        any_changed |= upgrade_a_node_in_place(node);
+    }
+    any_changed
+}
+
+/// Upgrade one node, and every node of a fragment it holds, in place; whether any changed.
+pub(crate) fn upgrade_a_node_in_place(node: &mut Value) -> bool {
+    let Some(node) = node.as_object_mut() else {
+        return false;
+    };
+    let mut any_changed = the_node_type_renamed(node);
+    any_changed |= the_nodes_retired_fields_folded(node);
+    if let Some(fragment) = node.get_mut("fragment") {
+        any_changed |= upgrade_stream_document_in_place(fragment);
     }
     any_changed
 }
@@ -218,36 +275,26 @@ fn the_type_a_node_type_was_renamed_to(node_type: &str) -> Option<&'static str> 
 /// Fold `config` and `pins` into `input_values`; whether the node held either. A node holding
 /// one of the three as anything but an object (or `null`) is left as written, for the reader
 /// after this to refuse by name.
-fn the_nodes_old_fields_folded(node: &mut Map<String, Value>) -> bool {
+fn the_nodes_retired_fields_folded(node: &mut Map<String, Value>) -> bool {
     if !node.contains_key(RETIRED_NODE_CONFIG_KEY) && !node.contains_key(RETIRED_NODE_PINS_KEY) {
         return false;
     }
-    let is_foldable =
-        |key: &str| matches!(node.get(key), None | Some(Value::Null | Value::Object(_)));
-    if ![
-        NODE_INPUT_VALUES_KEY,
-        RETIRED_NODE_PINS_KEY,
-        RETIRED_NODE_CONFIG_KEY,
-    ]
-    .into_iter()
-    .all(is_foldable)
+    if !holds_an_object_or_nothing(node.get(NODE_INPUT_VALUES_KEY))
+        || the_retired_field_holding_no_object(
+            node.get(RETIRED_NODE_PINS_KEY),
+            node.get(RETIRED_NODE_CONFIG_KEY),
+        )
+        .is_some()
     {
         return false;
     }
-    let mut take_the_object_under = |key: &str| match node.remove(key) {
-        Some(Value::Object(object)) => object,
-        _ => Map::new(),
-    };
-    let mut input_values = take_the_object_under(NODE_INPUT_VALUES_KEY);
-    let pins = take_the_object_under(RETIRED_NODE_PINS_KEY);
-    let config = take_the_object_under(RETIRED_NODE_CONFIG_KEY);
-    fold_into_input_values(&mut input_values, pins, config);
-    if !input_values.is_empty() {
-        node.insert(
-            NODE_INPUT_VALUES_KEY.to_owned(),
-            Value::Object(input_values),
-        );
-    }
+    let mut input_values = object_or_empty(node.remove(NODE_INPUT_VALUES_KEY));
+    fold_the_retired_fields_into(
+        &mut input_values,
+        node.remove(RETIRED_NODE_PINS_KEY),
+        node.remove(RETIRED_NODE_CONFIG_KEY),
+    );
+    put_input_values(node, input_values);
     true
 }
 

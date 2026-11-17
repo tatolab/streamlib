@@ -611,3 +611,92 @@ fn a_generators_group_naming_a_node_the_fragment_does_not_hold_is_refused_naming
     assert!(refusal.contains("`soften`"), "{refusal}");
     assert!(refusal.contains("`glow`"), "{refusal}");
 }
+
+#[test]
+fn a_node_holding_its_config_or_pins_as_no_object_is_refused_naming_it_and_the_key() {
+    for key in ["config", "pins"] {
+        let node = Uuid::new_v4();
+        let mut recorded = json!({"id": node, "name": "tone", "type": "nodes.tone:Tone"});
+        recorded[key] = json!([1]);
+        let refusal = serde_json::from_value::<StreamGraphDocumentNode>(recorded.clone())
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            refusal.contains(&format!("node {node} `tone`"))
+                && refusal.contains(&format!("`{key}`")),
+            "{refusal}"
+        );
+        let document = StreamGraphDocument::from_value(json!({"nodes": [recorded]})).unwrap();
+        let refusal = document.node(node).expect_err("refused");
+        assert!(refusal.contains(&format!("`{key}`")), "{refusal}");
+    }
+}
+
+/// A node holds one map of input values, so a `set_node_config` naming one of the node's inputs
+/// in `to` sets that input's value, and each field `from` names that `to` does not is taken out.
+#[test]
+fn a_set_node_config_naming_an_input_in_to_sets_the_value_of_that_input() {
+    let mut document = an_empty_document();
+    let mut tone = a_node("tone");
+    tone.input_values = Map::from_iter([
+        ("gain".to_owned(), json!(1)),
+        ("pitch".to_owned(), json!(220)),
+    ]);
+    document
+        .apply(&StreamGraphOperation::AddNode {
+            node: tone.clone(),
+            links: Vec::new(),
+        })
+        .unwrap();
+
+    document
+        .apply(&StreamGraphOperation::SetNodeConfig {
+            node: tone.id,
+            from: json!({"gain": 1}),
+            to: json!({"pitch": 440, "waveform": "saw"}),
+        })
+        .unwrap();
+
+    assert_eq!(
+        document.node(tone.id).unwrap().input_values,
+        Map::from_iter([
+            ("pitch".to_owned(), json!(440)),
+            ("waveform".to_owned(), json!("saw")),
+        ])
+    );
+}
+
+/// An edit recorded before a node held one map of input values still reads and applies, so it
+/// undoes and redoes: what it places takes the current shape, at every level of a fragment.
+#[test]
+fn an_add_node_recorded_before_input_values_places_its_node_in_the_current_shape() {
+    let node = Uuid::new_v4();
+    let recorded = json!({
+        "operation": "add_node",
+        "node": {
+            "id": node, "name": "look", "type": "generators.look:look",
+            "config": {"radius": 3, "amount": 1}, "pins": {"amount": 2},
+            "fragment": {
+                "nodes": [{"id": Uuid::new_v4(), "name": "lfo", "type": "tatolab.ops:Lfo",
+                           "config": {"rate_hz": 2}}],
+                "links": [],
+            },
+        },
+        "links": [],
+    });
+    let mut document = an_empty_document();
+
+    document
+        .apply(&serde_json::from_value(recorded).expect("an old edit reads"))
+        .unwrap();
+
+    let placed = &document.to_value()["nodes"][0];
+    assert_eq!(placed["input_values"], json!({"radius": 3, "amount": 2}));
+    assert!(placed.get("config").is_none() && placed.get("pins").is_none());
+    assert_eq!(
+        placed["fragment"]["nodes"][0],
+        json!({"id": placed["fragment"]["nodes"][0]["id"], "name": "lfo",
+               "type": "imports/core-nodes/core_nodes.animation:Lfo",
+               "input_values": {"rate_hz": 2}})
+    );
+}

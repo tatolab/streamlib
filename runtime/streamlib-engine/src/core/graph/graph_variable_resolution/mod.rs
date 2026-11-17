@@ -19,7 +19,9 @@ use crate::core::graph::graph_fragment_flattening::{
     GRAPH_FRAGMENT_NODE_PATH_SEPARATOR, GraphFragmentsAsDrawn,
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
-use crate::core::graph::legacy_config_of_a_node::config_of_a_node_as_drawn;
+use crate::core::graph::legacy_config_of_a_node::{
+    config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
+};
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
@@ -232,8 +234,7 @@ impl GraphVariablesAsDrawn {
                 pin_default: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
-            let config =
-                config_of_a_node_as_drawn(&variable_node.input_values, &serde_json::Map::new());
+            let config = config_of_a_node_holding_no_pin_value(&variable_node.input_values);
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,

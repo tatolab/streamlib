@@ -87,12 +87,11 @@ pub fn graph_document_with_each_stream_fragment_reference_resolved(
     if !graph_document_holds_a_stream_fragment(graph_document) {
         return Ok(graph_document.clone());
     }
-    let graph_document = &stream_document_in_the_current_shape(graph_document.clone());
     let project = TatolabProjectFile::read_from_project_directory(project_directory)
         .map_err(|refusal| refusal.to_string())?
         .project;
-    let mut resolved = graph_document.clone();
-    let stream_asset = graph_document
+    let mut resolved = stream_document_in_the_current_shape(graph_document.clone());
+    let stream_asset = resolved
         .get("asset")
         .and_then(Value::as_str)
         .and_then(|asset| Uuid::parse_str(asset).ok());

@@ -8,8 +8,9 @@ use uuid::Uuid;
 
 use crate::canonical_project_json::canonical_project_json_bytes;
 use crate::stream_document_upgrade::{
-    NODE_INPUT_VALUES_KEY, each_node_of_the_level_upgraded, fold_into_input_values,
-    stream_document_in_the_current_shape,
+    NODE_INPUT_VALUES_KEY, fold_the_retired_fields_into, put_input_values,
+    stream_document_in_the_current_shape, the_retired_field_holding_no_object,
+    upgrade_a_node_in_place, upgrade_stream_document_in_place,
 };
 use crate::stream_graph_studio_contract::{
     StreamGraphDocumentNote, StreamGraphNodeStudioFields, a_documents_studio_holding,
@@ -53,9 +54,10 @@ pub fn is_a_graph_interface_node_type(node_type: &str) -> bool {
 }
 
 /// One node as a stream's graph document holds it: the spec keys a load reads. A node an older
-/// runtime recorded, with `config` and `pins`, reads with them folded into `input_values`.
+/// runtime recorded, with `config` and `pins`, reads with them folded into `input_values`, and
+/// one holding either as anything but an object is refused naming the node and the key.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(from = "StreamGraphDocumentNodeAsRecorded")]
+#[serde(try_from = "StreamGraphDocumentNodeAsRecorded")]
 pub struct StreamGraphDocumentNode {
     /// The node's UUID, the runtime's from its placement on.
     pub id: Uuid,
@@ -102,7 +104,7 @@ impl StreamGraphDocumentNode {
     }
 }
 
-/// A node as any runtime recorded it, before its old fields are folded into `input_values`.
+/// A node as any runtime recorded it, before its retired fields are folded into `input_values`.
 #[derive(Deserialize)]
 struct StreamGraphDocumentNodeAsRecorded {
     id: Uuid,
@@ -112,7 +114,7 @@ struct StreamGraphDocumentNodeAsRecorded {
     #[serde(default)]
     input_values: Map<String, Value>,
     #[serde(default)]
-    pins: Map<String, Value>,
+    pins: Option<Value>,
     #[serde(default)]
     config: Option<Value>,
     #[serde(default)]
@@ -123,8 +125,10 @@ struct StreamGraphDocumentNodeAsRecorded {
     fragment: Option<Box<Value>>,
 }
 
-impl From<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
-    fn from(recorded: StreamGraphDocumentNodeAsRecorded) -> Self {
+impl TryFrom<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
+    type Error = String;
+
+    fn try_from(recorded: StreamGraphDocumentNodeAsRecorded) -> Result<Self, String> {
         let StreamGraphDocumentNodeAsRecorded {
             id,
             name,
@@ -136,12 +140,13 @@ impl From<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
             studio,
             fragment,
         } = recorded;
-        let config = match config {
-            Some(Value::Object(config)) => config,
-            _ => Map::new(),
-        };
-        fold_into_input_values(&mut input_values, pins, config);
-        Self {
+        if let Some(key) = the_retired_field_holding_no_object(pins.as_ref(), config.as_ref()) {
+            return Err(format!(
+                "node {id} `{name}` holds its `{key}` as no object, so its values do not read"
+            ));
+        }
+        fold_the_retired_fields_into(&mut input_values, pins, config);
+        Ok(Self {
             id,
             name,
             node_type,
@@ -149,7 +154,7 @@ impl From<StreamGraphDocumentNodeAsRecorded> for StreamGraphDocumentNode {
             exposed_config_fields,
             studio,
             fragment,
-        }
+        })
     }
 }
 
@@ -500,10 +505,10 @@ impl StreamGraphDocument {
 
     /// Apply `operation`, refused in its own words when the document does not hold what it
     /// names or already holds what it adds. A node it places in an older shape, such as a graph
-    /// generator's stored output, takes the current one.
+    /// generator's stored output or a node an edit recorded before this runtime, takes the
+    /// current one.
     pub fn apply(&mut self, operation: &StreamGraphOperation) -> Result<(), String> {
         self.apply_the_operation(operation)?;
-        each_node_of_the_level_upgraded(&mut self.node_values);
         self.drop_the_graph_each_stream_fragment_places();
         Ok(())
     }
@@ -528,9 +533,10 @@ impl StreamGraphDocument {
                         node_uuid_of(holder).map_or_else(String::new, |uuid| uuid.to_string())
                     ));
                 }
-                let node_value = serde_json::to_value(node).map_err(|not_written| {
+                let mut node_value = serde_json::to_value(node).map_err(|not_written| {
                     format!("node {} does not write: {not_written}", node.id)
                 })?;
+                upgrade_a_node_in_place(&mut node_value);
                 self.node_values_mut().push(node_value);
                 for link in links {
                     self.connect(link)?;
@@ -653,15 +659,10 @@ impl StreamGraphDocument {
                     ));
                 }
                 node_object.insert("type".to_owned(), Value::String(to.generator.clone()));
-                if to.input_values.is_empty() {
-                    node_object.remove(NODE_INPUT_VALUES_KEY);
-                } else {
-                    node_object.insert(
-                        NODE_INPUT_VALUES_KEY.to_owned(),
-                        Value::Object(to.input_values.clone()),
-                    );
-                }
-                node_object.insert("fragment".to_owned(), to.fragment.clone());
+                put_input_values(node_object, to.input_values.clone());
+                let mut fragment = to.fragment.clone();
+                upgrade_stream_document_in_place(&mut fragment);
+                node_object.insert("fragment".to_owned(), fragment);
                 Ok(())
             }
             StreamGraphOperation::SetExposedConfigFields { node, to, .. } => {
@@ -775,12 +776,7 @@ impl StreamGraphDocument {
             }
         };
         change(&mut input_values);
-        if !input_values.is_empty() {
-            node_object.insert(
-                NODE_INPUT_VALUES_KEY.to_owned(),
-                Value::Object(input_values),
-            );
-        }
+        put_input_values(node_object, input_values);
         Ok(())
     }
 

@@ -15,13 +15,14 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
-use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
+use crate::core::graph::legacy_config_of_a_node::{
+    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
+};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
     PendingDeletionComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
-use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
@@ -199,16 +200,13 @@ impl LoadedStreamInThisRuntime {
             else {
                 continue;
             };
-            let legacy_config = LegacyConfigOfANodeType::of(node_types, &document_node.node_type);
-            let spec = NodeSpec::new(
+            let spec = node_spec_holding_the_input_values(
+                node_types,
                 document_node.node_type.clone(),
-                legacy_config.config_of(&document_node.input_values),
-            )
-            .with_display_name(document_node.name.clone())
-            .with_pins_and_studio_fields(
-                legacy_config.pin_values_of(&document_node.input_values),
+                &document_node.input_values,
                 document_node.studio.clone(),
             )
+            .with_display_name(document_node.name.clone())
             .with_exposed_config_fields(document_node.exposed_config_fields.clone())
             .with_node_uuid(node_uuid);
             add_node_impl(
@@ -222,9 +220,11 @@ impl LoadedStreamInThisRuntime {
         }
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
-            let legacy_config = LegacyConfigOfANodeType::of(node_types, &document_node.node_type);
-            let document_config = legacy_config.config_of(&document_node.input_values);
-            let document_pins = legacy_config.pin_values_of(&document_node.input_values);
+            let ConfigAndPinValues {
+                config: document_config,
+                pin_values: document_pins,
+            } = LegacyConfigOfANodeType::of(node_types, &document_node.node_type)
+                .split(&document_node.input_values);
             if live_node.config != document_config {
                 self.update_node_config_compiled_right_away(
                     &live_node.node_run_id,

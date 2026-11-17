@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
-use crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY;
+use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, upgrade_a_node_in_place};
 use crate::stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
@@ -558,7 +558,9 @@ impl StreamGraphDocument {
                 ));
             }
             let position = node.position.min(self.node_values_of_the_level().len());
-            self.node_values_mut().insert(position, node.value.clone());
+            let mut node_value = node.value.clone();
+            upgrade_a_node_in_place(&mut node_value);
+            self.node_values_mut().insert(position, node_value);
         }
         for link in links_in {
             let position = link.position.min(self.link_values().len());

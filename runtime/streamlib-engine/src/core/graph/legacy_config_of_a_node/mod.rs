@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use crate::core::descriptors::NodeClassImportPath;
-use crate::core::nodes::NodeTypesOneStreamResolves;
+use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 
 /// How one node type splits its nodes' input values into a config and the values on its inputs.
 pub(crate) struct LegacyConfigOfANodeType {
@@ -24,25 +24,46 @@ pub(crate) struct LegacyConfigOfANodeType {
     its_input_ports: HashSet<String>,
 }
 
+/// A node's input values split as its type takes them: a config whole, and a value on each of
+/// its inputs.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConfigAndPinValues {
+    /// The config the node takes whole.
+    pub(crate) config: Value,
+    /// The value on each of the node's inputs, by input name.
+    pub(crate) pin_values: Map<String, Value>,
+}
+
 impl LegacyConfigOfANodeType {
-    /// How `node_type` splits its nodes' input values, as `node_types` describes it.
+    /// How `node_type` splits its nodes' input values, as `node_types` describes it. A config
+    /// field a placeholder of a type not described knows of, one a node of it exposes, is a
+    /// config field as one its schema lists is.
     pub(crate) fn of(
         node_types: &NodeTypesOneStreamResolves,
         node_type: &NodeClassImportPath,
     ) -> Self {
+        let mut fields_its_config_schema_lists =
+            fields_the_config_schema_of_a_node_type_lists(node_types, node_type);
+        if let Some(placeholder) = node_types.placeholder_of_the_node_type_not_described(node_type)
+        {
+            fields_its_config_schema_lists.extend(placeholder.config_fields_its_nodes_expose());
+        }
         Self {
-            fields_its_config_schema_lists: node_types
-                .descriptor(node_type)
-                .and_then(|descriptor| descriptor.config_schema)
-                .and_then(|config_schema| match config_schema.get("properties") {
-                    Some(Value::Object(properties)) => Some(properties.keys().cloned().collect()),
-                    _ => None,
-                })
-                .unwrap_or_default(),
+            fields_its_config_schema_lists,
             its_input_ports: node_types
                 .port_info(node_type)
                 .map(|(inputs, _)| inputs.into_iter().map(|input| input.name).collect())
                 .unwrap_or_default(),
+        }
+    }
+
+    /// How a node known only by the inputs it has splits its input values: a value on each of
+    /// `input_ports`, every other name a config field. A fragment node splits so, by the input
+    /// ports its interface declares.
+    pub(crate) fn of_the_input_ports(input_ports: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            fields_its_config_schema_lists: HashSet::new(),
+            its_input_ports: input_ports.into_iter().collect(),
         }
     }
 
@@ -61,14 +82,34 @@ impl LegacyConfigOfANodeType {
         )
     }
 
-    /// The value on each input of a node holding `input_values`, by input name.
-    pub(crate) fn pin_values_of(&self, input_values: &Map<String, Value>) -> Map<String, Value> {
-        input_values
+    /// `input_values` split into the config a node holding them takes whole and the value on
+    /// each of its inputs.
+    pub(crate) fn split(&self, input_values: &Map<String, Value>) -> ConfigAndPinValues {
+        let (config, pin_values) = input_values
             .iter()
-            .filter(|(name, _)| !self.is_a_config_field(name))
             .map(|(name, value)| (name.clone(), value.clone()))
-            .collect()
+            .partition(|(name, _)| self.is_a_config_field(name));
+        ConfigAndPinValues {
+            config: Value::Object(config),
+            pin_values,
+        }
     }
+}
+
+/// The fields the config schema of `node_type`, as `node_types` describes it, lists; none for
+/// a type that describes no config schema.
+pub(crate) fn fields_the_config_schema_of_a_node_type_lists(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+) -> HashSet<String> {
+    node_types
+        .descriptor(node_type)
+        .and_then(|descriptor| descriptor.config_schema)
+        .and_then(|config_schema| match config_schema.get("properties") {
+            Some(Value::Object(properties)) => Some(properties.keys().cloned().collect()),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// The config a node of `node_type` holding `input_values` takes whole.
@@ -80,9 +121,21 @@ pub(crate) fn config_of_a_node(
     LegacyConfigOfANodeType::of(node_types, node_type).config_of(input_values)
 }
 
-/// The config a node shows where it is rendered as drawn, with no node type at hand: each of
-/// its input values but those `pin_values` names. A fragment, a variable and an interface node
-/// take every value they hold as their config.
+/// The spec that places a node of `node_type` holding `input_values`, its config and the values
+/// on its inputs split as its type takes them, carrying `studio`.
+pub(crate) fn node_spec_holding_the_input_values(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: NodeClassImportPath,
+    input_values: &Map<String, Value>,
+    studio: Map<String, Value>,
+) -> NodeSpec {
+    let ConfigAndPinValues { config, pin_values } =
+        LegacyConfigOfANodeType::of(node_types, &node_type).split(input_values);
+    NodeSpec::new(node_type, config).with_pins_and_studio_fields(pin_values, studio)
+}
+
+/// The config a node shows where it is rendered as drawn over its running node: each of its
+/// input values but those `pin_values`, the running node's, names.
 pub(crate) fn config_of_a_node_as_drawn(
     input_values: &Map<String, Value>,
     pin_values: &Map<String, Value>,
@@ -94,6 +147,12 @@ pub(crate) fn config_of_a_node_as_drawn(
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect(),
     )
+}
+
+/// The config of a node that has no input of its own to hold a value on, a variable or an
+/// interface node: every input value it holds.
+pub(crate) fn config_of_a_node_holding_no_pin_value(input_values: &Map<String, Value>) -> Value {
+    Value::Object(input_values.clone())
 }
 
 /// The one map of input values a node taking `config` whole and `pin_values` on its inputs

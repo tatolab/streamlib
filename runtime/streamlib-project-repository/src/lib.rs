@@ -114,7 +114,7 @@ pub use sample_project::{
 };
 pub use stream_document_upgrade::{
     NODE_INPUT_VALUES_KEY, NODE_KEYS_FOLDED_INTO_INPUT_VALUES, fold_into_input_values,
-    stream_document_in_the_current_shape, upgraded_stream_document,
+    stream_document_in_the_current_shape, upgrade_stream_document_in_place,
 };
 pub use stream_fragment_references::{
     graph_document_holds_a_stream_fragment,
