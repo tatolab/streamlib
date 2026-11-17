@@ -11,9 +11,10 @@ use std::fmt::Write as _;
 use anyhow::Result;
 use serde_json::{Map, Value};
 
+use crate::contract_component_references::component_names_reached_from;
 use crate::contract_pin_types::{
-    BuiltInPinTypeRow, PIN_ANNOTATIONS_COMPONENT_NAME, PIN_TYPE_COMPONENT_NAME,
-    built_in_pin_type_rows, components_reached_from,
+    BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME, BuiltInPinTypeRow, PIN_ANNOTATIONS_COMPONENT_NAME,
+    PIN_TYPE_COMPONENT_NAME, PIN_TYPE_STABILITIES, built_in_pin_type_rows,
 };
 use crate::generate_runtime_client::{
     GENERATED_SOURCE_HEADER, json_string_literal, property_key, write_component_declaration,
@@ -21,6 +22,7 @@ use crate::generate_runtime_client::{
 
 /// The components the pin types file declares besides each stored value's.
 const PIN_TYPE_ROOT_COMPONENT_NAMES: &[&str] = &[
+    BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME,
     PIN_TYPE_COMPONENT_NAME,
     "DeclaredPinType",
     "PinFlow",
@@ -44,7 +46,7 @@ impl<'contract> RuntimeClientPinTypes<'contract> {
         let rows = built_in_pin_type_rows(contract)?;
         let mut roots = PIN_TYPE_ROOT_COMPONENT_NAMES.to_vec();
         roots.extend(rows.iter().filter_map(|row| row.value_component));
-        let component_names = components_reached_from(component_schemas, &roots)?;
+        let component_names = component_names_reached_from(component_schemas, &roots)?;
         Ok(Self {
             rows,
             component_names,
@@ -60,13 +62,9 @@ impl<'contract> RuntimeClientPinTypes<'contract> {
         }
         let _ = writeln!(
             declarations,
-            "/** The name of a built-in pin type: its `type` tag in a `PinType`. */\n\
-             export type BuiltInPinTypeName = {};\n",
-            self.rows
-                .iter()
-                .map(|row| json_string_literal(row.name))
-                .collect::<Vec<_>>()
-                .join(" | ")
+            "/** A contract component that states a built-in pin type's stored value. */\n\
+             export type PinValueComponentName = {};\n",
+            literal_union(self.value_component_names())
         );
         declarations.push_str(
             "/** An annotation a pin may state: a key of `PinAnnotations`. */\n\
@@ -104,16 +102,33 @@ impl<'contract> RuntimeClientPinTypes<'contract> {
              \x20 /** How a TypeScript declaration writes it. */\n\
              \x20 readonly typescript_form: string;\n\
              \x20 /** The contract component that states its stored value; absent, it stores none. */\n\
-             \x20 readonly value_component?: string;\n\
+             \x20 readonly value_component?: PinValueComponentName;\n\
              \x20 /** The contract version it was added in. */\n\
              \x20 readonly since: number;\n\
              \x20 /** Whether it may still change before it turns stable. */\n\
-             \x20 readonly stability: \"stable\" | \"experimental\";\n\
+             \x20 readonly stability: PinTypeStability;\n\
              }\n\n\
              /** Every built-in pin type, in the contract's order. */\n\
              export declare const BUILT_IN_PIN_TYPES: readonly PinTypeDescription[];\n",
         );
+        let _ = writeln!(
+            declarations,
+            "\n/** Whether a built-in pin type may still change before it turns stable. */\n\
+             export type PinTypeStability = {};",
+            literal_union(PIN_TYPE_STABILITIES.to_vec())
+        );
         declarations
+    }
+
+    /// Each distinct component a row's stored value is stated by, in row order.
+    fn value_component_names(&self) -> Vec<&'contract str> {
+        let mut names = Vec::new();
+        for value_component in self.rows.iter().filter_map(|row| row.value_component) {
+            if !names.contains(&value_component) {
+                names.push(value_component);
+            }
+        }
+        names
     }
 
     pub(crate) fn javascript(&self) -> String {
@@ -164,6 +179,14 @@ impl<'contract> RuntimeClientPinTypes<'contract> {
         module.push_str("]);\n");
         module
     }
+}
+
+fn literal_union(values: Vec<&str>) -> String {
+    values
+        .into_iter()
+        .map(json_string_literal)
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 #[cfg(test)]

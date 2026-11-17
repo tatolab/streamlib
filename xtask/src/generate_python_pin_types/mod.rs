@@ -7,7 +7,7 @@
 //! reaches, in standard `typing` only. `--check` is the CI gate that fails when the checked-in
 //! module differs from a regeneration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
@@ -15,10 +15,13 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Map, Value};
 use streamlib_control_contract::CONTROL_CONTRACT_FILE_WORKSPACE_PATH;
 
+use crate::contract_component_references::{
+    component_name_of_a_reference, component_names_reached_from, component_schemas_of,
+    property_names_of, tags_of_a_tagged_union,
+};
 use crate::contract_pin_types::{
-    BuiltInPinTypeRow, PIN_ANNOTATIONS_COMPONENT_NAME, PIN_TYPE_COMPONENT_NAME,
-    built_in_pin_type_rows, component_name_of_a_reference, component_schemas_of,
-    components_reached_from, property_names_of, tags_of_a_tagged_union,
+    BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME, BuiltInPinTypeRow, PIN_ANNOTATIONS_COMPONENT_NAME,
+    PIN_TYPE_COMPONENT_NAME, PIN_TYPE_STABILITIES, built_in_pin_type_rows,
 };
 use crate::generate_built_in_node_classes::{
     push_unique, python_prose, python_string_literal, render_docstring, union_of,
@@ -29,6 +32,7 @@ pub const GENERATED_PYTHON_PIN_TYPES_PATH: &str =
 
 /// The components the module renders, with every component they reach.
 const PYTHON_PIN_TYPE_ROOT_COMPONENT_NAMES: &[&str] = &[
+    BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME,
     PIN_TYPE_COMPONENT_NAME,
     "PinFlow",
     PIN_ANNOTATIONS_COMPONENT_NAME,
@@ -37,7 +41,7 @@ const PYTHON_PIN_TYPE_ROOT_COMPONENT_NAMES: &[&str] = &[
 
 const PIN_DECLARATION_COMPONENT_NAME: &str = "PinDeclaration";
 
-/// The column an alias wraps one alternative per line past.
+/// The column a line of the module wraps before.
 const PYTHON_LINE_WIDTH: usize = 88;
 
 /// What the module calls `PinDeclaration`: the dict a node declaration builds is its wire form.
@@ -55,7 +59,7 @@ const GENERATED_MODULE_HEADER: &str = r#"# Copyright (c) 2025 Tatolab LLC
 # contract file. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The built-in pin types and a pin declaration's wire form, as the control contract states them."""
+"""Built-in pin types and a pin declaration's wire form, from the control contract."""
 
 from __future__ import annotations
 
@@ -103,14 +107,10 @@ pub fn render_python_pin_types_module(contract: &Value) -> Result<String> {
     let mut module = PythonPinTypesModule {
         component_schemas,
         exported_names: BTreeSet::new(),
+        nested_classes: BTreeMap::new(),
         definitions: String::new(),
     };
 
-    module.write_literal_alias(
-        "BuiltInPinTypeName",
-        &rows.iter().map(|row| row.name).collect::<Vec<_>>(),
-        "The name of a built-in pin type: its `type` tag in a `PinType`.",
-    )?;
     module.write_literal_alias(
         "PinAnnotationName",
         &property_names_of(component_schemas, PIN_ANNOTATIONS_COMPONENT_NAME)?,
@@ -127,14 +127,34 @@ pub fn render_python_pin_types_module(contract: &Value) -> Result<String> {
             .with_context(|| format!("`{NODE_INPUT_MODE_COMPONENT_NAME}`"))?,
         &description_of(node_input_mode_schema),
     )?;
-    for name in components_reached_from(component_schemas, PYTHON_PIN_TYPE_ROOT_COMPONENT_NAMES)? {
+    for name in
+        component_names_reached_from(component_schemas, PYTHON_PIN_TYPE_ROOT_COMPONENT_NAMES)?
+    {
         module.write_component(name, &component_schemas[name])?;
     }
+    let mut value_component_names: Vec<&str> = Vec::new();
+    for value_component in rows.iter().filter_map(|row| row.value_component) {
+        if !value_component_names.contains(&value_component) {
+            value_component_names.push(value_component);
+        }
+    }
+    module.write_literal_alias(
+        "PinValueComponentName",
+        &value_component_names,
+        "A contract component that states a built-in pin type's stored value.",
+    )?;
+    module.write_literal_alias(
+        "PinTypeStability",
+        PIN_TYPE_STABILITIES,
+        "Whether a built-in pin type may still change before it turns stable.",
+    )?;
     module.write_built_in_pin_types(&rows)?;
 
+    let mut exported_names: Vec<&String> = module.exported_names.iter().collect();
+    exported_names.sort_by_key(|name| (name_sort_group(name), name.as_str()));
     let mut text = String::from(GENERATED_MODULE_HEADER);
     text.push_str("\n__all__ = [\n");
-    for name in &module.exported_names {
+    for name in exported_names {
         writeln!(text, "    \"{name}\",")?;
     }
     text.push_str("]\n");
@@ -145,6 +165,8 @@ pub fn render_python_pin_types_module(contract: &Value) -> Result<String> {
 struct PythonPinTypesModule<'contract> {
     component_schemas: &'contract Map<String, Value>,
     exported_names: BTreeSet<String>,
+    /// Each class written for an object nested in a property, by name, with its schema.
+    nested_classes: BTreeMap<String, Value>,
     definitions: String,
 }
 
@@ -163,12 +185,16 @@ impl PythonPinTypesModule<'_> {
             .iter()
             .map(|value| python_string_literal(value, name))
             .collect::<Result<Vec<_>>>()?;
-        let literal = if literals.join(", ").len() + name.len() + 18 <= PYTHON_LINE_WIDTH {
-            format!("Literal[{}]", literals.join(", "))
+        let one_line = format!("type {name} = Literal[{}]", literals.join(", "));
+        if one_line.len() <= PYTHON_LINE_WIDTH {
+            write!(self.definitions, "\n\n{one_line}\n")?;
         } else {
-            format!("Literal[\n    {},\n]", literals.join(",\n    "))
-        };
-        write!(self.definitions, "\n\ntype {name} = {literal}\n")?;
+            write!(
+                self.definitions,
+                "\n\ntype {name} = Literal[\n    {},\n]\n",
+                literals.join(",\n    ")
+            )?;
+        }
         self.write_alias_docstring(doc, name)
     }
 
@@ -208,12 +234,21 @@ impl PythonPinTypesModule<'_> {
             }
             self.export(&python_name)?;
             let union = variant_names.join(" | ");
-            let union = if union.len() + python_name.len() + 9 <= PYTHON_LINE_WIDTH {
-                union
+            let one_line = format!("type {python_name} = {union}");
+            if one_line.len() <= PYTHON_LINE_WIDTH {
+                write!(self.definitions, "\n\n{one_line}\n")?;
+            } else if union.len() + 4 <= PYTHON_LINE_WIDTH {
+                write!(
+                    self.definitions,
+                    "\n\ntype {python_name} = (\n    {union}\n)\n"
+                )?;
             } else {
-                format!("(\n    {}\n)", variant_names.join("\n    | "))
-            };
-            write!(self.definitions, "\n\ntype {python_name} = {union}\n")?;
+                write!(
+                    self.definitions,
+                    "\n\ntype {python_name} = (\n    {}\n)\n",
+                    variant_names.join("\n    | ")
+                )?;
+            }
             return self.write_alias_docstring(&doc, name);
         }
         if schema.get("properties").is_some() {
@@ -249,8 +284,8 @@ impl PythonPinTypesModule<'_> {
             );
             let python_type = self.python_type_of(
                 property_schema,
-                &format!("{class_name}{}", pascal_case(key)),
-                &format!("The value of `{class_name}`'s key `{key}`."),
+                &pascal_case(key),
+                &format!("What a `{key}` key holds."),
             )?;
             if required.contains(&key.as_str()) {
                 write!(fields, "\n    {key}: {python_type}\n")?;
@@ -279,7 +314,8 @@ impl PythonPinTypesModule<'_> {
     }
 
     /// `schema` as a Python type. An object with properties becomes the class
-    /// `nested_class_name`, documented by `nested_class_doc` when it states no description.
+    /// `nested_class_name`, documented by `nested_class_doc` when it states no description, and
+    /// written once however many keys hold that same object.
     fn python_type_of(
         &mut self,
         schema: &Value,
@@ -315,7 +351,18 @@ impl PythonPinTypesModule<'_> {
             }
         }
         if schema.get("properties").is_some() {
-            self.write_typed_dict(nested_class_name, schema, nested_class_doc)?;
+            match self.nested_classes.get(nested_class_name) {
+                Some(written) if written == schema => {}
+                Some(_) => bail!(
+                    "two different objects nested under a key would both be the class \
+                     `{nested_class_name}`"
+                ),
+                None => {
+                    self.nested_classes
+                        .insert(nested_class_name.to_owned(), schema.clone());
+                    self.write_typed_dict(nested_class_name, schema, nested_class_doc)?;
+                }
+            }
             return Ok(nested_class_name.to_owned());
         }
         let json_types: Vec<&str> = match &schema["type"] {
@@ -368,55 +415,119 @@ impl PythonPinTypesModule<'_> {
              \x20   \"\"\"What a pin of it may state besides its type.\"\"\"\n\n\
              \x20   python_forms: tuple[str, ...]\n\
              \x20   \"\"\"Each spelling a Python declaration writes it with.\"\"\"\n\n\
-             \x20   value_component: str | None\n\
-             \x20   \"\"\"The contract component that states its stored value; `None`, it stores none.\"\"\"\n\n\
+             \x20   value_component: PinValueComponentName | None\n\
+             \x20   \"\"\"The component that states its stored value; `None`, it stores none.\"\"\"\n\n\
              \x20   since: int\n\
              \x20   \"\"\"The contract version it was added in.\"\"\"\n\n\
-             \x20   stability: Literal[\"stable\", \"experimental\"]\n\
+             \x20   stability: PinTypeStability\n\
              \x20   \"\"\"Whether it may still change before it turns stable.\"\"\"\n\n\n\
              BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (\n",
         );
         for row in rows {
             let label = format!("the `{}` row", row.name);
-            let texts = |items: &[&str]| -> Result<String> {
-                let literals = items
-                    .iter()
-                    .map(|item| python_string_literal(item, &label))
-                    .collect::<Result<Vec<_>>>()?;
-                Ok(match literals.as_slice() {
-                    [only] => format!("({only},)"),
-                    _ => format!("({})", literals.join(", ")),
-                })
+            let text = |value: &str| python_string_literal(value, &label);
+            let texts = |items: &[&str]| -> Result<Vec<String>> {
+                items.iter().map(|item| text(item)).collect()
             };
+            self.definitions.push_str("    PinTypeDescription(\n");
+            write_text_argument(&mut self.definitions, "name", row.name, &label)?;
+            write_text_argument(&mut self.definitions, "label", row.label, &label)?;
+            write_text_argument(
+                &mut self.definitions,
+                "documentation",
+                row.documentation,
+                &label,
+            )?;
+            write_tuple_argument(&mut self.definitions, "flows", &texts(&row.flows)?);
+            write_tuple_argument(
+                &mut self.definitions,
+                "annotations",
+                &texts(&row.annotations)?,
+            );
+            write_tuple_argument(
+                &mut self.definitions,
+                "python_forms",
+                &texts(&row.python_forms)?,
+            );
             let value_component = match row.value_component {
-                Some(value_component) => python_string_literal(value_component, &label)?,
+                Some(value_component) => text(value_component)?,
                 None => "None".to_owned(),
             };
-            write!(
+            writeln!(
                 self.definitions,
-                "    PinTypeDescription(\n\
-                 \x20       name={},\n\
-                 \x20       label={},\n\
-                 \x20       documentation={},\n\
-                 \x20       flows={},\n\
-                 \x20       annotations={},\n\
-                 \x20       python_forms={},\n\
-                 \x20       value_component={value_component},\n\
-                 \x20       since={},\n\
-                 \x20       stability={},\n\
-                 \x20   ),\n",
-                python_string_literal(row.name, &label)?,
-                python_string_literal(row.label, &label)?,
-                python_string_literal(row.documentation, &label)?,
-                texts(&row.flows)?,
-                texts(&row.annotations)?,
-                texts(&row.python_forms)?,
-                row.since_contract_version,
-                python_string_literal(row.stability, &label)?,
+                "        value_component={value_component},"
             )?;
+            writeln!(
+                self.definitions,
+                "        since={},",
+                row.since_contract_version
+            )?;
+            write_text_argument(&mut self.definitions, "stability", row.stability, &label)?;
+            self.definitions.push_str("    ),\n");
         }
         self.definitions.push_str(")\n");
         Ok(())
+    }
+}
+
+/// A keyword argument of one `PinTypeDescription(...)` that holds text, split into adjacent
+/// literals on word boundaries when one line would pass [`PYTHON_LINE_WIDTH`].
+fn write_text_argument(written: &mut String, key: &str, value: &str, label: &str) -> Result<()> {
+    let one_line = format!("        {key}={},", python_string_literal(value, label)?);
+    if one_line.len() <= PYTHON_LINE_WIDTH {
+        writeln!(written, "{one_line}")?;
+        return Ok(());
+    }
+    let chunk_width = PYTHON_LINE_WIDTH - "            \"\"".len();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut chunk = String::new();
+    for word in value.split_inclusive(' ') {
+        if !chunk.is_empty() && chunk.len() + word.len() > chunk_width {
+            chunks.push(std::mem::take(&mut chunk));
+        }
+        chunk.push_str(word);
+    }
+    chunks.push(chunk);
+    writeln!(written, "        {key}=(")?;
+    for chunk in chunks {
+        writeln!(
+            written,
+            "            {}",
+            python_string_literal(&chunk, label)?
+        )?;
+    }
+    writeln!(written, "        ),")?;
+    Ok(())
+}
+
+/// A keyword argument of one `PinTypeDescription(...)` that holds a tuple of `literals`, one
+/// per line when one line would pass [`PYTHON_LINE_WIDTH`].
+fn write_tuple_argument(written: &mut String, key: &str, literals: &[String]) {
+    let one_line = match literals {
+        [only] => format!("        {key}=({only},),"),
+        _ => format!("        {key}=({}),", literals.join(", ")),
+    };
+    if one_line.len() <= PYTHON_LINE_WIDTH {
+        let _ = writeln!(written, "{one_line}");
+        return;
+    }
+    let _ = writeln!(written, "        {key}=(");
+    for literal in literals {
+        let _ = writeln!(written, "            {literal},");
+    }
+    let _ = writeln!(written, "        ),");
+}
+
+/// Where a name sorts in `__all__`, as ruff sorts it: constants, then classes, then the rest.
+fn name_sort_group(name: &str) -> u8 {
+    if name.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    }) {
+        0
+    } else if name.starts_with(|first: char| first.is_ascii_uppercase()) {
+        1
+    } else {
+        2
     }
 }
 

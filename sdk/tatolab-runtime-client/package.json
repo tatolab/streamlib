@@ -17,7 +17,11 @@
       "types": "./pin_types.d.ts",
       "default": "./pin_types.js"
     },
-    "./contract.json": "./contract.json"
+    "./contract.json": "./contract.json",
+    "./node_ui_manifest": {
+      "types": "./node_ui_manifest.d.ts"
+    },
+    "./node_ui_manifest.schema.json": "./node_ui_manifest.schema.json"
   },
   "files": [
     "index.js",
@@ -37,6 +41,8 @@
     "control_client.js",
     "control_client.d.ts",
     "contract.json",
+    "node_ui_manifest.d.ts",
+    "node_ui_manifest.schema.json",
     "REFERENCE.md"
   ],
   "dependencies": {

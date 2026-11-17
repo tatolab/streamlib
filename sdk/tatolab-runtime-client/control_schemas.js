@@ -1716,6 +1716,29 @@ const NodeInputMode = z.union([z.strictObject({
   mode: z.literal("setting_only"),
 })]);
 
+/** @type {z.ZodType<ControlContract.BuiltInPinTypeName>} */
+const BuiltInPinTypeName = z.union([z.literal("boolean"), z.literal("integer"), z.literal("float"), z.literal("string"), z.literal("menu"), z.literal("color"), z.literal("vector"), z.literal("rectangle"), z.literal("transform"), z.literal("texture"), z.literal("audio"), z.literal("encoded_video"), z.literal("encoded_audio"), z.literal("tensor"), z.literal("asset"), z.literal("trigger"), z.literal("list_of"), z.literal("bundle"), z.literal("named"), z.literal("node_reference"), z.literal("pin_type_choice")]);
+
+/** @type {z.ZodType<ControlContract.NodeUiManifestControl>} */
+const NodeUiManifestControl = z.strictObject({
+  type: BuiltInPinTypeName,
+  control: z.string().optional(),
+  script: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.NodeUiManifestNodeBody>} */
+const NodeUiManifestNodeBody = z.strictObject({
+  node_type: z.string(),
+  script: z.string(),
+});
+
+/** @type {z.ZodType<ControlContract.NodeUiManifest>} */
+const NodeUiManifest = z.strictObject({
+  contract: z.string(),
+  controls: z.array(NodeUiManifestControl).optional(),
+  node_bodies: z.array(NodeUiManifestNodeBody).optional(),
+});
+
 /** @satisfies {ControlSchemasOfTheContract} */
 export const ControlSchemas = Object.freeze({
   components: Object.freeze({
@@ -1931,6 +1954,10 @@ export const ControlSchemas = Object.freeze({
     ArrayOutputPortResidency,
     NodeInputMode,
     SettingReadTime,
+    NodeUiManifest,
+    NodeUiManifestControl,
+    BuiltInPinTypeName,
+    NodeUiManifestNodeBody,
   }),
   operations: Object.freeze({
     discover: Object.freeze({

@@ -10,5 +10,11 @@
     "allowJs": true,
     "checkJs": true
   },
-  "files": ["a_client_calling_the_runtime.ts", "an_extension_reading_the_pin_types.ts", "../control_schemas.js", "../pin_types.js"]
+  "files": [
+    "a_client_calling_the_runtime.ts",
+    "a_node_ui_manifest_an_author_writes.ts",
+    "an_extension_reading_the_pin_types.ts",
+    "../control_schemas.js",
+    "../pin_types.js"
+  ]
 }

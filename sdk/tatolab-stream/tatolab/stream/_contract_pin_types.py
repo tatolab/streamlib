@@ -5,7 +5,7 @@
 # contract file. Do not edit: CI fails when this file differs from a
 # regeneration.
 
-"""The built-in pin types and a pin declaration's wire form, as the control contract states them."""
+"""Built-in pin types and a pin declaration's wire form, from the control contract."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from dataclasses import dataclass
 from typing import Literal, NotRequired, TypedDict
 
 __all__ = [
+    "BUILT_IN_PIN_TYPES",
     "AnyDeclaredPinType",
     "ArrayOutputPortResidency",
     "AssetPinType",
     "AudioPinType",
-    "BUILT_IN_PIN_TYPES",
     "BooleanPinType",
     "BuiltInPinTypeName",
     "BundleMember",
@@ -30,10 +30,9 @@ __all__ = [
     "EncodedVideoPinType",
     "FloatPinType",
     "FloatSize",
+    "FromConfig",
     "FromConfigChannelsOutputPortSampleRate",
-    "FromConfigChannelsOutputPortSampleRateFromConfig",
     "FromConfigImageOutputPortFrameRate",
-    "FromConfigImageOutputPortFrameRateFromConfig",
     "ImageOutputPortFrameRate",
     "ImageStreamFrameRate",
     "IntegerPinType",
@@ -54,6 +53,8 @@ __all__ = [
     "PinType",
     "PinTypeChoicePinType",
     "PinTypeDescription",
+    "PinTypeStability",
+    "PinValueComponentName",
     "ProjectAssetMedia",
     "RectanglePinType",
     "SameAsInputDeclaredPinType",
@@ -69,32 +70,6 @@ __all__ = [
     "VectorComponentCount",
     "VectorPinType",
 ]
-
-
-type BuiltInPinTypeName = Literal[
-    "boolean",
-    "integer",
-    "float",
-    "string",
-    "menu",
-    "color",
-    "vector",
-    "rectangle",
-    "transform",
-    "texture",
-    "audio",
-    "encoded_video",
-    "encoded_audio",
-    "tensor",
-    "asset",
-    "trigger",
-    "list_of",
-    "bundle",
-    "named",
-    "node_reference",
-    "pin_type_choice",
-]
-"""The name of a built-in pin type: its `type` tag in a `PinType`."""
 
 
 type PinAnnotationName = Literal[
@@ -499,8 +474,8 @@ class StatedImageOutputPortFrameRate(TypedDict):
     stated: ImageStreamFrameRate
 
 
-class FromConfigImageOutputPortFrameRateFromConfig(TypedDict):
-    """The value of `FromConfigImageOutputPortFrameRate`'s key `from_config`."""
+class FromConfig(TypedDict):
+    """What a `from_config` key holds."""
 
     config_key: str
 
@@ -508,12 +483,11 @@ class FromConfigImageOutputPortFrameRateFromConfig(TypedDict):
 class FromConfigImageOutputPortFrameRate(TypedDict):
     """The value of the node's config key of this name."""
 
-    from_config: FromConfigImageOutputPortFrameRateFromConfig
+    from_config: FromConfig
 
 
 type ImageOutputPortFrameRate = (
-    StatedImageOutputPortFrameRate
-    | FromConfigImageOutputPortFrameRate
+    StatedImageOutputPortFrameRate | FromConfigImageOutputPortFrameRate
 )
 """The frame rate an Image output states, written on the class or read from its node's
 config.
@@ -534,21 +508,14 @@ class StatedChannelsOutputPortSampleRate(TypedDict):
     stated: int
 
 
-class FromConfigChannelsOutputPortSampleRateFromConfig(TypedDict):
-    """The value of `FromConfigChannelsOutputPortSampleRate`'s key `from_config`."""
-
-    config_key: str
-
-
 class FromConfigChannelsOutputPortSampleRate(TypedDict):
     """The value of the node's config key of this name."""
 
-    from_config: FromConfigChannelsOutputPortSampleRateFromConfig
+    from_config: FromConfig
 
 
 type ChannelsOutputPortSampleRate = (
-    StatedChannelsOutputPortSampleRate
-    | FromConfigChannelsOutputPortSampleRate
+    StatedChannelsOutputPortSampleRate | FromConfigChannelsOutputPortSampleRate
 )
 """The sample rate a Channels output states, written on the class or read from its
 node's config.
@@ -561,6 +528,55 @@ type ChannelsOutputPortSampleType = Literal["f32", "f64"]
 
 type ArrayOutputPortResidency = Literal["gpu", "cpu"]
 """Where an Array output's attributes live."""
+
+
+type BuiltInPinTypeName = Literal[
+    "boolean",
+    "integer",
+    "float",
+    "string",
+    "menu",
+    "color",
+    "vector",
+    "rectangle",
+    "transform",
+    "texture",
+    "audio",
+    "encoded_video",
+    "encoded_audio",
+    "tensor",
+    "asset",
+    "trigger",
+    "list_of",
+    "bundle",
+    "named",
+    "node_reference",
+    "pin_type_choice",
+]
+"""The name of a built-in pin type: the `type` tag of its pin type."""
+
+
+type PinValueComponentName = Literal[
+    "BooleanPinValue",
+    "IntegerPinValue",
+    "FloatPinValue",
+    "StringPinValue",
+    "MenuPinValue",
+    "ColorPinValue",
+    "VectorPinValue",
+    "RectanglePinValue",
+    "TransformPinValue",
+    "AssetPinValue",
+    "ListPinValue",
+    "BundlePinValue",
+    "NodeReferenceInConfig",
+    "PinType",
+]
+"""A contract component that states a built-in pin type's stored value."""
+
+
+type PinTypeStability = Literal["stable", "experimental"]
+"""Whether a built-in pin type may still change before it turns stable."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -585,13 +601,13 @@ class PinTypeDescription:
     python_forms: tuple[str, ...]
     """Each spelling a Python declaration writes it with."""
 
-    value_component: str | None
-    """The contract component that states its stored value; `None`, it stores none."""
+    value_component: PinValueComponentName | None
+    """The component that states its stored value; `None`, it stores none."""
 
     since: int
     """The contract version it was added in."""
 
-    stability: Literal["stable", "experimental"]
+    stability: PinTypeStability
     """Whether it may still change before it turns stable."""
 
 
@@ -610,10 +626,22 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="integer",
         label="Integer",
-        documentation="A whole number, exact to 2^53, or within the exact size the type states.",
+        documentation=(
+            "A whole number, exact to 2^53, or within the exact size the type states."
+        ),
         flows=("value", "stream"),
         annotations=("range", "step", "unit", "meaning", "control"),
-        python_forms=("int", "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"),
+        python_forms=(
+            "int",
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+        ),
         value_component="IntegerPinValue",
         since=3,
         stability="experimental",
@@ -720,7 +748,10 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="encoded_video",
         label="Encoded video",
-        documentation="Encoded video, one access unit per message, in one of the codecs the type states.",
+        documentation=(
+            "Encoded video, one access unit per message, in one of the codecs the type "
+            "states."
+        ),
         flows=("stream",),
         annotations=("meaning",),
         python_forms=("EncodedVideo",),
@@ -731,7 +762,10 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="encoded_audio",
         label="Encoded audio",
-        documentation="Encoded audio, one packet per message, in one of the codecs the type states.",
+        documentation=(
+            "Encoded audio, one packet per message, in one of the codecs the type "
+            "states."
+        ),
         flows=("stream",),
         annotations=("meaning",),
         python_forms=("EncodedAudio",),
@@ -786,7 +820,10 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="bundle",
         label="Bundle",
-        documentation="Named members, each of its own type, carried as one message. It has no name of its own: two bundles with the same members are one type.",
+        documentation=(
+            "Named members, each of its own type, carried as one message. It has no "
+            "name of its own: two bundles with the same members are one type."
+        ),
         flows=("value", "stream"),
         annotations=("meaning",),
         python_forms=("dataclass",),
@@ -797,7 +834,10 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="named",
         label="Named type",
-        documentation="A type a module declares by its class, carried as the bytes that class packs.",
+        documentation=(
+            "A type a module declares by its class, carried as the bytes that class "
+            "packs."
+        ),
         flows=("stream", "value"),
         annotations=("meaning",),
         python_forms=("named_pin_type",),
@@ -808,10 +848,16 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="node_reference",
         label="Node reference",
-        documentation="A setting naming another node of the graph. It never takes a wire.",
+        documentation=(
+            "A setting naming another node of the graph. It never takes a wire."
+        ),
         flows=("value",),
         annotations=(),
-        python_forms=("NodeReference", "NodeReferenceToNodeType", "SoleReferrerNodeReferenceToNodeType"),
+        python_forms=(
+            "NodeReference",
+            "NodeReferenceToNodeType",
+            "SoleReferrerNodeReferenceToNodeType",
+        ),
         value_component="NodeReferenceInConfig",
         since=3,
         stability="experimental",
@@ -819,7 +865,10 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
     PinTypeDescription(
         name="pin_type_choice",
         label="Pin type choice",
-        documentation="A setting that chooses another port's pin type; its value is a pin type. It never takes a wire.",
+        documentation=(
+            "A setting that chooses another port's pin type; its value is a pin type. "
+            "It never takes a wire."
+        ),
         flows=("value",),
         annotations=(),
         python_forms=("PinTypeChoice",),

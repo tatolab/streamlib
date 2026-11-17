@@ -427,8 +427,13 @@ export type ChannelsOutputPortSampleType = "f32" | "f64";
  */
 export type ArrayOutputPortResidency = "gpu" | "cpu";
 
-/** The name of a built-in pin type: its `type` tag in a `PinType`. */
+/**
+ * The name of a built-in pin type: the `type` tag of its pin type.
+ */
 export type BuiltInPinTypeName = "boolean" | "integer" | "float" | "string" | "menu" | "color" | "vector" | "rectangle" | "transform" | "texture" | "audio" | "encoded_video" | "encoded_audio" | "tensor" | "asset" | "trigger" | "list_of" | "bundle" | "named" | "node_reference" | "pin_type_choice";
+
+/** A contract component that states a built-in pin type's stored value. */
+export type PinValueComponentName = "BooleanPinValue" | "IntegerPinValue" | "FloatPinValue" | "StringPinValue" | "MenuPinValue" | "ColorPinValue" | "VectorPinValue" | "RectanglePinValue" | "TransformPinValue" | "AssetPinValue" | "ListPinValue" | "BundlePinValue" | "NodeReferenceInConfig" | "PinType";
 
 /** An annotation a pin may state: a key of `PinAnnotations`. */
 export type PinAnnotationName = keyof PinAnnotations;
@@ -471,12 +476,15 @@ export interface PinTypeDescription {
   /** How a TypeScript declaration writes it. */
   readonly typescript_form: string;
   /** The contract component that states its stored value; absent, it stores none. */
-  readonly value_component?: string;
+  readonly value_component?: PinValueComponentName;
   /** The contract version it was added in. */
   readonly since: number;
   /** Whether it may still change before it turns stable. */
-  readonly stability: "stable" | "experimental";
+  readonly stability: PinTypeStability;
 }
 
 /** Every built-in pin type, in the contract's order. */
 export declare const BUILT_IN_PIN_TYPES: readonly PinTypeDescription[];
+
+/** Whether a built-in pin type may still change before it turns stable. */
+export type PinTypeStability = "stable" | "experimental";

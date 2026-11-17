@@ -37,6 +37,51 @@ fn the_module_names_every_built_in_type_and_the_wire_form_of_a_declaration() {
     assert!(module.contains("    media: NotRequired[list[ProjectAssetMedia]]\n"));
     assert!(module.contains("        python_forms=(\"Vector2\", \"Vector3\", \"Vector4\"),\n"));
     assert!(!module.contains("class PinDeclaration(TypedDict)"));
+    assert_eq!(module.matches("type BuiltInPinTypeName = ").count(), 1);
+    assert!(module.contains("type PinTypeStability = Literal[\"stable\", \"experimental\"]"));
+    assert!(module.contains("    value_component: PinValueComponentName | None\n"));
+    assert!(
+        module.contains("__all__ = [\n    \"BUILT_IN_PIN_TYPES\",\n    \"AnyDeclaredPinType\",\n")
+    );
+}
+
+#[test]
+fn an_object_nested_under_the_same_key_in_two_places_is_one_class() {
+    let module = render_python_pin_types_module(&committed_contract()).unwrap();
+    assert_eq!(module.matches("class FromConfig(TypedDict):").count(), 1);
+    assert!(module.contains("    from_config: FromConfig\n"));
+}
+
+#[test]
+fn every_line_but_a_type_or_a_docstring_fits_the_width() {
+    let module = render_python_pin_types_module(&committed_contract()).unwrap();
+    for line in module.lines() {
+        assert!(line.len() <= PYTHON_LINE_WIDTH, "{line}");
+    }
+}
+
+#[test]
+fn an_alias_one_column_past_the_width_wraps_and_one_at_it_does_not() {
+    let fits = format!(
+        "{}a",
+        "x".repeat(PYTHON_LINE_WIDTH - "type N = Literal[\"\"]".len() - 1)
+    );
+    let mut module = PythonPinTypesModule {
+        component_schemas: &Map::new(),
+        exported_names: BTreeSet::new(),
+        nested_classes: BTreeMap::new(),
+        definitions: String::new(),
+    };
+    module.write_literal_alias("N", &[&fits], "").unwrap();
+    module
+        .write_literal_alias("M", &[&format!("{fits}b")], "")
+        .unwrap();
+    assert!(
+        module
+            .definitions
+            .contains(&format!("type N = Literal[\"{fits}\"]\n"))
+    );
+    assert!(module.definitions.contains("type M = Literal[\n"));
 }
 
 #[test]

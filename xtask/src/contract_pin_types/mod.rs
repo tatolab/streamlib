@@ -4,18 +4,25 @@
 //! The built-in pin types as the committed control contract file lists them in `x-pin-types`,
 //! read once for every generator that writes them into another language.
 
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result, bail, ensure};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::generate_runtime_client::COMPONENT_SCHEMA_REFERENCE_PREFIX;
+use crate::contract_component_references::{
+    component_name_of_a_reference, component_schemas_of, property_names_of,
+    string_values_of_a_closed_set, tags_of_a_tagged_union,
+};
 
 /// The component every built-in pin type is an alternative of, tagged on `type`.
 pub(crate) const PIN_TYPE_COMPONENT_NAME: &str = "PinType";
 
 /// The component whose keys are the annotations a pin type row names.
 pub(crate) const PIN_ANNOTATIONS_COMPONENT_NAME: &str = "PinAnnotations";
+
+/// The component whose values are the built-in pin type names.
+pub(crate) const BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME: &str = "BuiltInPinTypeName";
+
+/// What a row's `x-stability` may say.
+pub(crate) const PIN_TYPE_STABILITIES: &[&str] = &["stable", "experimental"];
 
 /// The key a `PinType` alternative is tagged on.
 const PIN_TYPE_TAG_KEY: &str = "type";
@@ -36,7 +43,9 @@ pub(crate) struct BuiltInPinTypeRow<'contract> {
 }
 
 /// Every row of `contract`'s `x-pin-types`, in its order. Refused when the rows name other
-/// types than `PinType`'s alternatives, in another order, or an annotation `PinAnnotations` lacks.
+/// types than `PinType`'s alternatives or `BuiltInPinTypeName`'s values, or in another order;
+/// or when a row names an annotation `PinAnnotations` lacks, a value schema that is not a
+/// component, or a stability other than `stable` and `experimental`.
 pub(crate) fn built_in_pin_type_rows(contract: &Value) -> Result<Vec<BuiltInPinTypeRow<'_>>> {
     let component_schemas = component_schemas_of(contract)?;
     let rows: Vec<BuiltInPinTypeRow<'_>> = contract["x-pin-types"]
@@ -45,18 +54,25 @@ pub(crate) fn built_in_pin_type_rows(contract: &Value) -> Result<Vec<BuiltInPinT
         .iter()
         .map(BuiltInPinTypeRow::of)
         .collect::<Result<_>>()?;
-    let pin_type_schema = component_schemas
-        .get(PIN_TYPE_COMPONENT_NAME)
-        .with_context(|| {
-            format!("the contract file has no `{PIN_TYPE_COMPONENT_NAME}` component")
-        })?;
-    let tags = tags_of_a_tagged_union(pin_type_schema, PIN_TYPE_TAG_KEY)
-        .with_context(|| format!("`{PIN_TYPE_COMPONENT_NAME}`"))?;
+    let component = |name: &str| {
+        component_schemas
+            .get(name)
+            .with_context(|| format!("the contract file has no `{name}` component"))
+    };
     let row_names: Vec<&str> = rows.iter().map(|row| row.name).collect();
+    let tags = tags_of_a_tagged_union(component(PIN_TYPE_COMPONENT_NAME)?, PIN_TYPE_TAG_KEY)
+        .with_context(|| format!("`{PIN_TYPE_COMPONENT_NAME}`"))?;
     ensure!(
         row_names == tags,
         "`x-pin-types` names {row_names:?}, but `{PIN_TYPE_COMPONENT_NAME}`'s alternatives are \
          {tags:?}; the two must name the same types in the same order"
+    );
+    let names = string_values_of_a_closed_set(component(BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME)?)
+        .with_context(|| format!("`{BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME}`"))?;
+    ensure!(
+        row_names == names,
+        "`x-pin-types` names {row_names:?}, but `{BUILT_IN_PIN_TYPE_NAME_COMPONENT_NAME}` holds \
+         {names:?}; the two must name the same types in the same order"
     );
     let annotation_names = property_names_of(component_schemas, PIN_ANNOTATIONS_COMPONENT_NAME)?;
     for row in &rows {
@@ -71,6 +87,12 @@ pub(crate) fn built_in_pin_type_rows(contract: &Value) -> Result<Vec<BuiltInPinT
                 row.name
             );
         }
+        ensure!(
+            PIN_TYPE_STABILITIES.contains(&row.stability),
+            "the `{}` row's stability is `{}`, neither of {PIN_TYPE_STABILITIES:?}",
+            row.name,
+            row.stability
+        );
         if let Some(value_component) = row.value_component {
             ensure!(
                 component_schemas.contains_key(value_component),
@@ -123,93 +145,6 @@ impl<'contract> BuiltInPinTypeRow<'contract> {
                 .with_context(|| format!("the `{name}` row has no `x-since`"))?,
             stability: text("x-stability")?,
         })
-    }
-}
-
-pub(crate) fn component_schemas_of(contract: &Value) -> Result<&Map<String, Value>> {
-    contract["components"]["schemas"]
-        .as_object()
-        .context("the contract file has no `components.schemas`")
-}
-
-/// The component a `{ "$ref": "#/components/schemas/<name>" }` schema names.
-pub(crate) fn component_name_of_a_reference(schema: &Value) -> Option<&str> {
-    schema["$ref"]
-        .as_str()?
-        .strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
-}
-
-/// The property names of the object component `name`.
-pub(crate) fn property_names_of<'contract>(
-    component_schemas: &'contract Map<String, Value>,
-    name: &str,
-) -> Result<Vec<&'contract str>> {
-    Ok(component_schemas
-        .get(name)
-        .and_then(|schema| schema["properties"].as_object())
-        .with_context(|| format!("the contract file has no object component `{name}`"))?
-        .keys()
-        .map(String::as_str)
-        .collect())
-}
-
-/// The tag values of a `oneOf` of objects each tagged by a `const` under `tag_key`, in order.
-pub(crate) fn tags_of_a_tagged_union<'schema>(
-    schema: &'schema Value,
-    tag_key: &str,
-) -> Result<Vec<&'schema str>> {
-    schema["oneOf"]
-        .as_array()
-        .context("is not a `oneOf`")?
-        .iter()
-        .map(|alternative| {
-            alternative["properties"][tag_key]["const"]
-                .as_str()
-                .with_context(|| format!("has an alternative with no `{tag_key}` tag"))
-        })
-        .collect()
-}
-
-/// `roots` and every component they reach through `$ref`, in the order `component_schemas`
-/// holds them.
-pub(crate) fn components_reached_from<'contract>(
-    component_schemas: &'contract Map<String, Value>,
-    roots: &[&str],
-) -> Result<Vec<&'contract str>> {
-    let mut reached = BTreeSet::new();
-    let mut unvisited: Vec<String> = roots.iter().map(|root| (*root).to_owned()).collect();
-    while let Some(name) = unvisited.pop() {
-        if !reached.insert(name.clone()) {
-            continue;
-        }
-        let schema = component_schemas
-            .get(&name)
-            .with_context(|| format!("`{name}` is referred to but is not a component"))?;
-        collect_referenced_components(schema, &mut unvisited);
-    }
-    Ok(component_schemas
-        .keys()
-        .map(String::as_str)
-        .filter(|name| reached.contains(*name))
-        .collect())
-}
-
-fn collect_referenced_components(schema: &Value, referenced: &mut Vec<String>) {
-    match schema {
-        Value::Object(members) => {
-            if let Some(name) = component_name_of_a_reference(schema) {
-                referenced.push(name.to_owned());
-            }
-            for member in members.values() {
-                collect_referenced_components(member, referenced);
-            }
-        }
-        Value::Array(items) => {
-            for item in items {
-                collect_referenced_components(item, referenced);
-            }
-        }
-        _ => {}
     }
 }
 

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
-use crate::contract_pin_types::component_schemas_of;
+use crate::contract_component_references::component_schemas_of;
 
 fn committed_contract() -> Value {
     serde_json::from_str(include_str!(
@@ -18,6 +18,19 @@ fn the_declarations_name_every_built_in_type_and_the_value_of_each_that_stores_o
         RuntimeClientPinTypes::of(&contract, component_schemas_of(&contract).unwrap()).unwrap();
     let declarations = pin_types.typescript_declarations();
     assert!(declarations.contains("export type BuiltInPinTypeName = \"boolean\" | \"integer\""));
+    assert_eq!(
+        declarations
+            .matches("export type BuiltInPinTypeName = ")
+            .count(),
+        1
+    );
+    assert!(
+        declarations.contains(
+            "export type PinValueComponentName = \"BooleanPinValue\" | \"IntegerPinValue\""
+        )
+    );
+    assert!(declarations.contains("  readonly value_component?: PinValueComponentName;\n"));
+    assert!(declarations.contains("export type PinTypeStability = \"stable\" | \"experimental\";"));
     assert!(declarations.contains("  readonly color: ColorPinValue;\n"));
     assert!(declarations.contains("  readonly pin_type_choice: PinType;\n"));
     assert!(!declarations.contains("  readonly texture:"));
