@@ -1,0 +1,126 @@
+{
+  "asset": "f0b00b1e-b952-44c8-81e5-6d44602e7fb4",
+  "links": [
+    {
+      "source": {
+        "node": "b4718d71-0ebb-419d-af06-d7347d65ede1",
+        "port": "video"
+      },
+      "target": {
+        "node": "070e58f6-394d-4c38-8872-d4be5dcec5dd",
+        "port": "image"
+      }
+    },
+    {
+      "source": {
+        "node": "9019522b-3430-40db-9a66-4f763eb3feb7",
+        "port": "value"
+      },
+      "target": {
+        "node": "2f44fe9c-94cb-4bf0-af2c-b91345adc7c9",
+        "port": "level"
+      }
+    },
+    {
+      "source": {
+        "node": "2f44fe9c-94cb-4bf0-af2c-b91345adc7c9",
+        "port": "glow"
+      },
+      "target": {
+        "node": "070e58f6-394d-4c38-8872-d4be5dcec5dd",
+        "port": "glow"
+      }
+    },
+    {
+      "source": {
+        "node": "2f44fe9c-94cb-4bf0-af2c-b91345adc7c9",
+        "port": "count"
+      },
+      "target": {
+        "node": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
+        "port": "count"
+      }
+    },
+    {
+      "source": {
+        "node": "2f44fe9c-94cb-4bf0-af2c-b91345adc7c9",
+        "port": "accented"
+      },
+      "target": {
+        "node": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
+        "port": "accented"
+      }
+    },
+    {
+      "source": {
+        "node": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
+        "port": "result"
+      },
+      "target": {
+        "node": "070e58f6-394d-4c38-8872-d4be5dcec5dd",
+        "port": "warmth"
+      }
+    },
+    {
+      "source": {
+        "node": "070e58f6-394d-4c38-8872-d4be5dcec5dd",
+        "port": "result"
+      },
+      "target": {
+        "node": "f511b25f-7028-4320-b538-a152f38695f8",
+        "port": "picture"
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "b4718d71-0ebb-419d-af06-d7347d65ede1",
+      "input_values": {
+        "height": 180,
+        "width": 320
+      },
+      "name": "testpattern",
+      "type": "tatolab.testpattern:TestPatternSource"
+    },
+    {
+      "id": "9019522b-3430-40db-9a66-4f763eb3feb7",
+      "input_values": {
+        "default": 0.5,
+        "family": "channels",
+        "port": "brightness",
+        "range": [
+          0.0,
+          1.0
+        ]
+      },
+      "name": "brightness",
+      "type": "tatolab.stream:GraphInput"
+    },
+    {
+      "id": "2f44fe9c-94cb-4bf0-af2c-b91345adc7c9",
+      "input_values": {
+        "beats_per_minute": 120.0
+      },
+      "name": "beat",
+      "type": "nodes.beat:Beat"
+    },
+    {
+      "id": "01ccd74d-f7e1-4fa5-a400-5c42ad278f19",
+      "name": "warmth",
+      "type": "nodes.beat:Warmth"
+    },
+    {
+      "id": "070e58f6-394d-4c38-8872-d4be5dcec5dd",
+      "name": "glow",
+      "type": "nodes.glow:Glow"
+    },
+    {
+      "id": "f511b25f-7028-4320-b538-a152f38695f8",
+      "input_values": {
+        "report_every_frames": 30
+      },
+      "name": "tally",
+      "type": "nodes.frame_tally:FrameTally"
+    }
+  ]
+}

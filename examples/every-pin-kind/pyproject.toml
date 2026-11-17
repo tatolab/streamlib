@@ -1,0 +1,8 @@
+[project]
+name = "every-pin-kind"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["tatolab-stream>=0.68.82", "tatolab-testpattern"]
+
+[tool.uv.sources]
+tatolab-testpattern = { path = "../../packages/tatolab-testpattern", editable = true }
