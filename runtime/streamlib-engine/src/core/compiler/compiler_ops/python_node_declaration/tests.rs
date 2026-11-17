@@ -784,3 +784,29 @@ fn a_channel_count_refusal_says_whether_the_value_was_the_wrong_kind_or_unusable
         Err(AudioWindowFieldRefusal::UnusableValue(_))
     ));
 }
+
+#[test]
+fn a_described_picture_input_stating_no_delivery_reads_by_its_pin_and_an_untyped_one_is_refused() {
+    let described = described_node_type_with_input_ports(serde_json::json!([
+        {"name": "frames", "family": {"family": "image"}, "description": ""},
+    ]));
+    let declaration = read(&described).expect("a picture input may state no delivery");
+    assert_eq!(declaration.descriptor.inputs[0].delivery_profile, None);
+    let registered = declaration
+        .descriptor
+        .with_input_deliveries_defaulted_by_pin()
+        .expect("a Texture input takes its default");
+    assert_eq!(
+        registered.inputs[0].delivery_profile.as_deref(),
+        Some("newest")
+    );
+
+    let untyped = described_node_type_with_input_ports(serde_json::json!([
+        {"name": "levels", "family": {"family": "channels"}, "description": ""},
+    ]));
+    assert_eq!(
+        refusal_of(&untyped),
+        "input port \"levels\" of family Channels states no delivery — a port with no pin type \
+         states `delivery=`, one of \"newest\", \"ordered\""
+    );
+}

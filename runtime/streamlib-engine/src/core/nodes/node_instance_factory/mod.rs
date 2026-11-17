@@ -290,7 +290,7 @@ impl NodeInstanceFactory {
         descriptor: NodeDescriptor,
         registration: HostCompiledRustTypeRegistration,
     ) -> Result<()> {
-        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        let descriptor = the_node_type_as_registered(descriptor)?;
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -326,7 +326,7 @@ impl NodeInstanceFactory {
     }
 
     pub fn register_descriptor_only(&self, descriptor: NodeDescriptor) -> Result<()> {
-        refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+        let descriptor = the_node_type_as_registered(descriptor)?;
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -511,12 +511,19 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
     ))
 }
 
-/// Refuse a descriptor whose ports are not each in cast form under a name of
-/// their own — every lookup casts its argument, so a port registered under an
-/// uncast name could never be reached.
-pub(crate) fn refuse_port_names_not_cast_or_declared_twice(
-    descriptor: &NodeDescriptor,
-) -> Result<()> {
+/// `descriptor` as its node type is registered: each input with a pin that
+/// states no delivery profile reads by its pin's default. Refuses a port not in
+/// cast form under a name of its own — every lookup casts its argument, so a
+/// port registered under an uncast name could never be reached — and a flow a
+/// port's pin type does not take.
+pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
+    refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+    descriptor
+        .with_input_deliveries_defaulted_by_pin()
+        .map_err(Error::Configuration)
+}
+
+fn refuse_port_names_not_cast_or_declared_twice(descriptor: &NodeDescriptor) -> Result<()> {
     let mut port_names_seen = HashSet::new();
     for port in descriptor.inputs.iter().chain(&descriptor.outputs) {
         if !is_in_exposed_name_cast_form(&port.name) {

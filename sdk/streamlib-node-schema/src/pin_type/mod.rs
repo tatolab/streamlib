@@ -7,6 +7,7 @@
 
 mod built_in_pin_types;
 mod pin_declaration;
+mod pin_flows;
 mod pin_type_variants;
 mod stored_pin_values;
 mod stored_value_check;
@@ -30,5 +31,7 @@ pub use stored_pin_values::{
 };
 pub use stored_value_check::PinValueNotTaken;
 
+#[cfg(test)]
+mod pin_flows_tests;
 #[cfg(test)]
 mod tests;

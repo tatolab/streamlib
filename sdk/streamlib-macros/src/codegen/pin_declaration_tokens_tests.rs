@@ -1,12 +1,16 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use streamlib_node_schema::pin_type::{FloatSize, PinType, TexturePixelFormat};
+use streamlib_node_schema::pin_type::{FloatSize, PinFlow, PinType, TexturePixelFormat};
 
 use super::pin_declaration_tokens::pin_declaration_tokens;
 
 fn emitted(pin_type: Option<&PinType>) -> String {
-    pin_declaration_tokens(pin_type)
+    emitted_in(pin_type, None)
+}
+
+fn emitted_in(pin_type: Option<&PinType>, flow: Option<PinFlow>) -> String {
+    pin_declaration_tokens(pin_type, flow)
         .to_string()
         .split_whitespace()
         .collect()
@@ -52,4 +56,18 @@ fn a_pin_type_the_grammar_never_declares_emits_a_compile_error_naming_it() {
     }));
     assert!(menu.contains("compile_error!"), "{menu}");
     assert!(menu.contains("Menu"), "{menu}");
+}
+
+#[test]
+fn a_stated_flow_is_emitted_over_the_types_default() {
+    assert_eq!(
+        emitted_in(
+            Some(&PinType::Float { exact_size: None }),
+            Some(PinFlow::Stream)
+        ),
+        "::std::option::Option::Some(__streamlib_sdk::descriptors::PinDeclaration{\
+         flow:__streamlib_sdk::descriptors::PinFlow::Stream,\
+         ..__streamlib_sdk::descriptors::PinDeclaration::exactly(\
+         __streamlib_sdk::descriptors::PinType::Float{exact_size:::std::option::Option::None})})"
+    );
 }
