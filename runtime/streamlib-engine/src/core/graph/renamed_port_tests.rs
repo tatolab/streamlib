@@ -391,5 +391,6 @@ fn an_input_holding_values_under_several_names_reads_the_current_then_the_first_
     assert_eq!(read(json!({ "volume": 1.0 })), json!({ "gain": 1.0 }));
     let moved = ports.inputs_holding_a_value_under_a_name_they_had(|name| name != "level");
     assert_eq!(moved.len(), 1);
-    assert_eq!(moved[0].names_in_the_order_read, ["gain", "volume"]);
+    assert_eq!(moved[0].name_read, "gain");
+    assert_eq!(moved[0].other_names_held, ["volume"]);
 }

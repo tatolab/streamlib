@@ -49,6 +49,16 @@ pub fn stream_assets_another_stream_of_the_project_places(
     placed_stream_assets
 }
 
+/// The stream asset of each stream of the same project `graph_document` places, at any level,
+/// by a stream fragment naming no `from`.
+pub fn stream_assets_of_the_project_a_graph_document_places(
+    graph_document: &Value,
+) -> BTreeSet<Uuid> {
+    let mut placed = BTreeSet::new();
+    each_stream_of_the_project_the_level_places(graph_document, &mut placed);
+    placed
+}
+
 fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTreeSet<Uuid>) {
     for node in level
         .get("nodes")

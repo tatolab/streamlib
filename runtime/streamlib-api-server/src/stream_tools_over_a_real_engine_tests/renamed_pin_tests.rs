@@ -554,3 +554,38 @@ async fn a_wiring_prompt_naming_an_output_by_its_old_name_renders_its_current_na
     );
     assert!(text.contains("`dimmer` port `signal`"), "{text}");
 }
+
+/// A request to connect a link the stream already holds is refused, whether it names the ports
+/// by their current names or by names they had, and the running stream keeps its one link.
+///
+/// Mental-revert: letting the connect reach the running stream, which connects nothing for a
+/// link it holds, has the document refuse it after, and putting the edit back then disconnects
+/// the one live link.
+#[tokio::test(flavor = "multi_thread")]
+async fn connecting_a_link_the_stream_holds_is_refused_and_keeps_its_one_link() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_saved_under_the_names_the_pins_had();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    for (source_port, target_port) in [("signal", "gain"), ("out", "level")] {
+        let refusal = engine
+            .the_answer_or_the_refusal_of(
+                "connect",
+                json!({ "stream": project.stream_asset_of("main"),
+                        "source": { "node": DIMMER_NODE_UUID, "port": source_port },
+                        "target": { "node": FADER_NODE_UUID, "port": target_port },
+                        "author": an_agent_named("alice") }),
+            )
+            .await
+            .expect_err("a link the stream holds is not connected again");
+        assert!(
+            format!("{refusal:?}").contains("already links"),
+            "{refusal:?}"
+        );
+        assert_eq!(
+            links_by_node_name_in(&engine.the_live_graph_of(&stream_id)),
+            ["dimmer/signal -> fader/gain"],
+            "after connecting {source_port} -> {target_port}"
+        );
+    }
+}

@@ -103,7 +103,7 @@ pub(super) fn the_request_under_the_current_port_names(
 /// what it read before, and the ports end joined by one link, as a link the running stream
 /// already holds is not connected again and a disconnect under a name a port had of a link it
 /// does not hold leaves it as it is.
-pub(super) fn the_operations_moving_each_former_port_name(
+fn the_operations_moving_each_former_port_name(
     document: &StreamGraphDocument,
     stream_operations: &dyn RuntimeOperations,
 ) -> Vec<StreamGraphOperation> {
@@ -124,7 +124,7 @@ pub(super) fn the_operations_moving_each_former_port_name(
         for moved in ports.inputs_holding_a_value_under_a_name_they_had(|name| {
             node.input_values.contains_key(name)
         }) {
-            for name in &moved.names_in_the_order_read {
+            for name in moved.names_held() {
                 moves.push(StreamGraphOperation::SetNodeInputValue {
                     node: node.id,
                     input: name.clone(),
@@ -136,10 +136,7 @@ pub(super) fn the_operations_moving_each_former_port_name(
                 node: node.id,
                 input: moved.current_name,
                 from: None,
-                to: node
-                    .input_values
-                    .get(&moved.names_in_the_order_read[0])
-                    .cloned(),
+                to: node.input_values.get(&moved.name_read).cloned(),
             });
         }
     }
@@ -185,4 +182,71 @@ pub(super) fn the_operations_moving_each_former_port_name(
         moves.push(StreamGraphOperation::Connect { link: moved });
     }
     moves
+}
+
+/// Move each value and link end `document`, the graph document of the stream `stream_asset`,
+/// holds under a name a port had to the port's current name, as `stream_operations` resolves
+/// each node's type, recording each move in `moved`; answers whether anything moved.
+pub(super) fn move_each_former_port_name(
+    stream_asset: Uuid,
+    document: &mut StreamGraphDocument,
+    stream_operations: &dyn RuntimeOperations,
+    moved: &mut Vec<ProjectOperation>,
+) -> Result<bool, GraphTransactionRefusal> {
+    let moves = the_operations_moving_each_former_port_name(document, stream_operations);
+    let anything_moved = !moves.is_empty();
+    for graph_operation in moves {
+        document
+            .apply(&graph_operation)
+            .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
+        moved.push(ProjectOperation::StreamGraph(
+            StreamGraphOperationOnAStream {
+                stream: stream_asset,
+                graph_operation,
+            },
+        ));
+    }
+    Ok(anything_moved)
+}
+
+/// The graph document of each stream of the project that a stream of `streams` places, at any
+/// depth, and that `streams` does not hold itself, with each former port name moved, by stream
+/// asset: those a request can reach at a placed stream's level. Each is resolved by the loaded
+/// stream that places it, the one whose node types its nodes run as, and only a document
+/// something moved in is staged; each move is recorded in `moved`.
+pub(super) fn the_placed_streams_with_each_former_port_name_moved(
+    streams: &BTreeMap<String, StreamATransactionEdits>,
+    project_repository: &ProjectRepository,
+    moved: &mut Vec<ProjectOperation>,
+) -> Result<BTreeMap<Uuid, StreamGraphDocument>, GraphTransactionRefusal> {
+    let held_by_the_transaction: BTreeSet<Uuid> = streams
+        .values()
+        .map(|held| held.stream_location.stream_asset)
+        .collect();
+    let mut reached: BTreeSet<Uuid> = held_by_the_transaction.clone();
+    let mut staged = BTreeMap::new();
+    for held in streams.values() {
+        let mut placed_to_visit: Vec<Uuid> =
+            stream_assets_of_the_project_a_graph_document_places(&held.staged_graph.to_value())
+                .into_iter()
+                .collect();
+        while let Some(placed_stream) = placed_to_visit.pop() {
+            if !reached.insert(placed_stream) {
+                continue;
+            }
+            let mut placed_graph = project_repository.stream_graph_document(placed_stream)?;
+            placed_to_visit.extend(stream_assets_of_the_project_a_graph_document_places(
+                &placed_graph.to_value(),
+            ));
+            if move_each_former_port_name(
+                placed_stream,
+                &mut placed_graph,
+                held.stream_operations.as_ref(),
+                moved,
+            )? {
+                staged.insert(placed_stream, placed_graph);
+            }
+        }
+    }
+    Ok(staged)
 }

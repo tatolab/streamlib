@@ -23,10 +23,11 @@ impl LoadedStreamInThisRuntime {
     /// graph holds, as the stream loads; a value its input no longer keeps live or takes is
     /// forgotten there, and the input reads its saved value.
     ///
-    /// An input holding values under names it had keeps the one it reads, by the one order
+    /// An input holding values under names it had holds the one it reads, by the one order
     /// [`crate::core::graph::GraphNodePorts::inputs_holding_a_value_under_a_name_they_had`]
-    /// reads them in, under its current name; each name it had is forgotten once that value is
-    /// written, and kept when the write fails, so a later load moves it again.
+    /// reads them in, live under its current name; the store keeps it under that name from then
+    /// on, each name it had forgotten once the value is written there, and kept when the write
+    /// fails, so a later load moves it again.
     pub(super) fn hold_the_live_values_the_project_store_keeps(&self) {
         self.compiler.scope_reading(|graph| {
             let live_values = graph.live_input_values();
@@ -51,28 +52,22 @@ impl LoadedStreamInThisRuntime {
                     .ports
                     .inputs_holding_a_value_under_a_name_they_had(|name| kept.contains_key(name))
                 {
-                    let current = &moved.current_name;
-                    let read = moved.names_in_the_order_read[0].clone();
-                    let names_it_had = moved
-                        .names_in_the_order_read
-                        .iter()
-                        .filter(|name| *name != current);
-                    let held_under_the_current_name = read == *current
-                        || kept
-                            .get(&read)
-                            .is_some_and(|value| project_store.keep(node, current, value));
-                    for name_it_had in names_it_had {
-                        if held_under_the_current_name {
+                    let current = moved.current_name.clone();
+                    let Some(value) = kept.get(&moved.name_read).cloned() else {
+                        continue;
+                    };
+                    let the_store_holds_it_under_the_current_name = if moved.name_read == current {
+                        true
+                    } else {
+                        project_store.keep(node, &current, &value)
+                    };
+                    for name_it_had in moved.names_held().filter(|name| **name != current) {
+                        kept.remove(name_it_had);
+                        if the_store_holds_it_under_the_current_name {
                             project_store.forget(node, name_it_had);
                         }
-                        let value = kept.remove(name_it_had);
-                        if *name_it_had == read
-                            && held_under_the_current_name
-                            && let Some(value) = value
-                        {
-                            kept.insert(current.clone(), value);
-                        }
                     }
+                    kept.insert(current, value);
                 }
                 for (input, value) in kept {
                     if its_input_keeps_and_takes_the_live_value(graph, kept_for, &input, &value) {

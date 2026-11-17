@@ -13,12 +13,20 @@ pub struct GraphNodePorts {
     pub outputs: Vec<PortInfo>,
 }
 
-/// An input holding a value under a name it had: its current name and each name it holds a
-/// value under, in the order they are read, the first being the one whose value it reads.
+/// An input holding a value under a name it had: its current name, the name whose value it
+/// reads, and each other name it holds a value under, in the order they are read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputHoldingAValueUnderANameItHad {
     pub current_name: String,
-    pub names_in_the_order_read: Vec<String>,
+    pub name_read: String,
+    pub other_names_held: Vec<String>,
+}
+
+impl InputHoldingAValueUnderANameItHad {
+    /// Each name the input holds a value under, in the order they are read: the one read first.
+    pub fn names_held(&self) -> impl Iterator<Item = &String> {
+        std::iter::once(&self.name_read).chain(&self.other_names_held)
+    }
 }
 
 impl GraphNodePorts {
@@ -27,6 +35,14 @@ impl GraphNodePorts {
         match direction {
             PortDirection::Input => &self.inputs,
             PortDirection::Output => &self.outputs,
+        }
+    }
+
+    /// The ports of `direction`, to change.
+    pub fn on_mut(&mut self, direction: PortDirection) -> &mut Vec<PortInfo> {
+        match direction {
+            PortDirection::Input => &mut self.inputs,
+            PortDirection::Output => &mut self.outputs,
         }
     }
 
@@ -69,13 +85,16 @@ impl GraphNodePorts {
         self.inputs
             .iter()
             .filter(|input| input.former_names.iter().any(|former| holds(former)))
-            .map(|input| InputHoldingAValueUnderANameItHad {
-                current_name: input.name.clone(),
-                names_in_the_order_read: std::iter::once(&input.name)
+            .filter_map(|input| {
+                let mut names_held = std::iter::once(&input.name)
                     .chain(&input.former_names)
                     .filter(|name| holds(name))
-                    .cloned()
-                    .collect(),
+                    .cloned();
+                Some(InputHoldingAValueUnderANameItHad {
+                    current_name: input.name.clone(),
+                    name_read: names_held.next()?,
+                    other_names_held: names_held.collect(),
+                })
             })
             .collect()
     }
@@ -91,12 +110,11 @@ impl GraphNodePorts {
         for moved in
             self.inputs_holding_a_value_under_a_name_they_had(|name| values.contains_key(name))
         {
-            let held: Vec<serde_json::Value> = moved
-                .names_in_the_order_read
-                .iter()
-                .filter_map(|name| values.remove(name))
-                .collect();
-            if let Some(read) = held.into_iter().next() {
+            let read = values.remove(&moved.name_read);
+            for other in &moved.other_names_held {
+                values.remove(other);
+            }
+            if let Some(read) = read {
                 values.insert(moved.current_name, read);
             }
         }

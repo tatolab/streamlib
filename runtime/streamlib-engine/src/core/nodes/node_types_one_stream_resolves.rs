@@ -400,22 +400,18 @@ impl NodeTypesOneStreamResolves {
         if not_described.is_empty() {
             return;
         }
-        let family_of_a_described_port = |node_name: &str, port_name: &str, is_input: bool| {
-            node_type_of_each_node
-                .get(node_name)
-                .and_then(|node_type| self.port_info(node_type))
-                .and_then(|ports| {
-                    let direction = if is_input {
-                        PortDirection::Input
-                    } else {
-                        PortDirection::Output
-                    };
-                    ports
-                        .the_one_a_name_finds(direction, port_name)
-                        .map(|port| port.family.clone())
-                })
-                .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
-        };
+        let family_of_a_described_port =
+            |node_name: &str, port_name: &str, direction: PortDirection| {
+                node_type_of_each_node
+                    .get(node_name)
+                    .and_then(|node_type| self.port_info(node_type))
+                    .and_then(|ports| {
+                        ports
+                            .the_one_a_name_finds(direction, port_name)
+                            .map(|port| port.family.clone())
+                    })
+                    .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
+            };
         let a_port = |name: &str, family: PortFamilyDeclaration, is_input: bool| PortInfo {
             delivery_profile: is_input.then(|| "newest".to_string()),
             ..PortInfo::declaring_only_a_family(name, String::new(), family)
@@ -443,16 +439,16 @@ impl NodeTypesOneStreamResolves {
             let add_once =
                 |ports: &mut GraphNodePorts, direction: PortDirection, port: PortInfo| {
                     if ports.the_one_a_name_finds(direction, &port.name).is_none() {
-                        match direction {
-                            PortDirection::Input => ports.inputs.push(port),
-                            PortDirection::Output => ports.outputs.push(port),
-                        }
+                        ports.on_mut(direction).push(port);
                     }
                 };
             for link in &graph.links {
                 if node_type_of_each_node.get(link.target.node.as_str()) == Some(&node_type) {
-                    let family =
-                        family_of_a_described_port(&link.source.node, &link.source.port, false);
+                    let family = family_of_a_described_port(
+                        &link.source.node,
+                        &link.source.port,
+                        PortDirection::Output,
+                    );
                     add_once(
                         ports,
                         PortDirection::Input,
@@ -460,8 +456,11 @@ impl NodeTypesOneStreamResolves {
                     );
                 }
                 if node_type_of_each_node.get(link.source.node.as_str()) == Some(&node_type) {
-                    let family =
-                        family_of_a_described_port(&link.target.node, &link.target.port, true);
+                    let family = family_of_a_described_port(
+                        &link.target.node,
+                        &link.target.port,
+                        PortDirection::Input,
+                    );
                     add_once(
                         ports,
                         PortDirection::Output,
