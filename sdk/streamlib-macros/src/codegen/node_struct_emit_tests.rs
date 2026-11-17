@@ -201,6 +201,7 @@ fn schema_declaring_iceoryx2_input_and_output_ports() -> NodeSchema {
         audio_window: None,
         family: PortFamilyDeclaration::of_family(PortFamily::Image),
         pin_type: None,
+        lifetime: streamlib_node_schema::NodeValueLifetime::Kept,
     };
     NodeSchema {
         inputs: vec![port("video_in")],
@@ -750,6 +751,7 @@ fn a_port_marker_is_named_by_its_spelling_and_carries_its_cast() {
         audio_window: None,
         family: PortFamilyDeclaration::of_family(PortFamily::Image),
         pin_type: None,
+        lifetime: streamlib_node_schema::NodeValueLifetime::Kept,
     };
     let rendered = generate_port_marker_module(
         PortDirection::Output,

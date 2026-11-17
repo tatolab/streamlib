@@ -16,11 +16,13 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 use crate::core::compiler::compiler_ops::input_port_pin_values::{
     hand_the_helper_of_the_node_the_pin_values_its_input_ports_read, the_control_value_of_a_pin,
 };
-use crate::core::descriptors::{NodeKind, PortFamily};
+use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
+use crate::core::error::{Error, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
     refuse_an_input_value_its_input_does_not_take, the_input_value_change,
+    the_lifetime_of_the_input,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,
@@ -38,8 +40,13 @@ impl LoadedStreamInThisRuntime {
         sets: &[InputValueToSetLive],
     ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
         self.with_no_other_input_value_change(|| {
+            let playback = if self.is_held_stopped() {
+                PlaybackOfTheStreamSetOn::Stopped
+            } else {
+                PlaybackOfTheStreamSetOn::NotStopped
+            };
             let held_live = self.compiler.scope_reading(|graph| {
-                set_the_input_values_live_and_hand_each_helper_its_own(graph, sets)
+                set_the_input_values_live_and_hand_each_helper_its_own(graph, sets, playback)
             })?;
             let Some(held_live) = held_live else {
                 return Ok(InputValuesSetLive::OnTheGraph);
@@ -63,6 +70,17 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// Whether the playback of the stream a live set is made on is stopped, so a `reset` input
+/// holds no live value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlaybackOfTheStreamSetOn {
+    /// Stopped, its graph held to read and edit: a live set on a `kept` input is held for the
+    /// next Play, and one on a `reset` input refused.
+    Stopped,
+    /// Playing, paused or starting.
+    NotStopped,
+}
+
 /// What a live set held apart from the graph made: each value set, the change of each input to
 /// announce, and the function nodes set on that run inside an island, whose islands are handed
 /// again under the graph's write lock.
@@ -74,11 +92,12 @@ pub(crate) struct InputValuesHeldLive {
 
 /// Set each of `sets` live in `graph`'s live values and hand the helper of each node set on its
 /// new pin values; `None`, with nothing set, when one is held on the graph. A value its input
-/// does not take is refused before any is set, and a helper not handed its values leaves every
-/// live value as it was.
+/// does not take, and a value on a `reset` input while `playback` is stopped, is refused before
+/// any is set, and a helper not handed its values leaves every live value as it was.
 pub(crate) fn set_the_input_values_live_and_hand_each_helper_its_own(
     graph: &Graph,
     sets: &[InputValueToSetLive],
+    playback: PlaybackOfTheStreamSetOn,
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
     let mut set_on_each: Vec<&GraphNode> = Vec::with_capacity(sets.len());
     for (set_index, set) in sets.iter().enumerate() {
@@ -115,6 +134,9 @@ pub(crate) fn set_the_input_values_live_and_hand_each_helper_its_own(
         })?;
         set_on_each.push(set_on);
     }
+    if playback == PlaybackOfTheStreamSetOn::Stopped {
+        refuse_a_value_on_a_reset_input_while_stopped(sets, &set_on_each)?;
+    }
 
     let made: Vec<InputValueSetLive> = sets
         .iter()
@@ -125,6 +147,7 @@ pub(crate) fn set_the_input_values_live_and_hand_each_helper_its_own(
                 set.node,
                 &set.input,
                 set.value.clone(),
+                the_lifetime_of_the_input(set_on, &set.input),
             ),
             saved_value: set_on.pins.get(&set.input).cloned(),
             linked_from: the_output_feeding_the_input(graph, set_on, &set.input),
@@ -232,6 +255,37 @@ fn refuse_a_value_its_own_helper_does_not_read(
     })
 }
 
+/// Refuse the first of `sets`, each set on the node `set_on_each` names at its index, that sets
+/// a value on a `reset` input: the stream's playback is stopped, and a `reset` input holds no
+/// live value until it plays. Taking a live value off is no refusal, there being none to take.
+fn refuse_a_value_on_a_reset_input_while_stopped(
+    sets: &[InputValueToSetLive],
+    set_on_each: &[&GraphNode],
+) -> std::result::Result<(), LiveInputValueSetRefusal> {
+    let refused = sets
+        .iter()
+        .zip(set_on_each)
+        .enumerate()
+        .find(|(_, (set, set_on))| {
+            set.value.is_some()
+                && the_lifetime_of_the_input(set_on, &set.input) == NodeValueLifetime::Reset
+        });
+    let Some((set_index, (set, set_on))) = refused else {
+        return Ok(());
+    };
+    Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
+        set_index,
+        refusal: Error::NodeOfAStreamIsNotRunning {
+            not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
+            runtime_words: format!(
+                "input `{}` of `{}` returns to its saved value at Stop, so it keeps no value set \
+                 live while the stream is stopped; `start_playback` plays it",
+                set.input, set_on.display_name
+            ),
+        },
+    })
+}
+
 /// Each of `nodes` once, in the order first named.
 fn each_once<'graph>(nodes: &[&'graph GraphNode]) -> Vec<&'graph GraphNode> {
     let mut each: Vec<&GraphNode> = Vec::with_capacity(nodes.len());
@@ -252,9 +306,12 @@ fn put_back_the_live_set(graph: &Graph, sets: &[InputValueToSetLive], made: &[In
         let Some(set_on) = graph.node_by_uuid(set.node) else {
             continue;
         };
-        graph
-            .live_input_values()
-            .set(set.node, &set.input, made.live_value_before.clone());
+        graph.live_input_values().set(
+            set.node,
+            &set.input,
+            made.live_value_before.clone(),
+            the_lifetime_of_the_input(set_on, &set.input),
+        );
         nodes_set_on.push(set_on);
     }
     for set_on in each_once(&nodes_set_on) {

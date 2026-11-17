@@ -363,8 +363,15 @@ pub(super) async fn remove_node_impl(
         live,
         stream,
     } = live_graph_change;
-    compiler.scope(|graph, tx| {
-        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
+    let node_uuid = compiler.scope(|graph, tx| {
+        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)?;
+        Ok::<_, Error>(
+            graph
+                .traversal()
+                .v(&node_run_id)
+                .first()
+                .map(|node| node.node_uuid),
+        )
     })?;
 
     let removal_outcome = commit_live_graph_change(&compiler, live).await;
@@ -372,6 +379,13 @@ pub(super) async fn remove_node_impl(
         && compiler.scope(|graph, _tx| graph.traversal().v(&node_run_id).exists())
     {
         return removal_outcome;
+    }
+    if let Some(node_uuid) = node_uuid {
+        compiler.scope_reading(|graph| {
+            if let Some(project_store) = graph.live_input_values().project_store_mirrored_into() {
+                project_store.forget_every_value_of_the_node(node_uuid);
+            }
+        });
     }
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveNode {

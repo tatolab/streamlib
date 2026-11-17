@@ -781,6 +781,7 @@ mod tests {
             ),
             pin_default: None,
             pin_declaration: None,
+            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         }
     }
 

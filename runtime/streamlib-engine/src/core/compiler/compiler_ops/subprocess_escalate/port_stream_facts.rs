@@ -111,6 +111,7 @@ mod tests {
             audio_window: None,
             pin_default: None,
             pin: None,
+            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
         }
     }

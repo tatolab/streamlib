@@ -74,6 +74,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         audio_window: None,
         pin_default: None,
         pin: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -108,6 +109,7 @@ fn a_node_whose_output_is(
             audio_window: None,
             pin_default: None,
             pin: None,
+            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             family: crate::core::descriptors::PortFamilyDeclaration {
                 frame_rate,
                 ..crate::core::descriptors::PortFamilyDeclaration::of_family(family)
@@ -284,6 +286,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         audio_window: None,
         pin_default: None,
         pin: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -335,6 +338,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         audio_window: Some(declared_window_contract()),
         pin_default: None,
         pin: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -378,6 +382,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
         )),
         pin_default: None,
         pin: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -409,6 +414,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
         pin_default: None,
         pin: None,
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(
             crate::core::descriptors::PortFamily::Image,
         ),
@@ -443,6 +449,7 @@ fn a_node_declaring_the_sentinel(
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
             pin_default: None,
             pin: None,
+            lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(
                 crate::core::descriptors::PortFamily::Image,
             ),

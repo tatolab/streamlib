@@ -116,6 +116,7 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
         family: PortFamilyDeclaration::of_family(port.family),
         pin_default: None,
         pin_declaration: None,
+        lifetime: NodeValueLifetime::Kept,
     }
 }
 
@@ -148,6 +149,7 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescripto
         family: value_family,
         pin_default: None,
         pin_declaration: None,
+        lifetime: NodeValueLifetime::Kept,
     }];
     Ok(descriptor)
 }

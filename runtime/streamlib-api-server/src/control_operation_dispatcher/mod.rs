@@ -870,20 +870,7 @@ pub(crate) fn the_refusal_of_a_reach_for_a_node(
             not_running_because,
             runtime_words,
         } => ControlOperationRefusal::RefusedAction(Box::new(ProjectActionRefusalOnTheWire {
-            not_running_because: Some(match not_running_because {
-                WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
-                    NodeNotRunningBecauseOnTheWire::PlaybackStopped
-                }
-                WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
-                    NodeNotRunningBecauseOnTheWire::PlaybackPaused
-                }
-                WhyANodeOfAStreamIsNotRunning::Preparing => {
-                    NodeNotRunningBecauseOnTheWire::Preparing
-                }
-                WhyANodeOfAStreamIsNotRunning::NodeFailed => {
-                    NodeNotRunningBecauseOnTheWire::NodeFailed
-                }
-            }),
+            not_running_because: Some(why_a_node_is_not_running_on_the_wire(not_running_because)),
             ..ProjectActionRefusalOnTheWire::of_the_action(
                 method_name,
                 ControlOperationRefusalCode::NodeNotRunning,
@@ -891,6 +878,22 @@ pub(crate) fn the_refusal_of_a_reach_for_a_node(
             )
         })),
         refusal => ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}")),
+    }
+}
+
+/// Why a node of a stream does not run, as the wire names it.
+pub(crate) fn why_a_node_is_not_running_on_the_wire(
+    not_running_because: WhyANodeOfAStreamIsNotRunning,
+) -> NodeNotRunningBecauseOnTheWire {
+    match not_running_because {
+        WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
+            NodeNotRunningBecauseOnTheWire::PlaybackStopped
+        }
+        WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
+            NodeNotRunningBecauseOnTheWire::PlaybackPaused
+        }
+        WhyANodeOfAStreamIsNotRunning::Preparing => NodeNotRunningBecauseOnTheWire::Preparing,
+        WhyANodeOfAStreamIsNotRunning::NodeFailed => NodeNotRunningBecauseOnTheWire::NodeFailed,
     }
 }
 

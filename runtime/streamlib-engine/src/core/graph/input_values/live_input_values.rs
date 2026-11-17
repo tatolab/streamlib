@@ -6,42 +6,121 @@
 //! else its saved one, else its declared default.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::OnceLock;
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-use crate::core::descriptors::NodeKind;
+use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
+use crate::core::descriptors::{NodeKind, NodeValueLifetime};
 use crate::core::graph::{Graph, GraphNode, PortInfo};
 use crate::core::pubsub::RuntimeEvent;
 
-/// The values set live on one stream's inputs, by node UUID and then input. A set takes no graph
-/// write lock, so a running stream's live values change while its graph is read.
+/// The values set live on one stream's inputs, by node UUID and then input, each with the
+/// lifetime its input declares. A set takes no graph write lock, so a running stream's live
+/// values change while its graph is read. Each value of a `kept` input is mirrored into the
+/// project's store, once the stream names one.
 #[derive(Debug, Default)]
 pub struct LiveInputValuesOfAStream {
-    values: RwLock<HashMap<Uuid, BTreeMap<String, Value>>>,
+    values: RwLock<HashMap<Uuid, BTreeMap<String, LiveInputValue>>>,
+    kept_values_mirrored_into: OnceLock<LiveInputValuesKeptInTheProjectStore>,
 }
 
+/// One value set live on an input, and the lifetime the input declares.
+#[derive(Debug, Clone, PartialEq)]
+struct LiveInputValue {
+    value: Value,
+    lifetime: NodeValueLifetime,
+}
+
+/// Every value set live on a stream's inputs, taken as its nodes are torn down at a Stop and
+/// held again once they are put back.
+#[derive(Debug, Default)]
+pub(crate) struct LiveInputValuesHeldAcrossAStop(HashMap<Uuid, BTreeMap<String, LiveInputValue>>);
+
 impl LiveInputValuesOfAStream {
-    /// Set `value` live on input `input` of `node`, `None` taking the live value off, answering
-    /// the live value it held before.
-    pub fn set(&self, node: Uuid, input: &str, value: Option<Value>) -> Option<Value> {
+    /// Mirror each value of a `kept` input into `project_store` from now on; a stream names its
+    /// project's store once, as it is loaded.
+    pub(crate) fn mirror_the_kept_values_into(
+        &self,
+        project_store: LiveInputValuesKeptInTheProjectStore,
+    ) {
+        if self.kept_values_mirrored_into.set(project_store).is_err() {
+            tracing::error!(
+                "a stream's live values were named a second project store to mirror into"
+            );
+        }
+    }
+
+    /// The project's store the values of `kept` inputs are mirrored into, once one is named.
+    pub(crate) fn project_store_mirrored_into(
+        &self,
+    ) -> Option<&LiveInputValuesKeptInTheProjectStore> {
+        self.kept_values_mirrored_into.get()
+    }
+
+    /// Set `value` live on input `input` of `node`, whose lifetime is `lifetime`, `None` taking
+    /// the live value off, answering the live value it held before. A value of a `kept` input
+    /// is mirrored into the project's store, and taking one off forgets it there.
+    pub fn set(
+        &self,
+        node: Uuid,
+        input: &str,
+        value: Option<Value>,
+        lifetime: NodeValueLifetime,
+    ) -> Option<Value> {
         let mut values = self.values.write();
-        match value {
-            Some(value) => values
-                .entry(node)
-                .or_default()
-                .insert(input.to_owned(), value),
-            None => {
-                let values_of_the_node = values.get_mut(&node)?;
-                let before = values_of_the_node.remove(input);
-                if values_of_the_node.is_empty() {
-                    values.remove(&node);
+        let before = match &value {
+            Some(value) => values.entry(node).or_default().insert(
+                input.to_owned(),
+                LiveInputValue {
+                    value: value.clone(),
+                    lifetime,
+                },
+            ),
+            None => match values.get_mut(&node) {
+                Some(values_of_the_node) => {
+                    let before = values_of_the_node.remove(input);
+                    if values_of_the_node.is_empty() {
+                        values.remove(&node);
+                    }
+                    before
                 }
-                before
+                None => None,
+            },
+        };
+        if let Some(project_store) = self.kept_values_mirrored_into.get() {
+            match &value {
+                Some(value) if lifetime.is_kept() => project_store.keep(node, input, value),
+                _ if before
+                    .as_ref()
+                    .is_some_and(|before| before.lifetime.is_kept()) =>
+                {
+                    project_store.forget(node, input)
+                }
+                _ => {}
             }
         }
+        before.map(|before| before.value)
+    }
+
+    /// Hold `value`, which the project's store keeps for input `input` of `node`, as the live
+    /// value of that `kept` input, without writing it back.
+    pub(crate) fn hold_the_kept_value_the_store_holds(
+        &self,
+        node: Uuid,
+        input: &str,
+        value: Value,
+    ) {
+        self.values.write().entry(node).or_default().insert(
+            input.to_owned(),
+            LiveInputValue {
+                value,
+                lifetime: NodeValueLifetime::Kept,
+            },
+        );
     }
 
     /// The value set live on input `input` of `node`; `None` when none is.
@@ -50,7 +129,7 @@ impl LiveInputValuesOfAStream {
             .read()
             .get(&node)
             .and_then(|values_of_the_node| values_of_the_node.get(input))
-            .cloned()
+            .map(|live| live.value.clone())
     }
 
     /// Each value set live on an input of `node`, by input.
@@ -60,14 +139,54 @@ impl LiveInputValuesOfAStream {
             .get(&node)
             .into_iter()
             .flatten()
-            .map(|(input, value)| (input.clone(), value.clone()))
+            .map(|(input, live)| (input.clone(), live.value.clone()))
             .collect()
     }
 
-    /// Forget every value set live on an input of `node`, as the node leaves the graph.
+    /// Forget every value set live on an input of `node`, as the node leaves the graph. The
+    /// project's store keeps what it mirrored: a node torn down at a Stop is put back.
     pub fn forget_the_node(&self, node: Uuid) {
         self.values.write().remove(&node);
     }
+
+    /// Forget every value set live on a `reset` input, as the stream stops, answering each
+    /// input forgotten as `(node, input)`.
+    pub(crate) fn forget_every_reset_value(&self) -> Vec<(Uuid, String)> {
+        let mut values = self.values.write();
+        let mut forgotten = Vec::new();
+        values.retain(|node, values_of_the_node| {
+            values_of_the_node.retain(|input, live| {
+                let kept = live.lifetime.is_kept();
+                if !kept {
+                    forgotten.push((*node, input.clone()));
+                }
+                kept
+            });
+            !values_of_the_node.is_empty()
+        });
+        forgotten
+    }
+
+    /// Every value set live now, to hold again once the nodes a Stop tears down are put back.
+    pub(crate) fn every_value_to_hold_across_a_stop(&self) -> LiveInputValuesHeldAcrossAStop {
+        LiveInputValuesHeldAcrossAStop(self.values.read().clone())
+    }
+
+    /// Hold again each value `held` took as the stream's nodes were torn down, the project's
+    /// store already keeping what it mirrors.
+    pub(crate) fn hold_again(&self, held: LiveInputValuesHeldAcrossAStop) {
+        let mut values = self.values.write();
+        for (node, values_of_the_node) in held.0 {
+            values.entry(node).or_default().extend(values_of_the_node);
+        }
+    }
+}
+
+/// The lifetime input `input` of `node` declares; kept for an input it does not have.
+pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeValueLifetime {
+    node.input_port(input)
+        .map(|port| port.lifetime)
+        .unwrap_or_default()
 }
 
 /// Where the value an input reads comes from, as `graph` renders it.
@@ -241,6 +360,15 @@ pub enum LiveInputValueSetRefusal {
         set_index: usize,
         /// Why its input does not take it.
         refusal: super::InputValueRefusal,
+    },
+    /// The value at `set_index` is on a `reset` input of a stream whose playback is stopped,
+    /// which holds no live value until it plays: `refusal` is the node not running, because its
+    /// playback is stopped.
+    TheInputIsResetWhileStopped {
+        /// The index of the refused value among those asked.
+        set_index: usize,
+        /// The refusal, naming the node and the input.
+        refusal: crate::core::Error,
     },
     /// A helper or island reading one of the values was not handed it.
     NotHandedOver(crate::core::Error),

@@ -155,6 +155,7 @@ fn a_channels_input_typed(pin_type: crate::core::descriptors::PinType) -> PortIn
         audio_window: None,
         pin_default: None,
         pin: crate::core::descriptors::PinDeclaration::exactly(pin_type).into_resolved(),
+        lifetime: crate::core::descriptors::NodeValueLifetime::Kept,
         family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Channels),
     }
 }
