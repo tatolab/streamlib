@@ -67,10 +67,13 @@ impl StreamGraphTransactionExecutor<'_> {
                     GraphRequestRefusal::of_an_input_value(refusal, "/value".to_owned()),
                 ));
             }
-            Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped { set_index, refusal }) => {
+            Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
+                set_index,
+                runtime_words,
+            }) => {
                 return Err(refusal_of_the_set(
                     set_index,
-                    GraphRequestRefusal::of_a_node_not_running(refusal),
+                    GraphRequestRefusal::of_a_reset_input_while_stopped(runtime_words),
                 ));
             }
             Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => {

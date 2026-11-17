@@ -280,3 +280,84 @@ async fn a_removed_node_takes_its_kept_live_values_with_it() {
         (Value::Null, Value::Null)
     );
 }
+
+/// The table of a project's store the live values of `kept` inputs are mirrored into.
+const LIVE_INPUT_VALUES_TABLE: streamlib_project_repository::ProjectStoreTableName =
+    streamlib_project_repository::ProjectStoreTableName::named("live_input_values");
+
+/// A stream loading its graph holds as live only the values its project's store keeps for an
+/// input that still keeps a live value and takes it, and forgets every other one there: one on a
+/// `reset` input, one on an input the node does not have, one its input no longer takes, and
+/// one on a setting its node holds in its config.
+///
+/// Mental-revert: holding each kept value without its checks reads `flash` as live; dropping the
+/// forgetting of a value that no longer fits leaves its key in the store.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kept_value_that_no_longer_fits_its_input_is_forgotten_as_the_stream_loads() {
+    register_the_input_lifetime_test_node_once();
+    super::input_value_set_tests::register_the_input_value_test_node_once();
+    let mixer = super::input_value_set_tests::MIXER_NODE_UUID;
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": DIMMER_NODE_UUID, "name": "dimmer",
+              "type": InputLifetimeTestNode::node_class_import_path().as_str(),
+              "config": {}, "pins": { "flash": 0.1 } },
+            { "id": mixer, "name": "mixer",
+              "type": super::input_value_set_tests::InputValueTestNode::node_class_import_path()
+                  .as_str(),
+              "config": {} },
+        ],
+        "links": [],
+    }));
+    let stream_id = project.stream_id_of("main");
+    {
+        let project_store =
+            streamlib_project_repository::ProjectStore::open_in_the_project_at(project.path())
+                .expect("the project's store opens");
+        for (key, value) in [
+            (format!("{DIMMER_NODE_UUID}/flash"), json!(0.9)),
+            (format!("{DIMMER_NODE_UUID}/absent"), json!(0.3)),
+            (format!("{DIMMER_NODE_UUID}/gain"), json!("loud")),
+            (format!("{mixer}/frame_width"), json!(640)),
+            (format!("{mixer}/gain"), json!(0.6)),
+        ] {
+            project_store
+                .write(LIVE_INPUT_VALUES_TABLE, &key, &value)
+                .expect("the stale value is written");
+        }
+    }
+
+    {
+        let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+        the_run_of_the_project_once_finished(
+            &engine.operations_on_the_loaded_streams(),
+            project.path(),
+        )
+        .await;
+        let graph = engine.the_live_graph_of(&stream_id);
+        let reads = |node: &str, input: &str| {
+            let rendered = the_input_named(&the_node_named(&graph, node), input);
+            (
+                rendered["value"].clone(),
+                rendered["value_comes_from"].clone(),
+            )
+        };
+        assert_eq!(reads("mixer", "gain"), (json!(0.6), json!("live")));
+        assert_eq!(reads("dimmer", "flash"), (json!(0.1), json!("saved")));
+        assert_eq!(reads("dimmer", "gain"), (Value::Null, Value::Null));
+        engine
+            .the_project_action_done("close_project", &project)
+            .await;
+    }
+
+    let project_store =
+        streamlib_project_repository::ProjectStore::open_in_the_project_at(project.path())
+            .expect("the project's store opens again");
+    assert_eq!(
+        project_store
+            .keys_in(LIVE_INPUT_VALUES_TABLE)
+            .expect("the kept values list"),
+        [format!("{mixer}/gain")]
+    );
+}

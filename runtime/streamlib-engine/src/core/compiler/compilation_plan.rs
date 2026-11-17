@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::compiler_ops::shader_node_island::RunningShaderNodesALiveEditRestarts;
-use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
+use std::collections::HashMap;
+
+use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, WhyTheNodeLeaves};
 
 /// Categorized operations ready for execution.
 ///
@@ -11,6 +13,8 @@ use crate::core::graph::{Graph, LinkUniqueId, NodeRunId};
 pub(super) struct CompilationPlan {
     pub(super) nodes_to_add: Vec<NodeRunId>,
     pub(super) nodes_to_remove: Vec<NodeRunId>,
+    /// Why each node of `nodes_to_remove` leaves the graph.
+    pub(super) why_each_node_leaves: HashMap<NodeRunId, WhyTheNodeLeaves>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
     pub(super) config_updates: Vec<(NodeRunId, serde_json::Value)>,

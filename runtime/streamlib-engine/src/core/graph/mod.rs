@@ -33,7 +33,7 @@ pub(crate) use config_node_reference_edges::{
     refuse_a_second_referrer_of_a_node_that_takes_one,
 };
 pub(crate) use config_schema_value_checks::refuse_a_config_its_node_types_config_schema_refuses;
-pub use data_structure::{Graph, GraphState};
+pub use data_structure::{Graph, GraphState, WhyTheNodeLeaves};
 pub(crate) use data_structure::{
     names_listed_for_a_refusal, node_named_or_refused, node_names_listed_for_a_refusal,
     port_names_listed_for_a_refusal,

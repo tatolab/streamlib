@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, NodeRunId, ShutdownChannelComponent, StateComponent,
-    ThreadHandleComponent,
+    ThreadHandleComponent, WhyTheNodeLeaves,
 };
 use crate::core::nodes::NodeState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
@@ -170,6 +170,7 @@ pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
     the_stream_the_nodes_belong_to: &LoadedStreamIdentity,
     node_run_ids: &[NodeRunId],
+    why_each_node_leaves: impl Fn(&NodeRunId) -> WhyTheNodeLeaves,
     budgets: NodeThreadJoinBudgets,
     is_shutdown_forced: impl Fn() -> bool,
     teardown_progress_note: &TeardownProgressNoteOfOneStream,
@@ -197,7 +198,7 @@ pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
             {
                 state.transition_to(NodeState::Stopped);
             }
-            if !graph.drop_the_node(node_run_id) {
+            if !graph.drop_the_node(node_run_id, why_each_node_leaves(node_run_id)) {
                 first_node_left_behind.get_or_insert_with(|| node_run_id.clone());
                 continue;
             }
@@ -419,6 +420,7 @@ mod tests {
                 stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
             },
             node_run_ids,
+            |_| WhyTheNodeLeaves::Removed,
             budgets,
             is_shutdown_forced,
             &TeardownProgressNoteOfOneStream::default(),

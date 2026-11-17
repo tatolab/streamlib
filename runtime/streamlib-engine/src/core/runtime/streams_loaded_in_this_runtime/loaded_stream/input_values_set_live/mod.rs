@@ -17,7 +17,6 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::{
     hand_the_helper_of_the_node_the_pin_values_its_input_ports_read, the_control_value_of_a_pin,
 };
 use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
-use crate::core::error::{Error, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
     InputValuesSetLive, LiveInputValueSetRefusal, NodeAnInputValueIsSetOn,
@@ -275,14 +274,11 @@ fn refuse_a_value_on_a_reset_input_while_stopped(
     };
     Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
         set_index,
-        refusal: Error::NodeOfAStreamIsNotRunning {
-            not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
-            runtime_words: format!(
-                "input `{}` of `{}` returns to its saved value at Stop, so it keeps no value set \
-                 live while the stream is stopped; `start_playback` plays it",
-                set.input, set_on.display_name
-            ),
-        },
+        runtime_words: format!(
+            "input `{}` of `{}` returns to its saved value at Stop, so it keeps no value set live \
+             while the stream is stopped; `start_playback` plays it",
+            set.input, set_on.display_name
+        ),
     })
 }
 

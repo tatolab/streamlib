@@ -26,9 +26,6 @@ pub(crate) use live_input_values::{
     the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
-pub(crate) use live_input_values_kept_in_the_project_store::{
-    LIVE_INPUT_VALUES_TABLE, the_node_a_key_leads_with,
-};
 
 /// What kind of value a refused set sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

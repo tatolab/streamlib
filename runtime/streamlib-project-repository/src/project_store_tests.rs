@@ -39,6 +39,19 @@ fn a_write_reads_back_at_once_and_after_the_store_opens_again() {
     );
 }
 
+/// A project has a store only once it is first opened, which makes it.
+#[test]
+fn a_project_has_a_store_once_it_is_first_opened() {
+    let project_directory = tempfile::tempdir().expect("a temporary project");
+    assert!(!ProjectStore::exists_in_the_project_at(
+        project_directory.path()
+    ));
+    drop(ProjectStore::open_in_the_project_at(project_directory.path()).expect("opens"));
+    assert!(ProjectStore::exists_in_the_project_at(
+        project_directory.path()
+    ));
+}
+
 #[test]
 fn a_thousand_writes_in_one_window_commit_once_holding_the_last() {
     let project_directory = tempfile::tempdir().expect("a temporary project");

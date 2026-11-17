@@ -16,6 +16,7 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::tests::{
     the_link_wiring_of,
 };
 use crate::core::descriptors::NodeValueLifetime;
+use crate::core::graph::WhyTheNodeLeaves;
 use crate::core::graph::input_values::{InputValueComesFrom, InputValueRead};
 use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
 use crate::iceoryx2::Iceoryx2Node;
@@ -194,7 +195,7 @@ fn a_node_dropped_from_the_graph_forgets_its_live_values() {
     let (level_meter, _delivery) = a_level_meter_past_its_setup(&mut graph);
     let node = the_uuid_of(&graph, &level_meter);
     the_values_set_live(&graph, &[a_set(node, "level", Some(json!(0.5)))]).unwrap();
-    assert!(graph.drop_the_node(&level_meter));
+    assert!(graph.drop_the_node(&level_meter, WhyTheNodeLeaves::Removed));
     assert_eq!(graph.live_input_values().value_of(node, "level"), None);
 }
 
@@ -513,11 +514,7 @@ fn while_stopped_a_kept_input_holds_a_live_value_and_a_reset_one_refuses_it() {
     match refused {
         Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
             set_index: 1,
-            refusal:
-                Error::NodeOfAStreamIsNotRunning {
-                    not_running_because: WhyANodeOfAStreamIsNotRunning::PlaybackStopped,
-                    runtime_words,
-                },
+            runtime_words,
         }) => assert!(runtime_words.contains("input `gain`"), "{runtime_words}"),
         other => panic!(
             "a reset input refuses a live value while stopped: {:?}",
@@ -532,13 +529,14 @@ fn while_stopped_a_kept_input_holds_a_live_value_and_a_reset_one_refuses_it() {
         .expect("taking a reset input's live value off is no refusal");
 }
 
-/// At Stop a stream forgets the live value of each `reset` input, naming each, and keeps each
-/// `kept` input's, which it holds again once its torn-down nodes are put back.
+/// At Stop a stream forgets the live value of each `reset` input, naming each; a node torn down
+/// at the Stop keeps each `kept` input's value, and a removed node forgets every one.
 ///
-/// Mental-revert: forgetting every live value at Stop drops `level`'s; holding again every value
-/// taken before the reset ones are forgotten brings `gain`'s back.
+/// Mental-revert: forgetting every live value of a node torn down at a Stop drops `level`'s;
+/// keeping every one leaves `gain`'s, set again before the teardown; keeping the `kept` ones of
+/// a removed node leaves `level`'s live after the removal.
 #[test]
-fn a_stop_forgets_each_reset_live_value_and_holds_each_kept_one_again() {
+fn a_stop_forgets_each_reset_live_value_and_a_removal_forgets_every_one() {
     let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
     let (level_meter, _delivery) = a_level_meter_past_its_setup(&mut graph);
     let node = the_uuid_of(&graph, &level_meter);
@@ -557,11 +555,11 @@ fn a_stop_forgets_each_reset_live_value_and_holds_each_kept_one_again() {
         live_values.forget_every_reset_value(),
         [(node, "gain".to_owned())]
     );
-    let held = live_values.every_value_to_hold_across_a_stop();
-    live_values.forget_the_node(node);
-    assert_eq!(live_values.value_of(node, "level"), None);
-    live_values.hold_again(held);
-
+    live_values.set(node, "gain", Some(json!(3.0)), NodeValueLifetime::Reset);
+    live_values.forget_the_node(node, WhyTheNodeLeaves::TornDownAtAStop);
     assert_eq!(live_values.value_of(node, "level"), Some(json!(0.25)));
     assert_eq!(live_values.value_of(node, "gain"), None);
+
+    live_values.forget_the_node(node, WhyTheNodeLeaves::Removed);
+    assert_eq!(live_values.value_of(node, "level"), None);
 }

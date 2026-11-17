@@ -305,26 +305,15 @@ impl GraphRequestRefusal {
         }
     }
 
-    /// A refusal of a value set on an input of a node that does not run, as `refusal` says:
-    /// coded `node_not_running` and naming why when it is that refusal, in the runtime's words
-    /// otherwise.
-    fn of_a_node_not_running(refusal: streamlib::sdk::error::Error) -> Self {
-        match refusal {
-            streamlib::sdk::error::Error::NodeOfAStreamIsNotRunning {
-                not_running_because,
-                runtime_words,
-            } => Self {
-                refusal_code: ControlOperationRefusalCode::NodeNotRunning,
-                runtime_words,
-                refused_field: None,
-                refused_params_pointer: None,
-                not_running_because: Some(
-                    crate::control_operation_dispatcher::why_a_node_is_not_running_on_the_wire(
-                        not_running_because,
-                    ),
-                ),
-            },
-            refusal => refusal.to_string().into(),
+    /// A refusal of a value set live on a `reset` input while its stream's playback is stopped,
+    /// in the runtime's words: coded `node_not_running`, because the playback is stopped.
+    fn of_a_reset_input_while_stopped(runtime_words: String) -> Self {
+        Self {
+            refusal_code: ControlOperationRefusalCode::NodeNotRunning,
+            runtime_words,
+            refused_field: None,
+            refused_params_pointer: None,
+            not_running_because: Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
         }
     }
 

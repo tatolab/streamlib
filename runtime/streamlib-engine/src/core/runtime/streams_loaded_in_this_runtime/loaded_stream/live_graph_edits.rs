@@ -494,7 +494,6 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
         .first_mut()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let node_uuid = node.node_uuid;
-    let lifetime = the_lifetime_of_the_input(node, input);
     if !node.has_input(input) {
         return Err(Error::NodePortNotFound {
             node_run_id: node.display_name.clone(),
@@ -502,6 +501,7 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
             direction: crate::core::PortDirection::Input,
         });
     }
+    let lifetime = the_lifetime_of_the_input(node, input);
     if value.is_some() && node.is_an_exposed_config_field_input(input) {
         return Err(Error::Configuration(format!(
             "input `{input}` of `{}` is a config field it exposes, which reads the \

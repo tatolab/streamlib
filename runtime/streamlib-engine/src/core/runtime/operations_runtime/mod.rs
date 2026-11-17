@@ -21,7 +21,7 @@ use crate::core::graph::input_values::{
 };
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
-    NodeRunId, PendingDeletionComponent, StateComponent, node_named_or_refused,
+    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
     refuse_a_link_between_ports_whose_families_do_not_match,
 };
 use crate::core::logging::{
@@ -103,7 +103,7 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
         for node_run_id in &nodes_pending_deletion {
-            if !this_streams_graph.drop_the_node(node_run_id) {
+            if !this_streams_graph.drop_the_node(node_run_id, WhyTheNodeLeaves::Removed) {
                 tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
             }
         }
@@ -296,7 +296,7 @@ pub(super) async fn add_node_impl(
                     )
                 })
             {
-                if !graph.drop_the_node(&node_id) {
+                if !graph.drop_the_node(&node_id, WhyTheNodeLeaves::Removed) {
                     tracing::warn!("`{node_id}`, whose add was refused, was not dropped");
                 }
                 return Err(refusal);
@@ -350,7 +350,10 @@ fn mark_the_node_and_each_of_its_links_pending_deletion(
     if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
         node.insert(PendingDeletionComponent);
     }
-    tx.log(PendingOperation::RemoveNode(node_run_id.clone()));
+    tx.log(PendingOperation::RemoveNode(
+        node_run_id.clone(),
+        WhyTheNodeLeaves::Removed,
+    ));
     Ok(())
 }
 
@@ -363,15 +366,8 @@ pub(super) async fn remove_node_impl(
         live,
         stream,
     } = live_graph_change;
-    let node_uuid = compiler.scope(|graph, tx| {
-        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)?;
-        Ok::<_, Error>(
-            graph
-                .traversal()
-                .v(&node_run_id)
-                .first()
-                .map(|node| node.node_uuid),
-        )
+    compiler.scope(|graph, tx| {
+        mark_the_node_and_each_of_its_links_pending_deletion(graph, tx, &node_run_id)
     })?;
 
     let removal_outcome = commit_live_graph_change(&compiler, live).await;
@@ -379,13 +375,6 @@ pub(super) async fn remove_node_impl(
         && compiler.scope(|graph, _tx| graph.traversal().v(&node_run_id).exists())
     {
         return removal_outcome;
-    }
-    if let Some(node_uuid) = node_uuid {
-        compiler.scope_reading(|graph| {
-            if let Some(project_store) = graph.live_input_values().project_store_mirrored_into() {
-                project_store.forget_every_value_of_the_node(node_uuid);
-            }
-        });
     }
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillRemoveNode {

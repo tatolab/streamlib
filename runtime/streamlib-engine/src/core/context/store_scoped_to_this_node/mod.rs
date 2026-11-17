@@ -11,14 +11,46 @@ use std::sync::{Arc, LazyLock, Weak};
 
 use parking_lot::Mutex;
 use serde_json::Value as JsonValue;
-use streamlib_project_repository::{ProjectStore, ProjectStoreTableName};
+use streamlib_project_repository::{ProjectStore, ProjectStoreRefusal, ProjectStoreTableName};
 use uuid::Uuid;
 
 use crate::core::error::{Error, Result};
-use crate::core::graph::input_values::{LIVE_INPUT_VALUES_TABLE, the_node_a_key_leads_with};
 
-/// The table every node's own keys live in, each key prefixed by the node's UUID.
+/// The table every node's own keys live in, each key [`key_of_the_node`] names.
 const NODE_STORE_TABLE: ProjectStoreTableName = ProjectStoreTableName::named("node_store");
+
+/// The table the live values of `kept` inputs are kept in, each under the key
+/// [`key_of_the_node`] names for its node and input.
+pub(crate) const LIVE_INPUT_VALUES_TABLE: ProjectStoreTableName =
+    ProjectStoreTableName::named("live_input_values");
+
+/// The key `rest` of the node `node` is kept under, in a table of the project's store whose keys
+/// each lead with their node's UUID.
+pub(crate) fn key_of_the_node(node: Uuid, rest: &str) -> String {
+    format!("{node}/{rest}")
+}
+
+/// The node, by UUID, and what follows it in a key [`key_of_the_node`] names; `None` for a key
+/// that does not lead with a node's UUID.
+pub(crate) fn the_node_a_key_leads_with(key: &str) -> Option<(Uuid, &str)> {
+    let (node, rest) = key.split_once('/')?;
+    Some((node.parse().ok()?, rest))
+}
+
+/// Remove every key of `table`, each of which [`key_of_the_node`] names, whose node
+/// `is_the_node_to_forget` picks.
+fn remove_every_key_whose_node(
+    project_store: &ProjectStore,
+    table: ProjectStoreTableName,
+    is_the_node_to_forget: impl Fn(Uuid) -> bool,
+) -> std::result::Result<(), ProjectStoreRefusal> {
+    for key in project_store.keys_in(table)? {
+        if the_node_a_key_leads_with(&key).is_some_and(|(node, _)| is_the_node_to_forget(node)) {
+            project_store.remove(table, &key);
+        }
+    }
+    Ok(())
+}
 
 /// The keys one placed node keeps in its project's store; no other node reaches them. It holds
 /// the store only while its project does, so a handle that outlives its project's close keeps no
@@ -77,7 +109,7 @@ impl StoreScopedToThisNode {
     }
 
     fn the_key_in_the_table(&self, key: &str) -> String {
-        format!("{}/{key}", self.node_uuid)
+        key_of_the_node(self.node_uuid, key)
     }
 }
 
@@ -132,24 +164,15 @@ fn drop_the_keys_of_every_node_not_held(
     node_uuids_held: &HashSet<Uuid>,
 ) {
     for table in [NODE_STORE_TABLE, LIVE_INPUT_VALUES_TABLE] {
-        let keys = match project_store.keys_in(table) {
-            Ok(keys) => keys,
-            Err(not_listed) => {
-                tracing::warn!(
-                    project_directory = %resolved_project_directory.display(),
-                    table = table.as_str(),
-                    "the project closed and its store's keys did not list, so the keys of \
-                     nodes it no longer holds stay: {not_listed}"
-                );
-                continue;
-            }
-        };
-        for key in keys {
-            if the_node_a_key_leads_with(&key)
-                .is_some_and(|(node_uuid, _)| !node_uuids_held.contains(&node_uuid))
-            {
-                project_store.remove(table, &key);
-            }
+        if let Err(not_listed) = remove_every_key_whose_node(project_store, table, |node_uuid| {
+            !node_uuids_held.contains(&node_uuid)
+        }) {
+            tracing::warn!(
+                project_directory = %resolved_project_directory.display(),
+                table = table.as_str(),
+                "the project closed and its store's keys did not list, so the keys of nodes it \
+                 no longer holds stay: {not_listed}"
+            );
         }
     }
 }

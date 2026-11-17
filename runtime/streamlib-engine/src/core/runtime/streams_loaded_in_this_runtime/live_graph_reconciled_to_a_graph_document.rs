@@ -786,7 +786,7 @@ mod tests {
                 .iter()
                 .any(|operation| matches!(
                     operation,
-                    PendingOperation::AddNode(id) | PendingOperation::RemoveNode(id)
+                    PendingOperation::AddNode(id) | PendingOperation::RemoveNode(id, _)
                         if *id == replaced_node
                 )),
             "the start builds nothing of the replaced node"

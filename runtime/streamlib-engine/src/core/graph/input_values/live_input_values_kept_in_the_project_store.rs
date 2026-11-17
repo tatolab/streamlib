@@ -10,29 +10,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde_json::Value;
-use streamlib_project_repository::{
-    PROJECT_RUNTIME_DIRECTORY, PROJECT_STORE_FILE_NAME, ProjectStore, ProjectStoreTableName,
-};
+use streamlib_project_repository::ProjectStore;
 use uuid::Uuid;
 
-use crate::core::context::ProjectStoresOpenInThisRuntime;
-
-/// The table of a project's store the live values of `kept` inputs are mirrored into, each
-/// under the key [`the_key_of_the_input`] names.
-pub(crate) const LIVE_INPUT_VALUES_TABLE: ProjectStoreTableName =
-    ProjectStoreTableName::named("live_input_values");
-
-/// The key the live value of input `input` of the node `node` is kept under.
-fn the_key_of_the_input(node: Uuid, input: &str) -> String {
-    format!("{node}/{input}")
-}
-
-/// The node, by UUID, and what follows it in a key of [`LIVE_INPUT_VALUES_TABLE`] or of
-/// `node_store`, each of which leads with its node's UUID; `None` for a key that does not.
-pub(crate) fn the_node_a_key_leads_with(key: &str) -> Option<(Uuid, &str)> {
-    let (node, rest) = key.split_once('/')?;
-    Some((node.parse().ok()?, rest))
-}
+use crate::core::context::{
+    LIVE_INPUT_VALUES_TABLE, ProjectStoresOpenInThisRuntime, key_of_the_node,
+    the_node_a_key_leads_with,
+};
 
 /// One stream's project's store, where the live values of its `kept` inputs are mirrored. A
 /// store that does not open, read or take a write is logged and leaves the live value as set:
@@ -62,7 +46,7 @@ impl LiveInputValuesKeptInTheProjectStore {
         };
         if let Err(not_kept) = project_store.write(
             LIVE_INPUT_VALUES_TABLE,
-            &the_key_of_the_input(node, input),
+            &key_of_the_node(node, input),
             value,
         ) {
             tracing::error!(
@@ -76,20 +60,8 @@ impl LiveInputValuesKeptInTheProjectStore {
 
     /// Stop keeping a live value of input `input` of `node`.
     pub(crate) fn forget(&self, node: Uuid, input: &str) {
-        if let Some(project_store) = self.the_project_store() {
-            project_store.remove(LIVE_INPUT_VALUES_TABLE, &the_key_of_the_input(node, input));
-        }
-    }
-
-    /// Stop keeping a live value of any input of `node`, as it leaves its stream's graph.
-    pub(crate) fn forget_every_value_of_the_node(&self, node: Uuid) {
-        let Some(project_store) = self.the_project_store_when_the_project_has_one() else {
-            return;
-        };
-        for key in Self::every_key(&project_store) {
-            if the_node_a_key_leads_with(&key).is_some_and(|(kept_for, _)| kept_for == node) {
-                project_store.remove(LIVE_INPUT_VALUES_TABLE, &key);
-            }
+        if let Some(project_store) = self.the_project_store_when_the_project_has_one() {
+            project_store.remove(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node, input));
         }
     }
 
@@ -102,8 +74,15 @@ impl LiveInputValuesKeptInTheProjectStore {
         let Some(project_store) = self.the_project_store_when_the_project_has_one() else {
             return Vec::new();
         };
-        Self::every_key(&project_store)
-            .into_iter()
+        let keys = project_store
+            .keys_in(LIVE_INPUT_VALUES_TABLE)
+            .unwrap_or_else(|not_listed| {
+                tracing::error!(
+                    "the kept live values of the project's inputs did not list: {not_listed}"
+                );
+                Vec::new()
+            });
+        keys.into_iter()
             .filter_map(|key| {
                 let (node, input) = the_node_a_key_leads_with(&key)?;
                 if !is_held(node) {
@@ -125,24 +104,10 @@ impl LiveInputValuesKeptInTheProjectStore {
             .collect()
     }
 
-    fn every_key(project_store: &ProjectStore) -> Vec<String> {
-        project_store
-            .keys_in(LIVE_INPUT_VALUES_TABLE)
-            .unwrap_or_else(|not_listed| {
-                tracing::error!(
-                    "the kept live values of the project's inputs did not list: {not_listed}"
-                );
-                Vec::new()
-            })
-    }
-
     /// The project's store, opened; `None`, with no store made, for a project that has none
     /// yet and so keeps no value.
     fn the_project_store_when_the_project_has_one(&self) -> Option<Arc<ProjectStore>> {
-        self.project_directory
-            .join(PROJECT_RUNTIME_DIRECTORY)
-            .join(PROJECT_STORE_FILE_NAME)
-            .exists()
+        ProjectStore::exists_in_the_project_at(&self.project_directory)
             .then(|| self.the_project_store())
             .flatten()
     }

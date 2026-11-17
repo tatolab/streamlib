@@ -18,7 +18,7 @@ use crate::core::error::PrivacyGatedCaptureDevice;
 use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::{
     GraphNodeWithComponents, GraphState, ObservableGraphReadiness, NodePauseGateComponent,
-    NodeRunId, StateComponent, StepProgressOfOneNodeComponent,
+    NodeRunId, StateComponent, StepProgressOfOneNodeComponent, WhyTheNodeLeaves,
 };
 use crate::core::media_clock::MediaClock;
 use crate::core::nodes::{NodeSpec, NodeState};
@@ -297,7 +297,10 @@ impl LoadedStreamInThisRuntime {
             let node_run_ids: Vec<NodeRunId> = graph.traversal().v(()).ids();
             let count = node_run_ids.len();
             for proc_id in node_run_ids {
-                tx.log(PendingOperation::RemoveNode(proc_id));
+                tx.log(PendingOperation::RemoveNode(
+                    proc_id,
+                    WhyTheNodeLeaves::TornDownAtAStop,
+                ));
             }
             graph.set_state(GraphState::Idle);
             (count, nodes_torn_down, links_torn_down)
@@ -365,18 +368,13 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// [`Self::stop_playback_keeping_the_graph`] with the start-or-stop lock held and no input
-    /// value changing: each live value held again once the nodes are put back.
+    /// value changing.
     fn stop_the_playback_and_put_the_graph_back(&self) -> Result<()> {
         if self.runtime_context.lock().is_none() {
             self.is_held_stopped.store(true, Ordering::Release);
             return Ok(());
         }
         let graph_only_nodes_as_drawn = self.graph_only_nodes_as_drawn.lock().clone();
-        let live_input_values = self.compiler.scope_reading(|graph| {
-            graph
-                .live_input_values()
-                .every_value_to_hold_across_a_stop()
-        });
         let (teardown_outcome, nodes_of_the_graph, links_of_the_graph) =
             self.stop_holding_the_start_or_stop_lock();
 
@@ -415,8 +413,6 @@ impl LoadedStreamInThisRuntime {
                 .set_node_names_the_graph_only_nodes_hold(node_names_the_graph_only_nodes_hold)
         });
         *self.graph_only_nodes_as_drawn.lock() = graph_only_nodes_as_drawn;
-        self.compiler
-            .scope_reading(|graph| graph.live_input_values().hold_again(live_input_values));
         *self.status.lock() = RuntimeStatus::Initial;
         self.is_held_stopped.store(true, Ordering::Release);
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
