@@ -41,10 +41,11 @@ impl PinType {
             .chain(members.iter().map(|member| &member.member_type))
     }
 
-    /// The types a List or a bundle holds that stream by default.
-    fn streaming_member_types(&self) -> impl Iterator<Item = &PinType> {
+    /// The types a List or a bundle holds that stream by default, each with its flows.
+    fn streaming_members_and_flows(&self) -> impl Iterator<Item = (&PinType, &'static [PinFlow])> {
         self.member_types()
-            .filter(|member_type| member_type.default_flow() == PinFlow::Stream)
+            .map(|member_type| (member_type, member_type.flows()))
+            .filter(|(_, member_flows)| member_flows[0] == PinFlow::Stream)
     }
 
     /// The flows a pin of this type may state, its default first. A List or a bundle is one
@@ -52,8 +53,8 @@ impl PinType {
     /// that allows least: a member that never travels as a value, else one that may.
     pub fn flows(&self) -> &'static [PinFlow] {
         let own_flows = built_in_pin_type(self.built_in_name()).flows;
-        self.streaming_member_types()
-            .map(PinType::flows)
+        self.streaming_members_and_flows()
+            .map(|(_, member_flows)| member_flows)
             .min_by_key(|member_flows| member_flows.contains(&PinFlow::Value))
             .unwrap_or(own_flows)
     }
@@ -72,9 +73,9 @@ impl PinType {
         let read_newest = match self {
             Self::Texture { .. } | Self::Tensor {} => true,
             Self::ListOf { .. } | Self::Bundle { .. } => {
-                let mut streaming_member_types = self.streaming_member_types().peekable();
-                streaming_member_types.peek().is_some()
-                    && streaming_member_types.all(|member_type| {
+                let mut streaming_members = self.streaming_members_and_flows().peekable();
+                streaming_members.peek().is_some()
+                    && streaming_members.all(|(member_type, _)| {
                         member_type.default_stream_delivery_profile() == NEWEST_DELIVERY_PROFILE
                     })
             }

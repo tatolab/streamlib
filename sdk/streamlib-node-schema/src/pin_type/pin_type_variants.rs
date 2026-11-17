@@ -146,6 +146,22 @@ pub enum IntegerSize {
     UInt64,
 }
 
+impl IntegerSize {
+    /// Its variant's name, as Rust code names it: `Int8` to `UInt64`.
+    pub const fn variant_name(self) -> &'static str {
+        match self {
+            Self::Int8 => "Int8",
+            Self::Int16 => "Int16",
+            Self::Int32 => "Int32",
+            Self::Int64 => "Int64",
+            Self::UInt8 => "UInt8",
+            Self::UInt16 => "UInt16",
+            Self::UInt32 => "UInt32",
+            Self::UInt64 => "UInt64",
+        }
+    }
+}
+
 /// The size a Float is held in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(
@@ -159,6 +175,16 @@ pub enum FloatSize {
     Float32,
     /// A 64-bit float.
     Float64,
+}
+
+impl FloatSize {
+    /// Its variant's name, as Rust code names it: `Float32` or `Float64`.
+    pub const fn variant_name(self) -> &'static str {
+        match self {
+            Self::Float32 => "Float32",
+            Self::Float64 => "Float64",
+        }
+    }
 }
 
 /// How many numbers a Vector holds.
@@ -206,6 +232,13 @@ macro_rules! texture_pixel_formats {
             pub const fn wire_name(self) -> &'static str {
                 match self {
                     $(Self::$format => $wire_name,)+
+                }
+            }
+
+            /// Its variant's name, as Rust code names it.
+            pub const fn variant_name(self) -> &'static str {
+                match self {
+                    $(Self::$format => stringify!($format),)+
                 }
             }
 
