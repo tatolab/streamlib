@@ -267,10 +267,10 @@ pub(crate) fn audio_windowing_declared_by_input_port(
     node_type: &NodeClassImportPath,
     port_name: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Some((inputs, _outputs)) = node_types.port_info(node_type) else {
+    let Some(ports) = node_types.port_info(node_type) else {
         return Ok(None);
     };
-    let Some(port) = inputs.iter().find(|port| port.name == port_name) else {
+    let Some(port) = ports.input_named(port_name) else {
         return Ok(None);
     };
     let Some(contract) = port.audio_window.as_ref() else {

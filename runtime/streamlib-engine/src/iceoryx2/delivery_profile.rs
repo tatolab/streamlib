@@ -99,10 +99,10 @@ pub(crate) fn delivery_profile_for_input_port(
     node_type: &NodeClassImportPath,
     port_name: &str,
 ) -> Result<DeliveryProfile> {
-    let Some((inputs, _outputs)) = node_types.port_info(node_type) else {
+    let Some(ports) = node_types.port_info(node_type) else {
         return Ok(DeliveryProfile::Newest);
     };
-    let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
+    let Some(port) = ports.input_named(port_name) else {
         return Ok(DeliveryProfile::Newest);
     };
 

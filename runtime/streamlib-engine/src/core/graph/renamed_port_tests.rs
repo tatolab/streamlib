@@ -11,7 +11,7 @@ use super::graph_snapshot::GraphSnapshot;
 use super::input_values::{
     InputValueRefusalCode, NodeAnInputValueIsSetOn, refuse_an_input_value_its_input_does_not_take,
 };
-use super::{Graph, InputLinkPortRef, OutputLinkPortRef};
+use super::{Graph, GraphNodePorts, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::nodes::NODE_REGISTRY;
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
@@ -232,4 +232,164 @@ fn a_value_set_under_a_name_an_input_had_is_checked_as_the_inputs_and_null_as_un
     )
     .expect_err("an input that must hold a value refuses null");
     assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
+}
+
+/// A fragment whose inner node is linked to the fragment's interface under names its ports had
+/// loads: each level is read under the current port names before it is flattened, so the
+/// fragment's interface checks and the flattened links name the current ports.
+///
+/// Mental-revert: moving names only once the fragments are flattened refuses the fragment, its
+/// interface check naming `video_in` as a port the mixer does not have.
+#[test]
+fn a_fragment_linking_its_interface_to_ports_under_names_they_had_loads_under_their_names() {
+    ensure_the_renamed_ports_node_registered();
+    let renamed = MockRenamedPortsNode::node_class_import_path();
+    let document = json!({
+        "nodes": [
+            { "name": "source", "type": MockPinTypedNode::node_class_import_path().as_str(),
+              "config": {} },
+            { "name": "look", "type": "looks.generators:look", "config": {},
+              "fragment": {
+                  "nodes": [
+                      { "name": "in", "type": "tatolab.stream:GraphInput",
+                        "config": { "port": "video", "family": "image" } },
+                      { "name": "mixer", "type": renamed.as_str(), "config": {},
+                        "pins": { "level": 0.5 } },
+                      { "name": "out", "type": "tatolab.stream:GraphOutput",
+                        "config": { "port": "video", "family": "image" } },
+                  ],
+                  "links": [
+                      { "source": { "node": "in", "port": "value" },
+                        "target": { "node": "mixer", "port": "video_in" } },
+                      { "source": { "node": "mixer", "port": "video" },
+                        "target": { "node": "out", "port": "value" } },
+                  ],
+              } },
+            { "name": "mixer-2", "type": renamed.as_str(), "config": {} },
+        ],
+        "links": [
+            { "source": { "node": "source", "port": "frames" },
+              "target": { "node": "look", "port": "video" } },
+            { "source": { "node": "look", "port": "video" },
+              "target": { "node": "mixer-2", "port": "video_in" } },
+        ],
+    });
+    let node_types = NodeTypesOneStreamResolves::new();
+    let graph = GraphSnapshot::from_graph_document(document).expect("the document reads");
+    graph
+        .validate(&node_types)
+        .expect("the fragment under its current port names validates");
+    let resolved = graph
+        .with_graph_only_nodes_resolved(&node_types)
+        .expect("its graph-only nodes resolve")
+        .graph_the_runtime_runs;
+    let mut link_ends: Vec<(String, String)> = resolved
+        .links
+        .iter()
+        .map(|link| {
+            (
+                format!("{}/{}", link.source.node, link.source.port),
+                format!("{}/{}", link.target.node, link.target.port),
+            )
+        })
+        .collect();
+    link_ends.sort();
+    assert_eq!(
+        link_ends,
+        [
+            ("look/mixer/frames".to_owned(), "mixer-2/picture".to_owned()),
+            ("source/frames".to_owned(), "look/mixer/picture".to_owned()),
+        ]
+    );
+    let mixer = resolved
+        .nodes
+        .iter()
+        .find(|node| node.name == "look/mixer")
+        .expect("the fragment's mixer is held");
+    assert_eq!(
+        Value::Object(mixer.input_values.clone()),
+        json!({ "gain": 0.5 })
+    );
+}
+
+/// A `SetVariable` linked from an output under a name it had holds the output under its
+/// current name, so the check that the setter holds a port the graph holds passes.
+///
+/// Mental-revert: holding the setter's link as written refuses it, naming `mixer/video` as a
+/// port the graph does not hold; moving names only once fragments are flattened refuses the
+/// setter inside the fragment.
+#[test]
+fn a_set_variable_holding_an_output_under_a_name_it_had_holds_it_under_its_name() {
+    ensure_the_renamed_ports_node_registered();
+    let document = json!({
+        "nodes": [
+            { "name": "mixer", "type": MockRenamedPortsNode::node_class_import_path().as_str(),
+              "config": {} },
+            { "name": "set-frames", "type": "tatolab.stream:SetVariable",
+              "config": { "variable": "frames" } },
+        ],
+        "links": [
+            { "source": { "node": "mixer", "port": "video" },
+              "target": { "node": "set-frames", "port": "value" } },
+        ],
+    });
+    let inside_a_fragment = json!({
+        "nodes": [
+            { "name": "look", "type": "looks.generators:look", "config": {},
+              "fragment": document.clone() },
+        ],
+        "links": [],
+    });
+    for document in [document, inside_a_fragment] {
+        GraphSnapshot::from_graph_document(document)
+            .expect("the document reads")
+            .validate(&NodeTypesOneStreamResolves::new())
+            .expect("the setter holds the mixer's output under its current name");
+    }
+}
+
+/// The input `gain`, which was `level` and before that `volume`.
+fn ports_of_an_input_renamed_twice() -> GraphNodePorts {
+    GraphNodePorts {
+        inputs: vec![PortInfo {
+            former_names: vec!["level".to_owned(), "volume".to_owned()],
+            ..PortInfo::declaring_only_a_family(
+                "gain",
+                "",
+                crate::core::descriptors::PortFamilyDeclaration::of_family(
+                    crate::core::descriptors::PortFamily::Records,
+                ),
+            )
+        }],
+        outputs: Vec::new(),
+    }
+}
+
+/// An input holding values under several of its names reads the one under its current name,
+/// else the one under the first name it declares it had; every other is dropped, and a key no
+/// input names is kept.
+///
+/// Mental-revert: keeping whichever value the map yields last reads `volume`'s 1.0 for the
+/// first case.
+#[test]
+fn an_input_holding_values_under_several_names_reads_the_current_then_the_first_declared() {
+    let ports = ports_of_an_input_renamed_twice();
+    let read = |values: Value| {
+        let Value::Object(values) = values else {
+            panic!("the values are an object");
+        };
+        Value::Object(ports.input_values_under_the_current_names(values))
+    };
+    assert_eq!(
+        read(json!({ "volume": 1.0, "level": 2.0, "other": true })),
+        json!({ "gain": 2.0, "other": true })
+    );
+    assert_eq!(
+        read(json!({ "volume": 1.0, "level": 2.0, "gain": 3.0 })),
+        json!({ "gain": 3.0 })
+    );
+    assert_eq!(read(json!({ "volume": 1.0 })), json!({ "gain": 1.0 }));
+    let moved = ports.inputs_holding_a_value_under_a_name_they_had(|name| name != "level");
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].names_in_the_order_read, ["gain", "volume"]);
 }

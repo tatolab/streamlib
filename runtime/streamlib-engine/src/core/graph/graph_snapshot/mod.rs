@@ -36,13 +36,15 @@ use uuid::Uuid;
 
 use crate::core::context::StreamClockSpec;
 use crate::core::descriptors::NodeClassImportPath;
-use crate::core::graph::PortInfo;
+use crate::core::graph::GraphNodePorts;
 use crate::core::graph::graph_interface_resolution::{
     GraphInterfaceLevel, is_a_graph_interface_node_type,
     the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_variable_resolution::is_a_graph_variable_node_type;
-use crate::core::graph::legacy_config_of_a_node::config_of_a_node;
+use crate::core::graph::legacy_config_of_a_node::{
+    config_of_a_node, fields_the_config_schema_of_a_node_type_lists,
+};
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
@@ -432,11 +434,10 @@ impl GraphSnapshot {
             studio: None,
             ..self.clone()
         }
+        .with_each_port_under_its_current_name(node_types)
         .with_graph_fragments_flattened(node_types)?;
-        let graph_the_runtime_runs = fragments
+        let variables = fragments
             .graph_the_runtime_runs
-            .with_each_port_under_its_current_name(node_types);
-        let variables = graph_the_runtime_runs
             .with_graph_variables_resolved(&fragments.fragments_as_drawn, node_types)?;
         let top_level = &variables.graph_the_runtime_runs;
         let interface = top_level.with_graph_interface_resolved(
@@ -465,50 +466,14 @@ impl GraphSnapshot {
     }
 
     /// This graph with each value and each link end held under a name a port had moved to the
-    /// port's current name, as the node types `node_types` resolves declare them, so every read
-    /// after it knows only the current names.
+    /// port's current name at every level, a fragment's nodes and links too, as the node types
+    /// `node_types` resolves declare them, so every step after it, flattening, the checks of a
+    /// fragment's interface and the variables included, knows only the current names.
     fn with_each_port_under_its_current_name(
         mut self,
         node_types: &NodeTypesOneStreamResolves,
     ) -> Self {
-        let mut ports_of_each_node: HashMap<String, (Vec<PortInfo>, Vec<PortInfo>)> =
-            HashMap::new();
-        for node in &mut self.nodes {
-            let Some(ports) = node_types.port_info(&node.node_type) else {
-                continue;
-            };
-            node.input_values = PortInfo::input_values_under_the_current_names(
-                &ports.0,
-                std::mem::take(&mut node.input_values),
-            );
-            if let Ok(cast) = cast_exposed_name_to_url_safe(&node.name) {
-                ports_of_each_node.insert(cast.into_owned(), ports);
-            }
-        }
-        let current_name = |end: &mut LinkPortRefOutput, direction: PortDirection| {
-            let (Ok(node), Ok(port)) = (
-                cast_exposed_name_to_url_safe(&end.node),
-                cast_exposed_name_to_url_safe(&end.port),
-            ) else {
-                return;
-            };
-            let Some((inputs, outputs)) = ports_of_each_node.get(node.as_ref()) else {
-                return;
-            };
-            let ports = match direction {
-                PortDirection::Input => inputs,
-                PortDirection::Output => outputs,
-            };
-            if let Some(found) = PortInfo::the_one_a_name_finds(ports, &port)
-                && found.name != port
-            {
-                end.port = found.name.clone();
-            }
-        };
-        for link in &mut self.links {
-            current_name(&mut link.source, PortDirection::Output);
-            current_name(&mut link.target, PortDirection::Input);
-        }
+        each_port_of_one_level_under_its_current_name(&mut self.nodes, &mut self.links, node_types);
         self
     }
 
@@ -601,3 +566,62 @@ impl GraphSnapshot {
 
 #[cfg(test)]
 mod tests;
+
+/// Each value and each link end of one level's `nodes` and `links`, and of every fragment level
+/// they hold, held under a name a port had moved to the port's current name. A value under a
+/// field the node type's config schema lists stays under its own name, and a link held under
+/// several names its ports had is held once.
+fn each_port_of_one_level_under_its_current_name(
+    nodes: &mut [GraphSnapshotNode],
+    links: &mut Vec<GraphSnapshotLink>,
+    node_types: &NodeTypesOneStreamResolves,
+) {
+    let mut ports_of_each_node: HashMap<String, GraphNodePorts> = HashMap::new();
+    for node in nodes.iter_mut() {
+        if let Some(fragment) = &mut node.fragment {
+            each_port_of_one_level_under_its_current_name(
+                &mut fragment.nodes,
+                &mut fragment.links,
+                node_types,
+            );
+        }
+        let Some(ports) = node_types.port_info(&node.node_type) else {
+            continue;
+        };
+        let config_fields =
+            fields_the_config_schema_of_a_node_type_lists(node_types, &node.node_type);
+        let (config_values, input_values): (serde_json::Map<_, _>, serde_json::Map<_, _>) =
+            std::mem::take(&mut node.input_values)
+                .into_iter()
+                .partition(|(name, _)| config_fields.contains(name));
+        node.input_values = ports.input_values_under_the_current_names(input_values);
+        node.input_values.extend(config_values);
+        if let Ok(cast) = cast_exposed_name_to_url_safe(&node.name) {
+            ports_of_each_node.insert(cast.into_owned(), ports);
+        }
+    }
+    let current_name = |end: &mut LinkPortRefOutput, direction: PortDirection| {
+        let (Ok(node), Ok(port)) = (
+            cast_exposed_name_to_url_safe(&end.node),
+            cast_exposed_name_to_url_safe(&end.port),
+        ) else {
+            return;
+        };
+        if let Some(current) = ports_of_each_node
+            .get(node.as_ref())
+            .and_then(|ports| ports.current_name(direction, &port))
+            && current != port
+        {
+            end.port = current.to_string();
+        }
+    };
+    let mut links_held: Vec<GraphSnapshotLink> = Vec::with_capacity(links.len());
+    for mut link in std::mem::take(links) {
+        current_name(&mut link.source, PortDirection::Output);
+        current_name(&mut link.target, PortDirection::Input);
+        if !links_held.contains(&link) {
+            links_held.push(link);
+        }
+    }
+    *links = links_held;
+}

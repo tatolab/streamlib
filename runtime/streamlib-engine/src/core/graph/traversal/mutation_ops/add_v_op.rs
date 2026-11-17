@@ -8,7 +8,7 @@ use petgraph::graph::DiGraph;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNode, GraphNodeWithComponents, Link,
+    EXPOSED_NAME_MAXIMUM_LENGTH, GraphNode, GraphNodePorts, GraphNodeWithComponents, Link,
     NodeFailureReasonComponent, NodeNotReadyBecauseComponent, NodeRunId, NodeTraversalMut,
     ProcessRaisingBecauseComponent, StateComponent, TraversalSourceMut,
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
@@ -55,7 +55,10 @@ impl<'a> TraversalSourceMut<'a> {
 
         // A missed node carries the requested path verbatim, so
         // `GET /api/graph` names exactly what the caller asked for.
-        let (mut inputs, outputs) = resolved_ports.unwrap_or_default();
+        let GraphNodePorts {
+            mut inputs,
+            outputs,
+        } = resolved_ports.unwrap_or_default();
         if !registry_miss && placeholder_of_its_type.is_none() {
             let declared_ports: Vec<_> = inputs.iter().chain(&outputs).cloned().collect();
             inputs.extend(the_input_ports_of_the_exposed_config_fields(

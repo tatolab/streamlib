@@ -29,18 +29,25 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to the live graph, each port it names under its current name,
     /// answering it as applied.
+    ///
+    /// The live graph holds each link once, under its ports' current names, while a document
+    /// may hold one link under several names a port had: a link it already holds is not
+    /// connected again, and a disconnect naming a port by a name it had leaves the graph as it
+    /// is when it holds no such link.
     pub(crate) async fn apply_a_stream_graph_operation_to_the_live_graph(
         &self,
         graph_operation: StreamGraphOperation,
     ) -> Result<StreamGraphOperation> {
+        let as_given = graph_operation.clone();
         let graph_operation = self.the_operation_under_the_current_port_names(graph_operation);
+        let names_a_port_by_a_name_it_had = graph_operation != as_given;
         if self.the_operation_touches_a_node_no_node_runs_as(&graph_operation) {
             return self
                 .apply_a_stream_graph_operation_by_reconciling_the_live_graph(graph_operation)
                 .await;
         }
         match graph_operation {
-            StreamGraphOperation::AddNode { mut node, links } => {
+            StreamGraphOperation::AddNode { node, links } => {
                 let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
                     Error::GraphError(format!("node {} `type`: {refusal}", node.id))
                 })?;
@@ -51,6 +58,8 @@ impl LoadedStreamInThisRuntime {
                     ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
                 )
                 .await?;
+                let (mut node, links) =
+                    self.the_added_node_under_the_current_port_names(node, links);
                 let mut spec = node_spec_holding_the_input_values(
                     self.node_types_this_stream_resolves(),
                     node_type,
@@ -90,12 +99,17 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::RemoveNode { node, links })
             }
             StreamGraphOperation::Connect { link } => {
-                self.connect_the_link(&link).await?;
+                if self.the_link_between(&link).is_err() {
+                    self.connect_the_link(&link).await?;
+                }
                 Ok(StreamGraphOperation::Connect { link })
             }
             StreamGraphOperation::Disconnect { link } => {
-                let link_id = self.the_link_between(&link)?;
-                self.disconnect_async(link_id).await?;
+                match self.the_link_between(&link) {
+                    Ok(link_id) => self.disconnect_async(link_id).await?,
+                    Err(_) if names_a_port_by_a_name_it_had => {}
+                    Err(refusal) => return Err(refusal),
+                }
                 Ok(StreamGraphOperation::Disconnect { link })
             }
             StreamGraphOperation::SetNodeConfig { node, from, to } => {

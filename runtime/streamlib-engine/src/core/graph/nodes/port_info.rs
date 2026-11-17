@@ -79,45 +79,6 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
 }
 
 impl PortInfo {
-    /// The port of `ports` that `name` finds: the port so named, else the one that lists `name`
-    /// as a former name. Every lookup of a port by a name a caller, a document or an older edit
-    /// gives goes through here, so a renamed port is found under the name it had.
-    pub fn the_one_a_name_finds<'port>(
-        ports: &'port [PortInfo],
-        name: &str,
-    ) -> Option<&'port PortInfo> {
-        ports.iter().find(|port| port.name == name).or_else(|| {
-            ports
-                .iter()
-                .find(|port| port.former_names.iter().any(|former| former == name))
-        })
-    }
-
-    /// `values`, each value by input name, with each one held under a name one of `inputs` had
-    /// moved to that input's name; a value already held under that name stays, and a key no
-    /// input names is kept as it is.
-    pub fn input_values_under_the_current_names(
-        inputs: &[PortInfo],
-        values: serde_json::Map<String, serde_json::Value>,
-    ) -> serde_json::Map<String, serde_json::Value> {
-        let mut under_former_names = Vec::new();
-        let mut current = serde_json::Map::with_capacity(values.len());
-        for (name, value) in values {
-            match Self::the_one_a_name_finds(inputs, &name) {
-                Some(input) if input.name != name => {
-                    under_former_names.push((input.name.clone(), value));
-                }
-                _ => {
-                    current.insert(name, value);
-                }
-            }
-        }
-        for (name, value) in under_former_names {
-            current.entry(name).or_insert(value);
-        }
-        current
-    }
-
     /// The value `value` taken as this input's stored value, or what it takes instead, by the
     /// pin it declares; `None` for a port that names no pin type.
     pub fn check_value(
@@ -125,11 +86,10 @@ impl PortInfo {
         value: &serde_json::Value,
     ) -> Option<Result<(), crate::core::descriptors::PinValueNotTaken>> {
         let pin = self.pin.as_ref()?;
-        let declared = crate::core::descriptors::PinDeclaration {
-            may_be_unset: self.may_be_unset,
-            ..crate::core::descriptors::PinDeclaration::exactly(pin.pin_type.clone())
-        };
-        Some(declared.check_value(value))
+        if value.is_null() && self.may_be_unset {
+            return Some(Ok(()));
+        }
+        Some(pin.pin_type.check_value(value))
     }
 
     /// A port named `name` that declares only `family`, typed as any port declaring that family

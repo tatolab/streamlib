@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use crate::core::NodeDescriptor;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_function_node_pool_type,
 };
@@ -15,7 +14,8 @@ use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
-    FunctionNodePromotedToItsOwnProcessComponent, GraphNode, GraphNodeWithComponents, PortInfo,
+    FunctionNodePromotedToItsOwnProcessComponent, GraphNode, GraphNodePorts,
+    GraphNodeWithComponents, PortInfo,
 };
 use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
 use crate::core::nodes::project_view_node::{
@@ -23,10 +23,11 @@ use crate::core::nodes::project_view_node::{
     the_node_type_of_a_top_level_graph_input,
 };
 use crate::core::nodes::{DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance};
+use crate::core::{NodeDescriptor, PortDirection};
 
 struct NodeTypeOneStreamResolvesBeyondTheNativeOnes {
     descriptor: NodeDescriptor,
-    input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
+    input_and_output_port_info: GraphNodePorts,
     how_its_nodes_run: HowANodeOfADescribedTypeRuns,
 }
 
@@ -37,10 +38,10 @@ static THE_NODE_TYPE_A_TOP_LEVEL_GRAPH_INPUT_RUNS_AS: std::sync::LazyLock<
     let descriptor = the_node_type_of_a_top_level_graph_input()
         .expect("the GraphInput node type's names are valid");
     Arc::new(NodeTypeOneStreamResolvesBeyondTheNativeOnes {
-        input_and_output_port_info: (
-            Vec::new(),
-            descriptor.outputs.iter().map(PortInfo::from).collect(),
-        ),
+        input_and_output_port_info: GraphNodePorts {
+            inputs: Vec::new(),
+            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
+        },
         descriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(
             |node| {
@@ -118,7 +119,7 @@ pub struct NodeTypesOneStreamResolves {
 pub struct PlaceholderOfANodeTypeNotDescribed {
     /// Why its node code did not describe it, in the runtime's words.
     pub why_its_node_code_did_not_describe_it: String,
-    input_and_output_port_info: (Vec<PortInfo>, Vec<PortInfo>),
+    input_and_output_port_info: GraphNodePorts,
     config_fields_its_nodes_expose: Vec<String>,
 }
 
@@ -200,10 +201,10 @@ impl NodeTypesOneStreamResolves {
                 }
             };
             why_no_node_takes_each_view.remove(&node_type);
-            let input_and_output_port_info = (
-                descriptor.inputs.iter().map(PortInfo::from).collect(),
-                descriptor.outputs.iter().map(PortInfo::from).collect(),
-            );
+            let input_and_output_port_info = GraphNodePorts {
+                inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
+                outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
+            };
             let descriptor_for_constructor = descriptor.clone();
             view_types.insert(
                 node_type,
@@ -273,10 +274,10 @@ impl NodeTypesOneStreamResolves {
                  Python class or its module"
             )));
         }
-        let input_and_output_port_info = (
-            descriptor.inputs.iter().map(PortInfo::from).collect(),
-            descriptor.outputs.iter().map(PortInfo::from).collect(),
-        );
+        let input_and_output_port_info = GraphNodePorts {
+            inputs: descriptor.inputs.iter().map(PortInfo::from).collect(),
+            outputs: descriptor.outputs.iter().map(PortInfo::from).collect(),
+        };
         self.described_in_this_streams_node_interpreter
             .write()
             .insert(
@@ -323,10 +324,7 @@ impl NodeTypesOneStreamResolves {
     }
 
     /// The input and output ports `node_type` declares, native first.
-    pub fn port_info(
-        &self,
-        node_type: &NodeClassImportPath,
-    ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+    pub fn port_info(&self, node_type: &NodeClassImportPath) -> Option<GraphNodePorts> {
         self.placeholder_of_the_node_type_not_described(node_type)
             .map(|placeholder| placeholder.input_and_output_port_info)
             .or_else(|| NODE_REGISTRY.port_info(node_type))
@@ -335,24 +333,6 @@ impl NodeTypesOneStreamResolves {
                     described.input_and_output_port_info.clone()
                 })
             })
-    }
-
-    /// The current name of the `direction` port of `node_type` that `name` finds, when `name` is
-    /// a name the port had; `None` when `name` is its current name or finds no port.
-    pub fn the_current_name_a_former_port_name_finds(
-        &self,
-        node_type: &NodeClassImportPath,
-        direction: crate::core::PortDirection,
-        name: &str,
-    ) -> Option<String> {
-        let (inputs, outputs) = self.port_info(node_type)?;
-        let ports = match direction {
-            crate::core::PortDirection::Input => inputs,
-            crate::core::PortDirection::Output => outputs,
-        };
-        PortInfo::the_one_a_name_finds(&ports, name)
-            .filter(|port| port.name != name)
-            .map(|port| port.name.clone())
     }
 
     /// Hold every node type a graph names as a placeholder from here on, reading none of its
@@ -424,11 +404,15 @@ impl NodeTypesOneStreamResolves {
             node_type_of_each_node
                 .get(node_name)
                 .and_then(|node_type| self.port_info(node_type))
-                .and_then(|(inputs, outputs)| {
-                    (if is_input { inputs } else { outputs })
-                        .into_iter()
-                        .find(|port| port.name == port_name)
-                        .map(|port| port.family)
+                .and_then(|ports| {
+                    let direction = if is_input {
+                        PortDirection::Input
+                    } else {
+                        PortDirection::Output
+                    };
+                    ports
+                        .the_one_a_name_finds(direction, port_name)
+                        .map(|port| port.family.clone())
                 })
                 .unwrap_or_else(|| PortFamilyDeclaration::of_family(PortFamily::Records))
         };
@@ -454,22 +438,35 @@ impl NodeTypesOneStreamResolves {
                 crate::core::graph::legacy_config_of_a_node::fields_the_config_schema_of_a_node_type_lists(
                     self, node_type,
                 );
-            let (inputs, outputs) = &mut placeholder.input_and_output_port_info;
-            let add_once = |ports: &mut Vec<PortInfo>, port: PortInfo| {
-                if !ports.iter().any(|held| held.name == port.name) {
-                    ports.push(port);
-                }
-            };
+            let ports = &mut placeholder.input_and_output_port_info;
+            // A name a held port had finds that port, so it adds no port of its own.
+            let add_once =
+                |ports: &mut GraphNodePorts, direction: PortDirection, port: PortInfo| {
+                    if ports.the_one_a_name_finds(direction, &port.name).is_none() {
+                        match direction {
+                            PortDirection::Input => ports.inputs.push(port),
+                            PortDirection::Output => ports.outputs.push(port),
+                        }
+                    }
+                };
             for link in &graph.links {
                 if node_type_of_each_node.get(link.target.node.as_str()) == Some(&node_type) {
                     let family =
                         family_of_a_described_port(&link.source.node, &link.source.port, false);
-                    add_once(inputs, a_port(&link.target.port, family, true));
+                    add_once(
+                        ports,
+                        PortDirection::Input,
+                        a_port(&link.target.port, family, true),
+                    );
                 }
                 if node_type_of_each_node.get(link.source.node.as_str()) == Some(&node_type) {
                     let family =
                         family_of_a_described_port(&link.target.node, &link.target.port, true);
-                    add_once(outputs, a_port(&link.source.port, family, false));
+                    add_once(
+                        ports,
+                        PortDirection::Output,
+                        a_port(&link.source.port, family, false),
+                    );
                 }
             }
             for node in graph
@@ -482,7 +479,8 @@ impl NodeTypesOneStreamResolves {
                         && !node.exposed_config_fields.contains(*input)
                 }) {
                     add_once(
-                        inputs,
+                        ports,
+                        PortDirection::Input,
                         a_port(
                             input,
                             PortFamilyDeclaration::of_family(PortFamily::Records),
@@ -492,7 +490,8 @@ impl NodeTypesOneStreamResolves {
                 }
                 for exposed in &node.exposed_config_fields {
                     add_once(
-                        inputs,
+                        ports,
+                        PortDirection::Input,
                         a_port(
                             exposed,
                             PortFamilyDeclaration::of_family(PortFamily::Channels),
@@ -846,7 +845,7 @@ mod tests {
             )
             .expect("a later describe replaces it");
 
-        let (inputs, _) = node_types
+        let GraphNodePorts { inputs, .. } = node_types
             .port_info(&class_import_path(path))
             .expect("the type is registered");
         let input_names: Vec<_> = inputs.iter().map(|port| port.name.as_str()).collect();
@@ -925,7 +924,7 @@ mod tests {
             node_types
                 .port_info(&path)
                 .expect("the stream resolves the class")
-                .0
+                .inputs
                 .into_iter()
                 .map(|port| port.name)
                 .collect()

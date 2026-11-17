@@ -7,6 +7,7 @@
 //! holds only current names.
 
 use streamlib::sdk::error::PortDirection;
+use streamlib::sdk::graph::GraphNodePorts;
 
 use super::*;
 
@@ -26,13 +27,8 @@ pub(super) fn the_request_under_the_current_port_names(
             .copied()
             .or_else(|| Uuid::parse_str(node).ok())
             .and_then(|node| staged_graph.node(node).ok())
-            .and_then(|node| {
-                stream_operations.the_current_name_a_former_port_name_finds(
-                    &node.node_type,
-                    direction,
-                    &name,
-                )
-            })
+            .and_then(|node| stream_operations.the_ports_a_node_type_declares(&node.node_type))
+            .and_then(|ports| ports.current_name(direction, &name).map(str::to_string))
             .unwrap_or(name)
     };
     let current_end =
@@ -94,80 +90,99 @@ pub(super) fn the_request_under_the_current_port_names(
 }
 
 /// The operations that move each value and link end `document` holds under a name a port had
-/// to the port's current name, as `stream_operations` resolves each node's type: a value under a
-/// former name is taken off, with any under the current name, and the current name set to the
-/// value the input reads, the one held under the current name when there is one; a link is
-/// taken out and put back between the ports' current names, unless one already is.
+/// to the port's current name, as `stream_operations` resolves each node's type.
 ///
-/// A running stream holds each of these values and links once, under the current name, and an
-/// undo or a redo applies them to it too, last first for an undo; each value is taken off before
-/// it is set in both orders, so the input ends reading what it read before.
+/// An input holding values under several of its names reads the one the engine's one order
+/// reads ([`GraphNodePorts::inputs_holding_a_value_under_a_name_they_had`]): each of those
+/// values is taken off, in that order, and the current name set to the one read. A link under a
+/// name a port had is taken out, with every other link that names the same ports, and the link
+/// between the current names put back once.
+///
+/// A running stream holds each value and link once, under the current names, and an undo or a
+/// redo applies these to it too, last first for an undo; in both orders the input ends reading
+/// what it read before, and the ports end joined by one link, as a link the running stream
+/// already holds is not connected again and a disconnect under a name a port had of a link it
+/// does not hold leaves it as it is.
 pub(super) fn the_operations_moving_each_former_port_name(
     document: &StreamGraphDocument,
     stream_operations: &dyn RuntimeOperations,
 ) -> Vec<StreamGraphOperation> {
     let nodes = document.nodes();
-    let current_name = |node: Uuid, name: &str, direction: PortDirection| {
-        nodes.iter().find(|held| held.id == node).and_then(|held| {
-            stream_operations.the_current_name_a_former_port_name_finds(
-                &held.node_type,
-                direction,
-                name,
-            )
+    let ports_of_each_node: HashMap<Uuid, GraphNodePorts> = nodes
+        .iter()
+        .filter_map(|node| {
+            stream_operations
+                .the_ports_a_node_type_declares(&node.node_type)
+                .map(|ports| (node.id, ports))
         })
-    };
+        .collect();
     let mut moves = Vec::new();
     for node in &nodes {
-        for (name, value) in &node.input_values {
-            let Some(current) = current_name(node.id, name, PortDirection::Input) else {
-                continue;
-            };
-            let held_under_the_current_name = node.input_values.get(&current);
-            if let Some(held) = held_under_the_current_name {
+        let Some(ports) = ports_of_each_node.get(&node.id) else {
+            continue;
+        };
+        for moved in ports.inputs_holding_a_value_under_a_name_they_had(|name| {
+            node.input_values.contains_key(name)
+        }) {
+            for name in &moved.names_in_the_order_read {
                 moves.push(StreamGraphOperation::SetNodeInputValue {
                     node: node.id,
-                    input: current.clone(),
-                    from: Some(held.clone()),
+                    input: name.clone(),
+                    from: node.input_values.get(name).cloned(),
                     to: None,
                 });
             }
             moves.push(StreamGraphOperation::SetNodeInputValue {
                 node: node.id,
-                input: name.clone(),
-                from: Some(value.clone()),
-                to: None,
-            });
-            moves.push(StreamGraphOperation::SetNodeInputValue {
-                node: node.id,
-                input: current,
+                input: moved.current_name,
                 from: None,
-                to: Some(held_under_the_current_name.unwrap_or(value).clone()),
+                to: node
+                    .input_values
+                    .get(&moved.names_in_the_order_read[0])
+                    .cloned(),
             });
         }
     }
+    let current_end =
+        |end: &StreamGraphDocumentLinkEnd, direction: PortDirection| StreamGraphDocumentLinkEnd {
+            node: end.node,
+            port: ports_of_each_node
+                .get(&end.node)
+                .and_then(|ports| ports.current_name(direction, &end.port))
+                .unwrap_or(&end.port)
+                .to_string(),
+        };
     let links = document.links();
-    let mut links_put_back: Vec<StreamGraphDocumentLink> = Vec::new();
+    let mut links_under_former_names_of_each_link: Vec<(
+        StreamGraphDocumentLink,
+        Vec<StreamGraphDocumentLink>,
+    )> = Vec::new();
     for link in &links {
-        let source = current_name(link.source.node, &link.source.port, PortDirection::Output);
-        let target = current_name(link.target.node, &link.target.port, PortDirection::Input);
-        if source.is_none() && target.is_none() {
+        let moved = StreamGraphDocumentLink {
+            source: current_end(&link.source, PortDirection::Output),
+            target: current_end(&link.target, PortDirection::Input),
+        };
+        if moved == *link {
             continue;
         }
-        let moved = StreamGraphDocumentLink {
-            source: StreamGraphDocumentLinkEnd {
-                node: link.source.node,
-                port: source.unwrap_or_else(|| link.source.port.clone()),
-            },
-            target: StreamGraphDocumentLinkEnd {
-                node: link.target.node,
-                port: target.unwrap_or_else(|| link.target.port.clone()),
-            },
-        };
-        moves.push(StreamGraphOperation::Disconnect { link: link.clone() });
-        if !links.contains(&moved) && !links_put_back.contains(&moved) {
-            links_put_back.push(moved.clone());
-            moves.push(StreamGraphOperation::Connect { link: moved });
+        match links_under_former_names_of_each_link
+            .iter_mut()
+            .find(|(held, _)| *held == moved)
+        {
+            Some((_, under_former_names)) => under_former_names.push(link.clone()),
+            None => links_under_former_names_of_each_link.push((moved, vec![link.clone()])),
         }
+    }
+    for (moved, under_former_names) in links_under_former_names_of_each_link {
+        if links.contains(&moved) {
+            moves.push(StreamGraphOperation::Disconnect {
+                link: moved.clone(),
+            });
+        }
+        for link in under_former_names {
+            moves.push(StreamGraphOperation::Disconnect { link });
+        }
+        moves.push(StreamGraphOperation::Connect { link: moved });
     }
     moves
 }

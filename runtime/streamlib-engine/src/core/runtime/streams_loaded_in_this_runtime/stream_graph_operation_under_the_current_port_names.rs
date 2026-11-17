@@ -7,13 +7,14 @@
 //! it has now.
 
 use streamlib_project_repository::{
-    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphDocumentNode,
+    StreamGraphOperation,
 };
 use uuid::Uuid;
 
 use crate::core::PortDirection;
 use crate::core::descriptors::NodeClassImportPath;
-use crate::core::graph::{GraphNodePorts, PortInfo};
+use crate::core::graph::GraphNodePorts;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 
 impl LoadedStreamInThisRuntime {
@@ -27,7 +28,7 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::AddNode { node, .. } => NodeClassImportPath::new(&node.node_type)
                 .ok()
                 .and_then(|node_type| self.node_types_this_stream_resolves().port_info(&node_type))
-                .map(|(inputs, outputs)| (node.id, GraphNodePorts { inputs, outputs })),
+                .map(|ports| (node.id, ports)),
             _ => None,
         };
         self.compiler.scope_reading(|graph| {
@@ -37,6 +38,77 @@ impl LoadedStreamInThisRuntime {
             })
         })
     }
+
+    /// The node an add places, and the links it brings, each under the current port names, its
+    /// own type read as this stream resolves it now: once an add has described a type the
+    /// stream did not resolve before, its values and links are renamed by what it declares.
+    pub(super) fn the_added_node_under_the_current_port_names(
+        &self,
+        node: StreamGraphDocumentNode,
+        links: Vec<StreamGraphDocumentLink>,
+    ) -> (StreamGraphDocumentNode, Vec<StreamGraphDocumentLink>) {
+        let added = node.id;
+        let ports_of_the_added = NodeClassImportPath::new(&node.node_type)
+            .ok()
+            .and_then(|node_type| self.node_types_this_stream_resolves().port_info(&node_type));
+        self.compiler.scope_reading(|graph| {
+            the_added_node_under_the_current_port_names(node, links, |node| {
+                if node == added {
+                    ports_of_the_added.clone()
+                } else {
+                    graph.node_by_uuid(node).map(|held| held.ports.clone())
+                }
+            })
+        })
+    }
+}
+
+/// `node` and the `links` it brings with each input value and link end under the current name
+/// of its port, each node's ports as `ports_of` answers them by its UUID.
+fn the_added_node_under_the_current_port_names(
+    mut node: StreamGraphDocumentNode,
+    links: Vec<StreamGraphDocumentLink>,
+    ports_of: impl Fn(Uuid) -> Option<GraphNodePorts>,
+) -> (StreamGraphDocumentNode, Vec<StreamGraphDocumentLink>) {
+    if let Some(ports) = ports_of(node.id) {
+        node.input_values =
+            ports.input_values_under_the_current_names(std::mem::take(&mut node.input_values));
+    }
+    let links = links
+        .into_iter()
+        .map(|link| the_link_under_the_current_port_names(link, &ports_of))
+        .collect();
+    (node, links)
+}
+
+/// `link` with each end under the current name of its port, each node's ports as `ports_of`
+/// answers them by its UUID.
+fn the_link_under_the_current_port_names(
+    link: StreamGraphDocumentLink,
+    ports_of: &impl Fn(Uuid) -> Option<GraphNodePorts>,
+) -> StreamGraphDocumentLink {
+    let current_name =
+        |end: StreamGraphDocumentLinkEnd, direction: PortDirection| StreamGraphDocumentLinkEnd {
+            port: the_current_name(ports_of, end.node, end.port, direction),
+            node: end.node,
+        };
+    StreamGraphDocumentLink {
+        source: current_name(link.source, PortDirection::Output),
+        target: current_name(link.target, PortDirection::Input),
+    }
+}
+
+/// The current name of the `direction` port of node `node` that `name` finds, each node's ports
+/// as `ports_of` answers them; `name` as given when nothing answers or no port is found.
+fn the_current_name(
+    ports_of: &impl Fn(Uuid) -> Option<GraphNodePorts>,
+    node: Uuid,
+    name: String,
+    direction: PortDirection,
+) -> String {
+    ports_of(node)
+        .and_then(|ports| ports.current_name(direction, &name).map(str::to_string))
+        .unwrap_or(name)
 }
 
 /// `graph_operation` with each input value and link end it names under the current name of its
@@ -46,36 +118,14 @@ pub(crate) fn the_operation_under_the_current_port_names(
     graph_operation: StreamGraphOperation,
     ports_of: impl Fn(Uuid) -> Option<GraphNodePorts>,
 ) -> StreamGraphOperation {
-    let current_name = |node: Uuid, name: String, direction: PortDirection| -> String {
-        let Some(ports) = ports_of(node) else {
-            return name;
-        };
-        let ports = match direction {
-            PortDirection::Input => &ports.inputs,
-            PortDirection::Output => &ports.outputs,
-        };
-        PortInfo::the_one_a_name_finds(ports, &name).map_or(name, |port| port.name.clone())
+    let current_name = |node: Uuid, name: String, direction: PortDirection| {
+        the_current_name(&ports_of, node, name, direction)
     };
-    let current_link = |link: StreamGraphDocumentLink| StreamGraphDocumentLink {
-        source: StreamGraphDocumentLinkEnd {
-            port: current_name(link.source.node, link.source.port, PortDirection::Output),
-            node: link.source.node,
-        },
-        target: StreamGraphDocumentLinkEnd {
-            port: current_name(link.target.node, link.target.port, PortDirection::Input),
-            node: link.target.node,
-        },
-    };
+    let current_link = |link| the_link_under_the_current_port_names(link, &ports_of);
     match graph_operation {
-        StreamGraphOperation::AddNode { mut node, links } => {
-            if let Some(ports) = ports_of(node.id) {
-                node.input_values = ports
-                    .input_values_under_the_current_names(std::mem::take(&mut node.input_values));
-            }
-            StreamGraphOperation::AddNode {
-                node,
-                links: links.into_iter().map(current_link).collect(),
-            }
+        StreamGraphOperation::AddNode { node, links } => {
+            let (node, links) = the_added_node_under_the_current_port_names(node, links, &ports_of);
+            StreamGraphOperation::AddNode { node, links }
         }
         StreamGraphOperation::Connect { link } => StreamGraphOperation::Connect {
             link: current_link(link),

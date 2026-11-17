@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::core::graph::{
-    PortInfo, cast_exposed_name_to_url_safe, port_names_listed_for_a_refusal,
+    GraphNodePorts, PortInfo, cast_exposed_name_to_url_safe, port_names_listed_for_a_refusal,
     the_input_ports_of_the_exposed_config_fields,
 };
 use crate::core::json_schema::LabelledNodeGroup;
@@ -312,7 +312,11 @@ pub(crate) fn the_ports_of_a_graph_document_node(
     node_name: &str,
     node: &GraphSnapshotNode,
 ) -> Result<Option<(Vec<PortInfo>, Vec<PortInfo>)>> {
-    let Some((mut inputs, outputs)) = node_types.port_info(&node.node_type) else {
+    let Some(GraphNodePorts {
+        mut inputs,
+        outputs,
+    }) = node_types.port_info(&node.node_type)
+    else {
         return Ok(None);
     };
     if node_types

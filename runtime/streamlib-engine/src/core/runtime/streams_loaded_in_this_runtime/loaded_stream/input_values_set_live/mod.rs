@@ -31,9 +31,10 @@ use crate::core::pubsub::RuntimeEvent;
 
 impl LoadedStreamInThisRuntime {
     /// Set each of `sets` live, under its input's current name, apart from the graph, when each
-    /// is on an input its node reads each run; none when one is held on the graph, so the set takes the path a graph edit
-    /// takes. Each value is checked before any is set, handed to the helper and the islands
-    /// reading it, and announced, one change of an input value of this stream at a time.
+    /// is on an input its node reads each run; none when one is held on the graph, so the set
+    /// takes the path a graph edit takes. Each value is checked before any is set, handed to the
+    /// helper and the islands reading it, and announced, one change of an input value of this
+    /// stream at a time.
     pub(crate) fn set_input_values_live(
         &self,
         sets: &[InputValueToSetLive],

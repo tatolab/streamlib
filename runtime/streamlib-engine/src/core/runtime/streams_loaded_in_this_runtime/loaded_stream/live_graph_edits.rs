@@ -479,9 +479,10 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, under the
-/// input's current name, `None` taking it off, dropping any value set live on the input first, then hand each island and the
-/// node's helper what the input reads now; answers the change of the input to announce. Whole or
-/// not at all: an island or helper not handed the value puts the saved and live values back.
+/// input's current name, `None` taking it off, dropping any value set live on the input first,
+/// then hand each island and the node's helper what the input reads now; answers the change of
+/// the input to announce. Whole or not at all: an island or helper not handed the value puts the
+/// saved and live values back.
 pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     graph: &mut Graph,
     node_run_id: &NodeRunId,

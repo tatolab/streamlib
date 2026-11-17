@@ -83,7 +83,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     {
         return Ok(());
     }
-    let Some((input_ports, _)) = node_types.port_info(node_type) else {
+    let Some(ports) = node_types.port_info(node_type) else {
         return Ok(());
     };
     let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
@@ -91,7 +91,8 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     let config_schema = descriptor
         .as_ref()
         .and_then(|descriptor| descriptor.config_schema.clone());
-    let the_input_port = PortInfo::the_one_a_name_finds(&input_ports, input)
+    let the_input_port = ports
+        .input_named(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
     if let Some(port) = the_input_port {
         let Some(value) = value else {
@@ -123,7 +124,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     let config_fields = the_properties_of_a_config_schema(config_schema.as_ref());
     if !config_fields.is_some_and(|properties| properties.contains_key(input)) {
         let mut its_inputs: Vec<String> =
-            input_ports.iter().map(|port| port.name.clone()).collect();
+            ports.inputs.iter().map(|port| port.name.clone()).collect();
         its_inputs.extend(
             config_fields
                 .into_iter()
@@ -243,7 +244,7 @@ pub fn an_exposure_of_config_fields_is_recorded_on(
     }
     let input_ports = node_types
         .port_info(node_type)
-        .map(|(input_ports, _)| input_ports)
+        .map(|ports| ports.inputs)
         .unwrap_or_default();
     let not_inputs: Vec<String> = exposed_config_fields
         .iter()

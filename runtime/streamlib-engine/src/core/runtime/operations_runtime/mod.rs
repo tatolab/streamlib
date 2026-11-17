@@ -758,18 +758,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
     }
 
-    fn the_current_name_a_former_port_name_finds(
+    fn the_ports_a_node_type_declares(
         &self,
         node_type: &str,
-        direction: crate::core::PortDirection,
-        name: &str,
-    ) -> Option<String> {
+    ) -> Option<crate::core::GraphNodePorts> {
         self.node_types_this_stream_resolves()
-            .the_current_name_a_former_port_name_finds(
-                &NodeClassImportPath::new(node_type).ok()?,
-                direction,
-                name,
-            )
+            .port_info(&NodeClassImportPath::new(node_type).ok()?)
     }
 
     fn the_config_a_node_holding_the_input_values_takes(

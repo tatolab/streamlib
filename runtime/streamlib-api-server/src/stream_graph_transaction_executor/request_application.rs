@@ -88,9 +88,55 @@ impl StreamGraphTransactionExecutor<'_> {
             );
         }
 
+        let mut staged_graph_of_each_stream_not_running: BTreeMap<Uuid, StreamGraphDocument> =
+            BTreeMap::new();
+        if let (Some(project_repository), Some(stream_operations)) = (
+            project_repository_held.as_deref(),
+            streams
+                .values()
+                .next()
+                .map(|held| Arc::clone(&held.stream_operations)),
+        ) {
+            for stream_asset in project_repository
+                .assets()
+                .map_err(|refusal| {
+                    GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
+                })?
+                .into_iter()
+                .filter(|asset| asset.kind == ProjectAssetKind::Stream)
+                .map(|asset| asset.asset)
+                .filter(|asset| {
+                    !streams
+                        .values()
+                        .any(|held| held.stream_location.stream_asset == *asset)
+                })
+            {
+                let mut placed_graph = project_repository.stream_graph_document(stream_asset)?;
+                let moves = the_operations_moving_each_former_port_name(
+                    &placed_graph,
+                    stream_operations.as_ref(),
+                );
+                if moves.is_empty() {
+                    continue;
+                }
+                for moved in moves {
+                    placed_graph
+                        .apply(&moved)
+                        .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
+                    former_port_names_moved.push(ProjectOperation::StreamGraph(
+                        StreamGraphOperationOnAStream {
+                            stream: stream_asset,
+                            graph_operation: moved,
+                        },
+                    ));
+                }
+                staged_graph_of_each_stream_not_running.insert(stream_asset, placed_graph);
+            }
+        }
+
         let mut staged = WhatTheTransactionHasStaged {
             streams,
-            staged_graph_of_each_stream_not_running: BTreeMap::new(),
+            staged_graph_of_each_stream_not_running,
             streams_taking_their_edits_once_the_documents_hold_them: BTreeSet::new(),
             project_repository: project_repository_held.as_deref(),
             node_by_label: HashMap::new(),

@@ -11,7 +11,7 @@ use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
-use crate::core::graph::{GraphNode, PortInfo, is_in_exposed_name_cast_form};
+use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
 use crate::core::nodes::{Config, DynGeneratedNode, GeneratedNode};
 
 pub struct NodeInstance(Box<dyn DynGeneratedNode + Send>);
@@ -201,7 +201,7 @@ struct HostCompiledRustTypeRegistration {
 
 pub struct NodeInstanceFactory {
     registrations: RwLock<HashMap<NodeClassImportPath, HostCompiledRustTypeRegistration>>,
-    port_info: RwLock<HashMap<NodeClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    port_info: RwLock<HashMap<NodeClassImportPath, GraphNodePorts>>,
     descriptors: RwLock<HashMap<NodeClassImportPath, NodeDescriptor>>,
     /// Each former built-in node type, with the module node that replaced it.
     built_in_node_types_moved_to_modules:
@@ -313,9 +313,10 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info
-            .write()
-            .insert(node_class_import_path.clone(), (inputs, outputs));
+        self.port_info.write().insert(
+            node_class_import_path.clone(),
+            GraphNodePorts { inputs, outputs },
+        );
 
         self.registrations
             .write()
@@ -346,9 +347,10 @@ impl NodeInstanceFactory {
             return Err(duplicate_class_import_path(&node_class_import_path));
         }
 
-        self.port_info
-            .write()
-            .insert(node_class_import_path.clone(), (inputs, outputs));
+        self.port_info.write().insert(
+            node_class_import_path.clone(),
+            GraphNodePorts { inputs, outputs },
+        );
 
         descriptors.insert(node_class_import_path.clone(), descriptor);
         drop(descriptors);
@@ -449,10 +451,7 @@ impl NodeInstanceFactory {
         Ok(instance)
     }
 
-    pub fn port_info(
-        &self,
-        node_type: &NodeClassImportPath,
-    ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
+    pub fn port_info(&self, node_type: &NodeClassImportPath) -> Option<GraphNodePorts> {
         self.port_info.read().get(node_type).cloned()
     }
 

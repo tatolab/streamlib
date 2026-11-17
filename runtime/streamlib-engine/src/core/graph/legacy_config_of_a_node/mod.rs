@@ -61,8 +61,9 @@ impl LegacyConfigOfANodeType {
             fields_its_config_schema_lists,
             its_input_ports: node_types
                 .port_info(node_type)
-                .map(|(inputs, _)| {
-                    inputs
+                .map(|ports| {
+                    ports
+                        .inputs
                         .into_iter()
                         .flat_map(|input| std::iter::once(input.name).chain(input.former_names))
                         .collect()
