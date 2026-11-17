@@ -284,3 +284,76 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
         );
     }
 }
+
+/// A value set live on a function node's input is held apart from the graph, so `graph` renders
+/// it live and its saved pins are unchanged; one set on a shader node's input is held on the
+/// graph, as its evaluator is built from the values the graph holds.
+///
+/// Mental-revert: holding a shader node's value live renders it `live` while the shader's
+/// evaluator, built from its pins, reads another.
+#[test]
+#[serial_test::serial]
+fn a_live_set_on_a_function_node_is_held_apart_and_one_on_a_shader_node_on_the_graph() {
+    use crate::core::graph::input_values::{InputValueToSetLive, InputValuesSetLive};
+    use crate::core::nodes::NodeSpec;
+    use crate::core::runtime::Runner;
+    use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = runner
+        .load_an_empty_stream(options_loading_a_stream_of_the_test_project_at(
+            project_directory.path(),
+            "main",
+        ))
+        .expect("an empty stream loads");
+    register_a_function_and_a_shader_node_type(stream.node_types_this_stream_resolves());
+    let added = |node_type: &str| {
+        let node = uuid::Uuid::new_v4();
+        stream
+            .add_node(
+                NodeSpec::new(NodeClassImportPath::new(node_type).unwrap(), Value::Null)
+                    .with_node_uuid(node),
+            )
+            .unwrap_or_else(|refusal| panic!("a `{node_type}` node is added: {refusal}"));
+        node
+    };
+    let scale = added(SCALE);
+    let tint = added(TINT);
+    let set_live = |node, input: &str, value| {
+        stream
+            .set_input_values_live(&[InputValueToSetLive {
+                node,
+                input: input.to_owned(),
+                value: Some(value),
+            }])
+            .unwrap_or_else(|refusal| panic!("`{input}` is set: {refusal:?}"))
+    };
+
+    assert!(matches!(
+        set_live(scale, "x", json!(0.5)),
+        InputValuesSetLive::ApartFromTheGraph(_)
+    ));
+    assert_eq!(
+        set_live(tint, "amount", json!(0.25)),
+        InputValuesSetLive::OnTheGraph
+    );
+
+    let graph = stream.to_json().expect("the graph serializes");
+    let rendered_scale = graph["nodes"]
+        .as_array()
+        .and_then(|nodes| nodes.iter().find(|node| node["id"] == scale.to_string()))
+        .unwrap_or_else(|| panic!("the graph holds `scale`: {graph}"));
+    let x = rendered_scale["ports"]["inputs"]
+        .as_array()
+        .and_then(|inputs| inputs.iter().find(|port| port["name"] == "x"))
+        .unwrap_or_else(|| panic!("`scale` renders `x`: {rendered_scale}"));
+    assert_eq!(
+        (&x["value"], &x["value_comes_from"]),
+        (&json!(0.5), &json!("live"))
+    );
+    assert!(
+        rendered_scale["pins"].get("x").is_none(),
+        "{rendered_scale}"
+    );
+}

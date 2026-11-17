@@ -650,8 +650,11 @@ async fn the_operations_it_replaces_record_what_it_records() {
 }
 
 /// What a node holds live alone is kept by a committed transaction refused part-way, whose
-/// sets are reversed to what the running node held, and is taken off by a `set_node_config`
-/// that replaces the config whole.
+/// sets are reversed to the saved value with the live one set live again, and is taken off by a
+/// `set_node_config` that replaces the config whole.
+///
+/// Mental-revert: reversing a set to the live value it replaced saves that value as a pin the
+/// document does not hold, and `graph` renders it `saved`.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_by_a_whole_config() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -687,7 +690,16 @@ async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_b
     assert_eq!(project.the_graph_document_of("main"), saved_before);
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
     let gain = the_input_named(&mixer, "gain");
-    assert_eq!(gain["value"], json!(0.25), "{gain}");
+    assert_eq!(
+        (&gain["value"], &gain["value_comes_from"]),
+        (&json!(0.25), &json!("live")),
+        "the reversal sets the live value live again: {gain}"
+    );
+    assert_eq!(
+        the_pin_values_of(&mixer),
+        json!({}),
+        "the pins are what the document holds: {mixer}"
+    );
     assert_eq!(mixer["config"], json!({ "frame_width": 800 }), "{mixer}");
 
     engine

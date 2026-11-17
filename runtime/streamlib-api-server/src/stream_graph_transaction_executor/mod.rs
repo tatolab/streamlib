@@ -124,10 +124,27 @@ struct StreamATransactionEdits {
 /// overrides the input value it sets, when one feeds that input.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
-    applied_live: Option<StreamGraphOperation>,
+    applied_live: Option<OneOperationAppliedLive>,
     project_operations: Vec<ProjectOperation>,
     made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
     overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
+}
+
+/// One operation made on a running stream, and the value set live on the input it set that it
+/// replaced, which its reversal sets live again once the saved value is back.
+struct OneOperationAppliedLive {
+    operation: StreamGraphOperation,
+    live_value_it_replaced: Option<streamlib::sdk::graph::input_values::InputValueToSetLive>,
+}
+
+impl OneOperationAppliedLive {
+    /// `operation`, made on a running stream, replacing no value set live.
+    fn replacing_no_live_value(operation: StreamGraphOperation) -> Self {
+        Self {
+            operation,
+            live_value_it_replaced: None,
+        }
+    }
 }
 
 /// The stream a collapse saves: its stream asset, its graph document, and the operation

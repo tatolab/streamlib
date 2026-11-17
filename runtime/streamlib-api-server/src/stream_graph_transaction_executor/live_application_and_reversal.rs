@@ -74,7 +74,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let stream_id_of_each_stream_asset =
             self.the_stream_id_of_each_loaded_stream_asset(project);
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
-        let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
+        let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
             Vec::new();
         let mut streams_taking_their_operations_once_the_documents_hold_them: BTreeSet<String> =
@@ -132,7 +132,12 @@ impl StreamGraphTransactionExecutor<'_> {
                             .apply_a_stream_graph_operation_live(graph_operation.clone()),
                     )
                     .map_err(|refusal| refusal.to_string())
-                    .map(|applied| (stream_id.clone(), applied))
+                    .map(|applied| {
+                        (
+                            stream_id.clone(),
+                            OneOperationAppliedLive::replacing_no_live_value(applied),
+                        )
+                    })
             };
             let applied = applied_to_the_running_stream();
             match applied {
@@ -189,11 +194,12 @@ impl StreamGraphTransactionExecutor<'_> {
     }
 
     /// Apply the inverse of each operation of `applied_live`, newest first, to the running
-    /// stream it was applied to, so a refused transaction leaves the streams as they were.
+    /// stream it was applied to, setting live again each value set live it replaced, so a
+    /// refused transaction leaves the streams as they were.
     pub(super) fn reverse_what_was_applied_live(
         &self,
         streams: &BTreeMap<String, StreamATransactionEdits>,
-        applied_live: Vec<(String, StreamGraphOperation)>,
+        applied_live: Vec<(String, OneOperationAppliedLive)>,
     ) {
         for (stream_id, applied) in applied_live.into_iter().rev() {
             let Some(stream) = streams.get(&stream_id) else {
@@ -202,12 +208,26 @@ impl StreamGraphTransactionExecutor<'_> {
             if let Err(not_reversed) = self.async_runtime.block_on(
                 stream
                     .stream_operations
-                    .apply_a_stream_graph_operation_live(applied.inverse()),
+                    .apply_a_stream_graph_operation_live(applied.operation.inverse()),
             ) {
                 tracing::error!(
                     stream = %stream_id,
                     %not_reversed,
                     "could not reverse part of a refused graph transaction on its running stream"
+                );
+                continue;
+            }
+            if let Some(live_value) = applied.live_value_it_replaced
+                && let Err(not_set_live_again) = stream
+                    .stream_operations
+                    .set_input_values_live(std::slice::from_ref(&live_value))
+            {
+                tracing::error!(
+                    stream = %stream_id,
+                    node = %live_value.node,
+                    input = live_value.input,
+                    ?not_set_live_again,
+                    "could not set live again a value a refused graph transaction replaced"
                 );
             }
         }

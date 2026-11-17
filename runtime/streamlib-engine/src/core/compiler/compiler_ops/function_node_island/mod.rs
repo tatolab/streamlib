@@ -501,16 +501,20 @@ pub(crate) fn hand_each_reader_the_island_a_compile_changed(
     hand_each_reader_its_island_again_when_it_changed(graph, island_links)
 }
 
-/// Hand each reader of an island evaluating the function node `function_node_id` that island
-/// again, when it differs from the one its reader was handed, as a value it reads changed.
-pub(crate) fn hand_each_reader_an_island_evaluating_the_node_again_when_it_changed(
+/// Hand each reader of an island evaluating one of the function nodes `function_node_ids` that
+/// island again, once, when it differs from the one its reader was handed, as a value it reads
+/// changed.
+pub(crate) fn hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
     graph: &mut Graph,
-    function_node_id: &NodeRunId,
+    function_node_ids: &[NodeRunId],
 ) -> Result<()> {
     let island_links: Vec<LinkUniqueId> = the_island_links(graph)
         .into_iter()
         .filter(|link_id| {
-            the_function_nodes_an_island_link_evaluates(graph, link_id).contains(function_node_id)
+            let evaluated = the_function_nodes_an_island_link_evaluates(graph, link_id);
+            function_node_ids
+                .iter()
+                .any(|function_node_id| evaluated.contains(function_node_id))
         })
         .collect();
     hand_each_reader_its_island_again_when_it_changed(graph, island_links)

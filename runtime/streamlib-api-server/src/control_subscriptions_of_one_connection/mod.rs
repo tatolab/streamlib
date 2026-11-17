@@ -120,6 +120,22 @@ impl StreamFollowed {
             WhatAConnectionFollowsOfAStream::InputValues => self.follows_its_input_values,
         }
     }
+
+    /// Follow `what` of the stream from now on.
+    fn follow(&mut self, what: WhatAConnectionFollowsOfAStream) {
+        match what {
+            WhatAConnectionFollowsOfAStream::Graph => self.follows_its_graph = true,
+            WhatAConnectionFollowsOfAStream::InputValues => self.follows_its_input_values = true,
+        }
+    }
+
+    /// Whether a change of kind `change` of the stream's live graph is sent: every kind to a
+    /// connection following its graph, and `missed` to one following its input values alone too,
+    /// so it reads again the values it may have missed.
+    fn is_sent_the_graph_change(&self, change: StreamGraphChangeKindOnTheWire) -> bool {
+        self.follows_its_graph
+            || (self.follows_its_input_values && change == StreamGraphChangeKindOnTheWire::Missed)
+    }
 }
 
 /// One followed stream as it is loaded now, and the listener that keeps its topic subscribed.
@@ -278,18 +294,25 @@ impl ControlSubscriptionsOfOneConnection {
             if !already_followed_on_this_load {
                 followed.load = Some(self.follow_one_load(loaded_stream)?);
             }
-            match what {
-                WhatAConnectionFollowsOfAStream::Graph => followed.follows_its_graph = true,
-                WhatAConnectionFollowsOfAStream::InputValues => {
-                    followed.follows_its_input_values = true;
-                }
-            }
+            followed.follow(what);
         }
         Ok(followed_streams
             .iter()
             .filter(|(_, followed)| followed.follows(what))
             .map(|(stream_id, _)| stream_id.clone())
             .collect())
+    }
+
+    /// Whether the connection is sent `change`, a change of the live graph of a stream it
+    /// follows.
+    pub(crate) fn is_sent_the_graph_change(
+        &self,
+        change: &StreamGraphChangedNotificationParams,
+    ) -> bool {
+        self.followed_streams
+            .lock()
+            .get(&change.stream)
+            .is_some_and(|followed| followed.is_sent_the_graph_change(change.change))
     }
 
     /// Whether the connection follows `what` of the stream `stream_id`.
@@ -338,7 +361,7 @@ impl ControlSubscriptionsOfOneConnection {
                 }
                 None => None,
             };
-            if followed.follows_its_graph {
+            if followed.is_sent_the_graph_change(StreamGraphChangeKindOnTheWire::Missed) {
                 streams_whose_load_changed.push(stream_id.clone());
             }
         }
@@ -497,30 +520,4 @@ fn node_state_on_the_wire(node_state: NodeState) -> NodeStateOnTheWire {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The wire names a node's state as `graph` renders it.
-    ///
-    /// Mental-revert: a wire spelling other than the engine's `Display` leaves a client reading
-    /// one name from `graph` and another from `stream_graph_changed`.
-    #[test]
-    fn a_node_state_on_the_wire_is_spelled_as_graph_renders_it() {
-        for node_state in [
-            NodeState::Pending,
-            NodeState::Idle,
-            NodeState::Running,
-            NodeState::Paused,
-            NodeState::Stopping,
-            NodeState::Stopped,
-            NodeState::Error,
-            NodeState::Restarting,
-        ] {
-            assert_eq!(
-                serde_json::to_value(node_state_on_the_wire(node_state))
-                    .expect("a node state serializes"),
-                serde_json::json!(node_state.to_string())
-            );
-        }
-    }
-}
+mod tests;

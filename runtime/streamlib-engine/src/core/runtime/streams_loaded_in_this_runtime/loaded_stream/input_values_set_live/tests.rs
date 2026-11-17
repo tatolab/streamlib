@@ -80,7 +80,11 @@ fn a_helper_refusing_its_values_leaves_every_live_value_as_it_was_and_announces_
     assert_eq!(live_values.value_of(node, "level"), Some(json!(0.25)));
     assert_eq!(live_values.value_of(node, "gain"), None);
     delivery.refuses_pin_values.store(false, Ordering::SeqCst);
-    hand_each_helper_reading_the_nodes_its_own(&graph, &[a_set(node, "level", None)]);
+    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(
+        &graph,
+        graph.node_by_uuid(node).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         delivery.pin_values_handed_over.lock().last(),
         json!({ "level": 0.25 }).as_object(),
@@ -185,7 +189,7 @@ fn a_node_dropped_from_the_graph_forgets_its_live_values() {
     let (level_meter, _delivery) = a_level_meter_past_its_setup(&mut graph);
     let node = the_uuid_of(&graph, &level_meter);
     the_values_set_live(&graph, &[a_set(node, "level", Some(json!(0.5)))]).unwrap();
-    assert!(!graph.drop_the_node(&level_meter));
+    assert!(graph.drop_the_node(&level_meter));
     assert_eq!(graph.live_input_values().value_of(node, "level"), None);
 }
 
@@ -313,9 +317,10 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
         held_live.function_nodes_read_inside_an_island,
         vec![remap.clone()]
     );
-    hand_each_reader_an_island_evaluating_the_nodes_again(
+    hand_each_island_the_live_set_or_put_it_back(
         &mut graph,
-        &held_live.function_nodes_read_inside_an_island,
+        &[a_set(remap_uuid, "x", Some(json!(0.5)))],
+        &held_live,
     )
     .unwrap();
     assert_eq!(the_pins_last_handed(), Some(json!({ "x": 0.5 })));
@@ -337,4 +342,135 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
         ),
         "{committed:?}"
     );
+}
+
+/// A function node read inside an island, reading `remap`'s `x`, whose reader past its setup
+/// hands what it is handed to the delivery answered.
+fn a_function_node_read_inside_an_island()
+-> (Graph, NodeRunId, RecordingOutOfProcessFarSideLinkDelivery) {
+    let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let remap = add_a_node(&mut graph, "test_ops:remap", Value::Null);
+    let reader = a_helper_reader_before_its_setup(&mut graph);
+    the_link_wiring_of(&graph, &reader)
+        .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
+        .unwrap();
+    let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
+    wire_a_link_from_a_function_node_island_into_its_reader(
+        &mut graph,
+        &into_the_reader,
+        &Iceoryx2Node::for_this_test_process(),
+    )
+    .unwrap();
+    (graph, remap, delivery)
+}
+
+/// Mental-revert: returning the island's refusal without putting the set back leaves the
+/// refused value live, while the reader still evaluates the value before it.
+#[test]
+fn an_island_refusing_its_values_leaves_every_live_value_as_it_was() {
+    let (mut graph, remap, delivery) = a_function_node_read_inside_an_island();
+    let remap_uuid = the_uuid_of(&graph, &remap);
+    let first = [a_set(remap_uuid, "x", Some(json!(0.25)))];
+    let held_live = the_values_set_live(&graph, &first)
+        .unwrap()
+        .expect("held live");
+    hand_each_island_the_live_set_or_put_it_back(&mut graph, &first, &held_live).unwrap();
+
+    delivery
+        .refuses_function_node_islands
+        .store(true, Ordering::SeqCst);
+    let second = [a_set(remap_uuid, "x", Some(json!(0.75)))];
+    let held_live = the_values_set_live(&graph, &second)
+        .unwrap()
+        .expect("held live");
+    let refused = hand_each_island_the_live_set_or_put_it_back(&mut graph, &second, &held_live);
+
+    assert!(
+        matches!(refused, Err(LiveInputValueSetRefusal::NotHandedOver(_))),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(
+        graph.live_input_values().value_of(remap_uuid, "x"),
+        Some(json!(0.25))
+    );
+}
+
+/// Mental-revert: writing the pin and dropping the live value, then returning the helper's
+/// refusal with `?`, leaves the graph holding a saved value no helper was handed and the live
+/// value gone.
+#[test]
+fn a_helper_refusing_a_saved_value_puts_the_saved_and_live_values_back() {
+    let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
+    let (level_meter, delivery) = a_level_meter_past_its_setup(&mut graph);
+    let node = the_uuid_of(&graph, &level_meter);
+    the_values_set_live(&graph, &[a_set(node, "level", Some(json!(0.25)))])
+        .unwrap()
+        .expect("held live");
+
+    delivery.refuses_pin_values.store(true, Ordering::SeqCst);
+    let refused =
+        set_the_saved_value_and_hand_it_over(&mut graph, &level_meter, "level", Some(json!(0.75)));
+
+    assert!(refused.is_err());
+    assert!(graph.node_by_uuid(node).unwrap().pins.is_empty());
+    assert_eq!(
+        graph.live_input_values().value_of(node, "level"),
+        Some(json!(0.25))
+    );
+}
+
+/// A string set live on a Channels input of a function node run in a helper of its own is
+/// refused, as that helper reads only a number or a bool there, and the saved value still reads.
+///
+/// Mental-revert: holding the string live hands the helper no value for the input, and the live
+/// string hides the saved one in `graph`.
+#[test]
+fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
+    use crate::core::execution::ProcessExecution;
+    use crate::core::graph::{
+        FunctionNodePromotedToItsOwnProcessComponent, GraphNodeWithComponents,
+        HowItsHelpersRanAFunctionNode,
+    };
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let remap = add_a_node(&mut graph, "test_ops:remap", Value::Null);
+    let remap_uuid = the_uuid_of(&graph, &remap);
+    assert!(
+        the_values_set_live(&graph, &[a_set(remap_uuid, "x", Some(json!("loud")))])
+            .unwrap()
+            .is_some(),
+        "a function node read inside an island is handed the string whole"
+    );
+    graph.live_input_values().set(remap_uuid, "x", None);
+    set_the_saved_value_and_hand_it_over(&mut graph, &remap, "x", Some(json!(0.25))).unwrap();
+    graph
+        .traversal_mut()
+        .v(&remap)
+        .first_mut()
+        .unwrap()
+        .insert_component_without_rendering_it(FunctionNodePromotedToItsOwnProcessComponent {
+            process_execution: ProcessExecution::Continuous { interval_ms: 10 },
+            how_its_own_helper_ran_it: std::sync::Arc::new(
+                HowItsHelpersRanAFunctionNode::default(),
+            ),
+        });
+
+    let refused = the_values_set_live(&graph, &[a_set(remap_uuid, "x", Some(json!("loud")))]);
+
+    assert!(
+        matches!(
+            refused,
+            Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt { set_index: 0, .. })
+        ),
+        "{:?}",
+        refused.err()
+    );
+    let node = graph.node_by_uuid(remap_uuid).unwrap();
+    assert!(matches!(
+        crate::core::graph::input_values::the_input_value_change(&graph, node, "x"),
+        Some(RuntimeEvent::InputValueDidChange { value_read: Some(InputValueRead {
+            value: Some(ref value), value_comes_from: Some(InputValueComesFrom::Saved) }), .. })
+            if value == &json!(0.25)
+    ));
 }

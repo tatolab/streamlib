@@ -465,7 +465,8 @@ impl LoadedStreamInThisRuntime {
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, `None`
 /// taking it off, dropping any value set live on the input first, then hand each island and the
-/// node's helper what the input reads now; answers the change of the input to announce.
+/// node's helper what the input reads now; answers the change of the input to announce. Whole or
+/// not at all: an island or helper not handed the value puts the saved and live values back.
 pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     graph: &mut Graph,
     node_run_id: &NodeRunId,
@@ -493,22 +494,58 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
             node.display_name
         )));
     }
-    match value {
-        Some(value) => {
-            refuse_a_pin_value_a_process_node_cannot_read(node, input, &value)?;
-            node.pins.insert(input.to_string(), value);
-        }
-        None => {
-            node.pins.remove(input);
-        }
+    if let Some(value) = &value {
+        refuse_a_pin_value_a_process_node_cannot_read(node, input, value)?;
     }
-    graph.live_input_values().set(node_uuid, input, None);
+    let saved_value_before = set_the_pin(node, input, value);
+    let live_value_before = graph.live_input_values().set(node_uuid, input, None);
+    if let Err(not_handed_over) = hand_each_island_and_the_helper_the_value(graph, node_run_id) {
+        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
+            set_the_pin(node, input, saved_value_before);
+        }
+        graph
+            .live_input_values()
+            .set(node_uuid, input, live_value_before);
+        if let Err(not_handed_back) = hand_each_island_and_the_helper_the_value(graph, node_run_id)
+        {
+            tracing::error!(
+                %not_handed_back,
+                "an island or helper was not handed back the value a refused saved set replaced"
+            );
+        }
+        return Err(not_handed_over);
+    }
+    let node = graph
+        .traversal()
+        .v(node_run_id)
+        .first()
+        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+    Ok(the_input_value_change(graph, node, input))
+}
+
+/// Set the pin `input` of `node` to `value`, `None` taking it off; answers the pin it held.
+fn set_the_pin(
+    node: &mut crate::core::graph::GraphNode,
+    input: &str,
+    value: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match value {
+        Some(value) => node.pins.insert(input.to_string(), value),
+        None => node.pins.remove(input),
+    }
+}
+
+/// Hand each island that changed, and the helper of the node `node_run_id`, the values they
+/// read now.
+fn hand_each_island_and_the_helper_the_value(
+    graph: &mut Graph,
+    node_run_id: &NodeRunId,
+) -> Result<()> {
     hand_each_reader_the_island_a_compile_changed(graph, &[])?;
     let node = graph
         .traversal()
         .v(node_run_id)
         .first()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)?;
-    Ok(the_input_value_change(graph, node, input))
+    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)
 }

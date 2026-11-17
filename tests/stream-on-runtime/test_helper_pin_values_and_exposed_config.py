@@ -76,8 +76,15 @@ def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_se
         for node in local_api.call_tool("graph", {"stream": stream_id})["nodes"]
         if node["name"] == "sink"
     ]
+    (brightness,) = [
+        port for port in sink_after_the_edit["ports"]["inputs"] if port["name"] == "brightness"
+    ]
+    assert brightness["value"] == pytest.approx(0.75), (
+        f"`graph` shows the value set live as the value the input reads: {brightness}"
+    )
+    assert brightness["value_comes_from"] == "live", brightness
     pins = sink_after_the_edit["pins"]
-    assert pins == {"brightness": 0.75}, f"`graph` shows the pin value set: {pins}"
+    assert "brightness" not in pins, f"a value set live is no saved pin value: {pins}"
 
     set_the_pin_live(None)
     defaulted_again, _ = the_first_value_batch_read_after(

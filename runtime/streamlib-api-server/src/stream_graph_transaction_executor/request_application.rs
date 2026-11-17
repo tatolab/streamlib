@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib::sdk::graph::input_values::InputValueToSetLive;
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Apply each request, to the loaded stream it names, as one transaction by `author`, to the
@@ -84,7 +85,7 @@ impl StreamGraphTransactionExecutor<'_> {
         )?;
 
         let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
-        let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
+        let mut applied_live: Vec<(String, OneOperationAppliedLive)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut project_operations: Vec<ProjectOperation> = Vec::new();
         let mut made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)> =
@@ -400,13 +401,20 @@ impl StreamGraphTransactionExecutor<'_> {
                         node, input, to, ..
                     },
                     Some(held),
-                ) => StreamGraphOperation::SetNodeInputValue {
-                    node: *node,
-                    input: input.clone(),
-                    from: held,
-                    to: to.clone(),
+                ) => OneOperationAppliedLive {
+                    operation: StreamGraphOperation::SetNodeInputValue {
+                        node: *node,
+                        input: input.clone(),
+                        from: held.saved,
+                        to: to.clone(),
+                    },
+                    live_value_it_replaced: held.live.map(|value| InputValueToSetLive {
+                        node: *node,
+                        input: input.clone(),
+                        value: Some(value),
+                    }),
                 },
-                _ => applied.clone(),
+                _ => OneOperationAppliedLive::replacing_no_live_value(applied.clone()),
             };
             let stream = streams
                 .get_mut(stream_id)
@@ -414,7 +422,7 @@ impl StreamGraphTransactionExecutor<'_> {
             if let Err(why) = stream.staged_graph.apply(&applied) {
                 if let Err(not_reversed) = self.async_runtime.block_on(
                     stream_operations.apply_a_stream_graph_operation_live(
-                        applied_on_the_running_stream.inverse(),
+                        applied_on_the_running_stream.operation.inverse(),
                     ),
                 ) {
                     tracing::error!(

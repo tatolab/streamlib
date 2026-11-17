@@ -103,7 +103,9 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
         for node_run_id in &nodes_pending_deletion {
-            this_streams_graph.drop_the_node(node_run_id);
+            if !this_streams_graph.drop_the_node(node_run_id) {
+                tracing::warn!("`{node_run_id}`, pending deletion, was not dropped from the graph");
+            }
         }
     });
 }
@@ -294,7 +296,9 @@ pub(super) async fn add_node_impl(
                     )
                 })
             {
-                graph.drop_the_node(&node_id);
+                if !graph.drop_the_node(&node_id) {
+                    tracing::warn!("`{node_id}`, whose add was refused, was not dropped");
+                }
                 return Err(refusal);
             }
         }

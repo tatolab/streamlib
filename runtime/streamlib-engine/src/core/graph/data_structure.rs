@@ -115,13 +115,20 @@ impl Graph {
         })
     }
 
-    /// Drop the node `node_run_id` and the links into and out of it, and forget each value set
-    /// live on its inputs; whether the graph still holds it.
+    /// Drop the node `node_run_id` and the links into and out of it, then forget each value set
+    /// live on its inputs; whether it was dropped.
+    #[must_use]
     pub fn drop_the_node(&mut self, node_run_id: &NodeRunId) -> bool {
-        if let Some(node) = self.traversal().v(node_run_id).first() {
-            self.live_input_values.forget_the_node(node.node_uuid);
+        let node_uuid = self
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .map(|node| node.node_uuid);
+        let dropped = !self.traversal_mut().v(node_run_id).drop().exists();
+        if dropped && let Some(node_uuid) = node_uuid {
+            self.live_input_values.forget_the_node(node_uuid);
         }
-        self.traversal_mut().v(node_run_id).drop().exists()
+        dropped
     }
 
     /// The node types this graph's stream resolves.

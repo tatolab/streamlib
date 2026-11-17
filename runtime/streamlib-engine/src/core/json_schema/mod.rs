@@ -120,8 +120,9 @@ pub struct GraphNodeOutput {
     pub config_checksum: u64,
     /// Input and output ports.
     pub ports: GraphNodePortsOutput,
-    /// The values set on the node's unlinked inputs, by input name.
-    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    /// The values saved on the node's unlinked inputs, by input name; empty when none is saved.
+    /// A value set live shows only as its input's `value`.
+    #[serde(default)]
     pub pins: serde_json::Map<String, serde_json::Value>,
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

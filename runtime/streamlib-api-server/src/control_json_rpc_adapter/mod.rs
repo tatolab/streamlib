@@ -509,6 +509,18 @@ async fn send_the_new_records_of_a_project_log(
     }
 }
 
+/// Send `Notification` with each of `each_params` to the client, in order; an error once the
+/// connection has ended.
+async fn send_each_notification<Notification: ControlNotification>(
+    outgoing_message_sender: &mpsc::Sender<Value>,
+    each_params: impl IntoIterator<Item = Notification::Params>,
+) -> Result<(), ()> {
+    for params in each_params {
+        send_a_notification::<Notification>(outgoing_message_sender, params).await?;
+    }
+    Ok(())
+}
+
 /// Send `Notification` with `params` to the client; an error once the connection has ended.
 async fn send_a_notification<Notification: ControlNotification>(
     outgoing_message_sender: &mpsc::Sender<Value>,
@@ -527,9 +539,10 @@ async fn send_a_notification<Notification: ControlNotification>(
 /// Send each change heard in a followed stream's graph as a `stream_graph_changed`
 /// notification, each followed stream whose drops, raises or link states changed since the last
 /// sample as one too, each input value change of a stream whose input values the connection
-/// follows as an `input_value_changed`, at most once each 33 ms for one input, and one of a
-/// stream whose graph alone it follows as `edited`, at most once each 500 ms for the stream,
-/// and each stream action change as a `stream_action_changed` once the connection subscribed to
+/// follows as an `input_value_changed`, at most once each
+/// [`ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY`] for one input, and one of a stream whose graph
+/// alone it follows as `edited`, at most once each [`A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY`]
+/// for the stream, and each stream action change as a `stream_action_changed` once the connection subscribed to
 /// them, until the connection ends. Each stream action change also moves each followed stream to
 /// the load it has now, sending `missed` for one whose load changed.
 async fn send_stream_graph_and_action_changes_until_the_connection_ends(
@@ -567,21 +580,20 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
             () = connection_ended.cancelled() => return,
             () = sleep_until_due(next_held_change_due_at) => {
                 let now = std::time::Instant::now();
-                for changed in input_value_changes.take_the_due(now) {
-                    if send_a_notification::<InputValueChanged>(&outgoing_message_sender, changed)
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-                for edited in value_changes_told_as_edited.take_the_due(now) {
-                    if send_a_notification::<StreamGraphChanged>(&outgoing_message_sender, edited)
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
+                if send_each_notification::<InputValueChanged>(
+                    &outgoing_message_sender,
+                    input_value_changes.take_the_due(now),
+                )
+                .await
+                .is_err()
+                    || send_each_notification::<StreamGraphChanged>(
+                        &outgoing_message_sender,
+                        value_changes_told_as_edited.take_the_due(now),
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
                 }
             }
             _ = drops_raises_and_link_states_sampling.tick() => {
@@ -611,10 +623,7 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                 let sent = match stream_change {
                     None => return,
                     Some(HeardOfAFollowedStream::GraphChanged(stream_graph_change)) => {
-                        if !subscriptions.follows(
-                            &stream_graph_change.stream,
-                            WhatAConnectionFollowsOfAStream::Graph,
-                        ) {
+                        if !subscriptions.is_sent_the_graph_change(&stream_graph_change) {
                             continue;
                         }
                         send_a_notification::<StreamGraphChanged>(
@@ -632,16 +641,11 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                                 node: input_value_change.node.clone(),
                                 input: input_value_change.input.clone(),
                             };
-                            match input_value_changes.heard(key, input_value_change, now) {
-                                Some(changed) => {
-                                    send_a_notification::<InputValueChanged>(
-                                        &outgoing_message_sender,
-                                        changed,
-                                    )
-                                    .await
-                                }
-                                None => Ok(()),
-                            }
+                            send_each_notification::<InputValueChanged>(
+                                &outgoing_message_sender,
+                                input_value_changes.heard(key, input_value_change, now),
+                            )
+                            .await
                         } else if subscriptions.follows(&stream, WhatAConnectionFollowsOfAStream::Graph) {
                             let edited = StreamGraphChangedNotificationParams {
                                 stream: stream.clone(),
@@ -649,16 +653,11 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                                 node: None,
                                 node_state: None,
                             };
-                            match value_changes_told_as_edited.heard(stream, edited, now) {
-                                Some(edited) => {
-                                    send_a_notification::<StreamGraphChanged>(
-                                        &outgoing_message_sender,
-                                        edited,
-                                    )
-                                    .await
-                                }
-                                None => Ok(()),
-                            }
+                            send_each_notification::<StreamGraphChanged>(
+                                &outgoing_message_sender,
+                                value_changes_told_as_edited.heard(stream, edited, now),
+                            )
+                            .await
                         } else {
                             Ok(())
                         }
@@ -726,7 +725,6 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
     }
 }
 
-/// Wait until `due_at`, or for ever when nothing is due.
 /// One input of a stream, which changes of its value are sent at most once each interval for:
 /// the stream, by stream id, the node, by its graph `id`, and the input, by name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -736,6 +734,7 @@ struct OneInputOfAStream {
     input: String,
 }
 
+/// Wait until `due_at`, or for ever when nothing is due.
 async fn sleep_until_due(due_at: Option<std::time::Instant>) {
     match due_at {
         Some(due_at) => tokio::time::sleep_until(tokio::time::Instant::from_std(due_at)).await,
