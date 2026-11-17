@@ -65,3 +65,43 @@ fn a_root_or_a_reference_the_contract_has_no_schema_for_is_refused() {
         .to_string();
     assert!(refusal.contains("`Root` names `Missing`"), "{refusal}");
 }
+
+#[test]
+fn a_closed_set_and_a_tagged_union_read_their_values_in_order() {
+    let closed_set = json!({ "oneOf": [{ "const": "value" }, { "const": "stream" }] });
+    assert_eq!(
+        string_values_of_a_closed_set(&closed_set).unwrap(),
+        ["value", "stream"]
+    );
+    let tagged_union = json!({ "oneOf": [
+        { "properties": { "mode": { "const": "wire_only" } } },
+        { "properties": { "mode": { "const": "setting_only" }, "read": {} } }
+    ] });
+    assert_eq!(
+        tags_of_a_tagged_union(&tagged_union, "mode").unwrap(),
+        ["wire_only", "setting_only"]
+    );
+    assert!(string_values_of_a_closed_set(&tagged_union).is_err());
+    assert!(tags_of_a_tagged_union(&closed_set, "mode").is_err());
+}
+
+#[test]
+fn a_reference_names_its_component_and_an_object_component_lists_its_keys() {
+    assert_eq!(
+        component_name_of_a_reference(&json!({ "$ref": "#/components/schemas/PinType" })),
+        Some("PinType")
+    );
+    assert_eq!(
+        component_name_of_a_reference(&json!({ "$ref": "#/$defs/PinType" })),
+        None
+    );
+    let schemas = component_schemas(json!({
+        "PinAnnotations": { "type": "object", "properties": { "range": {}, "unit": {} } },
+        "PinFlow": { "type": "string" }
+    }));
+    assert_eq!(
+        property_names_of(&schemas, "PinAnnotations").unwrap(),
+        ["range", "unit"]
+    );
+    assert!(property_names_of(&schemas, "PinFlow").is_err());
+}

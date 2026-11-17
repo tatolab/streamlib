@@ -13,6 +13,10 @@
       "types": "./index.d.ts",
       "default": "./index.js"
     },
+    "./pin_types": {
+      "types": "./pin_types.d.ts",
+      "default": "./pin_types.js"
+    },
     "./contract.json": "./contract.json",
     "./node_ui_manifest": {
       "types": "./node_ui_manifest.d.ts"
@@ -28,6 +32,8 @@
     "control_messages.d.ts",
     "control_transports.js",
     "control_transports.d.ts",
+    "pin_types.js",
+    "pin_types.d.ts",
     "control_contract.js",
     "control_contract.d.ts",
     "control_schemas.js",

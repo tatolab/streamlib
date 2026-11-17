@@ -203,6 +203,9 @@ jobs:
       - name: The TypeScript runtime client matches the control contract file
         run: cargo run --locked -q -p xtask -- generate-runtime-client --check
 
+      - name: The Python pin types match the control contract file
+        run: cargo run --locked -q -p xtask -- generate-python-pin-types --check
+
       - name: Install the TypeScript runtime client's dependencies
         run: npm ci --prefix sdk/tatolab-runtime-client --no-audit --no-fund
 

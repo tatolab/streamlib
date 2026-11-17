@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 
 /// Where a component sits in the contract file, before its name.
@@ -52,6 +52,65 @@ pub(crate) fn component_names_reached_from<'contract>(
         .map(String::as_str)
         .filter(|name| reached.contains(name))
         .collect())
+}
+
+/// The contract's `components.schemas`.
+pub(crate) fn component_schemas_of(contract: &Value) -> Result<&Map<String, Value>> {
+    contract["components"]["schemas"]
+        .as_object()
+        .context("the contract file has no `components.schemas`")
+}
+
+/// The component a `{ "$ref": "#/components/schemas/<name>" }` schema names, when it is one.
+pub(crate) fn component_name_of_a_reference(schema: &Value) -> Option<&str> {
+    schema["$ref"]
+        .as_str()?
+        .strip_prefix(COMPONENT_SCHEMA_REFERENCE_PREFIX)
+}
+
+/// The property names of the object component `name`, in order.
+pub(crate) fn property_names_of<'contract>(
+    component_schemas: &'contract Map<String, Value>,
+    name: &str,
+) -> Result<Vec<&'contract str>> {
+    Ok(component_schemas
+        .get(name)
+        .and_then(|schema| schema["properties"].as_object())
+        .with_context(|| format!("the contract file has no object component `{name}`"))?
+        .keys()
+        .map(String::as_str)
+        .collect())
+}
+
+/// The values of a `oneOf` of string `const`s, in order.
+pub(crate) fn string_values_of_a_closed_set(schema: &Value) -> Result<Vec<&str>> {
+    schema["oneOf"]
+        .as_array()
+        .context("is not a `oneOf`")?
+        .iter()
+        .map(|alternative| {
+            alternative["const"]
+                .as_str()
+                .context("has an alternative that is not a string `const`")
+        })
+        .collect()
+}
+
+/// The tag values of a `oneOf` of objects each tagged by a `const` under `tag_key`, in order.
+pub(crate) fn tags_of_a_tagged_union<'schema>(
+    schema: &'schema Value,
+    tag_key: &str,
+) -> Result<Vec<&'schema str>> {
+    schema["oneOf"]
+        .as_array()
+        .context("is not a `oneOf`")?
+        .iter()
+        .map(|alternative| {
+            alternative["properties"][tag_key]["const"]
+                .as_str()
+                .with_context(|| format!("has an alternative with no `{tag_key}` tag"))
+        })
+        .collect()
 }
 
 fn add_the_component_names_a_schema_names<'schema>(

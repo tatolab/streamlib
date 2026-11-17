@@ -17,13 +17,16 @@ pub mod check_vendored_trees;
 pub mod check_workspace_version_pins;
 pub mod codec_proof_image_measurement;
 pub mod contract_component_references;
+pub(crate) mod contract_pin_types;
 pub mod generate_built_in_node_classes;
 pub mod generate_control_contract;
 pub mod generate_module_host_table_c_header;
+pub mod generate_python_pin_types;
 pub mod generate_runtime_client;
 pub mod normal_build_dep_graph;
 pub mod psnr;
 pub mod runtime_client_node_ui_manifest;
+pub(crate) mod runtime_client_pin_types;
 pub mod runtime_client_zod_schemas;
 pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod stage_browser_host;
@@ -575,6 +578,16 @@ enum Commands {
         check: bool,
     },
 
+    /// Regenerate `tatolab/stream/_contract_pin_types.py`, the built-in pin types and a pin
+    /// declaration's wire form in Python, from the committed contract file, on any OS.
+    /// `--check` is the CI gate: it fails when the checked-in module differs from a
+    /// regeneration. See [`generate_python_pin_types`].
+    GeneratePythonPinTypes {
+        /// Fail when the checked-in module differs instead of rewriting it.
+        #[arg(long)]
+        check: bool,
+    },
+
     /// Regenerate `tatolab-module-sdk`'s `include/tatolab_module_host_table.h`
     /// from the table's Rust mirror. `--check` fails when the checked-in header
     /// differs from a regeneration; `check-all-source-gates` runs it. See
@@ -657,6 +670,9 @@ fn main() -> Result<()> {
         } => check_control_contract_compatibility::run(&workspace_root()?, &earlier_contract_file)?,
         Commands::GenerateRuntimeClient { check } => {
             generate_runtime_client::run(&workspace_root()?, check)?
+        }
+        Commands::GeneratePythonPinTypes { check } => {
+            generate_python_pin_types::run(&workspace_root()?, check)?
         }
         Commands::GenerateModuleHostTableCHeader { check } => {
             generate_module_host_table_c_header::run(&workspace_root()?, check)?

@@ -559,14 +559,14 @@ fn enumerated_string_values(
     }
 }
 
-fn push_unique(alternatives: &mut Vec<String>, alternative: String) {
+pub(crate) fn push_unique(alternatives: &mut Vec<String>, alternative: String) {
     if !alternatives.contains(&alternative) {
         alternatives.push(alternative);
     }
 }
 
 /// `alternatives` joined into one union, `None` last.
-fn union_of(mut alternatives: Vec<String>) -> String {
+pub(crate) fn union_of(mut alternatives: Vec<String>) -> String {
     if let Some(none_position) = alternatives
         .iter()
         .position(|alternative| alternative == "None")
@@ -589,7 +589,7 @@ fn sentence(text: &str) -> String {
 /// `rustdoc` as a Python author reads it: an intra-doc link becomes its
 /// backticked name. A link through a path other than `Self::` names a Rust item
 /// the author never sees, so it is refused rather than rendered.
-fn python_prose(rustdoc: &str, refused_item_label: &str) -> Result<String> {
+pub(crate) fn python_prose(rustdoc: &str, refused_item_label: &str) -> Result<String> {
     let mut prose = String::with_capacity(rustdoc.len());
     let mut rest = rustdoc;
     while let Some(link_start) = rest.find("[`") {
@@ -616,7 +616,7 @@ fn python_prose(rustdoc: &str, refused_item_label: &str) -> Result<String> {
     Ok(prose.replace('\\', "\\\\"))
 }
 
-fn python_string_literal(value: &str, refused_item_label: &str) -> Result<String> {
+pub(crate) fn python_string_literal(value: &str, refused_item_label: &str) -> Result<String> {
     if value.contains(['"', '\\']) || value.chars().any(char::is_control) {
         bail!("{refused_item_label} has the string {value:?}, which this generator does not quote");
     }
@@ -651,7 +651,7 @@ fn python_scalar_literal(value: &Value, refused_item_label: &str) -> Result<Stri
 /// [`DOCSTRING_WRAP_COLUMN`]. Within a paragraph a line indented past the
 /// paragraph's first is a list item: it starts its own line, and its wrapped
 /// lines hang under it.
-fn render_docstring(paragraphs: &[String], indent: usize) -> String {
+pub(crate) fn render_docstring(paragraphs: &[String], indent: usize) -> String {
     let margin = " ".repeat(indent);
     let mut lines: Vec<String> = Vec::new();
     for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {

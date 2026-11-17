@@ -4,6 +4,23 @@
 use super::*;
 use serde_json::json;
 
+/// `contract` with the committed contract's `x-pin-types` rows and the components they name,
+/// which every generation reads.
+fn with_the_committed_pin_types(contract: &mut Value) {
+    let committed: Value = serde_json::from_str(include_str!(
+        "../../../runtime/streamlib-control-contract/contract.json"
+    ))
+    .unwrap();
+    contract["x-pin-types"] = committed["x-pin-types"].clone();
+    let committed_schemas = committed["components"]["schemas"].as_object().unwrap();
+    let schemas = contract["components"]["schemas"].as_object_mut().unwrap();
+    for (name, schema) in committed_schemas {
+        schemas
+            .entry(name.clone())
+            .or_insert_with(|| schema.clone());
+    }
+}
+
 #[test]
 fn a_schema_object_becomes_an_interface_with_its_optional_and_nullable_fields() {
     let schema = json!({
@@ -91,7 +108,7 @@ fn the_client_has_one_method_per_operation_and_one_listener_per_notification() {
 
 #[test]
 fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
-    let contract = json!({
+    let mut contract = json!({
         "info": { "x-contract-version": 1 },
         "components": { "schemas": {
             "Code": {
@@ -113,6 +130,7 @@ fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
         "methods": [],
         "x-notifications": []
     });
+    with_the_committed_pin_types(&mut contract);
     let generated_files = runtime_client_generated_files(&contract, "").unwrap();
     let file = |name: &str| {
         &generated_files

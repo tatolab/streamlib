@@ -10,12 +10,13 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::contract_component_references::{
-    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names,
+    COMPONENT_SCHEMA_REFERENCE_PREFIX, component_names_a_schema_names, component_schemas_of,
 };
 use crate::runtime_client_node_ui_manifest::{
     NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
     node_ui_manifest_declarations, node_ui_manifest_json_schema,
 };
+use crate::runtime_client_pin_types::RuntimeClientPinTypes;
 use crate::runtime_client_zod_schemas::{ZodSchemasOfOneContractEntry, zod_schemas_javascript};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
@@ -45,6 +46,8 @@ pub const RUNTIME_CLIENT_PACKAGE_FILES_THE_RUNTIME_UNIT_CARRIES: &[&str] = &[
     "control_messages.d.ts",
     "control_transports.js",
     "control_transports.d.ts",
+    GENERATED_PIN_TYPES_TYPES_FILE_NAME,
+    GENERATED_PIN_TYPES_FILE_NAME,
     GENERATED_CONTRACT_TYPES_FILE_NAME,
     GENERATED_CONTRACT_CONSTANTS_FILE_NAME,
     GENERATED_SCHEMAS_FILE_NAME,
@@ -57,6 +60,8 @@ pub const RUNTIME_CLIENT_PACKAGE_FILES_THE_RUNTIME_UNIT_CARRIES: &[&str] = &[
     NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME,
 ];
 
+const GENERATED_PIN_TYPES_TYPES_FILE_NAME: &str = "pin_types.d.ts";
+const GENERATED_PIN_TYPES_FILE_NAME: &str = "pin_types.js";
 const GENERATED_CONTRACT_TYPES_FILE_NAME: &str = "control_contract.d.ts";
 const GENERATED_CONTRACT_CONSTANTS_FILE_NAME: &str = "control_contract.js";
 const GENERATED_SCHEMAS_FILE_NAME: &str = "control_schemas.js";
@@ -187,6 +192,14 @@ pub fn runtime_client_generated_files(
             control_contract.typescript_declarations(),
         ),
         (
+            GENERATED_PIN_TYPES_TYPES_FILE_NAME,
+            control_contract.pin_types.typescript_declarations(),
+        ),
+        (
+            GENERATED_PIN_TYPES_FILE_NAME,
+            control_contract.pin_types.javascript(),
+        ),
+        (
             GENERATED_CONTRACT_CONSTANTS_FILE_NAME,
             control_contract.javascript_constants(),
         ),
@@ -242,6 +255,7 @@ struct ControlContractRead<'contract> {
     methods: Vec<ControlContractEntryRead<'contract>>,
     notifications: Vec<ControlContractEntryRead<'contract>>,
     component_schemas: &'contract Map<String, Value>,
+    pin_types: RuntimeClientPinTypes<'contract>,
 }
 
 impl<'contract> ControlContractRead<'contract> {
@@ -249,9 +263,7 @@ impl<'contract> ControlContractRead<'contract> {
         let contract_version = contract["info"]["x-contract-version"]
             .as_u64()
             .context("the contract file names no `info.x-contract-version`")?;
-        let component_schemas = contract["components"]["schemas"]
-            .as_object()
-            .context("the contract file has no `components.schemas`")?;
+        let component_schemas = component_schemas_of(contract)?;
         let entries_of = |key: &str| -> Result<Vec<ControlContractEntryRead<'contract>>> {
             contract[key]
                 .as_array()
@@ -291,26 +303,21 @@ impl<'contract> ControlContractRead<'contract> {
             methods,
             notifications: entries_of("x-notifications")?,
             component_schemas,
+            pin_types: RuntimeClientPinTypes::of(contract, component_schemas)?,
         })
     }
 
     fn typescript_declarations(&self) -> String {
         let mut declarations = String::from(GENERATED_SOURCE_HEADER);
-        declarations.push('\n');
+        let pin_type_names = self.pin_types.component_names.join(",\n  ");
+        let _ = writeln!(
+            declarations,
+            "\nimport type {{\n  {pin_type_names},\n}} from \"./{GENERATED_PIN_TYPES_FILE_NAME}\";\n\
+             export type {{\n  {pin_type_names},\n}} from \"./{GENERATED_PIN_TYPES_FILE_NAME}\";\n"
+        );
         for (name, schema) in self.component_schemas {
-            write_doc_comment(&mut declarations, "", &[description_of(schema)]);
-            if is_an_object_with_properties(schema) {
-                let _ = writeln!(
-                    declarations,
-                    "export interface {name} {}\n",
-                    object_type_of(schema, 0)
-                );
-            } else {
-                let _ = writeln!(
-                    declarations,
-                    "export type {name} = {};\n",
-                    typescript_type_of(schema, 0)
-                );
+            if !self.pin_types.component_names.contains(&name.as_str()) {
+                write_component_declaration(&mut declarations, name, schema);
             }
         }
         declarations.push_str(
@@ -647,6 +654,24 @@ impl<'contract> ControlContractEntryRead<'contract> {
     }
 }
 
+/// `schema`, the component `name`, as an exported TypeScript declaration.
+pub(crate) fn write_component_declaration(declarations: &mut String, name: &str, schema: &Value) {
+    write_doc_comment(declarations, "", &[description_of(schema)]);
+    if is_an_object_with_properties(schema) {
+        let _ = writeln!(
+            declarations,
+            "export interface {name} {}\n",
+            object_type_of(schema, 0)
+        );
+    } else {
+        let _ = writeln!(
+            declarations,
+            "export type {name} = {};\n",
+            typescript_type_of(schema, 0)
+        );
+    }
+}
+
 /// Marks a property the client reads its `default` into: one whose `default` is a member of a
 /// set marked `x-may-grow`, which a runtime that predates the property leaves out. The client
 /// then reads such a property as present, as the runtime's `#[serde(default)]` does.
@@ -919,7 +944,7 @@ fn json_literal(value: &Value) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| unreachable!("a JSON value always serializes"))
 }
 
-fn json_string_literal(text: &str) -> String {
+pub(crate) fn json_string_literal(text: &str) -> String {
     json_literal(&Value::String(text.to_owned()))
 }
 
