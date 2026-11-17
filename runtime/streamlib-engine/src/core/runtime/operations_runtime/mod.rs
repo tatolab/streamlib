@@ -114,6 +114,52 @@ pub(super) enum ConfigReferencesOfTheAddedNode {
     ValidatedWithTheWholeGraphBeforeTheAdd,
 }
 
+fn a_load_holds_the_type_as_a_placeholder(
+    node_interpreter_launch_record: &NodeInterpreterLaunchRecordOfOneStream,
+    node_type: &NodeClassImportPath,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
+) -> bool {
+    config_references_of_the_added_node
+        == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
+        && node_interpreter_launch_record
+            .node_types_this_stream_resolves()
+            .placeholder_of_the_node_type_not_described(node_type)
+            .is_some()
+}
+
+/// Describe `node_type` in the stream's own interpreter when the stream does not resolve it
+/// yet, off the async worker, since a describe runs for as long as the module's import does;
+/// a type a load holds as a placeholder is not described. Once the type is described a later
+/// call does nothing, so an add that splits a node's input values by its type describes it
+/// first, and the add itself describes nothing again.
+pub(super) async fn describe_the_type_an_add_names_when_it_must(
+    node_interpreter_launch_record: &Arc<NodeInterpreterLaunchRecordOfOneStream>,
+    node_type: &NodeClassImportPath,
+    lend_directory: Option<PathBuf>,
+    config_references_of_the_added_node: ConfigReferencesOfTheAddedNode,
+) -> Result<()> {
+    if a_load_holds_the_type_as_a_placeholder(
+        node_interpreter_launch_record,
+        node_type,
+        config_references_of_the_added_node,
+    ) || !node_interpreter_launch_record.a_live_add_must_describe(node_type)
+    {
+        return Ok(());
+    }
+    let node_type = node_type.clone();
+    let launch_record = Arc::clone(node_interpreter_launch_record);
+    tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
+        launch_record
+            .describe_and_register_a_type_a_live_add_names(&node_type, lend_directory.as_deref())
+    }))
+    .await
+    .map_err(|join_failure| {
+        Error::Runtime(format!(
+            "the describe of a node type did not finish: {join_failure}"
+        ))
+    })?
+}
+
 pub(super) async fn add_node_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     node_interpreter_launch_record: Arc<NodeInterpreterLaunchRecordOfOneStream>,
@@ -138,33 +184,18 @@ pub(super) async fn add_node_impl(
         });
     };
 
-    // A type this stream does not resolve yet is described in the stream's
-    // own interpreter, off the async worker: a describe runs for as long as
-    // the module's import does.
-    let a_load_holds_its_type_as_a_placeholder = config_references_of_the_added_node
-        == ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd
-        && node_interpreter_launch_record
-            .node_types_this_stream_resolves()
-            .placeholder_of_the_node_type_not_described(&spec.name)
-            .is_some();
-    if !a_load_holds_its_type_as_a_placeholder
-        && node_interpreter_launch_record.a_live_add_must_describe(&spec.name)
-    {
-        let node_type = spec.name.clone();
-        let launch_record = Arc::clone(&node_interpreter_launch_record);
-        tokio::task::spawn_blocking(carrying_this_threads_project_log_route_entry(move || {
-            launch_record.describe_and_register_a_type_a_live_add_names(
-                &node_type,
-                lend_directory.as_deref(),
-            )
-        }))
-        .await
-        .map_err(|join_failure| {
-            Error::Runtime(format!(
-                "the describe of a node type did not finish: {join_failure}"
-            ))
-        })??;
-    }
+    let a_load_holds_its_type_as_a_placeholder = a_load_holds_the_type_as_a_placeholder(
+        &node_interpreter_launch_record,
+        &spec.name,
+        config_references_of_the_added_node,
+    );
+    describe_the_type_an_add_names_when_it_must(
+        &node_interpreter_launch_record,
+        &spec.name,
+        lend_directory,
+        config_references_of_the_added_node,
+    )
+    .await?;
 
     let ident_for_err = spec.name.clone();
 

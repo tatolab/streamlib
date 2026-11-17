@@ -6,7 +6,10 @@ use super::*;
 fn resolved(graph: serde_json::Value) -> Result<GraphSnapshotWithVariablesResolved> {
     GraphSnapshot::from_graph_document(graph)
         .expect("the graph parses")
-        .with_graph_variables_resolved(&GraphFragmentsAsDrawn::default())
+        .with_graph_variables_resolved(
+            &GraphFragmentsAsDrawn::default(),
+            &NodeTypesOneStreamResolves::new(),
+        )
 }
 
 fn refusal_of(graph: serde_json::Value) -> String {
@@ -107,7 +110,10 @@ fn resolved_once_flattened(graph: serde_json::Value) -> Result<GraphSnapshotWith
         .expect("the fragments flatten");
     flattening
         .graph_the_runtime_runs
-        .with_graph_variables_resolved(&flattening.fragments_as_drawn)
+        .with_graph_variables_resolved(
+            &flattening.fragments_as_drawn,
+            &NodeTypesOneStreamResolves::new(),
+        )
 }
 
 fn a_fragment_whose_tint_reads_the_variable_shade(
@@ -387,6 +393,54 @@ fn a_get_read_as_the_kind_of_value_its_variable_does_not_hold_is_refused() {
         serde_json::json!({"source": {"node": "get-camera"}});
     assert!(
         refusal_of(config_reading_a_port).contains("its variable `camera` holds a port's output")
+    );
+}
+
+/// A stream that described `rig:Display`, which has an input `source`.
+fn node_types_describing_a_display_with_an_input_named_source() -> NodeTypesOneStreamResolves {
+    use crate::core::descriptors::{
+        NodeClassShortName, NodeDescriptor, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    };
+    let node_types = NodeTypesOneStreamResolves::new();
+    let descriptor = NodeDescriptor::new(
+        NodeClassShortName::new("Display").unwrap(),
+        NodeClassImportPath::new("rig:Display").unwrap(),
+        "variable resolution test",
+    )
+    .with_input(PortDescriptor::new(
+        "source",
+        "what the display shows",
+        false,
+        PortFamilyDeclaration::of_family(PortFamily::Records),
+    ));
+    node_types
+        .register_a_type_described_in_this_streams_node_interpreter(
+            descriptor,
+            crate::core::nodes::HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
+                Box::new(|_node| Err(Error::NotSupported("never constructed".into()))),
+            ),
+        )
+        .expect("the type is described into the stream");
+    node_types
+}
+
+/// A value on one of a node's inputs is no config value, so one shaped like a node reference
+/// naming a get is left as it is, as a config field naming it is resolved.
+#[test]
+fn a_value_on_an_input_shaped_like_a_reference_to_a_get_is_left_as_it_is() {
+    let mut graph = a_camera_variable_read_by_two_displays();
+    graph["nodes"][4]["pins"] = serde_json::json!({"source": {"node": "get-camera"}});
+    let resolution = GraphSnapshot::from_graph_document(graph)
+        .expect("the graph parses")
+        .with_graph_variables_resolved(
+            &GraphFragmentsAsDrawn::default(),
+            &node_types_describing_a_display_with_an_input_named_source(),
+        )
+        .expect("a value on an input names no get");
+    let front = &resolution.graph_the_runtime_runs.nodes[1];
+    assert_eq!(
+        serde_json::Value::Object(front.input_values.clone()),
+        serde_json::json!({"source": {"node": "get-camera"}})
     );
 }
 

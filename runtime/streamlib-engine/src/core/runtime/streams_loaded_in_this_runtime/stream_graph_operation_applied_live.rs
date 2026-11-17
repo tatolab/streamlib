@@ -11,13 +11,18 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use crate::core::descriptors::NodeClassImportPath;
-use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_values;
+use crate::core::graph::legacy_config_of_a_node::{
+    ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
+};
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe, the_default_name_a_new_node_takes,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations::RuntimeOperations;
+use crate::core::runtime::operations_runtime::{
+    ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
+};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 impl LoadedStreamInThisRuntime {
@@ -35,6 +40,13 @@ impl LoadedStreamInThisRuntime {
                 let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
                     Error::GraphError(format!("node {} `type`: {refusal}", node.id))
                 })?;
+                describe_the_type_an_add_names_when_it_must(
+                    &self.node_interpreter_launch_record,
+                    &node_type,
+                    self.lend_directory(),
+                    ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+                )
+                .await?;
                 let mut spec = node_spec_holding_the_input_values(
                     self.node_types_this_stream_resolves(),
                     node_type,
@@ -83,7 +95,7 @@ impl LoadedStreamInThisRuntime {
                 Ok(StreamGraphOperation::Disconnect { link })
             }
             StreamGraphOperation::SetNodeConfig { node, from, to } => {
-                self.update_node_config_compiled_right_away(&self.the_node_of_the_node(node)?, &to)
+                self.set_the_config_and_pin_values_of_the_node(node, &from, &to)
                     .await?;
                 Ok(StreamGraphOperation::SetNodeConfig { node, from, to })
             }
@@ -269,6 +281,51 @@ impl LoadedStreamInThisRuntime {
                 "could not take out a node whose add was refused"
             );
         }
+    }
+
+    /// Set what a `set_node_config` from `from` to `to` sets on the running node `node`: the
+    /// config its type takes whole out of `to`, and the value on each of its inputs `to` names,
+    /// each input `from` names and `to` does not cleared. A `to` that is no object is the config.
+    async fn set_the_config_and_pin_values_of_the_node(
+        &self,
+        node: Uuid,
+        from: &serde_json::Value,
+        to: &serde_json::Value,
+    ) -> Result<()> {
+        let node_run_id = self.the_node_of_the_node(node)?;
+        let serde_json::Value::Object(to_object) = to else {
+            return self
+                .update_node_config_compiled_right_away(&node_run_id, to)
+                .await;
+        };
+        let node_type = self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(&node_run_id)
+                .first()
+                .map(|running| running.node_type.clone())
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))
+        })?;
+        let legacy_config =
+            LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
+        let ConfigAndPinValues { config, pin_values } = legacy_config.split(to_object);
+        let pin_values_cleared: Vec<String> = from
+            .as_object()
+            .map(|from_object| legacy_config.split(from_object).pin_values)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(input, _)| input)
+            .filter(|input| !pin_values.contains_key(input))
+            .collect();
+        self.update_node_config_compiled_right_away(&node_run_id, &config)
+            .await?;
+        for input in pin_values_cleared {
+            self.set_pin_value(&node_run_id, &input, None)?;
+        }
+        for (input, value) in pin_values {
+            self.set_pin_value(&node_run_id, &input, Some(value))?;
+        }
+        Ok(())
     }
 
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {

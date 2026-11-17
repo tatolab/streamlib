@@ -378,7 +378,7 @@ impl ProjectRepository {
                         refuse_input_values_referencing_an_asset_the_project_does_not_hold(
                             &staged_assets,
                             node,
-                            input_values,
+                            &input_values,
                         )?;
                     }
                     staged_document.apply(graph_operation).map_err(|why| {

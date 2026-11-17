@@ -67,7 +67,8 @@ impl LegacyConfigOfANodeType {
         }
     }
 
-    fn is_a_config_field(&self, name: &str) -> bool {
+    /// Whether a node holds its input value `name` as a config field rather than on an input.
+    pub(crate) fn is_a_config_field(&self, name: &str) -> bool {
         self.fields_its_config_schema_lists.contains(name) || !self.its_input_ports.contains(name)
     }
 

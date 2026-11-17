@@ -26,7 +26,8 @@ use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl, disconnect_impl, remove_node_impl,
+    ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl,
+    describe_the_type_an_add_names_when_it_must, disconnect_impl, remove_node_impl,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -200,6 +201,13 @@ impl LoadedStreamInThisRuntime {
             else {
                 continue;
             };
+            describe_the_type_an_add_names_when_it_must(
+                &self.node_interpreter_launch_record,
+                &document_node.node_type,
+                self.lend_directory(),
+                ConfigReferencesOfTheAddedNode::ValidatedWithTheWholeGraphBeforeTheAdd,
+            )
+            .await?;
             let spec = node_spec_holding_the_input_values(
                 node_types,
                 document_node.node_type.clone(),

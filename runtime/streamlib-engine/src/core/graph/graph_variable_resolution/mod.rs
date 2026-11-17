@@ -20,13 +20,14 @@ use crate::core::graph::graph_fragment_flattening::{
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::legacy_config_of_a_node::{
-    config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
+    LegacyConfigOfANodeType, config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
 };
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
 };
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
@@ -339,6 +340,7 @@ impl GraphSnapshot {
     pub fn with_graph_variables_resolved(
         &self,
         fragments_flattened: &GraphFragmentsAsDrawn,
+        node_types: &NodeTypesOneStreamResolves,
     ) -> Result<GraphSnapshotWithVariablesResolved> {
         let variable_nodes: Vec<&GraphSnapshotNode> = self
             .nodes
@@ -533,7 +535,11 @@ impl GraphSnapshot {
                 named_a_get = true;
                 Ok(Some(referenced_node.clone()))
             };
-            for (input, value) in resolved_input_values.iter_mut() {
+            let legacy_config = LegacyConfigOfANodeType::of(node_types, &node.node_type);
+            for (input, value) in resolved_input_values
+                .iter_mut()
+                .filter(|(input, _)| legacy_config.is_a_config_field(input))
+            {
                 resolve_each_config_value_naming_a_get(
                     value,
                     &format!("config[{input:?}]"),

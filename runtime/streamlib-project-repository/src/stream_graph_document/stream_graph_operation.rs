@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
+use crate::stream_document_upgrade::{upgrade_a_node_in_place, upgrade_stream_document_in_place};
 use crate::stream_graph_fragment_fold::{
     StreamGraphDocumentValueAtItsPosition, StreamGraphFragmentFold,
 };
@@ -276,43 +277,106 @@ impl StreamGraphOperation {
         }
     }
 
+    /// The `set_node_config` that sets `to` on `node`, which takes `config_it_takes` whole:
+    /// `from` is that config with the value `node` held of each other name `to` sets, such as
+    /// one of its inputs, so the inverse puts back every value the edit overwrites.
+    pub fn set_node_config_of(
+        node: &StreamGraphDocumentNode,
+        config_it_takes: Value,
+        to: Map<String, Value>,
+    ) -> Self {
+        let mut from = config_it_takes;
+        if let Value::Object(from_object) = &mut from {
+            for (name, held) in to
+                .keys()
+                .filter_map(|name| Some((name, node.input_values.get(name)?)))
+            {
+                from_object
+                    .entry(name.clone())
+                    .or_insert_with(|| held.clone());
+            }
+        }
+        Self::SetNodeConfig {
+            node: node.id,
+            from,
+            to: Value::Object(to),
+        }
+    }
+
+    /// The `set_pin_value` that sets `to` on `node`'s input `input`, `None` clearing it. A clear
+    /// of a config field the node exposes as an input is refused: the node holds one value of
+    /// the field, so the clear would take its config value out while the running node keeps it.
+    pub fn set_pin_value_of(
+        node: &StreamGraphDocumentNode,
+        input: String,
+        to: Option<Value>,
+    ) -> Result<Self, String> {
+        let to = to.filter(|value| !value.is_null());
+        if to.is_none() && node.exposed_config_fields.contains(&input) {
+            return Err(format!(
+                "node {} `{}` takes `{input}` as an input of its config field of that name, so                  the value it holds is its config's: set it with set_node_config",
+                node.id, node.name
+            ));
+        }
+        Ok(Self::SetPinValue {
+            node: node.id,
+            from: node.input_values.get(&input).cloned(),
+            input,
+            to,
+        })
+    }
+
     /// Each node's input values the operation leaves it with, by that node's UUID: its own
-    /// node's, and those of every node at every level of a fragment it places. A config set
-    /// whole is its own: the fields it sets are the input values it leaves.
-    pub fn input_values_it_sets(&self) -> Vec<(Uuid, &Map<String, Value>)> {
+    /// node's, and those of every node at every level of a fragment it places, read in the
+    /// current shape as [`StreamGraphDocument::apply`](super::StreamGraphDocument::apply) places
+    /// them. A config set whole is its own: the fields it sets are the input values it leaves;
+    /// a value set on one input is that input's value.
+    pub fn input_values_it_sets(&self) -> Vec<(Uuid, Map<String, Value>)> {
         let mut input_values = Vec::new();
+        let mut fragments_it_places = Vec::new();
+        let mut nodes_it_places = Vec::new();
         match self {
             Self::AddNode { node, .. } => {
-                input_values.push((node.id, &node.input_values));
-                if let Some(fragment) = &node.fragment {
-                    push_the_input_values_of_each_node_at_every_level(fragment, &mut input_values);
-                }
+                input_values.push((node.id, node.input_values.clone()));
+                fragments_it_places.extend(node.fragment.as_deref().cloned());
             }
             Self::SetNodeConfig {
                 node,
                 to: Value::Object(to),
                 ..
-            } => input_values.push((*node, to)),
+            } => input_values.push((*node, to.clone())),
+            Self::SetPinValue {
+                node,
+                input,
+                to: Some(value),
+                ..
+            } => input_values.push((*node, Map::from_iter([(input.clone(), value.clone())]))),
             Self::RefreshFragment { node, to, .. } => {
-                input_values.push((*node, &to.input_values));
-                push_the_input_values_of_each_node_at_every_level(&to.fragment, &mut input_values);
+                input_values.push((*node, to.input_values.clone()));
+                fragments_it_places.push(to.fragment.clone());
             }
-            Self::FoldIntoFragment { fold } => {
-                push_the_input_values_of_each_of_the_nodes_at_every_level(
-                    std::slice::from_ref(&fold.fragment.value),
-                    &mut input_values,
-                );
-            }
+            Self::FoldIntoFragment { fold } => nodes_it_places.push(fold.fragment.value.clone()),
             Self::UnfoldFragment { fold } => {
-                for node in &fold.nodes {
-                    push_the_input_values_of_each_of_the_nodes_at_every_level(
-                        std::slice::from_ref(&node.value),
-                        &mut input_values,
-                    );
-                }
+                nodes_it_places.extend(fold.nodes.iter().map(|node| node.value.clone()));
             }
             _ => {}
         }
+        for fragment in &mut fragments_it_places {
+            upgrade_stream_document_in_place(fragment);
+        }
+        for node in &mut nodes_it_places {
+            upgrade_a_node_in_place(node);
+        }
+        let mut placed = Vec::new();
+        for fragment in &fragments_it_places {
+            push_the_input_values_of_each_node_at_every_level(fragment, &mut placed);
+        }
+        push_the_input_values_of_each_of_the_nodes_at_every_level(&nodes_it_places, &mut placed);
+        input_values.extend(
+            placed
+                .into_iter()
+                .map(|(node, placed_input_values)| (node, placed_input_values.clone())),
+        );
         input_values
     }
 }

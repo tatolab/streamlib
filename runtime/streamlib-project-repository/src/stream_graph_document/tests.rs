@@ -649,20 +649,102 @@ fn a_set_node_config_naming_an_input_in_to_sets_the_value_of_that_input() {
         })
         .unwrap();
 
-    document
-        .apply(&StreamGraphOperation::SetNodeConfig {
+    let set_node_config = StreamGraphOperation::set_node_config_of(
+        &tone,
+        json!({"gain": 1}),
+        Map::from_iter([
+            ("pitch".to_owned(), json!(440)),
+            ("waveform".to_owned(), json!("saw")),
+        ]),
+    );
+    assert_eq!(
+        set_node_config,
+        StreamGraphOperation::SetNodeConfig {
             node: tone.id,
-            from: json!({"gain": 1}),
+            from: json!({"gain": 1, "pitch": 220}),
             to: json!({"pitch": 440, "waveform": "saw"}),
-        })
-        .unwrap();
+        }
+    );
 
+    document.apply(&set_node_config).unwrap();
     assert_eq!(
         document.node(tone.id).unwrap().input_values,
         Map::from_iter([
             ("pitch".to_owned(), json!(440)),
             ("waveform".to_owned(), json!("saw")),
         ])
+    );
+    document.apply(&set_node_config.inverse()).unwrap();
+    assert_eq!(
+        document.node(tone.id).unwrap().input_values,
+        tone.input_values
+    );
+}
+
+#[test]
+fn a_clear_of_an_exposed_config_fields_input_is_refused_and_any_other_set() {
+    let mut tone = a_node("tone");
+    tone.input_values = Map::from_iter([
+        ("gain".to_owned(), json!(1)),
+        ("pitch".to_owned(), json!(220)),
+    ]);
+    tone.exposed_config_fields = vec!["gain".to_owned()];
+
+    let refusal = StreamGraphOperation::set_pin_value_of(&tone, "gain".to_owned(), None)
+        .expect_err("a clear of an exposed config field is refused");
+    assert!(
+        refusal.contains("`gain`") && refusal.contains("set_node_config"),
+        "{refusal}"
+    );
+    assert_eq!(
+        StreamGraphOperation::set_pin_value_of(&tone, "pitch".to_owned(), Some(Value::Null)),
+        Ok(StreamGraphOperation::SetPinValue {
+            node: tone.id,
+            input: "pitch".to_owned(),
+            from: Some(json!(220)),
+            to: None,
+        })
+    );
+    assert!(
+        StreamGraphOperation::set_pin_value_of(&tone, "gain".to_owned(), Some(json!(2))).is_ok()
+    );
+}
+
+#[test]
+fn the_input_values_an_edit_sets_include_a_value_on_one_input_and_a_retired_shape_upgraded() {
+    let node = Uuid::new_v4();
+    let lut = Uuid::new_v4();
+    let set_pin_value = StreamGraphOperation::SetPinValue {
+        node,
+        input: "lut".to_owned(),
+        from: None,
+        to: Some(json!({"asset": lut})),
+    };
+    assert_eq!(
+        set_pin_value.input_values_it_sets(),
+        [(
+            node,
+            Map::from_iter([("lut".to_owned(), json!({"asset": lut}))])
+        )]
+    );
+
+    let inner = Uuid::new_v4();
+    let mut add_node = a_node("look");
+    add_node.fragment = Some(Box::new(json!({
+        "nodes": [{"id": inner, "name": "grade", "type": "nodes.grade:Grade",
+                   "config": {"lut": {"asset": lut}}}],
+        "links": [],
+    })));
+    let add_node = StreamGraphOperation::AddNode {
+        node: add_node.clone(),
+        links: Vec::new(),
+    };
+    assert_eq!(
+        add_node.input_values_it_sets()[1],
+        (
+            inner,
+            Map::from_iter([("lut".to_owned(), json!({"asset": lut}))])
+        )
     );
 }
 

@@ -197,22 +197,17 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::SetNodeConfig { node, config, .. } => {
             let node = node_named(&node, node_by_label)?;
             let configured = staged_graph.node(node)?;
-            Ok(StreamGraphOperation::SetNodeConfig {
-                node,
-                from: config_a_node_takes(&configured.node_type, &configured.input_values)?,
-                to: Value::Object(config),
-            })
+            Ok(StreamGraphOperation::set_node_config_of(
+                &configured,
+                config_a_node_takes(&configured.node_type, &configured.input_values)?,
+                config,
+            ))
         }
         StreamGraphAction::SetPinValue {
             node, input, value, ..
         } => {
             let node = node_named(&node, node_by_label)?;
-            Ok(StreamGraphOperation::SetPinValue {
-                node,
-                from: staged_graph.node(node)?.input_values.get(&input).cloned(),
-                input,
-                to: value.filter(|value| !value.is_null()),
-            })
+            StreamGraphOperation::set_pin_value_of(&staged_graph.node(node)?, input, value)
         }
         StreamGraphAction::RenameNode { node, name, .. } => {
             let node = node_named(&node, node_by_label)?;
