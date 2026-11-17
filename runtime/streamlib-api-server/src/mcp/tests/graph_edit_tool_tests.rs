@@ -95,9 +95,9 @@ async fn tools_call_add_node_carries_back_an_engine_refusal_in_its_own_words() {
         }),
     )
     .await;
-    assert_eq!(body["isError"], true, "body={body}");
-    let text = body["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("add_node failed"), "{text}");
+    let refused = the_refusal_of_a_tool_result(&body);
+    assert_eq!(refused.action, "add_node");
+    let text = refused.runtime_words;
     assert!(
         text.contains(refusal),
         "the refusal must reach the caller in the engine's own words: {text}"
@@ -343,9 +343,9 @@ async fn a_graph_tool_naming_a_node_by_its_name_or_an_absent_uuid_is_refused_nam
         let runtime = a_stub_holding_a_camera_linked_to_an_effect();
         let recorded = runtime.recorded_graph_mutations.clone();
         let body = tool_call_result(runtime, tool_name, arguments.clone()).await;
-        let text = body["content"][0]["text"].as_str().unwrap();
-        assert_eq!(body["isError"], true, "{arguments} gave {text}");
-        assert!(text.contains(&format!("{tool_name} failed")), "{text}");
+        let refused = the_refusal_of_a_tool_result(&body);
+        assert_eq!(refused.action, tool_name, "{arguments}");
+        let text = refused.runtime_words;
         assert!(text.contains(what_the_refusal_names), "{text}");
         assert!(recorded.lock().is_empty(), "nothing reached the runtime");
     }
@@ -540,12 +540,8 @@ async fn a_refused_graph_edit_answers_a_structured_refusal_naming_what_it_refuse
     assert_eq!(refusal["action"], "transact", "{refusal}");
     assert_eq!(refusal["refused_operation_index"], 1, "{refusal}");
     assert_eq!(refusal["refused_node"], absent_node, "{refusal}");
-    let runtime_words = refusal["runtime_words"].as_str().unwrap();
-    assert_eq!(
-        body["content"][0]["text"],
-        format!("transact failed: {runtime_words}"),
-        "the text and the structured refusal carry the same words"
-    );
+    assert_eq!(refusal["refusal_code"], "refused", "{refusal}");
+    the_refusal_of_a_tool_result(&body);
 
     let body = tool_call_result(
         a_stub_holding_a_camera_linked_to_an_effect(),

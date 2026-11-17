@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::TatolabCommandFailure;
-use crate::local_api_mcp_tool_client::{LocalApiMcpToolClient, LocalApiMcpToolClientFailure};
+use crate::local_api_mcp_tool_client::{
+    LocalApiMcpToolClient, LocalApiMcpToolClientFailure, OperationAnswered,
+};
 
 /// The tokio runtime that drives a local API connection would not start.
 #[derive(Debug, thiserror::Error)]
@@ -92,6 +94,23 @@ impl LocalApiConnection {
                 tool_arguments,
                 call_timeout,
             ))
+    }
+
+    /// Run `operation` with `params` by its own name or through `call_operation`, connecting the
+    /// MCP client first when it is not yet, and answer what it answered.
+    pub(crate) fn call_operation_by_name(
+        &mut self,
+        operation: &str,
+        params: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<OperationAnswered, LocalApiMcpToolClientFailure> {
+        let connected_mcp_client = local_api_mcp_tool_client_connected_on_first_use(
+            &self.local_api_tokio_runtime,
+            &mut self.connected_mcp_client,
+            &self.local_api_socket_path,
+            self.request_timeout,
+        )?;
+        self.local_api_tokio_runtime
+            .block_on(connected_mcp_client.call_operation_by_name(operation, params))
     }
 }
 

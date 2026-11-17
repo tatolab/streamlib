@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! `tatolab`: `new` writes a stream project; `open`, `close`, `play`, `reload`, `dev`, `stop`, `pause`, `resume`, `rm`,
-//! `streams` and `clock` load and manage the streams the machine's runtime holds; and `graph`, `logs` and
-//! `mcp` observe them — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
+//! `streams` and `clock` load and manage the streams the machine's runtime holds; `graph`, `logs` and
+//! `mcp` observe them; `call` runs any operation by name — each through the runtime's local API socket, at its fixed path; `logs` also reads a stream's JSONL log files; `enable-virtual-camera` grants this
 //! machine's users the virtual camera's loopback device, once; `--version` adds the runtime's
 //! description to the CLI's own version. No verb starts a runtime.
 
@@ -18,6 +18,7 @@ mod local_api_mcp_stdio_pipe;
 mod local_api_mcp_tool_client;
 mod local_api_unix_socket_http_client;
 mod machine_runtime_local_api_socket;
+mod operation_call_verb;
 mod process_signal_handling;
 mod project_log_records_from_the_runtime;
 mod project_source_change_watcher;
@@ -317,6 +318,27 @@ enum TatolabVerb {
         #[arg(long = "stream", value_name = "STREAM")]
         requested_stream: Option<String>,
     },
+    /// Run any operation the runtime serves to agents, by name, and print its JSON answer.
+    #[command(
+        long_about = "Run OPERATION with --params, the JSON object `describe_operations` states \
+                      its params as: a tool the runtime lists is called by its own name, and \
+                      any other operation through `call_operation`. Prints the operation's \
+                      answer as JSON and exits 0, or prints the runtime's refusal as JSON — its \
+                      refusal_code, the place it names and a suggested_call when it knows one \
+                      — and exits 1. `tatolab call list_operation_groups` lists every \
+                      operation."
+    )]
+    Call {
+        /// The operation, by the name `list_operation_groups` lists.
+        operation: String,
+        /// The operation's params, one JSON object (default: `{}`).
+        #[arg(
+            long = "params",
+            value_name = "JSON",
+            value_parser = operation_call_verb::operation_params_argument
+        )]
+        params: Option<serde_json::Map<String, serde_json::Value>>,
+    },
     /// Read a project's log: every record its streams and their loads wrote.
     #[command(
         long_about = "Reads a project's log as the runtime reads it from the project's folder, \
@@ -506,6 +528,12 @@ fn run_one_verb(verb: TatolabVerb) -> Result<u8, TatolabCommandFailure> {
             runtime_observation_verbs::print_local_api_tool_result_of_the_running_runtime(
                 runtime_observation_verbs::GRAPH_TOOL_NAME,
                 runtime_observation_verbs::graph_tool_arguments(requested_stream.as_deref()),
+            )
+        }
+        TatolabVerb::Call { operation, params } => {
+            operation_call_verb::call_an_operation_of_the_running_runtime(
+                &operation,
+                params.unwrap_or_default(),
             )
         }
         TatolabVerb::Logs(logs_arguments) => runtime_logs_verb::run_runtime_logs_verb(logs_arguments),

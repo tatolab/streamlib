@@ -9,10 +9,15 @@ use schemars::{JsonSchema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    ControlOperationRefusalCode, ProjectActionRefusalOnTheWire,
+};
+
 use crate::control_operation::{
     ControlOperationDeclaration, ControlOperationEffect, ControlOperationGroup,
     ControlOperationStability,
 };
+use crate::control_operation_refusals::the_refusal_of_an_unknown_operation;
 use crate::control_operations::CONTROL_OPERATIONS;
 
 /// The name of the discovery tool that lists the groups and the operations in each.
@@ -204,21 +209,21 @@ pub fn the_operation_groups_served_to_agents() -> ListOperationGroupsResult {
     ListOperationGroupsResult { groups }
 }
 
-/// What `describe_operations` answers for `request`, or why it describes nothing, in words an
-/// agent can act on.
+/// What `describe_operations` answers for `request`, or the refusal saying why it describes
+/// nothing.
 pub fn the_operations_described_for(
     DescribeOperationsRequest { operations, group }: DescribeOperationsRequest,
-) -> Result<DescribeOperationsResult, String> {
+) -> Result<DescribeOperationsResult, Box<ProjectActionRefusalOnTheWire>> {
     let described: Vec<&ControlOperationDeclaration> = match (operations, group) {
         (Some(names), None) => {
             if let Some(unknown) = names
                 .iter()
                 .find(|name| the_operation_served_to_agents_as(name).is_none())
             {
-                return Err(format!(
-                    "{DESCRIBE_OPERATIONS_TOOL_NAME} failed: the runtime serves no operation \
-                     named `{unknown}`; `{LIST_OPERATION_GROUPS_TOOL_NAME}` lists every one"
-                ));
+                return Err(Box::new(the_refusal_of_an_unknown_operation(
+                    Some(DESCRIBE_OPERATIONS_TOOL_NAME),
+                    unknown,
+                )));
             }
             the_operations_served_to_agents()
                 .filter(|declaration| names.iter().any(|name| name == declaration.method_name))
@@ -228,10 +233,14 @@ pub fn the_operations_described_for(
             .filter(|declaration| declaration.group == group)
             .collect(),
         _ => {
-            return Err(format!(
-                "{DESCRIBE_OPERATIONS_TOOL_NAME} failed: send exactly one of `operations` and \
-                 `group`"
-            ));
+            return Err(Box::new(ProjectActionRefusalOnTheWire::of_the_action(
+                DESCRIBE_OPERATIONS_TOOL_NAME,
+                ControlOperationRefusalCode::Refused,
+                format!(
+                    "{DESCRIBE_OPERATIONS_TOOL_NAME} failed: send exactly one of `operations` \
+                     and `group`"
+                ),
+            )));
         }
     };
     Ok(DescribeOperationsResult {
@@ -410,7 +419,7 @@ mod tests {
             operations: Some(vec!["add_node".to_owned()]),
             group: None,
         })
-        .unwrap_or_else(|refusal| panic!("{refusal}"));
+        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
         let [add_node] = described.operations.as_slice() else {
             panic!("one operation was asked for");
         };
@@ -481,7 +490,7 @@ mod tests {
             operations: None,
             group: Some(ControlOperationGroup::Dependency),
         })
-        .unwrap_or_else(|refusal| panic!("{refusal}"));
+        .unwrap_or_else(|refusal| panic!("{}", refusal.runtime_words));
         assert!(
             described
                 .operations
@@ -494,7 +503,11 @@ mod tests {
             group: None,
         })
         .unwrap_err();
-        assert!(refusal.contains("`expose_port`"));
+        assert!(refusal.runtime_words.contains("`expose_port`"));
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::OperationNotFound
+        );
         assert!(the_operations_described_for(DescribeOperationsRequest::default()).is_err());
     }
 }

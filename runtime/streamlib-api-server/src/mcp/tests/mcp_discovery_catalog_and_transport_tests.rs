@@ -384,12 +384,17 @@ async fn call_operation_reaches_an_operation_that_has_no_tool_of_its_own() {
         tool_call_outcome_of_the_tool(runtime.clone(), "add_node", add_node_params.clone())
             .await
             .expect("a tool result");
-    assert_eq!(answered_directly["isError"], true, "{answered_directly}");
+    let refused = the_refusal_of_a_tool_result(&answered_directly);
     assert!(
-        answered_directly["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("`call_operation`")),
+        refused.runtime_words.contains("`call_operation`"),
         "{answered_directly}"
+    );
+    assert_eq!(
+        refused
+            .suggested_call
+            .map(|call| (call.operation, Value::Object(call.params))),
+        Some(("add_node".to_owned(), add_node_params.clone())),
+        "the suggestion is exactly the arguments `call_operation` takes"
     );
     assert!(recorded_stream_graph_operations(&recorded).is_empty());
 
@@ -416,12 +421,122 @@ async fn call_operation_refuses_an_operation_the_agent_surface_does_not_serve() 
     )
     .await
     .expect("a tool result");
-    assert_eq!(answered["isError"], true, "{answered}");
+    let refused = the_refusal_of_a_tool_result(&answered);
+    assert!(refused.runtime_words.contains("`discover`"), "{answered}");
+    assert_eq!(
+        answered["structuredContent"]["refusal"]["refusal_code"],
+        "operation_not_found"
+    );
+    assert_eq!(
+        refused.suggested_call.map(|call| call.operation).as_deref(),
+        Some("list_operation_groups")
+    );
+}
+
+#[tokio::test]
+async fn every_call_a_refusal_suggests_is_answered_through_call_operation() {
+    let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+    let mut refused = vec![
+        (
+            "call_operation",
+            json!({ "operation": "no_such_operation" }),
+        ),
+        (
+            "describe_operations",
+            json!({ "operations": ["no_such_operation"] }),
+        ),
+    ];
+    for declaration in streamlib_control_contract::the_operations_served_to_agents() {
+        refused.push((
+            "call_operation",
+            json!({
+                "operation": declaration.method_name,
+                "params": { "a_param_no_operation_takes": true },
+            }),
+        ));
+    }
+    let mut suggestions_followed = 0;
+    for (tool_name, arguments) in refused {
+        let answered = tool_call_outcome_of_the_tool(runtime.clone(), tool_name, arguments)
+            .await
+            .expect("a tool result");
+        let Some(suggested) = the_refusal_of_a_tool_result(&answered).suggested_call else {
+            continue;
+        };
+        let followed = tool_call_outcome_of_the_tool(
+            runtime.clone(),
+            "call_operation",
+            json!({ "operation": suggested.operation, "params": suggested.params }),
+        )
+        .await
+        .expect("a tool result");
+        assert_eq!(
+            followed["isError"], false,
+            "{answered} suggests a call `call_operation` refuses: {followed}"
+        );
+        suggestions_followed += 1;
+    }
     assert!(
-        answered["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("`discover`")),
-        "{answered}"
+        suggestions_followed >= 2,
+        "an unknown operation and a params mismatch each suggest a call"
+    );
+}
+
+#[tokio::test]
+async fn params_that_do_not_match_are_refused_naming_where_and_suggesting_their_description() {
+    for (tool_name, arguments, refused_action) in [
+        (
+            "call_operation",
+            json!({ "operation": "list_streams", "params": { "unexpected": true } }),
+            "list_streams",
+        ),
+        (
+            "list_streams",
+            json!({ "unexpected": true }),
+            "list_streams",
+        ),
+    ] {
+        let answered = tool_call_outcome_of_the_tool(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            tool_name,
+            arguments,
+        )
+        .await
+        .expect("a tool result");
+
+        let refused = the_refusal_of_a_tool_result(&answered);
+        assert_eq!(
+            answered["structuredContent"]["refusal"]["refusal_code"], "params_do_not_match_schema",
+            "{answered}"
+        );
+        assert_eq!(refused.action, refused_action);
+        assert_eq!(
+            refused.refused_params_pointer.as_deref(),
+            Some("/unexpected")
+        );
+        assert_eq!(
+            refused
+                .suggested_call
+                .map(|call| (call.operation, Value::Object(call.params))),
+            Some((
+                "describe_operations".to_owned(),
+                json!({ "operations": ["list_streams"] })
+            ))
+        );
+    }
+
+    let answered = tool_call_outcome_of_the_tool(
+        Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+        "describe_operations",
+        json!({ "operations": "graph" }),
+    )
+    .await
+    .expect("a tool result");
+    let refused = the_refusal_of_a_tool_result(&answered);
+    assert_eq!(refused.action, "describe_operations");
+    assert_eq!(
+        refused.refused_params_pointer.as_deref(),
+        Some("/operations")
     );
 }
 

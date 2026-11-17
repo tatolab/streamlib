@@ -236,6 +236,25 @@ fn wire_outcome<T: serde::Serialize>(
     }
 }
 
+/// The refusal a failing tool result carries, asserting its text block is the same refusal as
+/// its `structuredContent.refusal`.
+pub(crate) fn the_refusal_of_a_tool_result(
+    tool_result: &Value,
+) -> streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRefusalOnTheWire {
+    assert_eq!(tool_result["isError"], true, "{tool_result}");
+    let refusal_as_text: Value = serde_json::from_str(
+        tool_result["content"][0]["text"]
+            .as_str()
+            .expect("a text block"),
+    )
+    .expect("a refusal's text block is JSON");
+    assert_eq!(
+        refusal_as_text, tool_result["structuredContent"]["refusal"],
+        "the text and the structured refusal are one refusal"
+    );
+    serde_json::from_value(refusal_as_text).expect("a refusal reads as the wire's refusal")
+}
+
 /// The JSON a successful tool result states in its first text block.
 pub(crate) fn first_text_block_json(tool_result: &Value) -> Value {
     assert_eq!(tool_result["isError"], false, "{tool_result}");

@@ -397,10 +397,35 @@ async fn a_malformed_call_is_refused_with_the_json_rpc_code_for_it() {
     let served = ControlServedWithAnMcpClient::over_the_stub().await;
     let unknown = served.control_call("no_such_operation", json!({})).await;
     assert_eq!(unknown["error"]["code"], -32601, "{unknown}");
+    assert_eq!(
+        unknown["error"]["message"],
+        "the runtime serves no operation named `no_such_operation`"
+    );
+    assert_eq!(
+        unknown["error"]["data"],
+        json!({
+            "refusal_code": "operation_not_found",
+            "action": "no_such_operation",
+            "runtime_words": "the runtime serves no operation named `no_such_operation`",
+        }),
+        "`list_operation_groups` is a discovery tool `/control` does not serve, so it is not \
+         suggested here"
+    );
     let invalid = served
         .control_call("list_streams", json!({ "unexpected": true }))
         .await;
     assert_eq!(invalid["error"]["code"], -32602, "{invalid}");
+    let refusal = &invalid["error"]["data"];
+    assert_eq!(
+        refusal["refusal_code"], "params_do_not_match_schema",
+        "{refusal}"
+    );
+    assert_eq!(
+        refusal["refused_params_pointer"], "/unexpected",
+        "{refusal}"
+    );
+    assert_eq!(refusal["runtime_words"], invalid["error"]["message"]);
+    assert_eq!(refusal.get("suggested_call"), None, "{refusal}");
     let (_, not_json) = served.control_post_with_headers("", "{ not json").await;
     assert_eq!(not_json["error"]["code"], -32700, "{not_json}");
     let (status_line, unanswered) = served
@@ -411,6 +436,34 @@ async fn a_malformed_call_is_refused_with_the_json_rpc_code_for_it() {
         .await;
     assert!(status_line.contains(" 204 "), "{status_line}");
     assert_eq!(unanswered, Value::Null);
+}
+
+#[tokio::test]
+async fn every_call_a_control_refusal_suggests_is_one_control_serves() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let mut refused = vec![served.control_call("no_such_operation", json!({})).await];
+    for declaration in streamlib_control_contract::CONTROL_OPERATIONS {
+        for params in [json!({}), json!({ "a_param_no_operation_takes": true })] {
+            refused.push(served.control_call(declaration.method_name, params).await);
+        }
+    }
+    for answer in refused {
+        let Some(suggested) = answer["error"]["data"].get("suggested_call") else {
+            continue;
+        };
+        let followed = served
+            .control_call(
+                suggested["operation"].as_str().expect("an operation name"),
+                suggested["params"].clone(),
+            )
+            .await;
+        for code in [-32601, -32602] {
+            assert_ne!(
+                followed["error"]["code"], code,
+                "{answer} suggests a call `/control` refuses: {followed}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -429,6 +482,55 @@ async fn a_subscription_over_a_one_shot_post_is_refused_naming_the_websocket_rou
             .unwrap()
             .contains("/control/ws"),
         "{refused}"
+    );
+    assert_eq!(
+        refused["error"]["data"]["refusal_code"], "refused",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["error"]["data"]["action"], "subscribe_project_changes",
+        "{refused}"
+    );
+    assert_eq!(
+        refused["error"]["data"]["runtime_words"], refused["error"]["message"],
+        "a client that reads only the message reads the same words"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_transact_answers_its_code_and_the_operation_it_refused_over_control() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let absent_node = uuid::Uuid::new_v4();
+    let refused = served
+        .control_call(
+            "transact",
+            json!({
+                "mode": "live",
+                "operations": [{
+                    "operation": "remove_node",
+                    "stream": crate::control_plane_stub_support::STUB_STREAM_ASSET,
+                    "node": absent_node,
+                }],
+            }),
+        )
+        .await;
+
+    assert_eq!(refused["error"]["code"], 1, "{refused}");
+    let refusal = &refused["error"]["data"];
+    assert_eq!(refusal["refusal_code"], "refused", "{refusal}");
+    assert_eq!(refusal["action"], "transact", "{refusal}");
+    assert_eq!(refusal["refused_operation_index"], 0, "{refusal}");
+    assert_eq!(
+        refusal["refused_node"],
+        absent_node.to_string(),
+        "{refusal}"
+    );
+    assert_eq!(
+        refused["error"]["message"],
+        format!(
+            "transact failed: {}",
+            refusal["runtime_words"].as_str().unwrap()
+        )
     );
 }
 

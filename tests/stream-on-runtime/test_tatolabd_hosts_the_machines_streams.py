@@ -228,7 +228,7 @@ class McpJsonRpcClientOverTheVerb:
             content["text"] for content in result["content"] if content.get("type") == "text"
         )
         if result.get("isError"):
-            raise McpToolCallRefused(text)
+            raise McpToolCallRefused(json.loads(text)["runtime_words"])
         return json.loads(text)
 
     def close_standard_input(self) -> int:
