@@ -6,10 +6,13 @@ use quote::quote;
 use streamlib_node_schema::pin_type::{PinFlow, PinType};
 
 /// Emit the `Option<PinDeclaration>` a port declaring `pin_type` carries: exactly that type, in
-/// the flow it states, else in its type's default flow.
+/// the flow it states, else in its type's default flow, with the names it had and whether it may
+/// be unset, as it states them.
 pub(super) fn pin_declaration_tokens(
     pin_type: Option<&PinType>,
     flow: Option<PinFlow>,
+    former_names: &[String],
+    may_be_unset: bool,
 ) -> TokenStream {
     let Some(pin_type) = pin_type else {
         return quote! { ::std::option::Option::None };
@@ -17,13 +20,25 @@ pub(super) fn pin_declaration_tokens(
     let descriptors = quote! { __streamlib_sdk::descriptors };
     let pin_type = pin_type_tokens(pin_type);
     let exactly = quote! { #descriptors::PinDeclaration::exactly(#pin_type) };
-    let Some(flow) = flow else {
+    let mut stated = Vec::new();
+    if let Some(flow) = flow {
+        let flow = Ident::new(flow.declaration_name(), Span::call_site());
+        stated.push(quote! { flow: #descriptors::PinFlow::#flow, });
+    }
+    if !former_names.is_empty() {
+        stated.push(quote! {
+            former_names: ::std::vec![#(::std::string::String::from(#former_names)),*],
+        });
+    }
+    if may_be_unset {
+        stated.push(quote! { may_be_unset: true, });
+    }
+    if stated.is_empty() {
         return quote! { ::std::option::Option::Some(#exactly) };
-    };
-    let flow = Ident::new(flow.declaration_name(), Span::call_site());
+    }
     quote! {
         ::std::option::Option::Some(#descriptors::PinDeclaration {
-            flow: #descriptors::PinFlow::#flow,
+            #(#stated)*
             ..#exactly
         })
     }

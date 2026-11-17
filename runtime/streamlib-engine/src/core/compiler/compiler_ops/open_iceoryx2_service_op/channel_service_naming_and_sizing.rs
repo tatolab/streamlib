@@ -267,14 +267,11 @@ pub(super) fn delivery_resolution_of_input_port(
 ) -> Result<DeliveryResolution> {
     let dest_type = node_class_import_path_of(graph, dest_proc_id)?;
     let node_types = graph.node_types_this_stream_resolves();
-    let declared_borrow_quota = node_types
-        .port_info(&dest_type)
-        .and_then(|(inputs, _outputs)| {
-            inputs
-                .into_iter()
-                .find(|port| port.name == dest_port)
-                .and_then(|port| port.borrow_quota)
-        });
+    let declared_borrow_quota = node_types.port_info(&dest_type).and_then(|ports| {
+        ports
+            .input_named(dest_port)
+            .and_then(|port| port.borrow_quota)
+    });
     Ok(DeliveryResolution {
         borrow_quota: input_port_borrow_quota(dest_port, declared_borrow_quota)?,
         ..delivery_profile_for_input_port(node_types, &dest_type, dest_port)?.resolve()

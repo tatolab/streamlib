@@ -114,20 +114,33 @@ pub(crate) fn refuse_a_config_field_named_as_an_input_port(
     else {
         return Ok(());
     };
-    match descriptor
-        .inputs
-        .iter()
-        .find(|input| properties.contains_key(&input.name))
-    {
-        Some(input) => Err(Error::Configuration(format!(
-            "node type `{}` names the config field `{name}` and the input port `{name}` alike; a \
-             value set on `{name}` would be both. To fix: rename the config field or the input \
-             port",
-            descriptor.node_class_import_path,
-            name = input.name
-        ))),
-        None => Ok(()),
+    for input in &descriptor.inputs {
+        if properties.contains_key(&input.name) {
+            return Err(Error::Configuration(format!(
+                "node type `{}` names the config field `{name}` and the input port `{name}` \
+                 alike; a value set on `{name}` would be both. To fix: rename the config field \
+                 or the input port",
+                descriptor.node_class_import_path,
+                name = input.name
+            )));
+        }
+        let former_names = input
+            .declared_pin()
+            .map(|declared| declared.former_names)
+            .unwrap_or_default();
+        if let Some(former_name) = former_names
+            .iter()
+            .find(|former_name| properties.contains_key(former_name.as_str()))
+        {
+            return Err(Error::Configuration(format!(
+                "node type `{}` names the config field `{former_name}`, and the input port `{}` \
+                 lists `{former_name}` as a name it had; a value saved under `{former_name}` \
+                 would be both. To fix: rename the config field or drop the name the port had",
+                descriptor.node_class_import_path, input.name
+            )));
+        }
     }
+    Ok(())
 }
 
 /// `field_schema` with a `$ref` into the config schema's definitions, or the single `allOf` a

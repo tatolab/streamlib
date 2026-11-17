@@ -555,7 +555,12 @@ fn generate_descriptor_from_schema(
             };
             let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
             let family_tokens = port_family_declaration_tokens(&p.family);
-            let pin_declaration_tokens = pin_declaration_tokens(p.pin_type.as_ref(), p.flow);
+            let pin_declaration_tokens = pin_declaration_tokens(
+                p.pin_type.as_ref(),
+                p.flow,
+                &p.former_names,
+                p.may_be_unset,
+            );
             let borrow_quota_tokens = match p.borrow_quota {
                 Some(quota) => quote! { ::std::option::Option::Some(#quota) },
                 None => quote! { ::std::option::Option::None },
@@ -588,7 +593,12 @@ fn generate_descriptor_from_schema(
             let port_name = &p.name;
             let port_desc = declared_description_str_expression(*declared_description);
             let family_tokens = port_family_declaration_tokens(&p.family);
-            let pin_declaration_tokens = pin_declaration_tokens(p.pin_type.as_ref(), p.flow);
+            let pin_declaration_tokens = pin_declaration_tokens(
+                p.pin_type.as_ref(),
+                p.flow,
+                &p.former_names,
+                p.may_be_unset,
+            );
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),

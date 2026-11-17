@@ -31,10 +31,11 @@ use crate::core::graph::{Graph, GraphNode, NodeRunId};
 use crate::core::pubsub::RuntimeEvent;
 
 impl LoadedStreamInThisRuntime {
-    /// Set each of `sets` live, apart from the graph, when each is on an input its node reads
-    /// each run; none when one is held on the graph, so the set takes the path a graph edit
-    /// takes. Each value is checked before any is set, handed to the helper and the islands
-    /// reading it, and announced, one change of an input value of this stream at a time.
+    /// Set each of `sets` live, under its input's current name, apart from the graph, when each
+    /// is on an input its node reads each run; none when one is held on the graph, so the set
+    /// takes the path a graph edit takes. Each value is checked before any is set, handed to the
+    /// helper and the islands reading it, and announced, one change of an input value of this
+    /// stream at a time.
     pub(crate) fn set_input_values_live(
         &self,
         sets: &[InputValueToSetLive],
@@ -70,6 +71,23 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
+/// Each of `sets` with its input under the name the input of its node in `graph` has now; a set
+/// on a node or an input the graph does not hold is left as given.
+fn the_sets_under_the_current_input_names(
+    graph: &Graph,
+    sets: &[InputValueToSetLive],
+) -> Vec<InputValueToSetLive> {
+    sets.iter()
+        .map(|set| InputValueToSetLive {
+            input: graph
+                .node_by_uuid(set.node)
+                .and_then(|set_on| set_on.input_port(&set.input))
+                .map_or_else(|| set.input.clone(), |input| input.name.clone()),
+            ..set.clone()
+        })
+        .collect()
+}
+
 /// Whether the playback of the stream a live set is made on is stopped, so a `reset` input
 /// holds no live value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +109,8 @@ pub(crate) struct InputValuesHeldLive {
     function_nodes_read_inside_an_island: Vec<NodeRunId>,
 }
 
-/// Set each of `sets` live in the live values of the graph `graph` locks, then hand each node set
+/// Set each of `sets` live, under its input's current name, in the live values of the graph
+/// `graph` locks, then hand each node set
 /// on its values, its helper or itself with the lock released and its islands under the write
 /// lock; `None`, with nothing set, when one is held on the graph. A value its input does not
 /// take, and a value on a `reset` input while `playback` is stopped, is refused before any is
@@ -101,7 +120,14 @@ pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
     sets: &[InputValueToSetLive],
     playback: PlaybackOfTheStreamSetOn,
 ) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
-    let Some(mut held_live) = set_the_input_values_live(&graph.read(), sets, playback)? else {
+    let (sets, held_live) = {
+        let graph = graph.read();
+        let sets = the_sets_under_the_current_input_names(&graph, sets);
+        let held_live = set_the_input_values_live(&graph, &sets, playback);
+        (sets, held_live)
+    };
+    let sets = sets.as_slice();
+    let Some(mut held_live) = held_live? else {
         return Ok(None);
     };
     let handed_over = std::mem::take(&mut held_live.deliveries)

@@ -182,22 +182,28 @@ impl GraphNode {
         self.exposed_config_fields.iter().any(|field| field == name)
     }
 
-    /// The input port named `name`.
+    /// The input port `name` finds: the input so named, else the one that had that name.
     pub fn input_port(&self, name: &str) -> Option<&PortInfo> {
-        self.ports.inputs.iter().find(|port| port.name == name)
+        self.ports.input_named(name)
+    }
+
+    /// The output port `name` finds: the output so named, else the one that had that name.
+    pub fn output_port(&self, name: &str) -> Option<&PortInfo> {
+        self.ports.output_named(name)
     }
 
     pub fn has_input(&self, name: &str) -> bool {
-        self.ports.inputs.iter().any(|p| p.name == name)
+        self.input_port(name).is_some()
     }
 
     pub fn has_output(&self, name: &str) -> bool {
-        self.ports.outputs.iter().any(|p| p.name == name)
+        self.output_port(name).is_some()
     }
 
-    /// Create a reference to an output port. Panics if port doesn't exist.
+    /// Create a reference to an output port, under its current name. Panics if port doesn't
+    /// exist.
     pub fn output(&self, port_name: &str) -> OutputLinkPortRef {
-        if !self.has_output(port_name) {
+        self.try_output(port_name).unwrap_or_else(|| {
             panic!(
                 "Node '{}' ({}) has no output port '{}'. Available outputs: {:?}",
                 self.id,
@@ -208,14 +214,14 @@ impl GraphNode {
                     .iter()
                     .map(|p| &p.name)
                     .collect::<Vec<_>>()
-            );
-        }
-        OutputLinkPortRef::new(self.id.to_string(), port_name)
+            )
+        })
     }
 
-    /// Create a reference to an input port. Panics if port doesn't exist.
+    /// Create a reference to an input port, under its current name. Panics if port doesn't
+    /// exist.
     pub fn input(&self, port_name: &str) -> InputLinkPortRef {
-        if !self.has_input(port_name) {
+        self.try_input(port_name).unwrap_or_else(|| {
             panic!(
                 "Node '{}' ({}) has no input port '{}'. Available inputs: {:?}",
                 self.id,
@@ -226,25 +232,18 @@ impl GraphNode {
                     .iter()
                     .map(|p| &p.name)
                     .collect::<Vec<_>>()
-            );
-        }
-        InputLinkPortRef::new(self.id.to_string(), port_name)
+            )
+        })
     }
 
     pub fn try_output(&self, port_name: &str) -> Option<OutputLinkPortRef> {
-        if self.has_output(port_name) {
-            Some(OutputLinkPortRef::new(self.id.to_string(), port_name))
-        } else {
-            None
-        }
+        self.output_port(port_name)
+            .map(|port| OutputLinkPortRef::new(self.id.to_string(), &port.name))
     }
 
     pub fn try_input(&self, port_name: &str) -> Option<InputLinkPortRef> {
-        if self.has_input(port_name) {
-            Some(InputLinkPortRef::new(self.id.to_string(), port_name))
-        } else {
-            None
-        }
+        self.input_port(port_name)
+            .map(|port| InputLinkPortRef::new(self.id.to_string(), &port.name))
     }
 }
 

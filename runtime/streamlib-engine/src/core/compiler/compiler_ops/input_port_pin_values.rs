@@ -38,8 +38,8 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
 }
 
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
-/// no pin value and that declare no default, so the node has no value to
-/// evaluate them with; none for a node of any other kind.
+/// no pin value, that declare no default and that may not be unset, so the node
+/// has no value to evaluate them with; none for a node of any other kind.
 pub(crate) fn the_inputs_a_function_node_has_no_value_for(
     graph: &Graph,
     node: &GraphNode,
@@ -63,6 +63,7 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
+                && !port.may_be_unset
                 && !node.is_an_exposed_config_field_input(&port.name)
                 && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
@@ -353,6 +354,50 @@ pub(crate) mod tests {
         set_a_pin(&mut graph, &remap, "gain", serde_json::json!(2.0));
         set_a_pin(&mut graph, &mix, "a", serde_json::json!(0.25));
         assert!(waiting(&graph, &remap).is_empty() && waiting(&graph, &mix).is_empty());
+        refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
+    }
+
+    /// A function node input that may be unset has a value with no link, pin or default: it
+    /// reads as nothing, so the node waits on none of it and the stream starts; an input that
+    /// declares the same pin but may not be unset still waits.
+    ///
+    /// Mental-revert: dropping the `may_be_unset` filter names `trim` as waiting and refuses the
+    /// stream as it starts.
+    #[test]
+    fn a_function_node_input_that_may_be_unset_never_waits_for_a_value() {
+        use crate::core::compiler::compiler_ops::function_node_island::tests::{
+            a_function_node_type, a_graph_resolving_these_function_node_types, add_a_node,
+        };
+        use crate::core::descriptors::{PinDeclaration, PinType};
+        let a_float_input = |name: &str, may_be_unset: bool| {
+            PortDescriptor::new(
+                name,
+                "",
+                true,
+                PortFamilyDeclaration::of_family(PortFamily::Channels),
+            )
+            .with_pin_declaration(PinDeclaration {
+                may_be_unset,
+                ..PinDeclaration::exactly(PinType::Float { exact_size: None })
+            })
+        };
+        let graph = a_graph_resolving_these_function_node_types([a_function_node_type(
+            "test_ops:trim",
+            &[],
+            &["result"],
+        )
+        .with_input(a_float_input("trim", true))
+        .with_input(a_float_input("gain", false))]);
+        let mut graph = graph;
+        let trim = add_a_node(&mut graph, "test_ops:trim", JsonValue::Null);
+        assert_eq!(
+            the_inputs_a_function_node_has_no_value_for(
+                &graph,
+                graph.traversal().v(&trim).first().unwrap()
+            ),
+            vec!["gain".to_string()]
+        );
+        set_a_pin(&mut graph, &trim, "gain", serde_json::json!(1.0));
         refuse_a_function_node_input_with_no_value_as_the_stream_starts(&graph).unwrap();
     }
 

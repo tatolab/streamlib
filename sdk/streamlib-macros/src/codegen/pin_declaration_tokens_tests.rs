@@ -10,7 +10,7 @@ fn emitted(pin_type: Option<&PinType>) -> String {
 }
 
 fn emitted_in(pin_type: Option<&PinType>, flow: Option<PinFlow>) -> String {
-    pin_declaration_tokens(pin_type, flow)
+    pin_declaration_tokens(pin_type, flow, &[], false)
         .to_string()
         .split_whitespace()
         .collect()
@@ -67,6 +67,29 @@ fn a_stated_flow_is_emitted_over_the_types_default() {
         ),
         "::std::option::Option::Some(__streamlib_sdk::descriptors::PinDeclaration{\
          flow:__streamlib_sdk::descriptors::PinFlow::Stream,\
+         ..__streamlib_sdk::descriptors::PinDeclaration::exactly(\
+         __streamlib_sdk::descriptors::PinType::Float{exact_size:::std::option::Option::None})})"
+    );
+}
+
+#[test]
+fn the_names_a_port_had_and_that_it_may_be_unset_are_emitted_beside_its_flow() {
+    let emitted: String = pin_declaration_tokens(
+        Some(&PinType::Float { exact_size: None }),
+        Some(PinFlow::Stream),
+        &["level".to_owned(), "amount".to_owned()],
+        true,
+    )
+    .to_string()
+    .split_whitespace()
+    .collect();
+    assert_eq!(
+        emitted,
+        "::std::option::Option::Some(__streamlib_sdk::descriptors::PinDeclaration{\
+         flow:__streamlib_sdk::descriptors::PinFlow::Stream,\
+         former_names:::std::vec![::std::string::String::from(\"level\"),\
+         ::std::string::String::from(\"amount\")],\
+         may_be_unset:true,\
          ..__streamlib_sdk::descriptors::PinDeclaration::exactly(\
          __streamlib_sdk::descriptors::PinType::Float{exact_size:::std::option::Option::None})})"
     );

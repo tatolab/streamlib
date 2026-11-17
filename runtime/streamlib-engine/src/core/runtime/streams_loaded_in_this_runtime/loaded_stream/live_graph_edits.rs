@@ -473,11 +473,11 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// Set the saved value `value` on input `input` of the node `node_run_id` in the graph `graph`
-/// locks, `None` taking it off, dropping any value set live on the input first, then hand that
-/// node what the input reads now: its islands under the write lock, its helper or itself with
-/// the lock released. Answers the changes to announce: the input's, and the graph's for an input
-/// held on the graph. Whole or not at all: a node or island not handed the value puts the saved
-/// and live values back.
+/// locks, under the input's current name, `None` taking it off, dropping any value set live on
+/// the input first, then hand that node what the input reads now: its islands under the write
+/// lock, its helper or itself with the lock released. Answers the changes to announce: the
+/// input's, and the graph's for an input held on the graph. Whole or not at all: a node or island
+/// not handed the value puts the saved and live values back.
 pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     graph: &RwLock<Graph>,
     node_run_id: &NodeRunId,
@@ -628,7 +628,10 @@ fn set_the_saved_value_and_hand_it_to_each_island(
     let delivery = UnlinkedInputValuesDelivery::of_the_node(graph, node);
     let changes_announced: Vec<RuntimeEvent> = the_input_value_change(graph, node, input)
         .into_iter()
-        .chain(is_held_on_the_graph(graph, node, input).then_some(RuntimeEvent::GraphDidChange))
+        .chain(
+            is_held_on_the_graph(graph, node, &put_back.input)
+                .then_some(RuntimeEvent::GraphDidChange),
+        )
         .collect();
     if let UnlinkedInputValuesDelivery::EachIslandEvaluatingIt(function_node) = &delivery {
         hand_each_island_again_or_put_the_values_back(
@@ -684,13 +687,14 @@ fn set_the_saved_value(
         .first_mut()
         .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
     let node_uuid = node.node_uuid;
-    if !node.has_input(input) {
+    let Some(input) = node.input_port(input).map(|port| port.name.clone()) else {
         return Err(Error::NodePortNotFound {
             node_run_id: node.display_name.clone(),
             port_name: input.to_string(),
             direction: crate::core::PortDirection::Input,
         });
-    }
+    };
+    let input = input.as_str();
     let lifetime = the_lifetime_of_the_input(node, input);
     if value.is_some() && node.is_an_exposed_config_field_input(input) {
         return Err(Error::Configuration(format!(
