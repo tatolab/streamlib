@@ -33,15 +33,13 @@ use crate::core::compiler::compiler_ops::function_node_promotion::{
     plan_the_promotion_of_a_function_node_out_of_its_readers_islands,
     record_each_promotion_on_its_nodes_metrics,
 };
-use crate::core::compiler::compiler_ops::input_port_pin_values::{
-    hand_each_helper_the_config_fields_its_node_exposes_as_inputs,
-    hand_each_helper_the_pin_values_its_input_ports_read,
-};
+use crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_config_fields_its_node_exposes_as_inputs;
 use crate::core::compiler::compiler_ops::shader_node_island::{
     RunningShaderNodesALiveEditRestarts, forget_the_build_of_each_shader_node_restarted,
     place_each_shader_node_island_on_its_host, the_running_shader_nodes_a_live_edit_restarts,
     unwire_each_link_of_the_shader_nodes_restarted,
 };
+use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::compiler_transaction::ConfigsACommitIsApplying;
 use crate::core::compiler::node_thread_shutdown::{
@@ -128,6 +126,11 @@ impl Compiler {
             Arc::clone(&self.configs_a_commit_is_applying),
         );
         f(&mut graph, &tx)
+    }
+
+    /// The graph, for a step that takes its lock only as long as it reads or edits it.
+    pub(crate) fn graph_lock(&self) -> &RwLock<Graph> {
+        &self.graph
     }
 
     /// Read the graph under its read lock, logging nothing.
@@ -453,7 +456,7 @@ impl Compiler {
         hand_each_reader_the_island_a_compile_changed(&mut graph_arc.write(), &plan.links_to_add)?;
         close_the_channels_no_island_reads_any_more(&mut graph_arc.write())?;
         note_where_each_function_node_runs(&mut graph_arc.write());
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph_arc.read())?;
+        deliver_the_unlinked_input_values_of_each_node(&graph_arc, &plan.nodes_to_add)?;
         hand_each_helper_the_config_fields_its_node_exposes_as_inputs(&graph_arc.read())?;
 
         // A function node has no thread whose setup would settle its state: it

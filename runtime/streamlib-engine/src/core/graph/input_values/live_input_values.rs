@@ -305,6 +305,22 @@ pub(crate) fn the_value_an_input_reads(
     })
 }
 
+/// The value each input of `node` in `graph` reads while no link feeds it, by input: its live
+/// value, else its saved one, else its declared default. An input that takes no stored value, a
+/// config field the node exposes as an input, which reads the node's config, and an input with
+/// none of the three are left out.
+pub(crate) fn the_unlinked_input_values(graph: &Graph, node: &GraphNode) -> Map<String, Value> {
+    node.ports
+        .inputs
+        .iter()
+        .filter(|port| !node.is_an_exposed_config_field_input(&port.name))
+        .filter_map(|port| {
+            let value = the_value_an_input_reads(graph, node, port, false)?.value?;
+            (!value.is_null()).then(|| (port.name.clone(), value))
+        })
+        .collect()
+}
+
 /// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now; `None`
 /// when the node has no such input.
 pub(crate) fn the_input_value_change(

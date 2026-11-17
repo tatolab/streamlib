@@ -521,13 +521,13 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     pub(crate) late_fed_function_node_islands: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
     /// Every `(input port, link id)` whose island the far side was told to stop evaluating.
     pub(crate) unfed_function_node_islands: Arc<parking_lot::Mutex<Vec<(String, String)>>>,
-    /// Every set of pin values handed over, in order.
-    pub(crate) pin_values_handed_over:
+    /// Every set of unlinked input values handed over, in order.
+    pub(crate) input_values_handed_over:
         Arc<parking_lot::Mutex<Vec<serde_json::Map<String, serde_json::Value>>>>,
     /// Every set of exposed config fields handed over, in order.
     pub(crate) exposed_config_fields_handed_over: Arc<parking_lot::Mutex<Vec<Vec<String>>>>,
-    /// Whether the far side refuses the pin values handed over, as a helper that died does.
-    pub(crate) refuses_pin_values: Arc<std::sync::atomic::AtomicBool>,
+    /// Whether the far side refuses the input values handed over, as a helper that died does.
+    pub(crate) refuses_input_values: Arc<std::sync::atomic::AtomicBool>,
     /// Whether the far side refuses the function node islands handed over, as a helper that died
     /// does.
     pub(crate) refuses_function_node_islands: Arc<std::sync::atomic::AtomicBool>,
@@ -594,19 +594,21 @@ impl crate::core::nodes::OutOfProcessFarSideLinkDelivery
         Ok(())
     }
 
-    fn hand_over_the_pin_values_of_its_input_ports(
+    fn hand_over_the_unlinked_input_values(
         &self,
-        pin_values: &serde_json::Map<String, serde_json::Value>,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> crate::core::Result<()> {
         if self
-            .refuses_pin_values
+            .refuses_input_values
             .load(std::sync::atomic::Ordering::SeqCst)
         {
             return Err(crate::core::Error::Configuration(
-                "the far side refuses pin values in this test".to_string(),
+                "the far side refuses input values in this test".to_string(),
             ));
         }
-        self.pin_values_handed_over.lock().push(pin_values.clone());
+        self.input_values_handed_over
+            .lock()
+            .push(input_values.clone());
         Ok(())
     }
 

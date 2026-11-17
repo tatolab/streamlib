@@ -5,7 +5,7 @@
 1244 packages/tatolab-camera/src/avfoundation_camera_capture.rs
 1145 packages/tatolab-opus/src/encoded_packet_to_audio_block_decoder.rs
 1098 runtime/streamlib-engine/src/core/compiler/compiler_ops/shader_node_island.rs
-2324 runtime/streamlib-engine/src/core/nodes/__generated_private/generated_node_impl.rs
+2134 runtime/streamlib-engine/src/core/nodes/__generated_private/generated_node_impl.rs
 1377 runtime/streamlib-vulkan-video/src/codec_utils/vk_image_resource/mod.rs
 1115 runtime/streamlib-vulkan-video/src/codec_utils/vk_video_core_profile/mod.rs
 1241 runtime/streamlib-vulkan-video/src/codec_utils/vulkan_command_buffer_pool/mod.rs

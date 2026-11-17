@@ -5,12 +5,10 @@ use std::sync::Arc;
 
 use parking_lot::{Condvar, Mutex};
 
-use super::GeneratedNode;
-use crate::core::NodeDescriptor;
 use crate::core::Result;
+use crate::core::context::RuntimeContextFullAccess;
 use crate::core::context::texture_pools_and_rings::node_output_surface_pool::OutputFramesKeptByTheOutputLinksOfOneNode;
-use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::execution::{ExecutionConfig, ProcessExecution};
+use crate::core::execution::ProcessExecution;
 use crate::core::graph::HowItsHelpersRanAFunctionNode;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::core::nodes::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
@@ -54,11 +52,11 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         link_id: &str,
     ) -> Result<()>;
 
-    /// Hand the far side the pin value each of its input ports reads while no
-    /// link feeds it, in place of those it reads now.
-    fn hand_over_the_pin_values_of_its_input_ports(
+    /// Hand the far side the value each of its inputs reads while no link
+    /// feeds it, in place of those it reads now.
+    fn hand_over_the_unlinked_input_values(
         &self,
-        pin_values: &serde_json::Map<String, JsonValue>,
+        input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()>;
 
     /// Hand the far side the config fields its node takes as inputs, each read
@@ -102,9 +100,9 @@ struct RecordedLinksAndHowTheNextReachesTheFarSide {
     input_links: Vec<JsonValue>,
     output_links: Vec<JsonValue>,
     function_node_islands_feeding_its_input_ports: Vec<JsonValue>,
-    /// The pin value each of its input ports reads while no link feeds it, by
-    /// port name.
-    pin_values_of_its_input_ports: serde_json::Map<String, JsonValue>,
+    /// The value each of its inputs reads while no link feeds it, by input
+    /// name.
+    unlinked_input_values: serde_json::Map<String, JsonValue>,
     /// The config fields its node takes as inputs, each read from the input
     /// port of its name.
     config_fields_its_node_exposes_as_inputs: Vec<String>,
@@ -231,7 +229,7 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
             "inputs": self.input_links,
             "outputs": self.output_links,
             "islands": self.function_node_islands_feeding_its_input_ports,
-            "pins": self.pin_values_of_its_input_ports,
+            "input_values": self.unlinked_input_values,
             "exposed_config_fields": self.config_fields_its_node_exposes_as_inputs,
         })
     }
@@ -417,7 +415,7 @@ impl OutOfProcessLinkWiringEnvelope {
                     input_links: Vec::new(),
                     output_links: Vec::new(),
                     function_node_islands_feeding_its_input_ports: Vec::new(),
-                    pin_values_of_its_input_ports: serde_json::Map::new(),
+                    unlinked_input_values: serde_json::Map::new(),
                     config_fields_its_node_exposes_as_inputs: Vec::new(),
                     function_nodes_by_breadcrumb_number: Vec::new(),
                     stateful_function_nodes_its_far_side_calls: Vec::new(),
@@ -650,25 +648,24 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// Record the pin value each of its input ports reads while no link feeds
-    /// it, and hand them to a far side past its setup command when they differ
-    /// from those it holds.
-    pub(crate) fn record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
+    /// Record the value each of its inputs reads while no link feeds it, and
+    /// hand them to a far side past its setup command when they differ from
+    /// those it holds.
+    pub(crate) fn record_the_unlinked_input_values_and_hand_them_to_a_far_side_past_its_setup_command(
         &self,
-        pin_values: serde_json::Map<String, JsonValue>,
+        input_values: serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
-        if recorded.pin_values_of_its_input_ports == pin_values {
+        if recorded.unlinked_input_values == input_values {
             return Ok(());
         }
-        recorded.pin_values_of_its_input_ports = pin_values;
+        recorded.unlinked_input_values = input_values;
         match &recorded.how_a_link_reaches_the_far_side {
-            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
-                .hand_over_the_pin_values_of_its_input_ports(
-                    &recorded.pin_values_of_its_input_ports,
-                ),
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
+                delivery.hand_over_the_unlinked_input_values(&recorded.unlinked_input_values)
+            }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_)
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
@@ -1230,193 +1227,6 @@ impl OutOfProcessLinkWiringEnvelope {
         self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
             .as_setup_command_ports()
-    }
-}
-
-pub trait DynGeneratedNode: Send + 'static {
-    /// Generated setup hook called by runtime with privileged ctx.
-    fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
-
-    /// Generated teardown hook called by runtime with privileged ctx.
-    fn __generated_teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
-
-    /// Generated on_pause hook — restricted ctx.
-    fn __generated_on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
-
-    /// Generated on_resume hook — restricted ctx.
-    fn __generated_on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
-
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()>;
-
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
-
-    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()>;
-
-    fn name(&self) -> &str;
-    fn descriptor(&self) -> Option<NodeDescriptor>;
-
-    fn execution_config(&self) -> ExecutionConfig;
-
-    fn has_iceoryx2_outputs(&self) -> bool;
-
-    fn has_iceoryx2_inputs(&self) -> bool;
-
-    /// Install host-allocated iceoryx2 resources (issue #894).
-    fn set_iceoryx2_resources(
-        &mut self,
-        output_writer: Option<crate::iceoryx2::OutputWriter>,
-        input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
-    ) -> crate::core::Result<()>;
-
-    /// Borrow the host-side `OutputWriterInner` Arc.
-    fn iceoryx2_output_writer_inner(
-        &self,
-    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>>;
-
-    /// Borrow the host-side `InputMailboxesInner` Arc.
-    fn iceoryx2_input_mailboxes_inner(
-        &self,
-    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
-
-    fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {}
-
-    fn has_failed_unrecoverably(&self) -> bool {
-        false
-    }
-
-    fn failure_the_node_reported_of_itself(&self) -> Option<String> {
-        None
-    }
-
-    fn why_process_is_raising_as_its_helper_reports(&self) -> Option<String> {
-        None
-    }
-
-    fn why_the_node_is_not_ready_as_its_helper_reports(&self) -> Option<String> {
-        None
-    }
-
-    fn why_the_out_of_process_helper_died_on_its_own(&self) -> Option<String> {
-        None
-    }
-
-    fn ask_to_promote_the_function_node_that_lost_the_helper_that_died(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> Option<FunctionNodePromotionAwaitedBeforeTheReaderRestarts> {
-        None
-    }
-
-    fn restart_the_out_of_process_helper_that_died(
-        &mut self,
-        _ctx: &RuntimeContextFullAccess<'_>,
-    ) -> crate::core::Result<()> {
-        Err(crate::core::Error::Runtime(
-            "this node runs in the app process, so it has no helper process to restart".to_string(),
-        ))
-    }
-
-    fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
-        None
-    }
-
-    /// Apply a JSON config update at runtime.
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
-
-    fn to_runtime_json(&self) -> serde_json::Value;
-
-    /// Get the current config as JSON.
-    fn config_json(&self) -> serde_json::Value;
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
-}
-
-impl<T> DynGeneratedNode for T
-where
-    T: GeneratedNode,
-{
-    fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::__generated_setup(self, ctx)
-    }
-
-    fn __generated_teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::__generated_teardown(self, ctx)
-    }
-
-    fn __generated_on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::__generated_on_pause(self, ctx)
-    }
-
-    fn __generated_on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::__generated_on_resume(self, ctx)
-    }
-
-    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::process(self, ctx)
-    }
-
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::start(self, ctx)
-    }
-
-    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        <Self as GeneratedNode>::stop(self, ctx)
-    }
-
-    fn name(&self) -> &str {
-        <Self as GeneratedNode>::name(self)
-    }
-
-    fn descriptor(&self) -> Option<NodeDescriptor> {
-        <T as GeneratedNode>::descriptor()
-    }
-
-    fn execution_config(&self) -> ExecutionConfig {
-        <Self as GeneratedNode>::execution_config(self)
-    }
-
-    fn has_iceoryx2_outputs(&self) -> bool {
-        <Self as GeneratedNode>::has_iceoryx2_outputs(self)
-    }
-
-    fn has_iceoryx2_inputs(&self) -> bool {
-        <Self as GeneratedNode>::has_iceoryx2_inputs(self)
-    }
-
-    fn set_iceoryx2_resources(
-        &mut self,
-        output_writer: Option<crate::iceoryx2::OutputWriter>,
-        input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
-    ) -> crate::core::Result<()> {
-        <Self as GeneratedNode>::set_iceoryx2_resources(self, output_writer, input_mailboxes)
-    }
-
-    fn iceoryx2_output_writer_inner(
-        &self,
-    ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
-        <Self as GeneratedNode>::iceoryx2_output_writer_inner(self)
-    }
-
-    fn iceoryx2_input_mailboxes_inner(
-        &self,
-    ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {
-        <Self as GeneratedNode>::iceoryx2_input_mailboxes_inner(self)
-    }
-
-    fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()> {
-        <Self as GeneratedNode>::apply_config_json(self, config_json)
-    }
-
-    fn to_runtime_json(&self) -> serde_json::Value {
-        <Self as GeneratedNode>::to_runtime_json(self)
-    }
-
-    fn config_json(&self) -> serde_json::Value {
-        <Self as GeneratedNode>::config_json(self)
-    }
-
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
     }
 }
 

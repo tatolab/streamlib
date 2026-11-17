@@ -35,6 +35,19 @@ pub trait GeneratedNode: Send + 'static {
         self.update_config(config)
     }
 
+    /// Take `input_values`, the value each input reads while no link feeds it, by input, in
+    /// place of those it took before; by default each lands in its input mailboxes, which answer
+    /// a read of the input with it while no link feeds it.
+    fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        if let Some(input_mailboxes) = self.iceoryx2_input_mailboxes_inner() {
+            input_mailboxes.read_each_unlinked_input_as_its_value(input_values);
+        }
+        Ok(())
+    }
+
     fn execution_config(&self) -> ExecutionConfig {
         ExecutionConfig::default()
     }

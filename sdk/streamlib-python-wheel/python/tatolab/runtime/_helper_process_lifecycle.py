@@ -252,9 +252,10 @@ class HelperProcessLifecycle:
         elif verb == "unfeed_island":
             # Unanswered, like `unwire_link`.
             self._unfeed_island(command)
-        elif verb == "set_pin_values":
-            # Unanswered, like `unwire_link`.
-            self._set_pin_values(command)
+        elif verb == "set_input_values":
+            # Unanswered, like `unwire_link`. Taken here on the main thread,
+            # between two `process` calls or at a manual node's steady tick.
+            self._set_input_values(command)
         elif verb == "set_exposed_config_fields":
             # Unanswered, like `unwire_link`.
             self._take_the_config_fields_its_node_exposes_as_inputs(
@@ -324,7 +325,7 @@ class HelperProcessLifecycle:
             )
             read_each_unlinked_input_port_as_its_pin_value(
                 link_data_access=self._link_data_access,
-                pin_values=dict(port_wiring.get("pins") or {}),
+                pin_values=_the_number_each_input_value_reads(port_wiring.get("input_values")),
             )
             self._hosted = construct_hosted_node(
                 self._node_class,
@@ -727,16 +728,16 @@ class HelperProcessLifecycle:
             )
         self._hand_back_the_config_value_of_an_exposed_field_a_link_stopped_driving(input_port)
 
-    def _set_pin_values(self, command: "dict[str, Any]") -> None:
+    def _set_input_values(self, command: "dict[str, Any]") -> None:
         try:
             read_each_unlinked_input_port_as_its_pin_value(
                 link_data_access=self._link_data_access,
-                pin_values=dict(command.get("pins") or {}),
+                pin_values=_the_number_each_input_value_reads(command.get("input_values")),
             )
-        except Exception as pin_values_refused:
+        except Exception as input_values_refused:
             log.error(
-                "this node could not read the pin values the engine handed it",
-                error=str(pin_values_refused),
+                "this node could not read the input values the engine handed it",
+                error=str(input_values_refused),
             )
 
     def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
@@ -771,3 +772,14 @@ class HelperProcessLifecycle:
         self._config_its_node_was_last_handed = dict(command.get("config") or {})
         self._bridge.send({"rpc": "ok"})
         self._tell_the_parent_whether_the_node_is_ready()
+
+
+def _the_number_each_input_value_reads(input_values: "Optional[dict[str, Any]]") -> "dict[str, float]":
+    """The number each input of `input_values` reads while no link feeds it:
+    its number, or 1 and 0 for a bool. A value of another kind reaches no
+    port, so its input reads only its links."""
+    return {
+        input_name: float(value)
+        for input_name, value in (input_values or {}).items()
+        if isinstance(value, (bool, int, float))
+    }

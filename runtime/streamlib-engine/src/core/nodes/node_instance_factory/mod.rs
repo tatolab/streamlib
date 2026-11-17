@@ -162,6 +162,14 @@ impl NodeInstance {
         self.0.apply_config_json(config_json)
     }
 
+    /// Hand the node `input_values`, the value each input reads while no link feeds it.
+    pub(crate) fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        self.0.set_unlinked_input_values(input_values)
+    }
+
     pub fn to_runtime_json(&self) -> serde_json::Value {
         self.0.to_runtime_json()
     }

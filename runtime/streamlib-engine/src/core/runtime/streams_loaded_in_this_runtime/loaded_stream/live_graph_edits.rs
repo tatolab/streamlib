@@ -4,16 +4,16 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use parking_lot::RwLock;
 use serde::Serialize;
 
 use super::LoadedStreamInThisRuntime;
-use super::input_values_set_live::is_held_on_the_graph;
+use super::input_values_set_live::{hand_back_each, is_held_on_the_graph};
 use crate::core::compiler::PendingOperation;
-use crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed;
-use crate::core::compiler::compiler_ops::input_port_pin_values::{
-    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read,
-    refuse_a_pin_value_a_process_node_cannot_read,
-};
+use crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed;
+use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read;
+use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
+use crate::core::descriptors::NodeValueLifetime;
 use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::input_values::{the_input_value_change, the_lifetime_of_the_input};
 use crate::core::graph::legacy_config_of_a_node::{
@@ -89,11 +89,10 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Set the saved value `value` on input `input` of the node `node_run_id`, `None` taking it
-    /// off, in place of any value set live on the input; hand it to each island and the helper
-    /// reading it, and announce the input's new value. On an input its node reads each run no
-    /// node, link or port changes, so no graph change is announced and nothing compiles; on one
-    /// held on the graph, such as a shader node's, the graph change is announced, so the next
-    /// compile builds the value in.
+    /// off, in place of any value set live on the input; hand it to that node alone, wherever it
+    /// is hosted, and announce the input's new value. No node, link or port changes, so nothing
+    /// compiles; on an input held on the graph, a setting its type holds in its config, the graph
+    /// change is announced.
     pub(crate) fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
@@ -101,17 +100,19 @@ impl LoadedStreamInThisRuntime {
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         self.with_no_other_input_value_change(|| {
-            let (input_value_changed, held_on_the_graph) =
-                self.compiler.scope(|graph, _tx| -> Result<_> {
-                    let held_on_the_graph = graph
-                        .traversal()
-                        .v(node_run_id)
-                        .first()
-                        .is_some_and(|node| is_held_on_the_graph(graph, node, input));
-                    let input_value_changed =
-                        set_the_saved_value_and_hand_it_over(graph, node_run_id, input, value)?;
-                    Ok((input_value_changed, held_on_the_graph))
-                })?;
+            let held_on_the_graph = self.compiler.scope_reading(|graph| {
+                graph
+                    .traversal()
+                    .v(node_run_id)
+                    .first()
+                    .is_some_and(|node| is_held_on_the_graph(graph, node, input))
+            });
+            let input_value_changed = set_the_saved_value_and_hand_it_over(
+                self.compiler.graph_lock(),
+                node_run_id,
+                input,
+                value,
+            )?;
             if let Some(input_value_changed) = input_value_changed {
                 self.publish_on_this_streams_topic(input_value_changed);
             }
@@ -478,16 +479,101 @@ impl LoadedStreamInThisRuntime {
     }
 }
 
-/// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, `None`
-/// taking it off, dropping any value set live on the input first, then hand each island and the
-/// node's helper what the input reads now; answers the change of the input to announce. Whole or
-/// not at all: an island or helper not handed the value puts the saved and live values back.
+/// Set the saved value `value` on input `input` of the node `node_run_id` in the graph `graph`
+/// locks, `None` taking it off, dropping any value set live on the input first, then hand that
+/// node what the input reads now: its islands under the write lock, its helper or itself with
+/// the lock released. Answers the change of the input to announce. Whole or not at all: a node
+/// or island not handed the value puts the saved and live values back.
 pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
-    graph: &mut Graph,
+    graph: &RwLock<Graph>,
     node_run_id: &NodeRunId,
     input: &str,
     value: Option<serde_json::Value>,
 ) -> Result<Option<RuntimeEvent>> {
+    let (put_back, delivery, input_value_changed) = {
+        let mut graph = graph.write();
+        let put_back = set_the_saved_value(&mut graph, node_run_id, input, value)?;
+        let node = graph
+            .traversal()
+            .v(node_run_id)
+            .first()
+            .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+        let delivery = UnlinkedInputValuesDelivery::of_the_node(&graph, node);
+        let input_value_changed = the_input_value_change(&graph, node, input);
+        if let UnlinkedInputValuesDelivery::EachIslandEvaluatingIt(function_node) = &delivery {
+            let function_node = [function_node.clone()];
+            if let Err(not_handed_over) =
+                hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
+                    &mut graph,
+                    &function_node,
+                )
+            {
+                put_back.put_back(&mut graph);
+                if let Err(not_handed_back) =
+                    hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
+                        &mut graph,
+                        &function_node,
+                    )
+                {
+                    tracing::error!(
+                        %not_handed_back,
+                        "an island was not handed back the value a refused saved set replaced"
+                    );
+                }
+                return Err(not_handed_over);
+            }
+        }
+        (put_back, delivery, input_value_changed)
+    };
+    if let Err(not_handed_over) = delivery.hand_over() {
+        let handed_back = {
+            let mut graph = graph.write();
+            put_back.put_back(&mut graph);
+            graph
+                .traversal()
+                .v(node_run_id)
+                .first()
+                .map(|node| UnlinkedInputValuesDelivery::of_the_node(&graph, node))
+        };
+        hand_back_each(handed_back.into_iter().collect());
+        return Err(not_handed_over);
+    }
+    Ok(input_value_changed)
+}
+
+/// The saved and live values a saved set on one input replaced, to put back when the set is
+/// refused.
+struct SavedSetToPutBack {
+    node_run_id: NodeRunId,
+    node_uuid: uuid::Uuid,
+    input: String,
+    lifetime: NodeValueLifetime,
+    saved_value_before: Option<serde_json::Value>,
+    live_value_before: Option<serde_json::Value>,
+}
+
+impl SavedSetToPutBack {
+    fn put_back(&self, graph: &mut Graph) {
+        if let Some(node) = graph.traversal_mut().v(&self.node_run_id).first_mut() {
+            set_the_pin(node, &self.input, self.saved_value_before.clone());
+        }
+        graph.live_input_values().set(
+            self.node_uuid,
+            &self.input,
+            self.live_value_before.clone(),
+            self.lifetime,
+        );
+    }
+}
+
+/// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, `None`
+/// taking it off, and drop any value set live on the input; answers what it replaced.
+fn set_the_saved_value(
+    graph: &mut Graph,
+    node_run_id: &NodeRunId,
+    input: &str,
+    value: Option<serde_json::Value>,
+) -> Result<SavedSetToPutBack> {
     let node = graph
         .traversal_mut()
         .v(node_run_id)
@@ -517,28 +603,14 @@ pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
     let live_value_before = graph
         .live_input_values()
         .set(node_uuid, input, None, lifetime);
-    if let Err(not_handed_over) = hand_each_island_and_the_helper_the_value(graph, node_run_id) {
-        if let Some(node) = graph.traversal_mut().v(node_run_id).first_mut() {
-            set_the_pin(node, input, saved_value_before);
-        }
-        graph
-            .live_input_values()
-            .set(node_uuid, input, live_value_before, lifetime);
-        if let Err(not_handed_back) = hand_each_island_and_the_helper_the_value(graph, node_run_id)
-        {
-            tracing::error!(
-                %not_handed_back,
-                "an island or helper was not handed back the value a refused saved set replaced"
-            );
-        }
-        return Err(not_handed_over);
-    }
-    let node = graph
-        .traversal()
-        .v(node_run_id)
-        .first()
-        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-    Ok(the_input_value_change(graph, node, input))
+    Ok(SavedSetToPutBack {
+        node_run_id: node_run_id.clone(),
+        node_uuid,
+        input: input.to_owned(),
+        lifetime,
+        saved_value_before,
+        live_value_before,
+    })
 }
 
 /// Set the pin `input` of `node` to `value`, `None` taking it off; answers the pin it held.
@@ -551,19 +623,4 @@ fn set_the_pin(
         Some(value) => node.pins.insert(input.to_string(), value),
         None => node.pins.remove(input),
     }
-}
-
-/// Hand each island that changed, and the helper of the node `node_run_id`, the values they
-/// read now.
-fn hand_each_island_and_the_helper_the_value(
-    graph: &mut Graph,
-    node_run_id: &NodeRunId,
-) -> Result<()> {
-    hand_each_reader_the_island_a_compile_changed(graph, &[])?;
-    let node = graph
-        .traversal()
-        .v(node_run_id)
-        .first()
-        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)
 }

@@ -155,6 +155,13 @@ fn spawn_dedicated_thread(
     {
         output_writer_inner.reach_the_stream_clock(Arc::clone(&runtime_ctx.stream_clock));
     }
+    if let Some(input_mailboxes_inner) = node_to_attach
+        .node_instance
+        .lock()
+        .iceoryx2_input_mailboxes_inner()
+    {
+        input_mailboxes_inner.reach_the_stream_clock(Arc::clone(&runtime_ctx.stream_clock));
+    }
     let node_arc_clone = Arc::clone(&node_to_attach.node_instance);
     let thread_kind = match runtime {
         NodeRuntime::Rust => NodeThreadKind::NativeNode,

@@ -295,6 +295,55 @@ fn an_unlinked_input_port_reads_its_pin_value_until_a_link_feeds_it() {
     );
 }
 
+/// A node in this process handed its unlinked input values reads a number as itself and a bool
+/// as 1 or 0, stamped with its stream's time; a value of another kind reaches no port.
+///
+/// Mental-revert: reading a bool as no number leaves `armed` reading nothing; stamping with media
+/// time ignores the stream clock reached.
+#[test]
+fn an_unlinked_input_reads_its_number_or_bool_value_at_stream_time() {
+    use crate::core::context::{StreamClock, StreamClockSpec};
+    use crate::core::media_clock::MediaClock;
+
+    let mailboxes = InputMailboxesInner::new();
+    let one_second_ago_ns = MediaClock::now().as_nanos() as i64 - 1_000_000_000;
+    let half_speed_since_a_second_ago = Arc::new(StreamClock::starting_at(
+        StreamClockSpec::Scaled {
+            scale: 0.5,
+            step_ns: 1_000,
+        },
+        one_second_ago_ns,
+    ));
+    mailboxes.reach_the_stream_clock(Arc::clone(&half_speed_since_a_second_ago));
+    mailboxes.read_each_unlinked_input_as_its_value(
+        serde_json::json!({"gain": 2, "armed": true, "label": "loud"})
+            .as_object()
+            .unwrap(),
+    );
+
+    let machine_before_ns = MediaClock::now().as_nanos() as i64;
+    let gain = mailboxes.read_raw("gain").unwrap().unwrap();
+    let machine_after_ns = MediaClock::now().as_nanos() as i64;
+    assert_eq!(gain.payload.bytes(), 2.0f64.to_le_bytes());
+    assert_eq!(
+        mailboxes
+            .read_raw("armed")
+            .unwrap()
+            .unwrap()
+            .payload
+            .bytes(),
+        1.0f64.to_le_bytes()
+    );
+    assert!(!mailboxes.has_port("label"));
+    assert!(
+        half_speed_since_a_second_ago.stream_time_ns_at(machine_before_ns) <= gain.timestamp_ns
+            && gain.timestamp_ns
+                <= half_speed_since_a_second_ago.stream_time_ns_at(machine_after_ns),
+        "{} is not the stream's time across the read",
+        gain.timestamp_ns
+    );
+}
+
 fn start_sample_of_the_next_read(mailboxes: &InputMailboxesInner, port: &str) -> u64 {
     let message = mailboxes.read_raw(port).unwrap().unwrap();
     streamlib_ipc_types::ChannelsBlockDescriptorBody::from_descriptor_body(

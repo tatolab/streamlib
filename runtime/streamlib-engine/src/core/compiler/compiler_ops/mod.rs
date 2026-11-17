@@ -24,6 +24,7 @@ mod spawn_node_op;
 pub(crate) mod subprocess_bridge;
 mod subprocess_escalate;
 mod subprocess_escalate_wire_types;
+pub(crate) mod unlinked_input_values_delivery;
 
 pub(crate) use apply_node_config_update_op::{NodeConfigUpdateOutcome, apply_node_config_update};
 pub(crate) use open_iceoryx2_service_op::{

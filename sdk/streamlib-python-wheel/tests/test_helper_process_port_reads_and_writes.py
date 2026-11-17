@@ -502,15 +502,16 @@ def test_an_island_fed_after_setup_is_evaluated_swapped_and_stopped_mid_run(stan
     assert not lifecycle_thread.is_alive()
 
 
-def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_set_after(
+def test_an_unlinked_input_reads_the_value_its_setup_carried_and_each_one_set_after(
     stand_in_parent,
 ):
-    """The engine hands a helper the pin value each unlinked Channels input
-    reads on its setup command and again, whole, as an unanswered
-    `set_pin_values` on each edit; an island fed into the port reads over its
-    pin until it is unfed.
+    """The engine hands a helper the value each unlinked input reads on its
+    setup command and again, whole, as an unanswered `set_input_values` on
+    each change; a bool reads as 1 or 0, a value that is no number reaches no
+    port, and an island fed into the port reads over its value until it is
+    unfed.
 
-    Fail-without-fix: drop the `set_pin_values` arm from `_dispatch` and the
+    Fail-without-fix: drop the `set_input_values` arm from `_dispatch` and the
     probe keeps reading the setup's 0.25.
     """
     from helper_process_probes import LEVELS_THE_ISLAND_READING_PROBE_READ
@@ -522,13 +523,18 @@ def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_se
         bridge, load_node_class(f"{PROBE_MODULE}:IslandReadingProbe")
     )
     stand_in_parent.send(
-        {"cmd": "setup", "capability": "full", "config": {}, "ports": {"pins": {"level": 0.25}}}
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {"input_values": {"level": 0.25}},
+        }
     )
     assert stand_in_parent.receive() == {"rpc": "ready"}
     stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 5})
     wait_until_the_island_reading_probe_reads(0.25)
 
-    stand_in_parent.send({"cmd": "set_pin_values", "pins": {"level": 0.5}})
+    stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": 0.5}})
     wait_until_the_island_reading_probe_reads(0.5)
 
     stand_in_parent.send(
@@ -541,11 +547,14 @@ def test_an_unlinked_input_reads_the_pin_value_its_setup_carried_and_each_one_se
     )
     wait_until_the_island_reading_probe_reads(0.5)
 
-    stand_in_parent.send({"cmd": "set_pin_values", "pins": {}})
+    stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": True}})
+    wait_until_the_island_reading_probe_reads(1.0)
+
+    stand_in_parent.send({"cmd": "set_input_values", "input_values": {"level": "loud"}})
     wait_until_the_island_reading_probe_reads(None)
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
-    assert stand_in_parent.receive()["rpc"] == "done", "`set_pin_values` answers nothing"
+    assert stand_in_parent.receive()["rpc"] == "done", "`set_input_values` answers nothing"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 

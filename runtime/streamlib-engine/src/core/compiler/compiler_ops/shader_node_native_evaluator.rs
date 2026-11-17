@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::input_port_pin_values::the_control_value_of_a_pin;
 use super::shader_node_island::{
     ShaderNodeIslandHostedHereComponent, pin_value_of_a_shader_node_input,
 };
@@ -121,6 +122,12 @@ impl ShaderNodeNativeEvaluator {
             value_by_float_input_port,
             refusal_last_logged: None,
         }
+    }
+
+    /// The value float input `input_port` of the island reads while nothing arrives on it.
+    #[cfg(test)]
+    pub(crate) fn the_value_a_float_input_reads(&self, input_port: &str) -> Option<f32> {
+        self.value_by_float_input_port.get(input_port).copied()
     }
 
     /// Each Image input port the island reads, with the member and its own
@@ -722,6 +729,29 @@ impl DynGeneratedNode for ShaderNodeNativeEvaluator {
             "shader node `{}` declares no configuration; its settings are its float inputs",
             self.node_name
         )))
+    }
+
+    /// Take each value of `input_values` on a float input of the island no link feeds, by the
+    /// input port it is read at; a linked input goes on reading its link.
+    fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<()> {
+        for (input_port, value) in input_values {
+            let fed_by_a_link = self
+                .input_mailboxes
+                .as_ref()
+                .is_some_and(|input_mailboxes| {
+                    !input_mailboxes.inbound_link_names(input_port).is_empty()
+                });
+            let Some(float_input) = self.value_by_float_input_port.get_mut(input_port) else {
+                continue;
+            };
+            if let (false, Some(number)) = (fed_by_a_link, the_control_value_of_a_pin(value)) {
+                *float_input = number as f32;
+            }
+        }
+        Ok(())
     }
 
     fn to_runtime_json(&self) -> serde_json::Value {

@@ -113,6 +113,44 @@ impl InputMailboxesInner {
         *input_ports_read_as_their_pin_value = pinned_ports;
     }
 
+    /// Read each input of `input_values` that holds a number or a bool as that number, 1 or 0
+    /// for a bool, while no link feeds it, stamped with stream time at each read, in place of
+    /// the values read before; an input left out, or holding a value of another kind, reads
+    /// only its links again.
+    pub fn read_each_unlinked_input_as_its_value(
+        &self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) {
+        let numbers = input_values
+            .iter()
+            .filter_map(|(input, value)| {
+                let number = match value {
+                    serde_json::Value::Bool(on) => f64::from(u8::from(*on)),
+                    serde_json::Value::Number(number) => number.as_f64()?,
+                    _ => return None,
+                };
+                Some((input.clone(), number))
+            })
+            .collect();
+        let stream_clock = self.stream_clock.get().cloned();
+        self.read_each_unlinked_input_port_as_its_pin_value(
+            numbers,
+            Arc::new(move || match &stream_clock {
+                Some(stream_clock) => stream_clock.now_ns(),
+                None => crate::core::media_clock::MediaClock::now().as_nanos() as i64,
+            }),
+        );
+    }
+
+    /// Whether a link feeds `port`.
+    fn is_fed_by_a_link(&self, port: &str) -> bool {
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .bound_to_local_port(port)
+            .next()
+            .is_some()
+    }
+
     /// The pin value `port` reads, when one is set on it and no link feeds it.
     pub(super) fn pin_value_read_by_an_unlinked(
         &self,
@@ -123,12 +161,6 @@ impl InputMailboxesInner {
             .read()
             .get(port)
             .cloned()?;
-        let no_link_feeds_the_port = self
-            .inbound_link_subscribers_and_listener
-            .lock()
-            .bound_to_local_port(port)
-            .next()
-            .is_none();
-        no_link_feeds_the_port.then_some(pinned_port)
+        (!self.is_fed_by_a_link(port)).then_some(pinned_port)
     }
 }

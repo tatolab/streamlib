@@ -23,7 +23,8 @@ pub use live_input_values::{
 };
 pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,
-    the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
+    the_pin_values_with_the_live_ones_over_them, the_unlinked_input_values,
+    the_value_an_input_reads,
 };
 pub(crate) use live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
 

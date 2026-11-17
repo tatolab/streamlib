@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
+use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
@@ -257,6 +258,10 @@ impl LoadedStreamInThisRuntime {
                         node.studio = document_node.studio.clone();
                     }
                 });
+                deliver_the_unlinked_input_values_of_each_node(
+                    self.compiler.graph_lock(),
+                    std::slice::from_ref(&live_node.node_run_id),
+                )?;
             }
         }
 

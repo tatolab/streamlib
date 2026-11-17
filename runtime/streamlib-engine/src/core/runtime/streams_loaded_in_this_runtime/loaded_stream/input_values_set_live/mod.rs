@@ -1,11 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Values set live on inputs their nodes read each run: checked, held in the stream's live
-//! values under the graph's read lock, handed to the helper and the islands that read them, and
-//! announced as `InputValueDidChange`, so no node, link or port changes and nothing compiles. A
-//! set is whole or not at all: one a helper or island is not handed leaves every value as it was.
+//! Values set live on inputs their nodes read each run: checked and held in the stream's live
+//! values under the graph's read lock, handed to each node set on alone, wherever it is hosted,
+//! with the lock released, and announced as `InputValueDidChange`, so no node, link or port
+//! changes and nothing compiles. A set is whole or not at all: one a node or island is not handed
+//! leaves every value as it was.
 
+use parking_lot::RwLock;
 use uuid::Uuid;
 
 use super::LoadedStreamInThisRuntime;
@@ -13,9 +15,8 @@ use crate::core::compiler::compiler_ops::function_node_island::{
     hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed,
     runs_inside_the_read_of_each_node_it_feeds,
 };
-use crate::core::compiler::compiler_ops::input_port_pin_values::{
-    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read, the_control_value_of_a_pin,
-};
+use crate::core::compiler::compiler_ops::input_port_pin_values::the_control_value_of_a_pin;
+use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::descriptors::{NodeKind, NodeValueLifetime, PortFamily};
 use crate::core::graph::input_values::{
     InputValueRefusal, InputValueRefusalCode, InputValueSetLive, InputValueToSetLive,
@@ -44,17 +45,14 @@ impl LoadedStreamInThisRuntime {
             } else {
                 PlaybackOfTheStreamSetOn::NotStopped
             };
-            let held_live = self.compiler.scope_reading(|graph| {
-                set_the_input_values_live_and_hand_each_helper_its_own(graph, sets, playback)
-            })?;
-            let Some(held_live) = held_live else {
+            let Some(held_live) = set_the_input_values_live_and_hand_each_node_its_own(
+                self.compiler.graph_lock(),
+                sets,
+                playback,
+            )?
+            else {
                 return Ok(InputValuesSetLive::OnTheGraph);
             };
-            if !held_live.function_nodes_read_inside_an_island.is_empty() {
-                self.compiler.scope(|graph, _tx| {
-                    hand_each_island_the_live_set_or_put_it_back(graph, sets, &held_live)
-                })?;
-            }
             for change in held_live.changes_announced {
                 self.publish_on_this_streams_topic(change);
             }
@@ -81,19 +79,51 @@ pub(crate) enum PlaybackOfTheStreamSetOn {
 }
 
 /// What a live set held apart from the graph made: each value set, the change of each input to
-/// announce, and the function nodes set on that run inside an island, whose islands are handed
-/// again under the graph's write lock.
+/// announce, how each node set on outside an island is handed its values, and the function nodes
+/// set on that run inside an island, whose islands are handed again under the graph's write lock.
 pub(crate) struct InputValuesHeldLive {
     pub(crate) made: Vec<InputValueSetLive>,
     pub(crate) changes_announced: Vec<RuntimeEvent>,
-    pub(crate) function_nodes_read_inside_an_island: Vec<NodeRunId>,
+    deliveries: Vec<UnlinkedInputValuesDelivery>,
+    function_nodes_read_inside_an_island: Vec<NodeRunId>,
 }
 
-/// Set each of `sets` live in `graph`'s live values and hand the helper of each node set on its
-/// new pin values; `None`, with nothing set, when one is held on the graph. A value its input
-/// does not take, and a value on a `reset` input while `playback` is stopped, is refused before
-/// any is set, and a helper not handed its values leaves every live value as it was.
-pub(crate) fn set_the_input_values_live_and_hand_each_helper_its_own(
+/// Set each of `sets` live in the live values of the graph `graph` locks, then hand each node set
+/// on its values, its helper or itself with the lock released and its islands under the write
+/// lock; `None`, with nothing set, when one is held on the graph. A value its input does not
+/// take, and a value on a `reset` input while `playback` is stopped, is refused before any is
+/// set, and a node or island not handed its values leaves every live value as it was.
+pub(crate) fn set_the_input_values_live_and_hand_each_node_its_own(
+    graph: &RwLock<Graph>,
+    sets: &[InputValueToSetLive],
+    playback: PlaybackOfTheStreamSetOn,
+) -> std::result::Result<Option<InputValuesHeldLive>, LiveInputValueSetRefusal> {
+    let Some(mut held_live) = set_the_input_values_live(&graph.read(), sets, playback)? else {
+        return Ok(None);
+    };
+    let handed_over = std::mem::take(&mut held_live.deliveries)
+        .into_iter()
+        .try_for_each(UnlinkedInputValuesDelivery::hand_over);
+    if let Err(not_handed_over) = handed_over {
+        hand_back_each(put_back_the_live_set(&graph.read(), sets, &held_live.made));
+        return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
+    }
+    if !held_live.function_nodes_read_inside_an_island.is_empty() {
+        let handed_to_each_island =
+            hand_each_island_the_live_set_or_put_it_back(&mut graph.write(), sets, &held_live);
+        if let Err((not_handed_over, handed_back)) = handed_to_each_island {
+            hand_back_each(handed_back);
+            return Err(not_handed_over);
+        }
+    }
+    Ok(Some(held_live))
+}
+
+/// Set each of `sets` live in `graph`'s live values and answer how each node set on takes its
+/// values; `None`, with nothing set, when one is held on the graph. A value its input does not
+/// take, and a value on a `reset` input while `playback` is stopped, is refused before any is
+/// set.
+fn set_the_input_values_live(
     graph: &Graph,
     sets: &[InputValueToSetLive],
     playback: PlaybackOfTheStreamSetOn,
@@ -152,42 +182,37 @@ pub(crate) fn set_the_input_values_live_and_hand_each_helper_its_own(
             linked_from: the_output_feeding_the_input(graph, set_on, &set.input),
         })
         .collect();
-
-    let nodes_set_on = each_once(&set_on_each);
-    for set_on in &nodes_set_on {
-        if let Err(not_handed_over) =
-            hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, set_on)
-        {
-            put_back_the_live_set(graph, sets, &made);
-            return Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over));
-        }
-    }
-
     let changes_announced = sets
         .iter()
         .zip(&set_on_each)
         .filter_map(|(set, set_on)| the_input_value_change(graph, set_on, &set.input))
         .collect();
-    let function_nodes_read_inside_an_island = nodes_set_on
-        .into_iter()
-        .filter(|set_on| runs_inside_the_read_of_each_node_it_feeds(graph, &set_on.id))
-        .map(|set_on| set_on.id.clone())
-        .collect();
+    let mut deliveries = Vec::new();
+    let mut function_nodes_read_inside_an_island = Vec::new();
+    for set_on in each_once(&set_on_each) {
+        match UnlinkedInputValuesDelivery::of_the_node(graph, set_on) {
+            UnlinkedInputValuesDelivery::EachIslandEvaluatingIt(function_node) => {
+                function_nodes_read_inside_an_island.push(function_node);
+            }
+            delivery => deliveries.push(delivery),
+        }
+    }
     Ok(Some(InputValuesHeldLive {
         made,
         changes_announced,
+        deliveries,
         function_nodes_read_inside_an_island,
     }))
 }
 
 /// Hand each reader of an island evaluating a function node `held_live` set on that island
-/// again; when one is not handed it, put every value of `sets` back as it was and hand each
-/// helper and island back what it held.
-pub(crate) fn hand_each_island_the_live_set_or_put_it_back(
+/// again; when one is not handed it, put every value of `sets` back as it was, hand each island
+/// back what it held, and answer how each node set on is handed back its values.
+fn hand_each_island_the_live_set_or_put_it_back(
     graph: &mut Graph,
     sets: &[InputValueToSetLive],
     held_live: &InputValuesHeldLive,
-) -> std::result::Result<(), LiveInputValueSetRefusal> {
+) -> std::result::Result<(), (LiveInputValueSetRefusal, Vec<UnlinkedInputValuesDelivery>)> {
     let Err(not_handed_over) =
         hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
             graph,
@@ -196,7 +221,7 @@ pub(crate) fn hand_each_island_the_live_set_or_put_it_back(
     else {
         return Ok(());
     };
-    put_back_the_live_set(graph, sets, &held_live.made);
+    let handed_back = put_back_the_live_set(graph, sets, &held_live.made);
     if let Err(not_handed_back) =
         hand_each_reader_an_island_evaluating_the_nodes_again_when_it_changed(
             graph,
@@ -208,19 +233,32 @@ pub(crate) fn hand_each_island_the_live_set_or_put_it_back(
             "an island was not handed back the values a refused live set replaced"
         );
     }
-    Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over))
+    Err((
+        LiveInputValueSetRefusal::NotHandedOver(not_handed_over),
+        handed_back,
+    ))
+}
+
+/// Hand each node of `handed_back` back the values it reads, logging one not handed them.
+pub(crate) fn hand_back_each(handed_back: Vec<UnlinkedInputValuesDelivery>) {
+    for delivery in handed_back {
+        if let Err(not_handed_back) = delivery.hand_over() {
+            tracing::error!(
+                %not_handed_back,
+                "a node was not handed back the values a refused set replaced"
+            );
+        }
+    }
 }
 
 /// Whether a value set on input `input` of `set_on` is held on `graph` rather than live: a
-/// setting its type holds in its config, a config field it exposes as an input, an input it
-/// does not have, or any input of a shader node, whose evaluator is built from the values its
-/// graph holds.
+/// setting its type holds in its config, a config field it exposes as an input, or an input it
+/// does not have.
 pub(super) fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &str) -> bool {
     LegacyConfigOfANodeType::of(graph.node_types_this_stream_resolves(), &set_on.node_type)
         .is_a_config_field(input)
         || set_on.is_an_exposed_config_field_input(input)
         || !set_on.has_input(input)
-        || matches!(set_on.node_kind(), Some(NodeKind::Shader))
 }
 
 /// Refuse `value`, set live on input `input` of `set_on`, a function node run in a helper of its
@@ -294,9 +332,13 @@ fn each_once<'graph>(nodes: &[&'graph GraphNode]) -> Vec<&'graph GraphNode> {
 }
 
 /// Set back, last first, the live value each of `sets` replaced, as `made` holds it, skipping a
-/// node the graph no longer holds, then hand the helper of each node set on the pin values it
-/// reads now, logging one not handed them.
-fn put_back_the_live_set(graph: &Graph, sets: &[InputValueToSetLive], made: &[InputValueSetLive]) {
+/// node the graph no longer holds; answers how each node set on outside an island is handed back
+/// the values it reads now.
+fn put_back_the_live_set(
+    graph: &Graph,
+    sets: &[InputValueToSetLive],
+    made: &[InputValueSetLive],
+) -> Vec<UnlinkedInputValuesDelivery> {
     let mut nodes_set_on: Vec<&GraphNode> = Vec::with_capacity(sets.len());
     for (set, made) in sets.iter().zip(made).rev() {
         let Some(set_on) = graph.node_by_uuid(set.node) else {
@@ -310,17 +352,10 @@ fn put_back_the_live_set(graph: &Graph, sets: &[InputValueToSetLive], made: &[In
         );
         nodes_set_on.push(set_on);
     }
-    for set_on in each_once(&nodes_set_on) {
-        if let Err(not_handed_back) =
-            hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, set_on)
-        {
-            tracing::error!(
-                node = %set_on.display_name,
-                %not_handed_back,
-                "a helper was not handed back the values a refused live set replaced"
-            );
-        }
-    }
+    each_once(&nodes_set_on)
+        .into_iter()
+        .map(|set_on| UnlinkedInputValuesDelivery::of_the_node(graph, set_on))
+        .collect()
 }
 
 /// The output that a link of `graph` feeds input `input` of `node` from, as `(node UUID, port)`.
