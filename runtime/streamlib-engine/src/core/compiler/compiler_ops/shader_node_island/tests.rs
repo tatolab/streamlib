@@ -544,3 +544,35 @@ fn shader_nodes_reading_their_own_image_in_a_cycle_are_refused() {
         .to_string();
     assert!(refusal.contains("break the cycle"), "{refusal}");
 }
+
+/// The members of an island are each named once: a shader node linked into one member through
+/// two inputs is named at most once, and shader nodes calling each other in a cycle are each
+/// named once.
+///
+/// Mental-revert: walking each link without checking the members already named never ends on
+/// the cycle.
+#[test]
+fn each_member_of_an_island_is_named_once() {
+    let mut graph = a_graph_resolving_shader_and_process_types();
+    let tint = add(&mut graph, "test_shaders:tint");
+    let blend = add(&mut graph, "test_shaders:blend");
+    let sink = add(&mut graph, "test_streams:sink");
+    link(&mut graph, (&tint, "result"), (&blend, "a"));
+    link(&mut graph, (&tint, "result"), (&blend, "b"));
+    link(&mut graph, (&blend, "result"), (&sink, "video"));
+    assert_eq!(
+        the_members_of_the_shader_node_island_hosted_by(&graph, &blend),
+        std::slice::from_ref(&blend),
+        "a node whose Image two inputs read is read twice, so not fused, and not named twice"
+    );
+
+    let mut graph = a_graph_resolving_shader_and_process_types();
+    let first = add(&mut graph, "test_shaders:blend");
+    let second = add(&mut graph, "test_shaders:tint");
+    link(&mut graph, (&first, "result"), (&second, "image"));
+    link(&mut graph, (&second, "result"), (&first, "a"));
+    assert_eq!(
+        the_members_of_the_shader_node_island_hosted_by(&graph, &first),
+        [first.clone(), second.clone()]
+    );
+}

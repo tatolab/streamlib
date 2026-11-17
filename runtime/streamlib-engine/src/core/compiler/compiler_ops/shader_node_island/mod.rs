@@ -131,17 +131,13 @@ pub(crate) fn the_members_of_the_shader_node_island_hosted_by(
     let mut next_to_walk = 0;
     while let Some(member_id) = members.get(next_to_walk).cloned() {
         next_to_walk += 1;
-        members.extend(
-            graph
-                .traversal()
-                .v(&member_id)
-                .in_e()
-                .iter()
-                .filter(|link| is_a_call_inside_a_shader_node_island(graph, link))
-                .map(|link| link.source().node_run_id().clone())
-                .filter(|source| !members.contains(source))
-                .collect::<Vec<_>>(),
-        );
+        let links_in: Vec<&Link> = graph.traversal().v(&member_id).in_e().iter().collect();
+        for link in links_in {
+            let source = link.source().node_run_id();
+            if is_a_call_inside_a_shader_node_island(graph, link) && !members.contains(source) {
+                members.push(source.clone());
+            }
+        }
     }
     members
 }
