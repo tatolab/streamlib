@@ -226,13 +226,43 @@ async fn a_kept_live_value_survives_stop_and_a_restart_and_a_reset_one_is_gone_a
     );
 }
 
-/// A node taken out of the stream takes its kept live values with it: a new runtime opening the
-/// project after an undo puts the node back reads its input as saved.
+/// A node taken out of a playing stream takes its kept live values with it: a new runtime opening
+/// the project after an undo puts the node back reads its input as saved.
 ///
 /// Mental-revert: leaving the removed node's keys in the project's store reads `gain` as live
 /// after the restart.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_removed_node_takes_its_kept_live_values_with_it() {
+    the_dimmer_reads_no_live_gain_after_its_removal_is_undone_and_the_project_reopened(
+        PlaybackAtTheRemoval::Playing,
+    )
+    .await;
+}
+
+/// A node taken out of a stopped stream, which drops it with no commit, takes its kept live
+/// values with it too.
+///
+/// Mental-revert: tearing the node down as at a Stop on that drop leaves its key in the
+/// project's store and reads `gain` as live after the restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_removed_from_a_stopped_stream_takes_its_kept_live_values_with_it() {
+    the_dimmer_reads_no_live_gain_after_its_removal_is_undone_and_the_project_reopened(
+        PlaybackAtTheRemoval::Stopped,
+    )
+    .await;
+}
+
+/// Whether the stream plays when its dimmer is taken out.
+enum PlaybackAtTheRemoval {
+    Playing,
+    Stopped,
+}
+
+/// Set `gain` live on a playing dimmer, take the dimmer out with the playback as `playback`
+/// says, undo, close, and assert a new runtime opening the project reads no live `gain`.
+async fn the_dimmer_reads_no_live_gain_after_its_removal_is_undone_and_the_project_reopened(
+    playback: PlaybackAtTheRemoval,
+) {
     let project = a_project_whose_main_stream_holds_a_dimmer();
     let stream_id = project.stream_id_of("main");
     {
@@ -249,6 +279,16 @@ async fn a_removed_node_takes_its_kept_live_values_with_it() {
             .set_live_on_the_dimmer(&project, "gain", 0.7)
             .await
             .expect("a playing stream takes a live gain");
+        if let PlaybackAtTheRemoval::Stopped = playback {
+            engine
+                .the_project_action_done("stop_playback", &project)
+                .await;
+            assert_eq!(
+                engine.what_the_dimmer_reads(&stream_id, "gain"),
+                (json!(0.7), json!("live")),
+                "a kept live value is held across the Stop"
+            );
+        }
         engine
             .the_answer_or_the_refusal_of(
                 "remove_node",
@@ -282,6 +322,7 @@ async fn a_removed_node_takes_its_kept_live_values_with_it() {
 }
 
 /// The table of a project's store the live values of `kept` inputs are mirrored into.
+/// Spelled out, with the `<node>/<input>` keys below, to pin the on-disk format from outside.
 const LIVE_INPUT_VALUES_TABLE: streamlib_project_repository::ProjectStoreTableName =
     streamlib_project_repository::ProjectStoreTableName::named("live_input_values");
 

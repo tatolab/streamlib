@@ -59,7 +59,7 @@ pub use project_lifecycle_requests::{
 };
 
 /// What a graph edit's `mode` argument says.
-pub const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.";
+pub const GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION: &str = "`commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.";
 
 /// What a change's `author` argument says.
 pub const AUTHOR_ARGUMENT_DESCRIPTION: &str = "Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.";

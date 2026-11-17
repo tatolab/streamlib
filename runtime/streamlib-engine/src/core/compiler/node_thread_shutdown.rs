@@ -169,17 +169,20 @@ pub(crate) fn stop_node_threads_signalling_every_thread_before_joining_any(
 pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
     graph_arc: &Arc<RwLock<Graph>>,
     the_stream_the_nodes_belong_to: &LoadedStreamIdentity,
-    node_run_ids: &[NodeRunId],
-    why_each_node_leaves: impl Fn(&NodeRunId) -> WhyTheNodeLeaves,
+    nodes_and_why_each_leaves: &[(NodeRunId, WhyTheNodeLeaves)],
     budgets: NodeThreadJoinBudgets,
     is_shutdown_forced: impl Fn() -> bool,
     teardown_progress_note: &TeardownProgressNoteOfOneStream,
     abandoned_node_threads: &Mutex<Vec<AbandonedNodeThreadStillRunning>>,
 ) -> Result<Vec<NodeDisplayNameAndId>> {
+    let node_run_ids: Vec<NodeRunId> = nodes_and_why_each_leaves
+        .iter()
+        .map(|(node_run_id, _)| node_run_id.clone())
+        .collect();
     let abandoned_nodes = stop_node_threads_signalling_every_thread_before_joining_any(
         graph_arc,
         the_stream_the_nodes_belong_to,
-        node_run_ids,
+        &node_run_ids,
         budgets,
         is_shutdown_forced,
         teardown_progress_note,
@@ -187,7 +190,7 @@ pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
     );
 
     let mut first_node_left_behind = None;
-    for node_run_id in node_run_ids {
+    for (node_run_id, why) in nodes_and_why_each_leaves {
         {
             let mut graph = graph_arc.write();
             if let Some(state) = graph
@@ -198,7 +201,7 @@ pub(crate) fn remove_nodes_signalling_every_thread_before_joining_any(
             {
                 state.transition_to(NodeState::Stopped);
             }
-            if !graph.drop_the_node(node_run_id, why_each_node_leaves(node_run_id)) {
+            if !graph.drop_the_node(node_run_id, *why) {
                 first_node_left_behind.get_or_insert_with(|| node_run_id.clone());
                 continue;
             }
@@ -419,8 +422,10 @@ mod tests {
                 stream_id: "main".to_string(),
                 stream_tag: crate::core::runtime::LoadedStreamTag::numbered_for_a_test(1),
             },
-            node_run_ids,
-            |_| WhyTheNodeLeaves::Removed,
+            &node_run_ids
+                .iter()
+                .map(|node_run_id| (node_run_id.clone(), WhyTheNodeLeaves::Removed))
+                .collect::<Vec<_>>(),
             budgets,
             is_shutdown_forced,
             &TeardownProgressNoteOfOneStream::default(),
