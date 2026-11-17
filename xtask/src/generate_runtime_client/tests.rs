@@ -115,7 +115,7 @@ fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
                 "oneOf": [{ "type": "string", "const": "known" }, { "type": "string", "const": "refused" }],
                 "x-may-grow": true
             },
-            "Closed": { "enum": ["a", "b"] },
+            "Closed": { "oneOf": [{ "type": "string", "const": "a" }, { "type": "string", "const": "b" }] },
             "NodeUiManifest": { "type": "object" },
             "Refusal": {
                 "type": "object",
@@ -141,11 +141,11 @@ fn a_property_defaulting_to_a_member_of_a_set_that_may_grow_reads_as_present() {
     };
     let schemas = file(GENERATED_SCHEMAS_FILE_NAME);
     assert!(
-        schemas.contains("  code: Code.default(\"refused\"),"),
+        schemas.contains("\"code\":{\"$ref\":\"#/components/schemas/Code\",\"default\":\"refused\",\"x-generated-reads-its-default\":true}"),
         "{schemas}"
     );
     assert!(
-        schemas.contains("  closed: Closed.optional(),"),
+        schemas.contains("\"closed\":{\"$ref\":\"#/components/schemas/Closed\"}"),
         "{schemas}"
     );
     let types = file(GENERATED_CONTRACT_TYPES_FILE_NAME);
@@ -167,6 +167,53 @@ fn an_operation_named_like_a_member_of_the_client_is_refused() {
         .to_string();
     assert!(
         refusal.contains("`close` is the name of a member"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn every_component_is_named_in_the_map_the_checker_reads_values_as() {
+    let contract_file_contents =
+        include_str!("../../../runtime/streamlib-control-contract/contract.json");
+    let contract: Value = serde_json::from_str(contract_file_contents).unwrap();
+    let generated_files =
+        runtime_client_generated_files(&contract, contract_file_contents).unwrap();
+    let declarations = &generated_files[0].1;
+    for name in contract["components"]["schemas"]
+        .as_object()
+        .unwrap()
+        .keys()
+    {
+        assert!(
+            declarations.contains(&format!("\n  {name}: {name};\n")),
+            "{name}"
+        );
+    }
+    assert!(
+        declarations.contains(
+            "export type ControlContractComponentName = keyof ControlContractComponents;"
+        )
+    );
+}
+
+#[test]
+fn a_contract_stating_a_keyword_the_checker_does_not_implement_generates_nothing() {
+    let mut contract = json!({
+        "info": { "x-contract-version": 1 },
+        "components": { "schemas": {
+            "NodeUiManifest": { "type": "object" },
+            "Kind": { "enum": ["a", "b"] }
+        } },
+        "methods": [],
+        "x-notifications": []
+    });
+    with_the_committed_pin_types(&mut contract);
+    let refusal = runtime_client_generated_files(&contract, "")
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        refusal.contains("components.schemas.Kind states `enum`"),
         "{refusal}"
     );
 }

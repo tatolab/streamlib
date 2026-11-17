@@ -8,13 +8,7 @@ import type {
   ControlOperations,
   ProjectActionRefusalOnTheWire,
 } from "./control_contract.js";
-
-/** One way a value does not match the control contract: where in the value, and what is wrong there. */
-export interface ControlContractIssue {
-  readonly code: string;
-  readonly path: readonly PropertyKey[];
-  readonly message: string;
-}
+import type { ControlContractIssue } from "./control_contract_check.js";
 
 /** A JSON-RPC request the client sends, its params checked against the contract. */
 export interface ControlRequestMessage<Method extends ControlOperationMethodName = ControlOperationMethodName> {
