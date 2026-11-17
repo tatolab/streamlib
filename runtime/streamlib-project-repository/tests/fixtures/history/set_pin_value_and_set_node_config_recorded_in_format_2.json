@@ -1,0 +1,37 @@
+{
+  "recorded_at_streamlib_commit": "5a599f129230cf0671ec9b95f0ac114a39cf27a6",
+  "commits": [
+    {
+      "message": "open_project rig",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\"stream\":\"main\",\"asset\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"nodes\":[{\"id\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"name\":\"mixer\",\"type\":\"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNode\",\"input_values\":{\"gain\":0.25,\"trim\":0.5,\"frame_width\":640}}],\"links\":[]}",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "set_pin_value 6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b/trim\n\nTatolab-Transaction: {\"format_version\":2,\"transaction\":\"7ef0b4ad-9c8d-4581-ad1f-9855de90090b\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"4c87e263a269d391b38875546b4a10ba285a22ce\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_pin_value\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"trim\",\"from\":0.5,\"to\":null}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_pin_value\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"trim\",\"from\":null,\"to\":0.5}],\"actions\":[{\"operation\":\"set_pin_value\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"trim\"}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 640,\n        \"gain\": 0.25\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "set_node_config 6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\n\nTatolab-Transaction: {\"format_version\":2,\"transaction\":\"a066cb64-f0bf-4205-a480-103f3950e42e\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"87eba2a5eb5ef491d502e151a78399cdc795988d\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_node_config\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":{\"frame_width\":640,\"gain\":0.25},\"to\":{\"frame_width\":1280,\"gain\":0.75}}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_node_config\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"from\":{\"frame_width\":1280,\"gain\":0.75},\"to\":{\"frame_width\":640,\"gain\":0.25}}],\"actions\":[{\"operation\":\"set_node_config\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"config\":{\"frame_width\":1280,\"gain\":0.75}}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 1280,\n        \"gain\": 0.75\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    },
+    {
+      "message": "set_pin_value 6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b/gain\n\nTatolab-Transaction: {\"format_version\":2,\"transaction\":\"211d7f2f-5d28-47e9-9e3a-682e615c486f\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"c32ab1973941cc58979109eaa5a0b86a0f9da797\",\"operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_pin_value\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"gain\",\"from\":0.75,\"to\":0.9}],\"inverse_operations\":[{\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"operation\":\"set_pin_value\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"gain\",\"from\":0.9,\"to\":0.75}],\"actions\":[{\"operation\":\"set_pin_value\",\"stream\":\"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\"node\":\"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\"input\":\"gain\",\"value\":0.9}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"860fdbd6-8fe2-592b-8ebc-faae672abefa\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"id\": \"6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b\",\n      \"input_values\": {\n        \"frame_width\": 1280,\n        \"gain\": 0.9\n      },\n      \"name\": \"mixer\",\n      \"type\": \"streamlib_api_server::stream_tools_over_a_real_engine_tests::input_value_set_tests::InputValueTestNode\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"3c1e5a77-0b2d-4f8e-9a61-7d2c4b9e8f10\"\n}\n"
+      }
+    }
+  ]
+}

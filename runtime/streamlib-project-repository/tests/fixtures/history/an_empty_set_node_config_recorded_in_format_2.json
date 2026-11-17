@@ -1,0 +1,21 @@
+{
+  "recorded_at_streamlib_commit": "5a599f129230cf0671ec9b95f0ac114a39cf27a6",
+  "commits": [
+    {
+      "message": "open_project rig",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\"stream\":\"main\",\"asset\":\"682a6e53-e0b2-5692-9554-298fe8acfabe\",\"nodes\":[{\"id\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"name\":\"passthrough\",\"type\":\"nodes.passthrough:Passthrough\"}],\"links\":[]}",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"5d2f6b88-1c3e-4a9f-8b72-8e3d5c0f9a21\"\n}\n"
+      }
+    },
+    {
+      "message": "set_node_config 7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\n\nTatolab-Transaction: {\"format_version\":2,\"transaction\":\"e8504c88-bcc4-4e9d-bb94-4b10908db974\",\"author\":{\"kind\":\"agent\",\"name\":\"alice\"},\"parent_commit\":\"9f4abb6d88e85168b5e0719d81d85284e4d0bd46\",\"operations\":[{\"stream\":\"682a6e53-e0b2-5692-9554-298fe8acfabe\",\"operation\":\"set_node_config\",\"node\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"from\":{},\"to\":{}}],\"inverse_operations\":[{\"stream\":\"682a6e53-e0b2-5692-9554-298fe8acfabe\",\"operation\":\"set_node_config\",\"node\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"from\":{},\"to\":{}}],\"actions\":[{\"operation\":\"set_node_config\",\"stream\":\"682a6e53-e0b2-5692-9554-298fe8acfabe\",\"node\":\"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\"config\":{}}]}\n",
+      "files": {
+        "pyproject.toml": "[project]\nname = \"project\"\n",
+        "streams/main.graph.json": "{\n  \"asset\": \"682a6e53-e0b2-5692-9554-298fe8acfabe\",\n  \"links\": [],\n  \"nodes\": [\n    {\n      \"id\": \"7c7c7c7c-7c7c-4c7c-8c7c-7c7c7c7c7c7c\",\n      \"name\": \"passthrough\",\n      \"type\": \"nodes.passthrough:Passthrough\"\n    }\n  ],\n  \"stream\": \"main\"\n}\n",
+        "tatolab-project.json": "{\n  \"dependencies\": [],\n  \"name\": \"rig\",\n  \"project\": \"5d2f6b88-1c3e-4a9f-8b72-8e3d5c0f9a21\"\n}\n"
+      }
+    }
+  ]
+}
