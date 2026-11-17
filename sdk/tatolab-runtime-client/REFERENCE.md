@@ -520,6 +520,17 @@ Subscribe the connection to the live graphs of `streams`, by stream id, each loa
 - Result: `SubscribeStreamGraphChangesResult`
 - Errors: `1` refused, `2` failed, `-32602` params do not match
 
+### `subscribe_input_value_changes`
+
+Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.
+
+Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node`, `input` and `member`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input and member, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+
+- Since contract version 3, experimental.
+- Params: `SubscribeInputValueChangesRequest`
+- Result: `SubscribeInputValueChangesResult`
+- Errors: `1` refused, `2` failed, `-32602` params do not match
+
 ### `subscribe_project_log_records`
 
 Send this connection each new record of the named projects' logs as `project_log_records_written` notifications.
@@ -895,6 +906,14 @@ A change in the live graph of a stream the connection subscribed to: an edit, a 
 - Sent after `subscribe_stream_graph_changes`.
 - Since contract version 2, experimental.
 - Params: `StreamGraphChangedNotificationParams`
+
+### `input_value_changed`
+
+The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+
+- Sent after `subscribe_input_value_changes`.
+- Since contract version 3, experimental.
+- Params: `InputValueChangedNotificationParams`
 
 ### `stream_action_changed`
 

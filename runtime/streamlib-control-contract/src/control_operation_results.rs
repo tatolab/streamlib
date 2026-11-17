@@ -35,6 +35,15 @@ pub struct SubscribeStreamGraphChangesResult {
     pub streams: Vec<String>,
 }
 
+/// What `subscribe_input_value_changes` answers: the streams the connection is now sent input
+/// value changes of.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeInputValueChangesResult {
+    /// Every stream the connection is subscribed to the input value changes of, by stream id,
+    /// this call's among them.
+    pub streams: Vec<String>,
+}
+
 /// What `subscribe_project_log_records` answers: the projects the connection is now told of new
 /// log records of.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

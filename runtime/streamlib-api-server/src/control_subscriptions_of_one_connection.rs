@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! What one open control connection subscribed to: projects' change feeds, loaded streams' live
-//! graphs, read from `PUBSUB` on each stream's topic, and the stream actions.
+//! graphs and input values, read from `PUBSUB` on each stream's topic, and the stream actions.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -11,13 +11,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Result as StreamlibResult;
+use streamlib::sdk::graph::input_values::{InputValueComesFrom, InputValueRead};
 use streamlib::sdk::nodes::NodeState;
 use streamlib::sdk::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics,
 };
 use streamlib::sdk::runtime::OperationsOnTheStreamsLoadedInThisRuntime;
 use streamlib_control_contract::{
-    NodeStateOnTheWire, StreamGraphChangeKindOnTheWire, StreamGraphChangedNotificationParams,
+    InputValueChangedNotificationParams, InputValueComesFromOnTheWire, NodeStateOnTheWire,
+    StreamGraphChangeKindOnTheWire, StreamGraphChangedNotificationParams,
 };
 use streamlib_project_repository::ProjectFilesWatchedWhileHeld;
 use tokio::sync::mpsc;
@@ -29,8 +31,8 @@ pub(crate) struct ControlSubscriptionsOfOneConnection {
         Mutex<BTreeMap<Uuid, ProjectFilesWatchedWhileHeld>>,
     subscribed_project_logs_by_directory_with_symlinks_resolved:
         Mutex<BTreeMap<PathBuf, ProjectLogSubscribed>>,
-    followed_stream_graphs: Mutex<BTreeMap<String, Option<StreamGraphFollowedOnOneLoad>>>,
-    stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
+    followed_streams: Mutex<BTreeMap<String, StreamFollowed>>,
+    heard_of_the_followed_streams: mpsc::Sender<HeardOfAFollowedStream>,
     subscribed_to_stream_actions: AtomicBool,
 }
 
@@ -49,12 +51,8 @@ impl std::fmt::Debug for ControlSubscriptionsOfOneConnection {
                     .lock(),
             )
             .field(
-                "followed_stream_graphs",
-                &self
-                    .followed_stream_graphs
-                    .lock()
-                    .keys()
-                    .collect::<Vec<_>>(),
+                "followed_streams",
+                &self.followed_streams.lock().keys().collect::<Vec<_>>(),
             )
             .field(
                 "subscribed_to_stream_actions",
@@ -88,23 +86,57 @@ pub(crate) struct ProjectLogNextPush {
     pub(crate) cursor_the_next_push_follows: String,
 }
 
+/// What a connection follows of a loaded stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WhatAConnectionFollowsOfAStream {
+    /// Its live graph's changes, sent as `stream_graph_changed`.
+    Graph,
+    /// Its input values' changes, sent as `input_value_changed`.
+    InputValues,
+}
+
+/// What a connection heard on the topic of a stream it follows.
+#[derive(Debug)]
+pub(crate) enum HeardOfAFollowedStream {
+    /// A change of the stream's live graph.
+    GraphChanged(StreamGraphChangedNotificationParams),
+    /// A change of the value one of its inputs reads.
+    InputValueChanged(InputValueChangedNotificationParams),
+}
+
+/// One stream the connection follows: whether it follows its graph and its input values, and
+/// the stream as it is loaded now, `None` while it is not loaded.
+#[derive(Default)]
+struct StreamFollowed {
+    follows_its_graph: bool,
+    follows_its_input_values: bool,
+    load: Option<StreamFollowedOnOneLoad>,
+}
+
+impl StreamFollowed {
+    fn follows(&self, what: WhatAConnectionFollowsOfAStream) -> bool {
+        match what {
+            WhatAConnectionFollowsOfAStream::Graph => self.follows_its_graph,
+            WhatAConnectionFollowsOfAStream::InputValues => self.follows_its_input_values,
+        }
+    }
+}
+
 /// One followed stream as it is loaded now, and the listener that keeps its topic subscribed.
-struct StreamGraphFollowedOnOneLoad {
+struct StreamFollowedOnOneLoad {
     loaded_stream: LoadedStreamIdentity,
     _listener_kept_subscribed: Arc<Mutex<dyn EventListener>>,
 }
 
 impl ControlSubscriptionsOfOneConnection {
-    /// No subscription yet; a followed stream's graph changes go to
-    /// `stream_graph_changes_to_the_connection`.
-    pub(crate) fn new(
-        stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
-    ) -> Self {
+    /// No subscription yet; what is heard of a followed stream goes to
+    /// `heard_of_the_followed_streams`.
+    pub(crate) fn new(heard_of_the_followed_streams: mpsc::Sender<HeardOfAFollowedStream>) -> Self {
         Self {
             subscribed_projects_with_their_folders_watched: Mutex::new(BTreeMap::new()),
             subscribed_project_logs_by_directory_with_symlinks_resolved: Mutex::new(BTreeMap::new()),
-            followed_stream_graphs: Mutex::new(BTreeMap::new()),
-            stream_graph_changes_to_the_connection,
+            followed_streams: Mutex::new(BTreeMap::new()),
+            heard_of_the_followed_streams,
             subscribed_to_stream_actions: AtomicBool::new(false),
         }
     }
@@ -227,66 +259,88 @@ impl ControlSubscriptionsOfOneConnection {
             .collect()
     }
 
-    /// Follow the live graph of each stream, as it is loaded now, answering every stream
-    /// followed.
-    pub(crate) fn follow_the_stream_graphs(
+    /// Follow `what` of each stream, as it is loaded now, answering every stream whose `what`
+    /// the connection follows.
+    pub(crate) fn follow_the_streams(
         &self,
         streams_as_loaded_now: Vec<LoadedStreamIdentity>,
+        what: WhatAConnectionFollowsOfAStream,
     ) -> StreamlibResult<Vec<String>> {
-        let mut followed_stream_graphs = self.followed_stream_graphs.lock();
+        let mut followed_streams = self.followed_streams.lock();
         for loaded_stream in streams_as_loaded_now {
-            let already_followed_on_this_load = followed_stream_graphs
-                .get(&loaded_stream.stream_id)
-                .and_then(Option::as_ref)
-                .is_some_and(|followed| followed.loaded_stream == loaded_stream);
-            if already_followed_on_this_load {
-                continue;
+            let followed = followed_streams
+                .entry(loaded_stream.stream_id.clone())
+                .or_default();
+            let already_followed_on_this_load = followed
+                .load
+                .as_ref()
+                .is_some_and(|load| load.loaded_stream == loaded_stream);
+            if !already_followed_on_this_load {
+                followed.load = Some(self.follow_one_load(loaded_stream)?);
             }
-            let stream_id = loaded_stream.stream_id.clone();
-            let followed = self.follow_one_load(loaded_stream)?;
-            followed_stream_graphs.insert(stream_id, Some(followed));
+            match what {
+                WhatAConnectionFollowsOfAStream::Graph => followed.follows_its_graph = true,
+                WhatAConnectionFollowsOfAStream::InputValues => {
+                    followed.follows_its_input_values = true;
+                }
+            }
         }
-        Ok(followed_stream_graphs.keys().cloned().collect())
+        Ok(followed_streams
+            .iter()
+            .filter(|(_, followed)| followed.follows(what))
+            .map(|(stream_id, _)| stream_id.clone())
+            .collect())
     }
 
-    /// Every followed stream that is loaded now, by stream id.
+    /// Whether the connection follows `what` of the stream `stream_id`.
+    pub(crate) fn follows(&self, stream_id: &str, what: WhatAConnectionFollowsOfAStream) -> bool {
+        self.followed_streams
+            .lock()
+            .get(stream_id)
+            .is_some_and(|followed| followed.follows(what))
+    }
+
+    /// Every stream whose graph the connection follows that is loaded now, by stream id.
     pub(crate) fn every_followed_stream_graph_loaded_now(&self) -> Vec<String> {
-        self.followed_stream_graphs
+        self.followed_streams
             .lock()
             .iter()
-            .filter(|(_, followed)| followed.is_some())
+            .filter(|(_, followed)| followed.follows_its_graph && followed.load.is_some())
             .map(|(stream_id, _)| stream_id.clone())
             .collect()
     }
 
     /// Move each followed stream's subscription to the load it has now, answering each stream
-    /// whose load changed: loaded again, unloaded, or loaded once more after it was unloaded.
+    /// whose graph the connection follows and whose load changed: loaded again, unloaded, or
+    /// loaded once more after it was unloaded.
     pub(crate) fn follow_each_stream_graph_to_its_current_load(
         &self,
         operations_on_the_loaded_streams: &dyn OperationsOnTheStreamsLoadedInThisRuntime,
     ) -> Vec<String> {
-        let mut followed_stream_graphs = self.followed_stream_graphs.lock();
+        let mut followed_streams = self.followed_streams.lock();
         let mut streams_whose_load_changed = Vec::new();
-        for (stream_id, followed) in followed_stream_graphs.iter_mut() {
+        for (stream_id, followed) in followed_streams.iter_mut() {
             let loaded_now = operations_on_the_loaded_streams
                 .loaded_stream_identity_of_the_stream_a_call_names(stream_id)
                 .ok();
-            if followed.as_ref().map(|followed| &followed.loaded_stream) == loaded_now.as_ref() {
+            if followed.load.as_ref().map(|load| &load.loaded_stream) == loaded_now.as_ref() {
                 continue;
             }
-            *followed = match loaded_now.map(|loaded_now| self.follow_one_load(loaded_now)) {
+            followed.load = match loaded_now.map(|loaded_now| self.follow_one_load(loaded_now)) {
                 Some(Ok(followed_on_the_new_load)) => Some(followed_on_the_new_load),
                 Some(Err(not_subscribed)) => {
                     tracing::warn!(
                         %not_subscribed,
                         stream_id,
-                        "a control connection could not follow a stream's graph to its new load"
+                        "a control connection could not follow a stream to its new load"
                     );
                     None
                 }
                 None => None,
             };
-            streams_whose_load_changed.push(stream_id.clone());
+            if followed.follows_its_graph {
+                streams_whose_load_changed.push(stream_id.clone());
+            }
         }
         streams_whose_load_changed
     }
@@ -305,58 +359,63 @@ impl ControlSubscriptionsOfOneConnection {
     fn follow_one_load(
         &self,
         loaded_stream: LoadedStreamIdentity,
-    ) -> StreamlibResult<StreamGraphFollowedOnOneLoad> {
+    ) -> StreamlibResult<StreamFollowedOnOneLoad> {
         let listener: Arc<Mutex<dyn EventListener>> =
-            Arc::new(Mutex::new(StreamGraphChangesForwardedToOneConnection {
+            Arc::new(Mutex::new(StreamChangesForwardedToOneConnection {
                 stream_id: loaded_stream.stream_id.clone(),
-                stream_graph_changes_to_the_connection: self
-                    .stream_graph_changes_to_the_connection
-                    .clone(),
+                heard_of_the_followed_streams: self.heard_of_the_followed_streams.clone(),
             }));
         PUBSUB.subscribe(
             &topics::loaded_stream(&loaded_stream),
             Arc::clone(&listener),
         )?;
-        Ok(StreamGraphFollowedOnOneLoad {
+        Ok(StreamFollowedOnOneLoad {
             loaded_stream,
             _listener_kept_subscribed: listener,
         })
     }
 }
 
-/// Forwards each change of one loaded stream's graph heard on its topic to one connection,
-/// waiting while the connection's queue is full, so a connection that falls behind loses events
-/// at `PUBSUB` and is told `missed`.
-struct StreamGraphChangesForwardedToOneConnection {
+/// Forwards each change of one loaded stream's graph and input values heard on its topic to one
+/// connection, waiting while the connection's queue is full, so a connection that falls behind
+/// loses events at `PUBSUB` and is told `missed`.
+struct StreamChangesForwardedToOneConnection {
     stream_id: String,
-    stream_graph_changes_to_the_connection: mpsc::Sender<StreamGraphChangedNotificationParams>,
+    heard_of_the_followed_streams: mpsc::Sender<HeardOfAFollowedStream>,
 }
 
-impl StreamGraphChangesForwardedToOneConnection {
+impl StreamChangesForwardedToOneConnection {
     fn forward(
         &self,
         change: StreamGraphChangeKindOnTheWire,
         node_state: Option<(String, NodeStateOnTheWire)>,
     ) {
         let (node, node_state) = node_state.unzip();
-        let forwarded = self.stream_graph_changes_to_the_connection.blocking_send(
+        self.send(HeardOfAFollowedStream::GraphChanged(
             StreamGraphChangedNotificationParams {
                 stream: self.stream_id.clone(),
                 change,
                 node,
                 node_state,
             },
-        );
-        if forwarded.is_err() {
+        ));
+    }
+
+    fn send(&self, heard: HeardOfAFollowedStream) {
+        if self
+            .heard_of_the_followed_streams
+            .blocking_send(heard)
+            .is_err()
+        {
             tracing::debug!(
                 stream_id = self.stream_id,
-                "a stream graph change was heard after its control connection ended"
+                "a stream change was heard after its control connection ended"
             );
         }
     }
 }
 
-impl EventListener for StreamGraphChangesForwardedToOneConnection {
+impl EventListener for StreamChangesForwardedToOneConnection {
     fn on_event(&mut self, event: &Event) -> StreamlibResult<()> {
         let Event::OfALoadedStream { event, .. } = event else {
             return Ok(());
@@ -364,6 +423,30 @@ impl EventListener for StreamGraphChangesForwardedToOneConnection {
         match event {
             RuntimeEvent::GraphDidChange => {
                 self.forward(StreamGraphChangeKindOnTheWire::Edited, None);
+            }
+            RuntimeEvent::InputValueDidChange {
+                node,
+                input,
+                member,
+                value_read,
+            } => {
+                let InputValueRead {
+                    value,
+                    value_comes_from,
+                } = value_read.clone().unwrap_or(InputValueRead {
+                    value: None,
+                    value_comes_from: None,
+                });
+                self.send(HeardOfAFollowedStream::InputValueChanged(
+                    InputValueChangedNotificationParams {
+                        stream: self.stream_id.clone(),
+                        node: node.to_string(),
+                        input: input.clone(),
+                        member: member.clone(),
+                        value: value.filter(|value| !value.is_null()),
+                        value_comes_from: value_comes_from.map(input_value_comes_from_on_the_wire),
+                    },
+                ));
             }
             RuntimeEvent::NodeStateDidChange {
                 node_run_id,
@@ -391,6 +474,17 @@ impl EventListener for StreamGraphChangesForwardedToOneConnection {
     fn on_events_lost(&mut self, _lost_event_count: u64) -> StreamlibResult<()> {
         self.forward(StreamGraphChangeKindOnTheWire::Missed, None);
         Ok(())
+    }
+}
+
+fn input_value_comes_from_on_the_wire(
+    value_comes_from: InputValueComesFrom,
+) -> InputValueComesFromOnTheWire {
+    match value_comes_from {
+        InputValueComesFrom::Live => InputValueComesFromOnTheWire::Live,
+        InputValueComesFrom::Saved => InputValueComesFromOnTheWire::Saved,
+        InputValueComesFrom::Default => InputValueComesFromOnTheWire::Default,
+        InputValueComesFrom::Wire => InputValueComesFromOnTheWire::Wire,
     }
 }
 

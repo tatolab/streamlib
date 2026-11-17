@@ -28,6 +28,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   subscribe_stream_graph_changes(params: ControlOperations["subscribe_stream_graph_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_stream_graph_changes"]["result"]>;
   /**
+   * Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.
+   */
+  subscribe_input_value_changes(params: ControlOperations["subscribe_input_value_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_input_value_changes"]["result"]>;
+  /**
    * Send this connection a `stream_action_changed` notification each time a stream action changes.
    */
   subscribe_stream_action_changes(params?: ControlOperations["subscribe_stream_action_changes"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["subscribe_stream_action_changes"]["result"]>;
@@ -335,6 +339,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    * Hear each `stream_graph_changed` the connection is sent, checked against the contract; the returned function stops it. A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.
    */
   on_stream_graph_changed(listener: (params: ControlNotifications["stream_graph_changed"]) => void): () => void;
+  /**
+   * Hear each `input_value_changed` the connection is sent, checked against the contract; the returned function stops it. The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+   */
+  on_input_value_changed(listener: (params: ControlNotifications["input_value_changed"]) => void): () => void;
   /**
    * Hear each `stream_action_changed` the connection is sent, checked against the contract; the returned function stops it. A stream action changed, which `describe_stream_action` describes, or `missed`.
    */

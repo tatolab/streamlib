@@ -143,7 +143,9 @@ impl ControlNotification for ProjectChanged {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamGraphChangeKindOnTheWire {
-    /// A node or a link was added, removed or reconfigured.
+    /// A node or a link was added, removed or reconfigured, or, on a connection not subscribed
+    /// to the stream's input value changes, an input's value changed, told at most once each
+    /// 500 ms for each stream.
     Edited,
     /// One node's state changed, named by `node` and `node_state`.
     NodeStateChanged,
@@ -201,6 +203,56 @@ impl ControlNotification for StreamGraphChanged {
     const ONE_LINE_DOC: &'static str = "A change in the live graph of a stream the connection subscribed to: an edit, a node's new state, a playback change, new drops, raises or link states, or `missed`.";
     const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_stream_graph_changes";
     const SINCE_CONTRACT_VERSION: u32 = 2;
+    const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
+    const EXPOSURES: &'static [ControlOperationExposure] = &[
+        ControlOperationExposure::Studio,
+        ControlOperationExposure::Public,
+    ];
+}
+
+/// Where the value an input reads comes from, as `graph` renders it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputValueComesFromOnTheWire {
+    /// A value set live, which no document holds.
+    Live,
+    /// The value the stream's graph document holds.
+    Saved,
+    /// The default the input declares.
+    Default,
+    /// A link feeds the input; it holds no value.
+    Wire,
+}
+
+/// `input_value_changed`'s params.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct InputValueChangedNotificationParams {
+    /// The stream, by stream id.
+    pub stream: String,
+    /// The node, by its graph `id`.
+    pub node: String,
+    /// The input, by name.
+    pub input: String,
+    /// The member of a bundle input whose value changed; absent for a whole input.
+    pub member: Option<String>,
+    /// The value the input reads now, as `graph` renders it: null when a link feeds it or it
+    /// reads nothing.
+    pub value: Option<serde_json::Value>,
+    /// Where `value` comes from; `wire` when a link feeds the input, absent when it reads
+    /// nothing.
+    pub value_comes_from: Option<InputValueComesFromOnTheWire>,
+}
+
+/// `input_value_changed`: the value an input of a stream the connection subscribed to reads
+/// changed.
+pub struct InputValueChanged;
+
+impl ControlNotification for InputValueChanged {
+    type Params = InputValueChangedNotificationParams;
+    const METHOD_NAME: &'static str = "input_value_changed";
+    const ONE_LINE_DOC: &'static str = "The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.";
+    const SUBSCRIBED_BY_METHOD_NAME: &'static str = "subscribe_input_value_changes";
+    const SINCE_CONTRACT_VERSION: u32 = 3;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const EXPOSURES: &'static [ControlOperationExposure] = &[
         ControlOperationExposure::Studio,
@@ -287,6 +339,7 @@ impl ControlNotification for ProjectLogRecordsWritten {
 pub const CONTROL_NOTIFICATIONS: &[ControlNotificationDeclaration] = &[
     ControlNotificationDeclaration::of::<ProjectChanged>(),
     ControlNotificationDeclaration::of::<StreamGraphChanged>(),
+    ControlNotificationDeclaration::of::<InputValueChanged>(),
     ControlNotificationDeclaration::of::<StreamActionChanged>(),
     ControlNotificationDeclaration::of::<ProjectLogRecordsWritten>(),
 ];

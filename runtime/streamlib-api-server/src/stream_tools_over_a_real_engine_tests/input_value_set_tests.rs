@@ -46,11 +46,11 @@ impl ManualNode for InputValueTestNode::Node {
     }
 }
 
-const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
+pub(super) const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
 
 /// A project whose stream `main` holds an [`InputValueTestNode`] `mixer`, by
 /// [`MIXER_NODE_UUID`], and a [`StreamToolsTestSink`] `monitor`.
-fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
+pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
     static REGISTERED: std::sync::Once = std::sync::Once::new();
     REGISTERED.call_once(|| NODE_REGISTRY.register::<InputValueTestNode::Node>());
     register_the_stream_tools_test_sink_once();

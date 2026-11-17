@@ -95,7 +95,9 @@ fn place_a_function_node_after_what_it_reads(
     let import_path = node.node_type.to_string();
     let node_name = node.display_name.clone();
     let config = node.config.clone().unwrap_or(JsonValue::Null);
-    let pins = JsonValue::Object(node.pins.clone());
+    let pins = JsonValue::Object(
+        crate::core::graph::input_values::the_pin_values_with_the_live_ones_over_them(graph, node),
+    );
 
     on_the_path_from_the_output.push(node_id.clone());
     let links_into_this_node: Vec<&Link> = graph

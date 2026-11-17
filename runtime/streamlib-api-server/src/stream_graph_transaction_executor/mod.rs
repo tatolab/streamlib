@@ -48,6 +48,7 @@ use crate::control_operations_on_project_assets::{
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 
 mod input_value_sets;
+mod input_values_set_live;
 mod live_application_and_reversal;
 mod request_application;
 mod request_to_graph_operation;
@@ -398,6 +399,14 @@ impl StreamGraphTransactionExecutor<'_> {
             if !stream_ids_in_order.contains(stream_id) {
                 stream_ids_in_order.push(stream_id.clone());
             }
+        }
+        if mode == GraphEditMode::Live
+            && let Some(applied) = self.apply_input_values_set_live_apart_from_the_graph(
+                &requests,
+                &stream_id_of_each_request,
+            )?
+        {
+            return Ok(applied);
         }
         let project_repository = match mode {
             GraphEditMode::Live => None,

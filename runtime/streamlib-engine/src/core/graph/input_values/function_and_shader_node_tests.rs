@@ -11,6 +11,7 @@ use serde_json::json;
 use super::*;
 use crate::core::compiler::compiler_ops::function_node_island::tests::a_function_node_type;
 use crate::core::compiler::compiler_ops::shader_node_island_program::tests::shader_program;
+use crate::core::descriptors::PortFamily;
 use crate::core::descriptors::{
     NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor,
     PortFamilyDeclaration,

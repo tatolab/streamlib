@@ -335,6 +335,15 @@ pub enum RuntimeEvent {
     GraphWillChange,
     /// Emitted after graph changed
     GraphDidChange,
+    /// The value one input of a node reads while unlinked changed, set live or saved, and no
+    /// node, link or port changed with it: `value_read` is what `graph` renders for the input,
+    /// `None` for an input that takes no stored value.
+    InputValueDidChange {
+        node: uuid::Uuid,
+        input: String,
+        member: Option<String>,
+        value_read: Option<crate::core::graph::input_values::InputValueRead>,
+    },
 
     RuntimeDidRegisterNodeType {
         node_type: NodeClassImportPath,

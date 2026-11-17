@@ -9,10 +9,21 @@
 use serde_json::{Map, Value};
 
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_control_value_of_a_pin;
-use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange, PortFamily};
+use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange};
 use crate::core::graph::PortInfo;
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::nodes::NodeTypesOneStreamResolves;
+
+mod live_input_values;
+
+pub use live_input_values::{
+    InputValueComesFrom, InputValueRead, InputValueSetLive, LiveInputValueHolding,
+    LiveInputValueKey, LiveInputValuesOfAStream,
+};
+pub(crate) use live_input_values::{
+    a_link_feeds_the_input, the_input_port_takes_a_value,
+    the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
+};
 
 /// What kind of value a refused set sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,16 +171,23 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
     value: &Value,
 ) -> Result<(), InputValueRefusal> {
     let input = &port.name;
+    if !the_input_port_takes_a_value(node_kind, port) {
+        let words = match &port.pin {
+            Some(pin) if !pin.pin_type.holds_a_stored_value() => format!(
+                "input `{input}` of `{node_name}` is wire only and takes no value. To fix: link it"
+            ),
+            _ => format!(
+                "input `{input}` of `{node_name}` carries {}, and a pin value is a control value, \
+                 which only a Channels input reads. To fix: link `{input}` instead",
+                port.family.family
+            ),
+        };
+        return Err(InputValueRefusal::of(
+            InputValueRefusalCode::InputTakesNoValue,
+            words,
+        ));
+    }
     if let Some(pin) = &port.pin {
-        if !pin.pin_type.holds_a_stored_value() {
-            return Err(InputValueRefusal::of(
-                InputValueRefusalCode::InputTakesNoValue,
-                format!(
-                    "input `{input}` of `{node_name}` is wire only and takes no value. To fix: \
-                     link it"
-                ),
-            ));
-        }
         pin.pin_type.check_value(value).map_err(|not_taken| {
             InputValueRefusal::of(
                 InputValueRefusalCode::InputValueNotValid,
@@ -188,16 +206,6 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         }
     } else if matches!(node_kind, Some(NodeKind::Function { .. })) {
         return Ok(());
-    }
-    if port.family.family != PortFamily::Channels {
-        return Err(InputValueRefusal::of(
-            InputValueRefusalCode::InputTakesNoValue,
-            format!(
-                "input `{input}` of `{node_name}` carries {}, and a pin value is a control value, \
-                 which only a Channels input reads. To fix: link `{input}` instead",
-                port.family.family
-            ),
-        ));
     }
     if the_control_value_of_a_pin(value).is_none() {
         return Err(InputValueRefusal::of(

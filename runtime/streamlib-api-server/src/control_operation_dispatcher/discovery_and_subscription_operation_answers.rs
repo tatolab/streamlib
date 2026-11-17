@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 use streamlib_control_contract::{
-    CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult, SubscribeProjectChangesResult,
-    SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesResult,
-    SubscribeStreamGraphChangesResult,
+    CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult, SubscribeInputValueChangesResult,
+    SubscribeProjectChangesResult, SubscribeProjectLogRecordsResult,
+    SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesResult,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET, ListStreamsToolResult, ListStreamsToolResultStream,
@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::control_subscriptions_of_one_connection::{
     ControlSubscriptionsOfOneConnection, ProjectLogAsSubscribedWithItsEnd,
+    WhatAConnectionFollowsOfAStream,
 };
 
 use super::{
@@ -205,16 +206,50 @@ impl ControlOperationDispatcher {
         streams: Vec<String>,
         request_origin: &ControlRequestOrigin,
     ) -> Result<SubscribeStreamGraphChangesResult, ControlOperationRefusal> {
+        self.follow_the_streams(
+            "subscribe_stream_graph_changes",
+            streams,
+            WhatAConnectionFollowsOfAStream::Graph,
+            request_origin,
+        )
+        .await
+        .map(|streams| SubscribeStreamGraphChangesResult { streams })
+    }
+
+    pub(super) async fn subscribe_to_input_value_changes(
+        &self,
+        streams: Vec<String>,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<SubscribeInputValueChangesResult, ControlOperationRefusal> {
+        self.follow_the_streams(
+            "subscribe_input_value_changes",
+            streams,
+            WhatAConnectionFollowsOfAStream::InputValues,
+            request_origin,
+        )
+        .await
+        .map(|streams| SubscribeInputValueChangesResult { streams })
+    }
+
+    /// Follow `what` of each of `streams`, by stream id, on the connection `request_origin`
+    /// arrived on, for the subscription `method_name`, answering every stream it follows that of.
+    async fn follow_the_streams(
+        &self,
+        method_name: &'static str,
+        streams: Vec<String>,
+        what: WhatAConnectionFollowsOfAStream,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<Vec<String>, ControlOperationRefusal> {
         let subscriptions = Arc::clone(
             the_subscriptions_of_the_connection_a_subscription_arrived_on(
-                "subscribe_stream_graph_changes",
+                method_name,
                 request_origin,
             )?,
         );
         if streams.is_empty() {
-            return Err(ControlOperationRefusal::Failed(
-                "subscribe_stream_graph_changes failed: `streams` names no stream".to_owned(),
-            ));
+            return Err(ControlOperationRefusal::Failed(format!(
+                "{method_name} failed: `streams` names no stream"
+            )));
         }
         let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
         tokio::task::spawn_blocking(move || {
@@ -226,23 +261,20 @@ impl ControlOperationDispatcher {
                 })
                 .collect::<streamlib::sdk::error::Result<Vec<_>>>()
                 .map_err(|refusal| {
-                    ControlOperationRefusal::Failed(format!(
-                        "subscribe_stream_graph_changes failed: {refusal}"
-                    ))
+                    ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
                 })?;
             subscriptions
-                .follow_the_stream_graphs(streams_as_loaded_now)
-                .map(|streams| SubscribeStreamGraphChangesResult { streams })
+                .follow_the_streams(streams_as_loaded_now, what)
                 .map_err(|not_subscribed| {
                     ControlOperationRefusal::Failed(format!(
-                        "subscribe_stream_graph_changes failed: {not_subscribed}"
+                        "{method_name} failed: {not_subscribed}"
                     ))
                 })
         })
         .await
-        .map_err(ControlOperationRefusal::the_task_did_not_finish(
-            "subscribe_stream_graph_changes failed: the subscription",
-        ))?
+        .map_err(ControlOperationRefusal::the_task_did_not_finish(format!(
+            "{method_name} failed: the subscription"
+        )))?
     }
 
     pub(super) async fn subscribe_to_stream_action_changes(

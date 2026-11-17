@@ -287,6 +287,29 @@ export interface SubscribeStreamGraphChangesResult {
 }
 
 /**
+ * `subscribe_input_value_changes`' params.
+ */
+export interface SubscribeInputValueChangesRequest {
+  /**
+   * The loaded streams, by stream id, whose input value changes the connection is sent;
+   * refused when empty or when one is not loaded.
+   */
+  streams: Array<string>;
+}
+
+/**
+ * What `subscribe_input_value_changes` answers: the streams the connection is now sent input
+ * value changes of.
+ */
+export interface SubscribeInputValueChangesResult {
+  /**
+   * Every stream the connection is subscribed to the input value changes of, by stream id,
+   * this call's among them.
+   */
+  streams: Array<string>;
+}
+
+/**
  * `subscribe_stream_action_changes`' params, which name nothing.
  */
 export type SubscribeStreamActionChangesRequest = Record<string, never>;
@@ -4138,6 +4161,43 @@ export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "
 export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
 
 /**
+ * `input_value_changed`'s params.
+ */
+export interface InputValueChangedNotificationParams {
+  /**
+   * The stream, by stream id.
+   */
+  stream: string;
+  /**
+   * The node, by its graph `id`.
+   */
+  node: string;
+  /**
+   * The input, by name.
+   */
+  input: string;
+  /**
+   * The member of a bundle input whose value changed; absent for a whole input.
+   */
+  member?: string | null;
+  /**
+   * The value the input reads now, as `graph` renders it: null when a link feeds it or it
+   * reads nothing.
+   */
+  value?: unknown;
+  /**
+   * Where `value` comes from; `wire` when a link feeds the input, absent when it reads
+   * nothing.
+   */
+  value_comes_from?: InputValueComesFromOnTheWire | null;
+}
+
+/**
+ * Where the value an input reads comes from, as `graph` renders it.
+ */
+export type InputValueComesFromOnTheWire = "live" | "saved" | "default" | "wire";
+
+/**
  * `stream_action_changed`'s params.
  */
 export interface StreamActionChangedNotificationParams {
@@ -4433,6 +4493,17 @@ export interface ControlOperations {
   subscribe_stream_graph_changes: {
     params: SubscribeStreamGraphChangesRequest;
     result: SubscribeStreamGraphChangesResult;
+  };
+  /**
+   * Send this connection an `input_value_changed` notification for each change of the value an input of the named loaded streams reads.
+   *
+   * Subscribe the connection to the input values of `streams`, by stream id, each loaded: from then on, each change of the value an input reads while unlinked, set live or saved, is sent as an `input_value_changed` notification naming its `node`, `input` and `member`, with the `value` and `value_comes_from` `graph` renders for that input, until the connection closes; the caller of a set is sent it too. Changes are sent at most once each 33 ms for one input and member, the newest kept, and the last value is always sent. A connection that follows a stream's graph and has not subscribed here is sent `stream_graph_changed` `edited` for a value change instead, at most once each 500 ms for each stream; one that subscribed is sent no `edited` for a value set live. Served only on a connection that stays open; refused for an empty `streams` or a stream not loaded. Answers every stream the connection is subscribed to.
+   *
+   * Since contract version 3, experimental.
+   */
+  subscribe_input_value_changes: {
+    params: SubscribeInputValueChangesRequest;
+    result: SubscribeInputValueChangesResult;
   };
   /**
    * Send this connection a `stream_action_changed` notification each time a stream action changes.
@@ -5273,6 +5344,12 @@ export interface ControlNotifications {
    * Since contract version 2, experimental.
    */
   stream_graph_changed: StreamGraphChangedNotificationParams;
+  /**
+   * The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+   *
+   * Since contract version 3, experimental.
+   */
+  input_value_changed: InputValueChangedNotificationParams;
   /**
    * A stream action changed, which `describe_stream_action` describes, or `missed`.
    *

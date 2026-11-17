@@ -12,7 +12,7 @@ ignores:
   - "**/tests.rs"
   - "**/tests/**"
   - "**/*_tests/**"
-  - runtime/streamlib-api-server/src/control_plane_stub_support.rs
+  - runtime/streamlib-api-server/src/control_plane_stub_support/**
   - "**/benches/**"
   - "**/examples/**"
   - "**/build.rs"

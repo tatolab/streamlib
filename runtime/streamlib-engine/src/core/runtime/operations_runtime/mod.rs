@@ -788,6 +788,26 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
+    fn how_a_live_input_value_is_held(
+        &self,
+        node: uuid::Uuid,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<
+        crate::core::graph::input_values::LiveInputValueHolding,
+        crate::core::graph::input_values::InputValueRefusal,
+    > {
+        LoadedStreamInThisRuntime::how_a_live_input_value_is_held(self, node, input, value)
+    }
+
+    fn set_input_values_live(
+        &self,
+        node: uuid::Uuid,
+        sets: Vec<(String, Option<serde_json::Value>)>,
+    ) -> Result<Vec<crate::core::graph::input_values::InputValueSetLive>> {
+        LoadedStreamInThisRuntime::set_input_values_live(self, node, sets)
+    }
+
     fn an_exposure_of_config_fields_is_recorded_on(
         &self,
         node_type: &NodeClassImportPath,

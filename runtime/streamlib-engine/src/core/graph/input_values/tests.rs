@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::PortFamily;
 use serde_json::json;
 
 use crate::core::test_support::{

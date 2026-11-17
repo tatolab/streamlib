@@ -24,6 +24,8 @@ export interface ControlSchemasOfTheContract {
     readonly SubscribeProjectChangesResult: z.ZodType<ControlContract.SubscribeProjectChangesResult>;
     readonly SubscribeStreamGraphChangesRequest: z.ZodType<ControlContract.SubscribeStreamGraphChangesRequest>;
     readonly SubscribeStreamGraphChangesResult: z.ZodType<ControlContract.SubscribeStreamGraphChangesResult>;
+    readonly SubscribeInputValueChangesRequest: z.ZodType<ControlContract.SubscribeInputValueChangesRequest>;
+    readonly SubscribeInputValueChangesResult: z.ZodType<ControlContract.SubscribeInputValueChangesResult>;
     readonly SubscribeStreamActionChangesRequest: z.ZodType<ControlContract.SubscribeStreamActionChangesRequest>;
     readonly SubscribeStreamActionChangesResult: z.ZodType<ControlContract.SubscribeStreamActionChangesResult>;
     readonly SubscribeProjectLogRecordsRequest: z.ZodType<ControlContract.SubscribeProjectLogRecordsRequest>;
@@ -181,6 +183,8 @@ export interface ControlSchemasOfTheContract {
     readonly StreamGraphChangedNotificationParams: z.ZodType<ControlContract.StreamGraphChangedNotificationParams>;
     readonly StreamGraphChangeKindOnTheWire: z.ZodType<ControlContract.StreamGraphChangeKindOnTheWire>;
     readonly NodeStateOnTheWire: z.ZodType<ControlContract.NodeStateOnTheWire>;
+    readonly InputValueChangedNotificationParams: z.ZodType<ControlContract.InputValueChangedNotificationParams>;
+    readonly InputValueComesFromOnTheWire: z.ZodType<ControlContract.InputValueComesFromOnTheWire>;
     readonly StreamActionChangedNotificationParams: z.ZodType<ControlContract.StreamActionChangedNotificationParams>;
     readonly StreamActionChangeKindOnTheWire: z.ZodType<ControlContract.StreamActionChangeKindOnTheWire>;
     readonly ProjectLogRecordsWrittenNotificationParams: z.ZodType<ControlContract.ProjectLogRecordsWrittenNotificationParams>;

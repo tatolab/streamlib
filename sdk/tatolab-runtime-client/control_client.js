@@ -18,6 +18,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
     return this.call("subscribe_stream_graph_changes", params, callOptions);
   }
 
+  subscribe_input_value_changes(params, callOptions) {
+    return this.call("subscribe_input_value_changes", params, callOptions);
+  }
+
   subscribe_stream_action_changes(params = {}, callOptions) {
     return this.call("subscribe_stream_action_changes", params, callOptions);
   }
@@ -324,6 +328,10 @@ export class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverATranspor
 
   on_stream_graph_changed(listener) {
     return this.onNotification("stream_graph_changed", listener);
+  }
+
+  on_input_value_changed(listener) {
+    return this.onNotification("input_value_changed", listener);
   }
 
   on_stream_action_changed(listener) {

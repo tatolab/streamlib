@@ -35,6 +35,7 @@ use crate::core::runtime::{
 };
 use crate::core::{Error, Result};
 
+mod input_values_set_live;
 mod live_graph_edits;
 mod shutdown_and_teardown;
 mod start_and_stop;
@@ -463,10 +464,14 @@ impl LoadedStreamInThisRuntime {
     /// How many nodes this stream's live graph holds.
     pub fn node_count(&self) -> usize {
         self.compiler
-            .scope(|graph, _tx| graph.traversal().v(()).iter().count())
+            .scope_reading(|graph| graph.traversal().v(()).iter().count())
     }
 
     pub fn to_json(&self) -> Result<serde_json::Value> {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::core::runtime::graph_renders_counted_for_a_test::count_a_graph_render_of(
+            self.loaded_stream_identity(),
+        );
         let machine_name = self
             .engine_resources_shared_by_every_stream
             .machine_name

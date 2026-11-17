@@ -18,7 +18,8 @@ use streamlib_control_contract::{
     CONTROL_CONTRACT_VERSION, ControlContractVersionMismatch, ControlOperationCall,
     DescribeRuntimeRequest, DiscoverRequest, DiscoverResult, GraphEditMode, GraphRequest,
     ListStreamsRequest, OneProjectByItsDirectoryRequest, ProjectTransactionAuthorArgument,
-    ProjectTransactionAuthorKindArgument, SubscribeProjectChangesRequest,
+    ProjectTransactionAuthorKindArgument, SubscribeInputValueChangesRequest,
+    SubscribeInputValueChangesResult, SubscribeProjectChangesRequest,
     SubscribeProjectChangesResult, SubscribeProjectLogRecordsRequest,
     SubscribeProjectLogRecordsResult, SubscribeStreamActionChangesRequest,
     SubscribeStreamActionChangesResult, SubscribeStreamGraphChangesRequest,
@@ -94,6 +95,8 @@ pub(crate) enum ControlOperationAnswer {
     SubscribeProjectLogRecords(SubscribeProjectLogRecordsResult),
     /// `subscribe_stream_graph_changes`'.
     SubscribeStreamGraphChanges(SubscribeStreamGraphChangesResult),
+    /// `subscribe_input_value_changes`'.
+    SubscribeInputValueChanges(SubscribeInputValueChangesResult),
     /// `subscribe_stream_action_changes`'.
     SubscribeStreamActionChanges(SubscribeStreamActionChangesResult),
     /// `describe_runtime`'s.
@@ -333,6 +336,12 @@ impl ControlOperationDispatcher {
                 .subscribe_to_stream_graph_changes(streams, request_origin)
                 .await
                 .map(ControlOperationAnswer::SubscribeStreamGraphChanges),
+            ControlOperationCall::SubscribeInputValueChanges(
+                SubscribeInputValueChangesRequest { streams },
+            ) => self
+                .subscribe_to_input_value_changes(streams, request_origin)
+                .await
+                .map(ControlOperationAnswer::SubscribeInputValueChanges),
             ControlOperationCall::SubscribeStreamActionChanges(
                 SubscribeStreamActionChangesRequest {},
             ) => self

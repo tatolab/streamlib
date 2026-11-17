@@ -9,7 +9,7 @@ use crate::core::context::StreamClockSpec;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::edges::Link;
-use super::nodes::GraphNode;
+use super::nodes::{GraphNode, NodeRunId};
 use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
@@ -17,6 +17,9 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
+use crate::core::graph::input_values::{
+    LiveInputValuesOfAStream, the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
+};
 use crate::core::json_schema::{GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId};
 
 /// Graph state.
@@ -60,6 +63,9 @@ pub struct Graph {
 
     /// Graph-level state.
     state: GraphState,
+
+    /// The values set live on this graph's inputs, held apart from its nodes.
+    live_input_values: Arc<LiveInputValuesOfAStream>,
 }
 
 impl Default for Graph {
@@ -88,7 +94,13 @@ impl Graph {
             node_names_the_graph_only_nodes_hold: HashSet::new(),
             compiled_at: None,
             state: GraphState::Idle,
+            live_input_values: Arc::default(),
         }
+    }
+
+    /// The values set live on this graph's inputs, which change under its read lock.
+    pub fn live_input_values(&self) -> &Arc<LiveInputValuesOfAStream> {
+        &self.live_input_values
     }
 
     /// The node types this graph's stream resolves.
@@ -228,9 +240,26 @@ impl Graph {
     /// it carries renders once, as the link it was given.
     pub(crate) fn to_graph_response(&self, machine: String) -> GraphResponse {
         let node_names = NodeNamesByNodeRunId::of(self.digraph.node_weights());
-        let render_a_node = |node: &GraphNode| GraphNodeOutput {
-            inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
-            ..GraphNodeOutput::from(node)
+        let linked_inputs: HashSet<(&NodeRunId, &str)> = self
+            .digraph
+            .edge_weights()
+            .map(|link| (link.to_port().node_run_id(), link.to_port().port_name()))
+            .collect();
+        let render_a_node = |node: &GraphNode| {
+            let mut rendered = GraphNodeOutput {
+                inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
+                pins: the_pin_values_with_the_live_ones_over_them(self, node),
+                ..GraphNodeOutput::from(node)
+            };
+            for (rendered_input, port) in rendered.ports.inputs.iter_mut().zip(&node.ports.inputs) {
+                rendered_input.value_read = the_value_an_input_reads(
+                    self,
+                    node,
+                    port,
+                    linked_inputs.contains(&(&node.id, port.name.as_str())),
+                );
+            }
+            rendered
         };
         let is_the_pool = |node: &&GraphNode| is_the_function_node_pool_type(&node.node_type);
         GraphResponse {

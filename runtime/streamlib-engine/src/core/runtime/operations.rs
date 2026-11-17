@@ -108,6 +108,28 @@ pub trait RuntimeOperations: Send + Sync {
         exposed_config_fields: &[String],
     ) -> Result<bool>;
 
+    /// How `value`, set live on input `input` of the node `node`, by UUID, is held, refused when
+    /// the input does not take it: apart from the graph for an input the node reads each run, on
+    /// the graph, as an edit of it, for anything else.
+    fn how_a_live_input_value_is_held(
+        &self,
+        node: uuid::Uuid,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<
+        crate::core::graph::input_values::LiveInputValueHolding,
+        crate::core::graph::input_values::InputValueRefusal,
+    >;
+
+    /// Set each of `sets`, each held apart from the graph, live on the node `node`, by UUID,
+    /// `None` taking an input's live value off, with no graph edit and no compile; each input's
+    /// new value is announced as `InputValueDidChange`.
+    fn set_input_values_live(
+        &self,
+        node: uuid::Uuid,
+        sets: Vec<(String, Option<serde_json::Value>)>,
+    ) -> Result<Vec<crate::core::graph::input_values::InputValueSetLive>>;
+
     /// Bring each stream fragment of this stream's live graph to the stream it references, as
     /// that stream's graph document, or its import's, is on disk now.
     fn reconcile_each_stream_fragment_to_the_stream_it_references_live(

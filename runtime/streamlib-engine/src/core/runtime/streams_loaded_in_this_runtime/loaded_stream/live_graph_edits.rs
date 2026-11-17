@@ -81,18 +81,22 @@ impl LoadedStreamInThisRuntime {
         Ok(renamed)
     }
 
+    /// Set the saved value `value` on input `input` of the node `node_run_id`, `None` taking it
+    /// off, in place of any value set live on the input; hand it to each helper and island
+    /// reading it, and announce the graph's change and the input's new value.
     pub(crate) fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
         input: &str,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
-        self.compiler.scope(|graph, _tx| -> Result<()> {
+        let input_value_changed = self.compiler.scope(|graph, _tx| -> Result<RuntimeEvent> {
             let node = graph
                 .traversal_mut()
                 .v(node_run_id)
                 .first_mut()
                 .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+            let node_uuid = node.node_uuid;
             if !node.has_input(input) {
                 return Err(Error::NodePortNotFound {
                     node_run_id: node.display_name.clone(),
@@ -123,11 +127,37 @@ impl LoadedStreamInThisRuntime {
                 graph,
                 &[],
             )?;
+            graph.live_input_values().set(node_uuid, input, None);
             crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_pin_values_its_input_ports_read(
                 graph,
-            )
+            )?;
+            let node = graph
+                .traversal()
+                .v(node_run_id)
+                .first()
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+            let value_read = node
+                .ports
+                .inputs
+                .iter()
+                .find(|port| port.name == input)
+                .and_then(|port| {
+                    crate::core::graph::input_values::the_value_an_input_reads(
+                        graph,
+                        node,
+                        port,
+                        crate::core::graph::input_values::a_link_feeds_the_input(graph, node, input),
+                    )
+                });
+            Ok(RuntimeEvent::InputValueDidChange {
+                node: node_uuid,
+                input: input.to_owned(),
+                member: None,
+                value_read,
+            })
         })?;
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
+        self.publish_on_this_streams_topic(input_value_changed);
         Ok(())
     }
 

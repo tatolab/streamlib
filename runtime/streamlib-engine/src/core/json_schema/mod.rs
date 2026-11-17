@@ -209,6 +209,11 @@ pub struct PortInfoOutput {
     /// code does not state exactly, which links by its family alone.
     #[serde(flatten)]
     pub pin: Option<crate::core::descriptors::ResolvedPin>,
+    /// On an input of a node of a live graph, the value it reads while unlinked, as `value`,
+    /// and where that value comes from, as `value_comes_from`. Both are absent from the
+    /// rendering on an input that takes no stored value and on a catalog port.
+    #[serde(flatten)]
+    pub value_read: Option<crate::core::graph::input_values::InputValueRead>,
 }
 
 /// The kind of port - determines how data flows.
@@ -671,6 +676,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             family: Some(port.family.clone()),
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
+            value_read: None,
         }
     }
 }

@@ -12,7 +12,9 @@ use crate::core::graph::{
 use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
-use crate::core::graph::input_values::refuse_a_value_the_input_port_does_not_take;
+use crate::core::graph::input_values::{
+    refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
+};
 
 /// Hand each helper the pin values its input ports read while unlinked, when
 /// they differ from those it holds.
@@ -27,7 +29,7 @@ pub(crate) fn hand_each_helper_the_pin_values_its_input_ports_read(graph: &Graph
         link_wiring
             .0
             .record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
-                the_pin_values_its_input_ports_read(node),
+                the_pin_values_its_input_ports_read(graph, node),
             )?;
     }
     Ok(())
@@ -54,15 +56,20 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
     Ok(())
 }
 
-/// The value each Channels input of `node` reads while unlinked, by port: the
-/// pin value set on it, else its declared default, as a number.
-fn the_pin_values_its_input_ports_read(node: &GraphNode) -> serde_json::Map<String, JsonValue> {
+/// The value each Channels input of `node` in `graph` reads while unlinked, by
+/// port: the value set on it live, else its pin value, else its declared
+/// default, as a number.
+fn the_pin_values_its_input_ports_read(
+    graph: &Graph,
+    node: &GraphNode,
+) -> serde_json::Map<String, JsonValue> {
+    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
     node.ports
         .inputs
         .iter()
         .filter(|port| port.family.family == PortFamily::Channels)
         .filter_map(|port| {
-            let pin_value = node.pins.get(&port.name).or(port.pin_default.as_ref())?;
+            let pin_value = pin_values.get(&port.name).or(port.pin_default.as_ref())?;
             the_control_value_of_a_pin(pin_value)
                 .map(|control_value| (port.name.clone(), JsonValue::from(control_value)))
         })
@@ -98,13 +105,14 @@ pub(crate) fn the_inputs_a_function_node_has_no_value_for(
         .filter(|link| link.to_port().node_run_id() == &node.id)
         .map(|link| link.to_port().port_name().to_string())
         .collect();
+    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
     node.ports
         .inputs
         .iter()
         .filter(|port| {
             port.pin_default.is_none()
                 && !node.is_an_exposed_config_field_input(&port.name)
-                && !node.pins.contains_key(&port.name)
+                && !pin_values.contains_key(&port.name)
                 && !linked_input_ports.contains(&port.name)
         })
         .map(|port| port.name.clone())
