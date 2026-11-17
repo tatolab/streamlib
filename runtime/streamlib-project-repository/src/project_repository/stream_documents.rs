@@ -105,11 +105,13 @@ impl ProjectRepository {
                 let staged_document =
                     StreamGraphDocument::from_value(document.clone()).map_err(unreadable)?;
                 let bytes = staged_document.canonical_bytes()?;
-                for (node, config) in staged_document.configs_of_every_node_at_every_level() {
-                    refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+                for (node, input_values) in
+                    staged_document.input_values_of_every_node_at_every_level()
+                {
+                    refuse_input_values_referencing_an_asset_the_project_does_not_hold(
                         staged_assets,
                         node,
-                        config,
+                        input_values,
                     )?;
                 }
                 staged_assets.insert(
@@ -211,44 +213,5 @@ impl ProjectRepository {
                 );
             }
         }
-    }
-
-    /// Move each node of a `tatolab-ops` type in the project's stream documents to the Core Nodes
-    /// type that replaced it, as one transaction by the runtime under
-    /// [`TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY`]. `None` when no document holds such a node,
-    /// or history already holds the move, undone since or not, so an undo of it holds.
-    pub fn move_each_tatolab_ops_node_to_core_nodes(
-        &mut self,
-    ) -> Result<Option<ProjectActionApplyOutcome>, ProjectRepositoryRefusal> {
-        let move_key =
-            ProjectActionIdempotencyKey::from_caller(TATOLAB_OPS_NODES_MOVED_TO_CORE_NODES_KEY)?;
-        if self.commit_of_each_idempotency_key.contains_key(&move_key) {
-            return Ok(None);
-        }
-        let assets = self.every_asset()?;
-        let mut operations = Vec::new();
-        for asset in assets.values() {
-            if asset.kind != ProjectAssetKind::Stream {
-                continue;
-            }
-            let Ok((_, document)) = self.read_stream_graph_document(&assets, asset.asset) else {
-                continue;
-            };
-            operations.extend(operations_moving_each_tatolab_ops_node_to_core_nodes(
-                asset.asset,
-                &document,
-            ));
-        }
-        if operations.is_empty() {
-            return Ok(None);
-        }
-        self.apply_project_operations(
-            &ProjectTransactionAuthor::the_runtime(),
-            Some(&move_key),
-            Vec::new(),
-            operations,
-            ProjectTransactionLineage::NewEdit,
-        )
-        .map(Some)
     }
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::stream_graph_fragment_fold::{
@@ -17,8 +17,8 @@ use super::StreamGraphDocumentLinkEnd;
 use super::{
     STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocumentGroup, StreamGraphDocumentLink,
     StreamGraphDocumentNode, StreamGraphFragmentPlacement, StreamGraphGroupFields,
-    push_the_config_of_each_node_at_every_level,
-    push_the_config_of_each_of_the_nodes_at_every_level,
+    push_the_input_values_of_each_node_at_every_level,
+    push_the_input_values_of_each_of_the_nodes_at_every_level,
 };
 
 /// One change to a stream's graph, recorded with everything its inverse needs.
@@ -41,9 +41,10 @@ pub enum StreamGraphOperation {
     Connect { link: StreamGraphDocumentLink },
     /// The link was taken out.
     Disconnect { link: StreamGraphDocumentLink },
-    /// The node's config was replaced whole.
+    /// The node's config was replaced whole: each input value `from` names taken out, then each
+    /// `to` names set.
     SetNodeConfig { node: Uuid, from: Value, to: Value },
-    /// The value on one of the node's inputs was set, `None` being no value.
+    /// The value of one of the node's inputs was set, `None` being no value.
     SetPinValue {
         node: Uuid,
         input: String,
@@ -275,38 +276,43 @@ impl StreamGraphOperation {
         }
     }
 
-    /// Each config the operation leaves a node with, by that node's UUID: its own node's, and
-    /// that of every node at every level of a fragment it places.
-    pub fn configs_it_sets(&self) -> Vec<(Uuid, &Value)> {
-        let mut configs = Vec::new();
+    /// Each node's input values the operation leaves it with, by that node's UUID: its own
+    /// node's, and those of every node at every level of a fragment it places. A config set
+    /// whole is its own: the fields it sets are the input values it leaves.
+    pub fn input_values_it_sets(&self) -> Vec<(Uuid, &Map<String, Value>)> {
+        let mut input_values = Vec::new();
         match self {
             Self::AddNode { node, .. } => {
-                configs.push((node.id, &node.config));
+                input_values.push((node.id, &node.input_values));
                 if let Some(fragment) = &node.fragment {
-                    push_the_config_of_each_node_at_every_level(fragment, &mut configs);
+                    push_the_input_values_of_each_node_at_every_level(fragment, &mut input_values);
                 }
             }
-            Self::SetNodeConfig { node, to, .. } => configs.push((*node, to)),
+            Self::SetNodeConfig {
+                node,
+                to: Value::Object(to),
+                ..
+            } => input_values.push((*node, to)),
             Self::RefreshFragment { node, to, .. } => {
-                configs.push((*node, &to.config));
-                push_the_config_of_each_node_at_every_level(&to.fragment, &mut configs);
+                input_values.push((*node, &to.input_values));
+                push_the_input_values_of_each_node_at_every_level(&to.fragment, &mut input_values);
             }
             Self::FoldIntoFragment { fold } => {
-                push_the_config_of_each_of_the_nodes_at_every_level(
+                push_the_input_values_of_each_of_the_nodes_at_every_level(
                     std::slice::from_ref(&fold.fragment.value),
-                    &mut configs,
+                    &mut input_values,
                 );
             }
             Self::UnfoldFragment { fold } => {
                 for node in &fold.nodes {
-                    push_the_config_of_each_of_the_nodes_at_every_level(
+                    push_the_input_values_of_each_of_the_nodes_at_every_level(
                         std::slice::from_ref(&node.value),
-                        &mut configs,
+                        &mut input_values,
                     );
                 }
             }
             _ => {}
         }
-        configs
+        input_values
     }
 }

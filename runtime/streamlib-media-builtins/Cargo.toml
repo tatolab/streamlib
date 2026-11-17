@@ -37,6 +37,8 @@ rmp-serde = { workspace = true }
 rmpv = { workspace = true }
 # The project directory each golden graph's stream loads in.
 tempfile = { workspace = true }
+# The upgrade a golden written in an older shape is read through.
+streamlib-project-repository = { path = "../streamlib-project-repository", default-features = false }
 
 [lints]
 workspace = true

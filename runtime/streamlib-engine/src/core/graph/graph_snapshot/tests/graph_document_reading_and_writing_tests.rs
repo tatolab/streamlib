@@ -28,7 +28,10 @@ fn a_graph_document_parses_with_its_live_keys_ignored() {
     assert_eq!(graph.stream.as_deref(), Some("main"));
     assert_eq!(graph.nodes[0].name, "camera");
     assert_eq!(graph.nodes[0].node_type.as_str(), A_CAMERA_CLASS);
-    assert_eq!(graph.nodes[0].config, serde_json::json!({"fps": 30}));
+    assert_eq!(
+        serde_json::Value::Object(graph.nodes[0].input_values.clone()),
+        serde_json::json!({"fps": 30})
+    );
     assert_eq!(
         graph.links[0].source,
         LinkPortRefOutput {
@@ -49,8 +52,7 @@ fn a_graph_serializes_exactly_the_spec_keys() {
             id: None,
             name: "camera".into(),
             node_type: NodeClassImportPath::new(A_CAMERA_CLASS).unwrap(),
-            config: serde_json::json!({}),
-            pins: serde_json::Map::new(),
+            input_values: serde_json::Map::new(),
             exposed_config_fields: Vec::new(),
             studio: serde_json::Map::new(),
             fragment: None,
@@ -65,7 +67,7 @@ fn a_graph_serializes_exactly_the_spec_keys() {
     assert_eq!(
         serialized,
         serde_json::json!({
-            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS, "config": {}}],
+            "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}],
             "links": []
         })
     );
@@ -102,7 +104,7 @@ fn a_graph_document_names_link_ends_by_node_uuid_and_reads_back_by_name() {
 
     assert_eq!(graph.asset, Some(asset));
     assert_eq!(graph.nodes[0].id, Some(camera));
-    assert_eq!(graph.nodes[0].pins["fps"], serde_json::json!(30));
+    assert_eq!(graph.nodes[0].input_values["fps"], serde_json::json!(30));
     assert_eq!(
         graph.nodes[0].exposed_config_fields,
         vec!["exposure".to_string()]
@@ -358,13 +360,13 @@ fn a_setting_the_nodes_type_takes_passes() {
 }
 
 #[test]
-fn a_node_written_without_a_config_takes_the_config_naming_no_setting() {
+fn a_node_written_without_a_config_holds_no_input_value() {
     let graph = GraphSnapshot::from_graph_document(serde_json::json!({
         "nodes": [{"name": "camera", "type": A_CAMERA_CLASS}]
     }))
     .unwrap();
 
-    assert_eq!(graph.nodes[0].config, serde_json::json!({}));
+    assert!(graph.nodes[0].input_values.is_empty());
 }
 
 /// A misspelled key is read past by serde and the graph loads as something
@@ -391,14 +393,14 @@ fn a_key_this_runtime_does_not_read_is_refused_naming_it_and_where_it_sits() {
             serde_json::json!({"nodes": [with(a_node.clone(), "confg")]}),
             [
                 "node `camera` carries the key `confg`",
-                "`id`, `name`, `type`, `config`, `pins`, `exposed_config_fields`, `studio` and `fragment`",
+                "`id`, `name`, `type`, `input_values`, `exposed_config_fields`, `studio` and `fragment`",
             ],
         ),
         (
             serde_json::json!({"nodes": [{"name": "camera", "typ": A_CAMERA_CLASS}]}),
             [
                 "node `camera` carries the key `typ`",
-                "`id`, `name`, `type`, `config`, `pins`, `exposed_config_fields`, `studio` and `fragment`",
+                "`id`, `name`, `type`, `input_values`, `exposed_config_fields`, `studio` and `fragment`",
             ],
         ),
         (
@@ -437,8 +439,8 @@ fn a_key_this_runtime_does_not_read_is_refused_from_a_json_string_too() {
 }
 
 /// `graph` renders spec and live keys together and a load reads it back, so
-/// every key the render can carry has to be one a load reads or skips, and
-/// every spec key one the render carries.
+/// every key the render can carry has to be one a load reads, skips or folds
+/// into the node's input values, and every spec key one the render carries.
 #[test]
 fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
     let render_schema = serde_json::to_value(schemars::schema_for!(
@@ -466,15 +468,25 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
     ] {
         let rendered = keys_rendered_on(object_schema);
         for key in &rendered {
+            let folded_into_input_values = keys.object_kind == GRAPH_NODE_KEYS.object_kind
+                && streamlib_project_repository::NODE_KEYS_FOLDED_INTO_INPUT_VALUES
+                    .contains(&key.as_str());
             assert!(
-                keys.spec_keys.contains(&key.as_str()) || keys.live_keys.contains(&key.as_str()),
-                "`graph` renders `{key}` on {}, which a load neither reads nor skips",
+                keys.spec_keys.contains(&key.as_str())
+                    || keys.live_keys.contains(&key.as_str())
+                    || folded_into_input_values,
+                "`graph` renders `{key}` on {}, which a load neither reads, skips nor folds",
                 keys.object_kind
             );
         }
         for spec_key in keys.spec_keys {
+            let rendered_as_the_keys_it_folds = *spec_key
+                == streamlib_project_repository::NODE_INPUT_VALUES_KEY
+                && streamlib_project_repository::NODE_KEYS_FOLDED_INTO_INPUT_VALUES
+                    .iter()
+                    .all(|folded| rendered.contains(*folded));
             assert!(
-                rendered.contains(*spec_key),
+                rendered.contains(*spec_key) || rendered_as_the_keys_it_folds,
                 "a load reads `{spec_key}` on {}, which `graph` does not render",
                 keys.object_kind
             );

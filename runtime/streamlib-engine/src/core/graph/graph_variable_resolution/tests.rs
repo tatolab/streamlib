@@ -357,14 +357,17 @@ fn a_node_reference_variable_resolves_each_config_naming_a_get_to_the_setters_no
     let track = &resolution.graph_the_runtime_runs.nodes[1];
     assert_eq!(track.name, "camera-track");
     assert_eq!(
-        track.config,
+        serde_json::Value::Object(track.input_values.clone()),
         serde_json::json!({"gateway": {"node": "cloudflare"}, "track": "camera"})
     );
     assert_eq!(
-        resolution
-            .variables_as_drawn
-            .configs_naming_a_get_by_node_name["camera-track"]
-            .as_drawn,
+        serde_json::Value::Object(
+            resolution
+                .variables_as_drawn
+                .configs_naming_a_get_by_node_name["camera-track"]
+                .as_drawn
+                .clone()
+        ),
         serde_json::json!({"gateway": {"node": "get-connection"}, "track": "camera"})
     );
 }
@@ -447,7 +450,11 @@ fn a_node_reference_naming_a_get_at_any_depth_resolves() {
         serde_json::json!({"routes": [{"gateway": {"node": "get-connection"}}]});
     let resolution = resolved(graph).unwrap();
     assert_eq!(
-        resolution.graph_the_runtime_runs.nodes[1].config,
+        serde_json::Value::Object(
+            resolution.graph_the_runtime_runs.nodes[1]
+                .input_values
+                .clone()
+        ),
         serde_json::json!({"routes": [{"gateway": {"node": "cloudflare"}}]})
     );
 }
@@ -514,7 +521,11 @@ fn a_config_object_naming_no_castable_node_is_left_as_written() {
     graph["nodes"][4]["config"] = serde_json::json!({"metadata": {"node": ""}});
     let resolution = resolved(graph).unwrap();
     assert_eq!(
-        resolution.graph_the_runtime_runs.nodes[1].config,
+        serde_json::Value::Object(
+            resolution.graph_the_runtime_runs.nodes[1]
+                .input_values
+                .clone()
+        ),
         serde_json::json!({"metadata": {"node": ""}})
     );
 }

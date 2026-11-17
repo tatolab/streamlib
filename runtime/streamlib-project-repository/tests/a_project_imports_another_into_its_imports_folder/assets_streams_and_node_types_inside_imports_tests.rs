@@ -38,8 +38,7 @@ fn a_transaction_in_an_import_opened_as_its_own_project_commits_on_the_enclosing
                             id: Uuid::new_v4(),
                             name: "tint".to_owned(),
                             node_type: "nodes.arm:Tint".to_owned(),
-                            config: json!({}),
-                            pins: Map::new(),
+                            input_values: Map::new(),
                             exposed_config_fields: Vec::new(),
                             studio: Default::default(),
                             fragment: None,
@@ -325,7 +324,7 @@ fn a_node_type_an_imports_own_code_defines_is_led_by_its_folder_at_every_depth()
         "imports/robot-arm/imports/gripper/nodes.gripper:Gripper"
     );
     assert_eq!(
-        cell.main_document()["nodes"][1]["config"],
+        cell.main_document()["nodes"][1]["input_values"],
         json!({ "stream": { "asset": arm.stream, "from": arm.project() } }),
         "the stored document keeps its reference; nothing is written back"
     );
@@ -391,7 +390,7 @@ fn a_fragment_holds_a_reference_and_each_load_reads_the_stream_it_names() {
         Uuid::new_v5(&fragment_node, arm_node.as_bytes()).to_string()
     );
     assert_eq!(
-        placed["config"]["lut"],
+        placed["input_values"]["lut"],
         json!({ "asset": imports.arm_lut, "from": imports.arm.project() })
     );
 

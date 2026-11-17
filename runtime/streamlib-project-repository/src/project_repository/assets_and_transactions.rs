@@ -374,11 +374,11 @@ impl ProjectRepository {
                         Entry::Vacant(unstaged) => unstaged
                             .insert(self.read_stream_graph_document(&staged_assets, *stream)?.1),
                     };
-                    for (node, config) in graph_operation.configs_it_sets() {
-                        refuse_a_config_referencing_an_asset_the_project_does_not_hold(
+                    for (node, input_values) in graph_operation.input_values_it_sets() {
+                        refuse_input_values_referencing_an_asset_the_project_does_not_hold(
                             &staged_assets,
                             node,
-                            config,
+                            input_values,
                         )?;
                     }
                     staged_document.apply(graph_operation).map_err(|why| {

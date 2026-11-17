@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::project_file::TatolabProjectFile;
 use crate::project_import_folders::the_folder_of_an_import;
 use crate::project_stream_document::{ProjectStreamDocument, project_stream_documents};
+use crate::stream_document_upgrade::{NODE_INPUT_VALUES_KEY, stream_document_in_the_current_shape};
 use crate::stream_graph_document::{
     STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE,
     asset_references_made_references_into_the_import,
@@ -32,6 +33,7 @@ pub fn stream_assets_another_stream_of_the_project_places(
             .as_ref()
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+            .map(stream_document_in_the_current_shape)
         else {
             continue;
         };
@@ -55,7 +57,7 @@ fn each_stream_of_the_project_the_level_places(level: &Value, placed: &mut BTree
         .flatten()
     {
         if node.get("type").and_then(Value::as_str) == Some(STREAM_FRAGMENT_NODE_TYPE) {
-            let held_stream = &node["config"][STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
+            let held_stream = &node[NODE_INPUT_VALUES_KEY][STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY];
             if held_stream.get("from").is_none()
                 && let Some(stream_asset) = held_stream
                     .get("asset")
@@ -85,6 +87,7 @@ pub fn graph_document_with_each_stream_fragment_reference_resolved(
     if !graph_document_holds_a_stream_fragment(graph_document) {
         return Ok(graph_document.clone());
     }
+    let graph_document = &stream_document_in_the_current_shape(graph_document.clone());
     let project = TatolabProjectFile::read_from_project_directory(project_directory)
         .map_err(|refusal| refusal.to_string())?
         .project;
@@ -188,7 +191,7 @@ fn resolve_each_stream_fragment_of_the_level(
                 .and_then(|id| Uuid::parse_str(id).ok())
                 .ok_or("a stream fragment holds no UUID as its `id`")?;
             let held_stream = node
-                .get("config")
+                .get(NODE_INPUT_VALUES_KEY)
                 .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
                 .cloned()
                 .unwrap_or(Value::Null);
@@ -218,7 +221,7 @@ fn the_fragment_held_stream_places(
         .and_then(|asset| Uuid::parse_str(asset).ok())
         .ok_or_else(|| {
             format!(
-                "stream fragment {fragment_node} names no stream: its config's \
+                "stream fragment {fragment_node} names no stream: its input value \
                  `{STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY}` holds no `asset` UUID"
             )
         })?;
@@ -398,7 +401,10 @@ fn read_the_held_stream(
         .map_err(|not_read| format!("`{}` does not read: {not_read}", stream_document.path))?;
     let document = serde_json::from_slice(bytes)
         .map_err(|not_parsed| format!("`{}` does not parse: {not_parsed}", stream_document.path))?;
-    Ok((document, stream_document.stream_name().to_owned()))
+    Ok((
+        stream_document_in_the_current_shape(document),
+        stream_document.stream_name().to_owned(),
+    ))
 }
 
 /// Give each node and group of `level`, at every level of a fragment it holds, the UUID

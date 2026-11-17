@@ -15,6 +15,7 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
+use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
     PendingDeletionComponent, cast_exposed_name_to_url_safe,
@@ -188,6 +189,7 @@ impl LoadedStreamInThisRuntime {
                 }
                 Ok(())
             })?;
+        let node_types = self.node_types_this_stream_resolves();
         let kept_node_uuids: HashSet<Uuid> = kept_live_nodes
             .iter()
             .map(|live_node| live_node.node_uuid)
@@ -197,12 +199,16 @@ impl LoadedStreamInThisRuntime {
             else {
                 continue;
             };
+            let legacy_config = LegacyConfigOfANodeType::of(node_types, &document_node.node_type);
             let spec = NodeSpec::new(
                 document_node.node_type.clone(),
-                document_node.config.clone(),
+                legacy_config.config_of(&document_node.input_values),
             )
             .with_display_name(document_node.name.clone())
-            .with_pins_and_studio_fields(document_node.pins.clone(), document_node.studio.clone())
+            .with_pins_and_studio_fields(
+                legacy_config.pin_values_of(&document_node.input_values),
+                document_node.studio.clone(),
+            )
             .with_exposed_config_fields(document_node.exposed_config_fields.clone())
             .with_node_uuid(node_uuid);
             add_node_impl(
@@ -216,10 +222,13 @@ impl LoadedStreamInThisRuntime {
         }
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
-            if live_node.config != document_node.config {
+            let legacy_config = LegacyConfigOfANodeType::of(node_types, &document_node.node_type);
+            let document_config = legacy_config.config_of(&document_node.input_values);
+            let document_pins = legacy_config.pin_values_of(&document_node.input_values);
+            if live_node.config != document_config {
                 self.update_node_config_compiled_right_away(
                     &live_node.node_run_id,
-                    &document_node.config,
+                    &document_config,
                 )
                 .await?;
             }
@@ -229,14 +238,14 @@ impl LoadedStreamInThisRuntime {
                     document_node.exposed_config_fields.clone(),
                 )?;
             }
-            if live_node.pins != document_node.pins || live_node.studio != document_node.studio {
+            if live_node.pins != document_pins || live_node.studio != document_node.studio {
                 self.compiler.scope(|this_streams_graph, _tx| {
                     if let Some(node) = this_streams_graph
                         .traversal_mut()
                         .v(&live_node.node_run_id)
                         .first_mut()
                     {
-                        node.pins = document_node.pins.clone();
+                        node.pins = document_pins.clone();
                         node.studio = document_node.studio.clone();
                     }
                 });

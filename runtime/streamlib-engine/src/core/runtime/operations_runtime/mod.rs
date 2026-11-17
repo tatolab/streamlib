@@ -675,18 +675,34 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.the_name_a_node_of_the_type_takes_at_a_level(node_type, names_at_the_level)
     }
 
+    fn the_config_a_node_holding_the_input_values_takes(
+        &self,
+        node_type: &str,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let node_type = NodeClassImportPath::new(node_type)
+            .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")))?;
+        Ok(
+            crate::core::graph::legacy_config_of_a_node::config_of_a_node(
+                self.node_types_this_stream_resolves(),
+                &node_type,
+                input_values,
+            ),
+        )
+    }
+
     fn refuse_a_node_a_live_add_would_refuse(
         &self,
         node_type: &str,
         node_name: &str,
-        config: &serde_json::Value,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> BoxFuture<'_, Result<()>> {
         let launch_record = Arc::clone(&self.node_interpreter_launch_record);
         let lend_directory = self.lend_directory();
         let node_type = NodeClassImportPath::new(node_type)
             .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")));
         let node_name = node_name.to_owned();
-        let config = config.clone();
+        let input_values = input_values.clone();
         self.in_this_streams_log_route(async move {
             let node_type = node_type?;
             if launch_record.a_live_add_must_describe(&node_type) {
@@ -711,6 +727,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             if node_types.port_info(&node_type).is_none() {
                 return Err(Error::UnknownNodeType { ident: node_type });
             }
+            let config = crate::core::graph::legacy_config_of_a_node::config_of_a_node(
+                node_types,
+                &node_type,
+                &input_values,
+            );
             node_types.refuse_a_node_this_stream_cannot_add(&node_name, &node_type, &config)?;
             crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
                 &node_name, &node_type, node_types, &config,

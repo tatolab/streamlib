@@ -5,7 +5,6 @@
       "id": "0b7e4c1a-2d3f-4a5b-8c6d-9e0f1a2b3c4d",
       "name": "camera",
       "type": "nodes.camera:Camera",
-      "config": {},
       "studio": {
         "contract": 1,
         "position": [120, 40],

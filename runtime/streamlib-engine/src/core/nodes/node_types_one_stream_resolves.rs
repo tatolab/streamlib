@@ -441,16 +441,6 @@ impl NodeTypesOneStreamResolves {
                 .iter()
                 .filter(|node| &node.node_type == node_type)
             {
-                for pinned in node.pins.keys() {
-                    add_once(
-                        inputs,
-                        a_port(
-                            pinned,
-                            PortFamilyDeclaration::of_family(PortFamily::Records),
-                            true,
-                        ),
-                    );
-                }
                 for exposed in &node.exposed_config_fields {
                     add_once(
                         inputs,

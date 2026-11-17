@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The graph as data: the spec a runtime loads, in the one shape `graph`
-//! renders.
+//! The graph as data: the spec a runtime loads.
 //!
 //! A [`GraphSnapshot`] is the spec keys of a `graph` document — `stream`, `clock`,
-//! `nodes[].name` / `type` / `config` and `links[].source` / `target` — and
-//! nothing else, so `graph`'s own output reads into one with
-//! its live keys skipped, and any other key is refused by name. Loading one is
+//! `nodes[].name` / `type` / `input_values` and `links[].source` / `target` — and
+//! nothing else. A document is upgraded to the current shape before it is read, so
+//! `graph`'s own output, which still renders a node's `config` and `pins`, reads into
+//! one with its live keys skipped, and any other key is refused by name. Loading one is
 //! [`Runner::load_stream_from_graph_snapshot`](crate::core::runtime::Runner::load_stream_from_graph_snapshot);
 //! there is no saver, because the render is the export.
 
@@ -41,6 +41,7 @@ use crate::core::graph::graph_interface_resolution::{
     the_family_a_port_linked_to_an_interface_node_carries,
 };
 use crate::core::graph::graph_variable_resolution::is_a_graph_variable_node_type;
+use crate::core::graph::legacy_config_of_a_node::config_of_a_node;
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
     config_node_reference_edges_of_one_node, node_names_listed_for_a_refusal,
@@ -154,8 +155,7 @@ const GRAPH_NODE_KEYS: GraphDocumentObjectKeys = GraphDocumentObjectKeys {
         "id",
         "name",
         "type",
-        "config",
-        "pins",
+        "input_values",
         "exposed_config_fields",
         "studio",
         "fragment",
@@ -217,14 +217,11 @@ pub struct GraphSnapshotNode {
     #[serde(rename = "type")]
     pub node_type: NodeClassImportPath,
 
-    /// The node's config. Absent reads as `{}`, the config `add_node` takes
-    /// when it is given none.
-    #[serde(default = "a_config_naming_no_setting")]
-    pub config: serde_json::Value,
-
-    /// The value set on each unlinked input, by input name.
+    /// The value the node holds for each input, by input name; an input it names no value for
+    /// reads its declared default. Which of them a node type not yet typed reads as its config
+    /// is [`crate::core::graph::legacy_config_of_a_node`]'s to say.
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
-    pub pins: serde_json::Map<String, serde_json::Value>,
+    pub input_values: serde_json::Map<String, serde_json::Value>,
 
     /// The config fields the node takes as inputs too, each an input of the field's name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -256,10 +253,6 @@ pub struct GraphFragment {
     pub groups: Vec<LabelledNodeGroup>,
 }
 
-fn a_config_naming_no_setting() -> serde_json::Value {
-    serde_json::Value::Object(serde_json::Map::new())
-}
-
 /// A node's `id` as a UUID; a string that is no UUID reads as none.
 fn a_node_uuid_or_none_for_a_string_that_is_no_uuid<'de, D: Deserializer<'de>>(
     deserializer: D,
@@ -289,9 +282,11 @@ impl GraphSnapshot {
         )
     }
 
-    /// Read a graph from a parsed `graph` document, its live keys skipped and
-    /// any other key refused by name.
+    /// Read a graph from a parsed `graph` document, in the shape an older runtime wrote it or in
+    /// this one's, its live keys skipped and any other key refused by name.
     pub fn from_graph_document(graph_document: serde_json::Value) -> Result<Self> {
+        let graph_document =
+            streamlib_project_repository::stream_document_in_the_current_shape(graph_document);
         refuse_a_key_this_runtime_does_not_read(&graph_document)?;
         let GraphSnapshotAsWritten {
             asset,
@@ -477,7 +472,7 @@ impl GraphSnapshot {
             node_types.refuse_a_node_this_stream_cannot_add(
                 &node.name,
                 &node.node_type,
-                &node.config,
+                &config_of_a_node(node_types, &node.node_type, &node.input_values),
             )?;
             if node_types.port_info(&node.node_type).is_none() {
                 return Err(Error::UnknownNodeType {
@@ -525,7 +520,7 @@ impl GraphSnapshot {
         for node in &self.nodes {
             for reference in config_node_reference_edges_of_one_node(
                 &node.name,
-                &node.config,
+                &config_of_a_node(node_types, &node.node_type, &node.input_values),
                 config_keys_of_a_node_type_holding_a_node_reference(node_types, &node.node_type),
             )? {
                 let referenced_node_name = &reference.edge.referenced_node;

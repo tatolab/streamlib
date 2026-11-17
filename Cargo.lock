@@ -5688,6 +5688,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "streamlib",
+ "streamlib-project-repository",
  "tempfile",
  "tracing",
 ]
@@ -7831,6 +7832,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "streamlib-control-contract",
+ "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "streamlib-slang-shader-compiler",
  "syn 2.0.117",

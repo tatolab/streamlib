@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::project_stream_document::STREAM_DOCUMENT_ASSET_KEY;
+use crate::stream_document_upgrade::NODE_INPUT_VALUES_KEY;
 use crate::stream_graph_document::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE,
@@ -247,10 +248,10 @@ impl StreamGraphDocument {
             id: fragment,
             name: fragment_name.to_owned(),
             node_type: STREAM_FRAGMENT_NODE_TYPE.to_owned(),
-            config: json!({ STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY: {
-                "asset": placed_stream.to_string(),
-            }}),
-            pins: Map::new(),
+            input_values: Map::from_iter([(
+                STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY.to_owned(),
+                json!({ "asset": placed_stream.to_string() }),
+            )]),
             exposed_config_fields: Vec::new(),
             studio: Default::default(),
             fragment: None,
@@ -282,7 +283,7 @@ impl StreamGraphDocument {
     /// plain nodes of the level, its `GraphInput` and `GraphOutput` nodes gone, and each link
     /// into or out of one of its ports carried straight to the node its interface fed or read.
     /// A node placing a stream unfolds a copy of the document `document_of_the_placed_stream`
-    /// reads from its config's `stream`, each node and group under a UUID `new_uuid` makes.
+    /// reads from its input value `stream`, each node and group under a UUID `new_uuid` makes.
     pub fn the_fold_a_fragment_unfolds(
         &self,
         fragment: Uuid,
@@ -303,7 +304,7 @@ impl StreamGraphDocument {
             == Some(STREAM_FRAGMENT_NODE_TYPE)
         {
             let held_stream = fragment_object
-                .get("config")
+                .get(NODE_INPUT_VALUES_KEY)
                 .and_then(|config| config.get(STREAM_FRAGMENT_HELD_STREAM_CONFIG_KEY))
                 .ok_or_else(|| format!("node {fragment} names no stream it places"))?;
             copy_of_the_placed_stream = a_copy_under_new_uuids(
@@ -345,7 +346,7 @@ impl StreamGraphDocument {
             let inner_type = inner_object.get("type").and_then(Value::as_str);
             if inner_type.is_some_and(is_a_graph_interface_node_type) {
                 let port = inner_object
-                    .get("config")
+                    .get(NODE_INPUT_VALUES_KEY)
                     .and_then(|config| config.get(GRAPH_INTERFACE_PORT_CONFIG_KEY))
                     .and_then(Value::as_str)
                     .unwrap_or_default()
@@ -665,7 +666,7 @@ fn an_interface_node(node: Uuid, port: &str, node_type: &str, family: &str) -> V
         "id": node,
         "name": port,
         "type": node_type,
-        "config": {
+        NODE_INPUT_VALUES_KEY: {
             GRAPH_INTERFACE_PORT_CONFIG_KEY: port,
             GRAPH_INTERFACE_FAMILY_CONFIG_KEY: family,
         },

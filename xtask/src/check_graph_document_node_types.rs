@@ -11,6 +11,9 @@
 //! `[project.entry-points."tatolab.nodes"]` table states each defining path; a
 //! graph-document type that names the same class through a parent module of that
 //! path is the re-export, and fails here instead of on a rig.
+//!
+//! It also fails a graph document the stream-document upgrade still finds work in, so a sample
+//! or the scaffold never ships in a shape an older runtime wrote.
 
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
@@ -45,6 +48,8 @@ pub struct GraphDocumentNodeTypeScanReport {
     pub graph_documents_scanned: usize,
     pub node_entry_points_read: usize,
     pub node_types_naming_a_re_export: Vec<GraphDocumentNodeTypeNamingAReExport>,
+    /// Repository-relative path of each graph document in a shape an older runtime wrote.
+    pub graph_documents_in_an_older_shape: Vec<String>,
 }
 
 /// Run the gate over every graph document in the repository.
@@ -77,6 +82,12 @@ pub fn run(workspace_root: &Path) -> Result<()> {
                 violation.defining_import_path,
             )
         })
+        .chain(report.graph_documents_in_an_older_shape.iter().map(|path| {
+            format!(
+                "{path}: written in a shape an older runtime wrote; rewrite it with \
+                 `streamlib_project_repository::upgraded_stream_document`"
+            )
+        }))
         .collect();
     anyhow::ensure!(
         failure_lines.is_empty(),
@@ -141,6 +152,11 @@ pub fn scan(workspace_root: &Path) -> Result<GraphDocumentNodeTypeScanReport> {
         let graph_document: serde_json::Value = serde_json::from_str(&graph_document_text)
             .with_context(|| format!("parsing {graph_document_path}"))?;
         report.graph_documents_scanned += 1;
+        if streamlib_project_repository::upgraded_stream_document(&graph_document).is_some() {
+            report
+                .graph_documents_in_an_older_shape
+                .push(graph_document_path.clone());
+        }
         let nodes = graph_document
             .get("nodes")
             .and_then(serde_json::Value::as_array)
@@ -220,8 +236,8 @@ mod tests {
                 .join("examples/camera-display/streams/main.graph.json"),
             &format!(
                 "{{\"links\": [], \"nodes\": [\
-                 {{\"config\": {{}}, \"id\": \"a\", \"name\": \"camerasource\", \"type\": \"{camera_node_type}\"}},\
-                 {{\"config\": {{}}, \"id\": \"b\", \"name\": \"local\", \"type\": \"nodes.local_effect:LocalEffect\"}}\
+                 {{\"id\": \"a\", \"name\": \"camerasource\", \"type\": \"{camera_node_type}\"}},\
+                 {{\"id\": \"b\", \"name\": \"local\", \"type\": \"nodes.local_effect:LocalEffect\"}}\
                  ]}}"
             ),
         );
@@ -268,6 +284,30 @@ mod tests {
     }
 
     #[test]
+    fn a_graph_document_in_an_older_shape_fails_naming_it() {
+        let workspace = workspace_with_a_camera_package_and_a_graph_document_naming(
+            "tatolab.camera.camera_source:CameraSource",
+        );
+        write_file(
+            &workspace
+                .path()
+                .join("examples/old-sample/streams/main.graph.json"),
+            "{\"links\": [], \"nodes\": [{\"id\": \"a\", \"name\": \"camerasource\", \
+             \"type\": \"tatolab.camera.camera_source:CameraSource\", \"config\": {}}]}",
+        );
+        let report = scan(workspace.path()).unwrap();
+        assert_eq!(
+            report.graph_documents_in_an_older_shape,
+            ["examples/old-sample/streams/main.graph.json"]
+        );
+        let failure = run(workspace.path()).unwrap_err().to_string();
+        assert!(
+            failure.contains("examples/old-sample/streams/main.graph.json: written in a shape"),
+            "{failure}"
+        );
+    }
+
+    #[test]
     fn a_golden_compatibility_record_is_not_held_to_the_rule() {
         let workspace = workspace_with_a_camera_package_and_a_graph_document_naming(
             "tatolab.camera.camera_source:CameraSource",
@@ -277,11 +317,12 @@ mod tests {
                 .path()
                 .join("runtime/some-crate/tests/golden_graph_documents/0001.graph.json"),
             "{\"links\": [], \"nodes\": [{\"id\": \"a\", \"name\": \"camerasource\", \
-             \"type\": \"tatolab.camera:CameraSource\"}]}",
+             \"type\": \"tatolab.camera:CameraSource\", \"config\": {}}]}",
         );
         let report = scan(workspace.path()).unwrap();
         assert_eq!(report.graph_documents_scanned, 1);
         assert!(report.node_types_naming_a_re_export.is_empty());
+        assert!(report.graph_documents_in_an_older_shape.is_empty());
     }
 
     #[test]

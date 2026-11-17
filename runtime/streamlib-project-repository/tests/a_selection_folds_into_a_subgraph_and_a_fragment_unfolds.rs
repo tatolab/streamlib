@@ -144,7 +144,10 @@ fn a_collapsed_selection_is_a_new_stream_placed_where_its_nodes_were() {
     assert_eq!(names, ["source", "look", "sink", "preview"]);
     let look = collapsed.node(Uuid::from_u128(0x99)).unwrap();
     assert_eq!(look.node_type, STREAM_FRAGMENT_NODE_TYPE);
-    assert_eq!(look.config, json!({ "stream": { "asset": LOOK_STREAM } }));
+    assert_eq!(
+        Value::Object(look.input_values),
+        json!({ "stream": { "asset": LOOK_STREAM } })
+    );
     assert!(look.fragment.is_none());
     assert_eq!(
         links_of(&collapsed),
@@ -159,7 +162,7 @@ fn a_collapsed_selection_is_a_new_stream_placed_where_its_nodes_were() {
     let inner: Vec<(String, String, Value)> = saved
         .nodes()
         .into_iter()
-        .map(|node| (node.name, node.node_type, node.config))
+        .map(|node| (node.name, node.node_type, Value::Object(node.input_values)))
         .collect();
     assert_eq!(
         inner,
@@ -352,7 +355,7 @@ fn a_generators_frozen_output_unlocked_is_plain_nodes_a_refresh_no_longer_reache
     let names: Vec<String> = unlocked.nodes().into_iter().map(|node| node.name).collect();
     assert_eq!(names, ["source", "soft-blur", "sink"]);
     assert_eq!(
-        unlocked.node(uuid(generated_blur)).unwrap().config,
+        Value::Object(unlocked.node(uuid(generated_blur)).unwrap().input_values),
         json!({ "radius": 3 })
     );
     assert_eq!(

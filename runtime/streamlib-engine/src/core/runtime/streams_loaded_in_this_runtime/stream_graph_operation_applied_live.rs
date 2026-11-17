@@ -11,6 +11,7 @@ use streamlib_project_repository::{
 use uuid::Uuid;
 
 use crate::core::descriptors::NodeClassImportPath;
+use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe, the_default_name_a_new_node_takes,
 };
@@ -32,15 +33,19 @@ impl LoadedStreamInThisRuntime {
         }
         match graph_operation {
             StreamGraphOperation::AddNode { mut node, links } => {
-                let mut spec = NodeSpec::new(
-                    NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
-                        Error::GraphError(format!("node {} `type`: {refusal}", node.id))
-                    })?,
-                    node.config.clone(),
-                )
-                .with_pins_and_studio_fields(node.pins.clone(), node.studio.to_map())
-                .with_exposed_config_fields(node.exposed_config_fields.clone())
-                .with_node_uuid(node.id);
+                let node_type = NodeClassImportPath::new(&node.node_type).map_err(|refusal| {
+                    Error::GraphError(format!("node {} `type`: {refusal}", node.id))
+                })?;
+                let legacy_config =
+                    LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
+                let mut spec =
+                    NodeSpec::new(node_type, legacy_config.config_of(&node.input_values))
+                        .with_pins_and_studio_fields(
+                            legacy_config.pin_values_of(&node.input_values),
+                            node.studio.to_map(),
+                        )
+                        .with_exposed_config_fields(node.exposed_config_fields.clone())
+                        .with_node_uuid(node.id);
                 if !node.name.is_empty() {
                     spec = spec.with_display_name(node.name.clone());
                 }
@@ -140,7 +145,10 @@ impl LoadedStreamInThisRuntime {
             StreamGraphOperation::AddNode { node, links } => {
                 node.fragment.is_some()
                     || node.node_type == STREAM_FRAGMENT_NODE_TYPE
-                    || is_a_graph_interface_node_naming_no_family(&node.node_type, &node.config)
+                    || is_a_graph_interface_node_naming_no_family(
+                        &node.node_type,
+                        &node.input_values,
+                    )
                     || links
                         .iter()
                         .flat_map(|link| [link.source.node, link.target.node])
@@ -336,9 +344,12 @@ impl LoadedStreamInThisRuntime {
 
 /// Whether a node of `node_type` holding `config` is a `GraphInput` or `GraphOutput` whose config
 /// names no family, so the family it carries is resolved with the graph's links.
-fn is_a_graph_interface_node_naming_no_family(node_type: &str, config: &serde_json::Value) -> bool {
+fn is_a_graph_interface_node_naming_no_family(
+    node_type: &str,
+    input_values: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
     is_a_graph_interface_node_type(node_type)
-        && config
+        && input_values
             .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
             .is_none_or(serde_json::Value::is_null)
 }

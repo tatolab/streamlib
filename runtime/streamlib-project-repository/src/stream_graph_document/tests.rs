@@ -28,8 +28,7 @@ fn a_node(name: &str) -> StreamGraphDocumentNode {
         id: Uuid::new_v4(),
         name: name.to_owned(),
         node_type: "nodes.effect:Effect".to_owned(),
-        config: json!({}),
-        pins: Map::new(),
+        input_values: Map::new(),
         exposed_config_fields: Vec::new(),
         studio: Default::default(),
         fragment: None,
@@ -193,7 +192,7 @@ fn a_rerun_keeps_the_uuid_of_each_node_whose_name_is_unchanged_at_every_level() 
         );
     }
     assert_eq!(
-        second_run["nodes"][1]["fragment"]["nodes"][0]["config"]["radius"],
+        second_run["nodes"][1]["fragment"]["nodes"][0]["input_values"]["radius"],
         8
     );
     let tint = uuid_of_the_node_at(&second_run, &["tint"]);
@@ -234,12 +233,12 @@ fn a_fragment_refreshed_and_refreshed_back_is_the_document_it_was() {
         node: look.id,
         from: StreamGraphFragmentPlacement {
             generator: look.node_type.clone(),
-            config: json!({}),
+            input_values: Map::new(),
             fragment: first_run.clone(),
         },
         to: StreamGraphFragmentPlacement {
             generator: look.node_type.clone(),
-            config: json!({"radius": 8}),
+            input_values: Map::from_iter([("radius".to_owned(), json!(8))]),
             fragment: fragment_with_each_node_uuid_kept_by_its_name(
                 &a_look_fragment_run(8, true),
                 Some(&first_run),
@@ -251,7 +250,10 @@ fn a_fragment_refreshed_and_refreshed_back_is_the_document_it_was() {
     let before = document.canonical_bytes().unwrap();
 
     document.apply(&refresh).unwrap();
-    assert_eq!(document.node(look.id).unwrap().config, json!({"radius": 8}));
+    assert_eq!(
+        document.node(look.id).unwrap().input_values,
+        Map::from_iter([("radius".to_owned(), json!(8))])
+    );
     document.apply(&refresh.inverse()).unwrap();
 
     assert_eq!(document.canonical_bytes().unwrap(), before);
@@ -269,7 +271,7 @@ fn a_refresh_of_a_node_holding_no_fragment_is_refused_naming_it() {
         .unwrap();
     let placement = StreamGraphFragmentPlacement {
         generator: "generators.look:look".to_owned(),
-        config: json!({}),
+        input_values: Map::new(),
         fragment: json!({"nodes": [], "links": []}),
     };
 
@@ -344,16 +346,22 @@ fn a_link_end_naming_its_node_by_name_reads_as_its_uuid() {
 }
 
 #[test]
-fn a_config_references_its_projects_assets_and_leaves_another_projects_to_it() {
+fn input_values_reference_their_projects_assets_at_any_depth_and_leave_another_projects_to_it() {
     let image = Uuid::new_v4();
     let lut = Uuid::new_v4();
-    let config = json!({
+    let input_values = json!({
         "image": {"asset": image},
         "grading": [{"lut": {"asset": lut}}],
         "font": {"asset": Uuid::new_v4(), "from": Uuid::new_v4()},
         "label": "asset",
     });
-    assert_eq!(assets_a_node_config_references(&config), [image, lut]);
+    let Value::Object(input_values) = input_values else {
+        unreachable!()
+    };
+    assert_eq!(
+        assets_a_nodes_input_values_reference(&input_values),
+        [image, lut]
+    );
 }
 
 #[test]

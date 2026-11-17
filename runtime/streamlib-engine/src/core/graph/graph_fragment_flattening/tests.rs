@@ -161,7 +161,11 @@ fn a_node_reference_inside_a_fragment_names_the_node_by_its_path_at_the_keys_its
     let flattening =
         flattened(a_camera_through_look_holding_soft_into_a_display()).expect("flattens");
     assert_eq!(
-        flattening.graph_the_runtime_runs.nodes[3].config,
+        serde_json::Value::Object(
+            flattening.graph_the_runtime_runs.nodes[3]
+                .input_values
+                .clone()
+        ),
         serde_json::json!({
             "reads_radius_of": {"node": "look/soft/blur"},
             "label_shaped_like_a_reference": {"node": "blur"},
@@ -182,7 +186,7 @@ fn a_marked_node_reference_naming_a_node_outside_the_fragment_is_left_as_written
         .find(|node| node.name == "look/soft/tint")
         .expect("tint runs");
     assert_eq!(
-        tint.config["reads_radius_of"],
+        tint.input_values["reads_radius_of"],
         serde_json::json!({"node": "camera"})
     );
 }
@@ -205,7 +209,7 @@ fn a_set_variable_inside_a_fragment_names_its_referenced_node_by_its_path() {
         .find(|node| node.name == "look/soft/set-blur")
         .expect("the setter is kept");
     assert_eq!(
-        setter.config,
+        serde_json::Value::Object(setter.input_values.clone()),
         serde_json::json!({"variable": "blur", "node_reference": {"node": "look/soft/blur"}})
     );
 }
