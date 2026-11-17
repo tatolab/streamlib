@@ -107,7 +107,6 @@ pub(super) fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
         .unwrap_or_else(|| panic!("the document holds no node {node}: {graph_document}"))
 }
 
-/// The pin values `rendered_node`, a node of a `graph` render, holds; none when it renders none.
 /// The input `input` of `rendered_node`, a node of a `graph` render.
 pub(super) fn the_input_named(rendered_node: &Value, input: &str) -> Value {
     rendered_node["ports"]["inputs"]
@@ -119,11 +118,13 @@ pub(super) fn the_input_named(rendered_node: &Value, input: &str) -> Value {
         .unwrap_or_else(|| panic!("the node renders no input `{input}`: {rendered_node}"))
 }
 
+/// The pin values `rendered_node`, a node of a `graph` render, holds, which it always renders.
 pub(super) fn the_pin_values_of(rendered_node: &Value) -> Value {
-    match &rendered_node["pins"] {
-        Value::Null => json!({}),
-        pins => pins.clone(),
-    }
+    rendered_node
+        .get("pins")
+        .filter(|pins| pins.is_object())
+        .cloned()
+        .unwrap_or_else(|| panic!("the node renders no `pins`: {rendered_node}"))
 }
 
 /// Each operation `answer`, a graph edit's answer, reports it applied, without the stream it

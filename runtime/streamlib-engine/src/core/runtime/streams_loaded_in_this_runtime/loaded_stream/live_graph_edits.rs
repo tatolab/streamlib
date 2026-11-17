@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::LoadedStreamInThisRuntime;
+use super::input_values_set_live::is_held_on_the_graph;
 use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed;
 use crate::core::compiler::compiler_ops::input_port_pin_values::{
@@ -89,8 +90,10 @@ impl LoadedStreamInThisRuntime {
 
     /// Set the saved value `value` on input `input` of the node `node_run_id`, `None` taking it
     /// off, in place of any value set live on the input; hand it to each island and the helper
-    /// reading it, and announce the input's new value. No node, link or port changes, so no
-    /// graph change is announced and nothing compiles.
+    /// reading it, and announce the input's new value. On an input its node reads each run no
+    /// node, link or port changes, so no graph change is announced and nothing compiles; on one
+    /// held on the graph, such as a shader node's, the graph change is announced, so the next
+    /// compile builds the value in.
     pub(crate) fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
@@ -98,11 +101,22 @@ impl LoadedStreamInThisRuntime {
         value: Option<serde_json::Value>,
     ) -> Result<()> {
         self.with_no_other_input_value_change(|| {
-            let input_value_changed = self.compiler.scope(|graph, _tx| {
-                set_the_saved_value_and_hand_it_over(graph, node_run_id, input, value)
-            })?;
+            let (input_value_changed, held_on_the_graph) =
+                self.compiler.scope(|graph, _tx| -> Result<_> {
+                    let held_on_the_graph = graph
+                        .traversal()
+                        .v(node_run_id)
+                        .first()
+                        .is_some_and(|node| is_held_on_the_graph(graph, node, input));
+                    let input_value_changed =
+                        set_the_saved_value_and_hand_it_over(graph, node_run_id, input, value)?;
+                    Ok((input_value_changed, held_on_the_graph))
+                })?;
             if let Some(input_value_changed) = input_value_changed {
                 self.publish_on_this_streams_topic(input_value_changed);
+            }
+            if held_on_the_graph {
+                self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
             }
             Ok(())
         })

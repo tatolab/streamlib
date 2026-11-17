@@ -193,7 +193,7 @@ pub(crate) fn hand_each_island_the_live_set_or_put_it_back(
 /// setting its type holds in its config, a config field it exposes as an input, an input it
 /// does not have, or any input of a shader node, whose evaluator is built from the values its
 /// graph holds.
-fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &str) -> bool {
+pub(super) fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &str) -> bool {
     LegacyConfigOfANodeType::of(graph.node_types_this_stream_resolves(), &set_on.node_type)
         .is_a_config_field(input)
         || set_on.is_an_exposed_config_field_input(input)

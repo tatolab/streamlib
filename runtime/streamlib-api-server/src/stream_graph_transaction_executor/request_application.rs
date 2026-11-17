@@ -420,18 +420,11 @@ impl StreamGraphTransactionExecutor<'_> {
                 .get_mut(stream_id)
                 .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
             if let Err(why) = stream.staged_graph.apply(&applied) {
-                if let Err(not_reversed) = self.async_runtime.block_on(
-                    stream_operations.apply_a_stream_graph_operation_live(
-                        applied_on_the_running_stream.operation.inverse(),
-                    ),
-                ) {
-                    tracing::error!(
-                        stream = %stream_id,
-                        %not_reversed,
-                        "could not reverse part of a refused graph transaction on its running \
-                         stream"
-                    );
-                }
+                self.reverse_one_operation_applied_live(
+                    stream_id,
+                    stream_operations.as_ref(),
+                    &applied_on_the_running_stream,
+                );
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \
                      does: {why}"
