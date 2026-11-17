@@ -12,6 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use streamlib_node_schema::PortFamily;
 
+use crate::project_views::TATOLAB_VIEW_MANIFEST_FILE_NAME;
+
 /// The view contract this runtime reads: a manifest for a later minor, or another major, does not open.
 pub const VIEW_CONTRACT_READ_MAJOR: u64 = 1;
 /// The highest minor of [`VIEW_CONTRACT_READ_MAJOR`] this runtime reads.
@@ -123,9 +125,10 @@ pub enum TatolabViewCapability {
 }
 
 /// The field a refusal names, as the view SDK names it: a missing field by its own path, a field
-/// the contract does not have by the object holding it, the whole manifest as `tatolab_view.json`.
-fn the_field_a_serde_refusal_names(
+/// the contract does not have by the object holding it, the whole manifest by `manifest_file_name`.
+pub(crate) fn the_field_a_serde_refusal_names(
     not_the_contract: &serde_path_to_error::Error<serde_json::Error>,
+    manifest_file_name: &str,
 ) -> String {
     let why = not_the_contract.inner().to_string();
     let mut steps: Vec<String> = not_the_contract
@@ -149,13 +152,15 @@ fn the_field_a_serde_refusal_names(
     let field_path = steps.concat();
     match field_path.strip_prefix('.') {
         Some(field_path) => field_path.to_owned(),
-        None if field_path.is_empty() => "tatolab_view.json".to_owned(),
+        None if field_path.is_empty() => manifest_file_name.to_owned(),
         None => field_path,
     }
 }
 
 /// An optional field present in the manifest, which the view contract refuses as `null`.
-fn a_value_never_written_as_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn a_value_never_written_as_null<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -176,7 +181,8 @@ struct TatolabViewManifestIssue {
 pub fn read_tatolab_view_manifest(manifest_json: &Value) -> Result<TatolabViewManifest, String> {
     let mut manifest: TatolabViewManifest = serde_path_to_error::deserialize(manifest_json.clone())
         .map_err(|not_the_contract| {
-            let field_path = the_field_a_serde_refusal_names(&not_the_contract);
+            let field_path =
+                the_field_a_serde_refusal_names(&not_the_contract, TATOLAB_VIEW_MANIFEST_FILE_NAME);
             format!("`{field_path}`: {}.", not_the_contract.into_inner())
         })?;
     let issues = every_issue_of_a_manifest(&manifest);
@@ -288,28 +294,40 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
     issues
 }
 
-fn is_a_canonical_unsigned_integer(text: &str) -> bool {
+pub(crate) fn is_a_canonical_unsigned_integer(text: &str) -> bool {
     text == "0"
         || (!text.is_empty()
             && !text.starts_with('0')
             && text.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-fn is_a_contract_version(contract: &str) -> bool {
+pub(crate) fn is_a_contract_version(contract: &str) -> bool {
     contract.split_once('.').is_some_and(|(major, minor)| {
         is_a_canonical_unsigned_integer(major) && is_a_canonical_unsigned_integer(minor)
     })
 }
 
 fn is_a_contract_version_this_runtime_reads(contract: &str) -> bool {
+    is_a_contract_version_of_major_up_to_minor(
+        contract,
+        VIEW_CONTRACT_READ_MAJOR,
+        VIEW_CONTRACT_READ_MINOR,
+    )
+}
+
+/// Whether `contract` names `read_major` and a minor no higher than `highest_minor`.
+pub(crate) fn is_a_contract_version_of_major_up_to_minor(
+    contract: &str,
+    read_major: u64,
+    highest_minor: u64,
+) -> bool {
     let Some((major, minor)) = contract.split_once('.') else {
         return false;
     };
     let (Ok(major), Ok(minor)) = (major.parse::<u64>(), minor.parse::<u64>()) else {
         return false;
     };
-    major == VIEW_CONTRACT_READ_MAJOR
-        && (major, minor) <= (VIEW_CONTRACT_READ_MAJOR, VIEW_CONTRACT_READ_MINOR)
+    major == read_major && minor <= highest_minor
 }
 
 /// A path inside the view's own folder: relative, with no `..` step, no scheme and no backslash.

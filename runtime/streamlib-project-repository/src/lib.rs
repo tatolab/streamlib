@@ -5,6 +5,7 @@
 
 mod canonical_project_json;
 mod core_project_import;
+mod node_ui_manifest;
 mod project_asset;
 #[cfg(feature = "history")]
 mod project_asset_file_bytes;
@@ -44,6 +45,11 @@ pub use core_project_import::{
     CORE_PROJECT_IMPORT_FOLDER, every_import_a_project_resolves, link_the_core_project_into,
     link_the_core_project_into_each_import_of, the_core_project_link_in,
     the_core_project_linked_into,
+};
+pub use node_ui_manifest::{
+    NODE_UI_CONTRACT_READ_MAJOR, NODE_UI_CONTRACT_READ_MINOR, NODE_UI_DIRECTORY,
+    NODE_UI_MANIFEST_FILE_NAME, NodeUiManifest, NodeUiManifestControl, NodeUiManifestNodeBody,
+    read_node_ui_manifest,
 };
 pub use project_asset::{
     ASSET_SIDECAR_FILE_SUFFIX, GRAPH_DOCUMENT_FILE_SUFFIX, PROJECT_IMPORTS_DIRECTORY, ProjectAsset,

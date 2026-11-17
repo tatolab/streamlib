@@ -22,6 +22,7 @@ pub mod generate_module_host_table_c_header;
 pub mod generate_runtime_client;
 pub mod normal_build_dep_graph;
 pub mod psnr;
+pub mod runtime_client_node_ui_manifest;
 pub mod runtime_client_zod_schemas;
 pub mod sign_the_carried_packages_with_a_developer_id;
 pub mod stage_browser_host;

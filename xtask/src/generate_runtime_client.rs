@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
+use crate::runtime_client_node_ui_manifest::{
+    NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME, NODE_UI_MANIFEST_TYPES_FILE_NAME,
+    node_ui_manifest_declarations, node_ui_manifest_json_schema,
+};
 use crate::runtime_client_zod_schemas::{ZodSchemasOfOneContractEntry, zod_schemas_javascript};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
@@ -45,6 +49,8 @@ pub const RUNTIME_CLIENT_PACKAGE_FILES_THE_RUNTIME_UNIT_CARRIES: &[&str] = &[
     GENERATED_CLIENT_TYPES_FILE_NAME,
     GENERATED_REFERENCE_FILE_NAME,
     COPIED_CONTRACT_FILE_NAME,
+    NODE_UI_MANIFEST_TYPES_FILE_NAME,
+    NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME,
 ];
 
 const GENERATED_CONTRACT_TYPES_FILE_NAME: &str = "control_contract.d.ts";
@@ -198,6 +204,14 @@ pub fn runtime_client_generated_files(
             control_contract.reference_markdown(),
         ),
         (COPIED_CONTRACT_FILE_NAME, contract_file_contents.to_owned()),
+        (
+            NODE_UI_MANIFEST_TYPES_FILE_NAME,
+            node_ui_manifest_declarations(control_contract.component_schemas)?,
+        ),
+        (
+            NODE_UI_MANIFEST_JSON_SCHEMA_FILE_NAME,
+            node_ui_manifest_json_schema(control_contract.component_schemas)?,
+        ),
     ])
 }
 
