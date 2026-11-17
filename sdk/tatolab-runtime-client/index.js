@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 export * from "./pin_types.js";
-export * from "./control_contract.js";
-export * from "./control_schemas.js";
+export * from "./contract.js";
 export * from "./control_messages.js";
 export * from "./control_transports.js";
 export * from "./runtime_client.js";
