@@ -490,7 +490,7 @@ export interface TransactRequest {
    */
   operations: Array<StreamGraphAction>;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1153,7 +1153,7 @@ export interface AddNodeRequest {
    */
   studio?: { [key: string]: unknown } | null;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1187,7 +1187,7 @@ export interface OneLinkGraphEditRequest {
    */
   target: StreamGraphActionLinkEnd;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1221,7 +1221,7 @@ export interface ImportGraphGeneratorRequest {
    */
   config?: { [key: string]: unknown } | null;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1251,7 +1251,7 @@ export interface OneNodeGraphEditRequest {
    */
   node: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1285,7 +1285,7 @@ export interface SetNodeConfigRequest {
    */
   config: { [key: string]: unknown };
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1323,7 +1323,7 @@ export interface SetPinValueRequest {
    */
   value?: unknown;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1361,7 +1361,7 @@ export interface SetNodeInputValueRequest {
    */
   value?: unknown;
   /**
-   * `commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, gone on the next load, never in history; send `commit` when a continuous gesture ends.
+   * `commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, never in history; a `kept` input holds it across a Stop and the next load, and a `reset` input forgets it at Stop; send `commit` when a continuous gesture ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1395,7 +1395,7 @@ export interface RenameNodeRequest {
    */
   name: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1429,7 +1429,7 @@ export interface SetStudioFieldsRequest {
    */
   studio: { [key: string]: unknown };
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1463,7 +1463,7 @@ export interface SetExposedConfigFieldsRequest {
    */
   exposed_config_fields: Array<string>;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1505,7 +1505,7 @@ export interface AddGroupRequest {
    */
   nodes: Array<string>;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1547,7 +1547,7 @@ export interface SetGroupFieldsRequest {
    */
   colour?: string | null;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1581,7 +1581,7 @@ export interface CollapseSelectionIntoSubgraphRequest {
    */
   name: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1611,7 +1611,7 @@ export interface UnlockSubgraphRequest {
    */
   fragment: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1645,7 +1645,7 @@ export interface AddNoteRequest {
    */
   size: [number, number];
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1683,7 +1683,7 @@ export interface SetNoteFieldsRequest {
    */
   size?: [number, number] | null;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1709,7 +1709,7 @@ export interface RemoveNoteRequest {
    */
   note: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -1739,7 +1739,7 @@ export interface RemoveGroupRequest {
    */
   group: string;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -3991,7 +3991,7 @@ export interface RefreshFragmentsRequest {
    */
   changed_files: Array<string>;
   /**
-   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, never in history, and gone on the next load, except a value set live on a `kept` input, which is held across a Stop and the next load while a `reset` input forgets its one at Stop. Send a continuous gesture as one transaction when it ends.
    */
   mode?: GraphEditMode | null;
   /**

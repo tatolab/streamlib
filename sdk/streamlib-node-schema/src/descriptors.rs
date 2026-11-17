@@ -24,8 +24,10 @@ pub struct PortDescriptor {
     pub description: String,
     pub required: bool,
     /// Delivery profile declared by an *input* port (the destination of an
-    /// iceoryx2 service) — `"newest"` or `"ordered"`. Required on every input
-    /// port and always `None` on an output port.
+    /// iceoryx2 service) — `"newest"` or `"ordered"`. An input with a pin that
+    /// states none reads by its pin's default, which
+    /// [`NodeDescriptor::with_input_deliveries_defaulted_by_pin`] fills in; every
+    /// other input states one. Always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
     /// The samples each link into this *input* port may hold beyond its
@@ -275,5 +277,46 @@ impl NodeDescriptor {
 
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
+    }
+
+    /// This node type with each input that states no delivery profile reading by its pin's
+    /// default. Refuses a port that states a flow its pin type does not take, and a windowed
+    /// input whose default would skip messages, each by name. An input with no pin keeps the
+    /// delivery profile it states, or none.
+    pub fn with_input_deliveries_defaulted_by_pin(mut self) -> Result<Self, String> {
+        let node_type = &self.node_class_import_path;
+        for port in self.inputs.iter().chain(&self.outputs) {
+            if let Some(refusal) = port
+                .declared_pin()
+                .and_then(|pin| pin.refusal_of_its_flow(&port.name))
+            {
+                return Err(format!("`{node_type}`: {refusal}"));
+            }
+        }
+        for input in &mut self.inputs {
+            if input.delivery_profile.is_some() {
+                continue;
+            }
+            let Some(default_delivery_profile) = input
+                .declared_pin()
+                .and_then(|pin| pin.default_input_delivery_profile())
+            else {
+                continue;
+            };
+            if input.audio_window.is_some() {
+                crate::refuse_audio_window_beside_a_skipping_delivery_profile(Some(
+                    default_delivery_profile,
+                ))
+                .map_err(|refusal| {
+                    format!(
+                        "`{node_type}`: input port `{}` reads by its pin's default delivery \
+                         profile, `{default_delivery_profile}`: {refusal}",
+                        input.name
+                    )
+                })?;
+            }
+            input.delivery_profile = Some(default_delivery_profile.to_string());
+        }
+        Ok(self)
     }
 }

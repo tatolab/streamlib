@@ -138,14 +138,21 @@ def test_a_borrow_quota_that_is_not_a_whole_count_is_refused_at_declaration(borr
 
 
 def test_an_unknown_delivery_is_refused_at_declaration():
-    with pytest.raises(ValueError, match="must declare `delivery=`"):
+    with pytest.raises(ValueError, match="declares `delivery=` 'eventually'; it is one of"):
         Input(Image, delivery="eventually")
 
 
-def test_an_input_port_without_a_delivery_is_refused():
-    """There is no default, so the omission is refused where it is written."""
-    with pytest.raises(ValueError, match="must declare `delivery=`"):
-        Input(Image)
+def test_an_input_port_stating_no_delivery_sends_none_for_the_runtime_to_default():
+    """The runtime holds the one table of defaults by pin type, so the stream package sends
+    no delivery for an input that states none."""
+
+    @node.process(execution="reactive")
+    class Sink:
+        frames = Input(Image)
+
+    assert Sink.__tatolab_node_input_ports__ == [
+        {"name": "frames", "description": "", "family": {"family": "image"}}
+    ]
 
 
 def test_an_output_port_needs_no_delivery_profile():

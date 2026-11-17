@@ -68,7 +68,6 @@ fn port_info_output_renders_exactly_the_declared_keys() {
     let port = crate::core::graph::PortInfo {
         name: "video_in".to_string(),
         description: "Frames to convert".to_string(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: Some("newest".to_string()),
         borrow_quota: None,
         audio_window: None,
@@ -103,7 +102,6 @@ fn a_node_whose_output_is(
         vec![crate::core::graph::PortInfo {
             name: "video".to_string(),
             description: "Frames".to_string(),
-            port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,
@@ -280,7 +278,6 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
     let port = crate::core::graph::PortInfo {
         name: "data".to_string(),
         description: String::new(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: None,
         borrow_quota: None,
         audio_window: None,
@@ -332,7 +329,6 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
     let port = crate::core::graph::PortInfo {
         name: "audio".to_string(),
         description: "Samples to frame".to_string(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: Some("ordered".to_string()),
         borrow_quota: None,
         audio_window: Some(declared_window_contract()),
@@ -368,7 +364,6 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
     let port = crate::core::graph::PortInfo {
         name: "audio".to_string(),
         description: String::new(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: Some("ordered".to_string()),
         borrow_quota: None,
         audio_window: Some(crate::core::descriptors::AudioWindowContract::Declaration(
@@ -408,7 +403,6 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
     let port = crate::core::graph::PortInfo {
         name: "audio".to_string(),
         description: String::new(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: Some("ordered".to_string()),
         borrow_quota: None,
         audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),
@@ -443,7 +437,6 @@ fn a_node_declaring_the_sentinel(
         vec![crate::core::graph::PortInfo {
             name: "audio".to_string(),
             description: "Blocks to play".to_string(),
-            port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: Some("ordered".to_string()),
             borrow_quota: None,
             audio_window: Some(crate::core::descriptors::AudioWindowContract::MatchDevice {}),

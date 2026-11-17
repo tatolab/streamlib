@@ -7,7 +7,7 @@ use streamlib_node_schema::{
     DELIVERY_PROFILE_DECLARATION_VALUES, ImageOutputPortFrameRate, MAX_INPUT_PORT_BORROW_QUOTA,
     NodeValueLifetime, OutputPortDeclaredNames, PortFamily, PortFamilyDeclaration,
     PortFamilyDeclarationDirection, cast_exposed_name_to_url_safe,
-    pin_type::{PinType, TexturePixelFormat},
+    pin_type::{PinDeclaration, PinFlow, PinType, TexturePixelFormat},
     refuse_audio_window_beside_a_skipping_delivery_profile, render_declaration_values,
 };
 use syn::ext::IdentExt;
@@ -21,17 +21,19 @@ use super::{DeclaredDescription, ParsedPort, PortDirection};
 ///
 /// `<name-string>[, delivery_profile = "...", borrow_quota = <n>, description = "...",
 /// audio_window(...) | audio_window = match_device, family = <Family>, pin_type = <PinType>,
-/// lifetime = kept | reset, <family key> = …]`.
+/// lifetime = kept | reset, flow = <PinFlow>, <family key> = …]`.
 ///
 /// A port states `family = …`, `pin_type = …`, or both when they agree. A port declared by pin
 /// type serves the family its messages belong to, and its family keys apply to that family.
+/// A port with a pin — a pin type, or a picture family — may state `flow = …` where its type
+/// allows another flow than its default.
 ///
-/// `delivery_profile` is a consumer-side setting: **required** on every
-/// `input(...)`, and rejected with a spanned error on an `output(...)` rather
-/// than silently dropped. `audio_window` is likewise consumer-side and
-/// likewise rejected on an output — a producer publishes what it has, and only
-/// a consumer states what it needs. `lifetime` is the input's too: whether a value set live on it
-/// is kept across Stop or reset there, kept when it is not stated.
+/// `delivery_profile` is a consumer-side setting: optional on an `input(...)` with a pin, which
+/// reads by its pin's default when it states none, **required** on every other `input(...)`,
+/// and rejected with a spanned error on an `output(...)` rather than silently dropped.
+/// `audio_window` is likewise consumer-side and likewise rejected on an output — a producer
+/// publishes what it has, and only a consumer states what it needs. `lifetime` is the input's too:
+/// whether a value set live on it is kept across Stop or reset there, kept when it is not stated.
 pub(super) fn parse_port(
     input: ParseStream<'_>,
     direction: PortDirection,
@@ -72,6 +74,7 @@ pub(super) fn parse_port(
     let mut family: Option<PortFamily> = None;
     let mut pin_type: Option<(proc_macro2::Span, PinType)> = None;
     let mut lifetime = NodeValueLifetime::Kept;
+    let mut flow: Option<(proc_macro2::Span, PinFlow)> = None;
     let mut family_keys = PortFamilyDeclaration::of_family(PortFamily::Records);
     let mut first_family_key_span: Option<proc_macro2::Span> = None;
 
@@ -154,6 +157,10 @@ pub(super) fn parse_port(
                 let lifetime_ident: Ident = content.parse()?;
                 lifetime = parse_lifetime(&lifetime_ident, &name, direction)?;
             }
+            "flow" => {
+                let flow_ident: Ident = content.parse()?;
+                flow = Some((flow_ident.span(), parse_pin_flow(&flow_ident, &name)?));
+            }
             family_key @ ("names" | "requires" | "codec" | "requires_codec" | "rate"
             | "frame_rate" | "dtype" | "formats" | "residency") => {
                 first_family_key_span.get_or_insert(key_span);
@@ -165,32 +172,13 @@ pub(super) fn parse_port(
                     format!(
                         "unknown port key `{other}` — expected `delivery_profile`, \
                          `borrow_quota`, `description`, `audio_window`, `family`, `pin_type`, \
-                         `lifetime`, or one of \
+                         `lifetime`, `flow`, or one of \
                          the family keys `names`, `requires`, `codec`, `requires_codec`, \
                          `rate`, `frame_rate`, `dtype`, `formats`, `residency`"
                     ),
                 ));
             }
         }
-    }
-
-    if direction == PortDirection::Input && delivery_profile.is_none() {
-        return Err(syn::Error::new(
-            name_lit.span(),
-            format!(
-                "input port `{name}` must declare a `delivery_profile` — one of {}. \
-                 There is no default: channel policy is declared port-locally at the \
-                 consuming input port",
-                render_delivery_profile_values(),
-            ),
-        ));
-    }
-
-    // Checked after the loop rather than at the key, so a contract declared
-    // before its profile is refused the same as one declared after.
-    if let Some((key_span, _)) = &audio_window {
-        refuse_audio_window_beside_a_skipping_delivery_profile(delivery_profile.as_deref())
-            .map_err(|refusal| syn::Error::new(*key_span, format!("port `{name}`: {refusal}")))?;
     }
 
     let family_its_pin_type_carries = pin_type
@@ -246,6 +234,37 @@ pub(super) fn parse_port(
         other => other.map(|(_, pin_type)| pin_type),
     };
     let family = family_keys;
+    let pin = declared_pin(pin_type.as_ref(), &family, flow, &name)?;
+    // A picture port that states a flow states its Texture with it, so the flow is emitted.
+    let pin_type = match (&flow, &pin) {
+        (Some(_), Some(pin)) => pin.clone().into_resolved().map(|pin| pin.pin_type),
+        _ => pin_type,
+    };
+
+    if direction == PortDirection::Input {
+        let delivery_profile_read_by = delivery_profile.as_deref().or_else(|| {
+            pin.as_ref()
+                .and_then(PinDeclaration::default_input_delivery_profile)
+        });
+        let Some(delivery_profile_read_by) = delivery_profile_read_by else {
+            return Err(syn::Error::new(
+                name_lit.span(),
+                format!(
+                    "input port `{name}` must declare a `delivery_profile` — one of {} — or a \
+                     `pin_type = …` whose default it reads by",
+                    render_delivery_profile_values(),
+                ),
+            ));
+        };
+        // Checked after the loop rather than at the key, so a contract declared
+        // before its profile is refused the same as one declared after.
+        if let Some((key_span, _)) = &audio_window {
+            refuse_audio_window_beside_a_skipping_delivery_profile(Some(delivery_profile_read_by))
+                .map_err(|refusal| {
+                    syn::Error::new(*key_span, format!("port `{name}`: {refusal}"))
+                })?;
+        }
+    }
 
     Ok(ParsedPort {
         declared_marker_ident,
@@ -257,6 +276,7 @@ pub(super) fn parse_port(
         family,
         pin_type,
         lifetime,
+        flow: flow.map(|(_, flow)| flow),
     })
 }
 
@@ -288,6 +308,60 @@ fn parse_lifetime(
             ),
         )
     })
+}
+
+/// The pin a port declares: its stated pin type, else the one its family states exactly, in
+/// the flow it states, else that type's default. `None` for a port with no pin, which may not
+/// state a flow; a flow the type does not allow is refused at the flow.
+fn declared_pin(
+    pin_type: Option<&PinType>,
+    family: &PortFamilyDeclaration,
+    flow: Option<(proc_macro2::Span, PinFlow)>,
+    port_name: &str,
+) -> syn::Result<Option<PinDeclaration>> {
+    let Some(pin_type) = pin_type.cloned().or_else(|| family.exact_pin_type()) else {
+        return match flow {
+            Some((flow_span, _)) => Err(syn::Error::new(
+                flow_span,
+                format!(
+                    "port `{port_name}` states `flow = …` and has no pin type to flow by — add \
+                     `pin_type = …`, one of {}",
+                    rendered_rust_declared_pin_type_names()
+                ),
+            )),
+            None => Ok(None),
+        };
+    };
+    let mut pin = PinDeclaration::exactly(pin_type);
+    let Some((flow_span, flow)) = flow else {
+        return Ok(Some(pin));
+    };
+    pin.flow = flow;
+    match pin.refusal_of_its_flow(port_name) {
+        Some(refusal) => Err(syn::Error::new(flow_span, refusal)),
+        None => Ok(Some(pin)),
+    }
+}
+
+/// Parse `flow = <PinFlow>`'s value: `Value`, `Stream` or `Trigger`.
+fn parse_pin_flow(flow_ident: &Ident, port_name: &str) -> syn::Result<PinFlow> {
+    PinFlow::EVERY_FLOW
+        .into_iter()
+        .find(|flow| flow_ident == flow.declaration_name())
+        .ok_or_else(|| {
+            let flow_names = PinFlow::EVERY_FLOW
+                .iter()
+                .map(|flow| format!("`{}`", flow.declaration_name()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            syn::Error::new(
+                flow_ident.span(),
+                format!(
+                    "port `{port_name}` declares `flow = {flow_ident}` — a flow is one of \
+                     {flow_names}"
+                ),
+            )
+        })
 }
 
 fn rendered_port_family_names() -> String {

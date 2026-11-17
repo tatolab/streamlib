@@ -98,14 +98,13 @@ mod tests {
     use super::*;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
     use crate::core::descriptors::{PacketsStreamFacts, PortFamily, PortStreamFacts};
-    use crate::core::graph::{PortInfo, PortKind};
+    use crate::core::graph::PortInfo;
     use crate::iceoryx2::InboundLinkName;
 
     fn output_port_named(name: &str) -> PortInfo {
         PortInfo {
             name: name.to_string(),
             description: String::new(),
-            port_kind: PortKind::Data,
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,

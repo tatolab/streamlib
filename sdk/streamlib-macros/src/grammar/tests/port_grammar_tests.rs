@@ -188,7 +188,7 @@ fn a_lifetime_on_an_output_or_naming_no_lifetime_is_an_error() {
 fn input_without_a_delivery_profile_is_an_error() {
     let msg = parse_err(quote! {
         execution = manual,
-        input("video_in", family = Image),
+        input("video_in", family = Records),
     });
     assert!(
         msg.contains("input port `video_in` must declare a `delivery_profile`"),

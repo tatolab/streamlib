@@ -3,8 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::PortKind;
-
 /// Metadata about a port (input or output).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortInfo {
@@ -13,8 +11,6 @@ pub struct PortInfo {
     /// field on [`crate::core::descriptors::PortDescriptor`].
     #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    pub port_kind: PortKind,
     #[serde(default)]
     pub delivery_profile: Option<String>,
     /// Borrow quota declared by this input port, or `None` for the engine's
@@ -55,7 +51,6 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
-            port_kind: PortKind::default(),
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),

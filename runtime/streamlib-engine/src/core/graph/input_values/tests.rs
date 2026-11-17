@@ -149,7 +149,6 @@ fn a_channels_input_typed(pin_type: crate::core::descriptors::PinType) -> PortIn
     PortInfo {
         name: "label".to_owned(),
         description: String::new(),
-        port_kind: crate::core::graph::PortKind::Data,
         delivery_profile: Some("newest".to_owned()),
         borrow_quota: None,
         audio_window: None,

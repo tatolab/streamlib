@@ -172,11 +172,13 @@ pub struct PortInfoOutput {
     /// Human-readable description declared alongside the port.
     #[serde(default)]
     pub description: String,
-    /// Kind of port: data, event, or control.
+    /// Always `data`, served until the contract's version changes; how a
+    /// port's messages are read is its `flow`.
     #[serde(default)]
     pub port_kind: PortKindOutput,
-    /// Delivery profile declared by this input port — `"newest"` or
-    /// `"ordered"`; `None` on an output port.
+    /// The delivery profile this input port reads by — `"newest"` or
+    /// `"ordered"`: the one it declares, else its pin's default; `None` on an
+    /// output port.
     pub delivery_profile: Option<String>,
     /// The samples each link into this input port may hold beyond its mailbox,
     /// declared; absent from the rendering on a port that takes the default.
@@ -217,7 +219,7 @@ pub struct PortInfoOutput {
     pub value_read: Option<crate::core::graph::input_values::InputValueRead>,
 }
 
-/// The kind of port - determines how data flows.
+/// The kind a port was once declared as; every port is `data`.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PortKindOutput {
@@ -522,8 +524,9 @@ pub struct PortDescriptorOutput {
     pub description: String,
     /// Whether the port is required.
     pub required: bool,
-    /// Delivery profile declared by this input port — `"newest"` or
-    /// `"ordered"`; `None` on an output port.
+    /// The delivery profile this input port reads by — `"newest"` or
+    /// `"ordered"`: the one it declares, else its pin's default; `None` on an
+    /// output port.
     pub delivery_profile: Option<String>,
     /// The samples each link into this input port may hold beyond its mailbox,
     /// declared; absent from the rendering on a port that takes the default.
@@ -668,7 +671,7 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
-            port_kind: PortKindOutput::from(port.port_kind),
+            port_kind: PortKindOutput::default(),
             delivery_profile: port.delivery_profile.clone(),
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
@@ -678,16 +681,6 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
             pin_default: port.pin_default.clone(),
             pin: port.pin.clone(),
             value_read: None,
-        }
-    }
-}
-
-impl From<crate::core::graph::PortKind> for PortKindOutput {
-    fn from(kind: crate::core::graph::PortKind) -> Self {
-        match kind {
-            crate::core::graph::PortKind::Data => PortKindOutput::Data,
-            crate::core::graph::PortKind::Event => PortKindOutput::Event,
-            crate::core::graph::PortKind::Control => PortKindOutput::Control,
         }
     }
 }

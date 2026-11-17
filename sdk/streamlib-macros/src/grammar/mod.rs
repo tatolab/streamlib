@@ -229,8 +229,8 @@ pub(crate) struct ParsedPort {
     /// descriptor and the marker's `PORT_NAME` carry.
     pub cast_name: String,
     pub description: Option<DeclaredDescription>,
-    /// Always `Some` on an input and always `None` on an output — the grammar
-    /// requires it on the one and rejects it on the other.
+    /// The `delivery_profile` an input port states; `None` on an input with a pin
+    /// that reads by its pin's default, and always `None` on an output.
     pub delivery_profile: Option<String>,
     /// The `borrow_quota` an input port declares; `None` takes the engine's
     /// default, and always `None` on an output.
@@ -248,6 +248,9 @@ pub(crate) struct ParsedPort {
     /// How long a value set live on the input lives, as `lifetime = …` declares it; kept when
     /// it declares none, and always kept on an output.
     pub lifetime: streamlib_node_schema::NodeValueLifetime,
+    /// The flow the port states with `flow = …`; `None` reads in its pin
+    /// type's default flow.
+    pub flow: Option<streamlib_node_schema::pin_type::PinFlow>,
 }
 
 pub(crate) struct ParsedNodeAttr {
@@ -284,6 +287,7 @@ impl ParsedNodeAttr {
             family: p.family.clone(),
             pin_type: p.pin_type.clone(),
             lifetime: p.lifetime,
+            flow: p.flow,
         };
 
         NodeSchema {
