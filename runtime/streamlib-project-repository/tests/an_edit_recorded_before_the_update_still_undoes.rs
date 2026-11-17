@@ -24,13 +24,18 @@ use uuid::Uuid;
 const HISTORY_RECORDED_IN_FORMAT_2: &str =
     include_str!("fixtures/history/set_pin_value_and_set_node_config_recorded_in_format_2.json");
 
+/// A history recorded the same way: a `set_node_config` of `{}` on `passthrough`, a node whose
+/// type takes no config and which holds no value.
+const AN_EMPTY_SET_NODE_CONFIG_RECORDED_IN_FORMAT_2: &str =
+    include_str!("fixtures/history/an_empty_set_node_config_recorded_in_format_2.json");
+
 const STREAM: &str = "860fdbd6-8fe2-592b-8ebc-faae672abefa";
 const MIXER: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
 
-/// A project directory under `root` whose history holds the recorded commits, in order, and
-/// whose files are the newest commit's.
-fn the_recorded_project_under(root: &std::path::Path) -> ProjectRepository {
-    let recorded: Value = serde_json::from_str(HISTORY_RECORDED_IN_FORMAT_2).unwrap();
+/// A project directory under `root` whose history holds the commits `recording` records, in
+/// order, and whose files are the newest commit's.
+fn the_recorded_project_under(root: &std::path::Path, recording: &str) -> ProjectRepository {
+    let recorded: Value = serde_json::from_str(recording).unwrap();
     let project_directory = root.join("rig");
     std::fs::create_dir_all(&project_directory).unwrap();
     let history = ProjectHistoryRepository::create_for_project(&project_directory).unwrap();
@@ -102,24 +107,54 @@ fn set_of_the_mixer(input: &str, from: Option<Value>, to: Option<Value>) -> Proj
     })
 }
 
-fn undo(project: &mut ProjectRepository) {
+/// Undo `alice`'s latest edit; the operations the undo applied.
+fn undo(project: &mut ProjectRepository) -> Vec<ProjectOperation> {
     let undo = project.undo_by(&alice()).unwrap();
     project
-        .apply_project_operations(&alice(), None, Vec::new(), undo.operations, undo.lineage)
+        .apply_project_operations(
+            &alice(),
+            None,
+            Vec::new(),
+            undo.operations.clone(),
+            undo.lineage,
+        )
         .unwrap();
+    undo.operations
 }
 
-fn redo(project: &mut ProjectRepository) {
+/// Redo `alice`'s latest undo; the operations the redo applied.
+fn redo(project: &mut ProjectRepository) -> Vec<ProjectOperation> {
     let redo = project.redo_by(&alice()).unwrap();
     project
-        .apply_project_operations(&alice(), None, Vec::new(), redo.operations, redo.lineage)
+        .apply_project_operations(
+            &alice(),
+            None,
+            Vec::new(),
+            redo.operations.clone(),
+            redo.lineage,
+        )
         .unwrap();
+    redo.operations
+}
+
+/// Whether each of `operations` sets one input value.
+fn each_sets_one_input_value(operations: &[ProjectOperation]) -> bool {
+    !operations.is_empty()
+        && operations.iter().all(|operation| {
+            matches!(
+                operation,
+                ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                    graph_operation: StreamGraphOperation::SetNodeInputValue { .. },
+                    ..
+                })
+            )
+        })
 }
 
 #[test]
 fn each_recorded_edit_is_listed_as_the_input_value_sets_it_stands_for() {
     let root = tempfile::tempdir().unwrap();
-    let project = the_recorded_project_under(root.path());
+    let project = the_recorded_project_under(root.path(), HISTORY_RECORDED_IN_FORMAT_2);
 
     let mut listed = project
         .applied_transactions_newest_first(usize::MAX)
@@ -192,7 +227,7 @@ fn each_recorded_edit_is_listed_as_the_input_value_sets_it_stands_for() {
 #[test]
 fn a_recorded_project_takes_an_edit_then_undoes_and_redoes_back_through_the_old_ones() {
     let root = tempfile::tempdir().unwrap();
-    let mut project = the_recorded_project_under(root.path());
+    let mut project = the_recorded_project_under(root.path(), HISTORY_RECORDED_IN_FORMAT_2);
     assert_eq!(
         the_input_values_of_the_mixer(&project),
         json!({ "gain": 0.9, "frame_width": 1280 })
@@ -219,7 +254,8 @@ fn a_recorded_project_takes_an_edit_then_undoes_and_redoes_back_through_the_old_
         json!({ "gain": 0.25, "frame_width": 640, "trim": 0.5 }),
     ];
     for undone_to in &each_state_undone_to {
-        undo(&mut project);
+        let undone = undo(&mut project);
+        assert!(each_sets_one_input_value(&undone), "{undone:?}");
         assert_eq!(&the_input_values_of_the_mixer(&project), undone_to);
     }
     assert!(matches!(
@@ -235,7 +271,8 @@ fn a_recorded_project_takes_an_edit_then_undoes_and_redoes_back_through_the_old_
     );
 
     for redone_to in each_state_undone_to.iter().rev().skip(1) {
-        redo(&mut project);
+        let redone = redo(&mut project);
+        assert!(each_sets_one_input_value(&redone), "{redone:?}");
         assert_eq!(&the_input_values_of_the_mixer(&project), redone_to);
     }
     redo(&mut project);
@@ -243,4 +280,51 @@ fn a_recorded_project_takes_an_edit_then_undoes_and_redoes_back_through_the_old_
         the_input_values_of_the_mixer(&project),
         json!({ "gain": 1.0, "frame_width": 1280 })
     );
+}
+
+/// A recorded `set_node_config` that names no value stays the edit it was recorded as, so it
+/// undoes and redoes as a change of nothing rather than as an edit with no operation.
+#[test]
+fn a_recorded_set_node_config_naming_no_value_undoes_and_redoes() {
+    let root = tempfile::tempdir().unwrap();
+    let mut project =
+        the_recorded_project_under(root.path(), AN_EMPTY_SET_NODE_CONFIG_RECORDED_IN_FORMAT_2);
+    let recorded_edit = &project.applied_transactions_newest_first(1).unwrap()[0];
+    assert!(
+        matches!(
+            recorded_edit.transaction.operations.as_slice(),
+            [ProjectOperation::StreamGraph(
+                StreamGraphOperationOnAStream {
+                    graph_operation: StreamGraphOperation::SetNodeConfig { .. },
+                    ..
+                }
+            )]
+        ),
+        "{:?}",
+        recorded_edit.transaction.operations
+    );
+    let document_before = project
+        .stream_graph_document(recorded_stream_of(&project))
+        .unwrap()
+        .to_value();
+
+    assert_eq!(undo(&mut project).len(), 1);
+    assert_eq!(redo(&mut project).len(), 1);
+    assert_eq!(
+        project
+            .stream_graph_document(recorded_stream_of(&project))
+            .unwrap()
+            .to_value(),
+        document_before
+    );
+    assert_eq!(undo(&mut project).len(), 1, "the redo undoes in turn");
+}
+
+/// The stream the newest recorded edit changed.
+fn recorded_stream_of(project: &ProjectRepository) -> Uuid {
+    let newest = &project.applied_transactions_newest_first(1).unwrap()[0];
+    match &newest.transaction.operations[0] {
+        ProjectOperation::StreamGraph(StreamGraphOperationOnAStream { stream, .. }) => *stream,
+        operation => panic!("no graph edit: {operation:?}"),
+    }
 }

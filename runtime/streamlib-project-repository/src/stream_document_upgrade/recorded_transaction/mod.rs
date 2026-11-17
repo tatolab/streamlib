@@ -81,9 +81,12 @@ fn the_set_pin_value_renamed(recorded: &mut Value) -> bool {
 }
 
 /// The `set_node_input_value` of each name whose value differs between the `from` and `to` of a
-/// recorded `set_node_config`, `None` when `operation` is no such operation, or holds a config
-/// that is no object. A config that changed no value reads as a set of each name it holds, to
-/// the value it already held, so the edit still undoes as one that changed nothing.
+/// recorded `set_node_config`, `None` when `operation` is no such operation, holds a config
+/// that is no object, or names no value at all. A config that changed no value reads as a set of
+/// each name it holds, to the value it already held, so the edit still undoes as one that changed
+/// nothing; one that names no value stays the `set_node_config` it was recorded as, which applies
+/// as a change of nothing, since no set could stand for it and an edit left with no operation
+/// would not undo.
 fn the_sets_a_whole_config_stands_for(operation: &Value) -> Option<Vec<Value>> {
     let recorded = operation.as_object()?;
     if recorded.get(OPERATION_KEY).and_then(Value::as_str) != Some(RETIRED_SET_NODE_CONFIG) {
@@ -98,6 +101,9 @@ fn the_sets_a_whole_config_stands_for(operation: &Value) -> Option<Vec<Value>> {
         .keys()
         .chain(from.keys().filter(|name| !to.contains_key(*name)))
         .collect();
+    if names.is_empty() {
+        return None;
+    }
     let differing: Vec<&String> = names
         .iter()
         .copied()

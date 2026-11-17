@@ -81,6 +81,17 @@ fn a_set_node_config_that_changed_nothing_reads_as_sets_to_the_values_held() {
 }
 
 #[test]
+fn a_set_node_config_that_names_no_value_stays_as_written() {
+    let transaction = json!({
+        "operations": [{ "stream": STREAM, "operation": "set_node_config", "node": NODE,
+                         "from": {}, "to": {} }],
+        "inverse_operations": [{ "stream": STREAM, "operation": "set_node_config", "node": NODE,
+                                 "from": null, "to": {} }],
+    });
+    assert_eq!(upgraded(transaction), None);
+}
+
+#[test]
 fn a_set_node_config_action_and_a_config_that_is_no_object_stay_as_written() {
     let transaction = json!({
         "operations": [{ "stream": STREAM, "operation": "set_node_config", "node": NODE,
