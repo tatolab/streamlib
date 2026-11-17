@@ -361,7 +361,8 @@ fn a_studio_at(position: [i64; 2]) -> streamlib_project_repository::StreamGraphN
     }
 }
 
-/// Each edit carries what its inverse needs, read from the graph as it was.
+/// Each edit carries what its inverse needs, read from the graph as it was; a config or a pin
+/// value set records one `SetNodeInputValue` for each input value it changes.
 #[tokio::test]
 async fn each_node_edit_carries_what_the_node_held_before_it() {
     let runtime = a_stub_holding_a_camera_linked_to_an_effect();
@@ -401,15 +402,16 @@ async fn each_node_edit_carries_what_the_node_held_before_it() {
     use streamlib_project_repository::StreamGraphOperation;
     assert_eq!(
         recorded[0],
-        StreamGraphOperation::SetNodeConfig {
+        StreamGraphOperation::SetNodeInputValue {
             node: camera,
-            from: json!({ "fps": 30 }),
-            to: json!({ "fps": 60 }),
+            input: "fps".to_owned(),
+            from: Some(json!(30)),
+            to: Some(json!(60)),
         }
     );
     assert_eq!(
         recorded[1],
-        StreamGraphOperation::SetPinValue {
+        StreamGraphOperation::SetNodeInputValue {
             node: effect,
             input: "strength".to_owned(),
             from: Some(json!(0.5)),

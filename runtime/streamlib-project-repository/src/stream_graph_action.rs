@@ -42,6 +42,10 @@ pub const DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION: &str = "The imported project's
 /// How `use_dependency_stream`'s `name` is described to its caller.
 pub const DEPENDENCY_STREAM_NAME_ARGUMENT_DESCRIPTION: &str = "The fragment node's name, cast to lowercase URL-safe; the stream's own name when omitted. Any node of that name already in the graph refuses the placement.";
 
+/// How `set_node_input_value`'s `input` is described to its caller.
+pub const NODE_INPUT_ARGUMENT_DESCRIPTION: &str = "The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.";
+/// How `set_node_input_value`'s `value` is described to its caller.
+pub const NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION: &str = "The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.";
 /// How a node's `studio` is described to its caller.
 pub const NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION: &str = "What Tato Studio draws the node with, under the studio contract: `position` an `[x, y]` pair of numbers, `group` a labelled group's UUID, `comment` and `colour` strings, `collapsed` a bool, and anything else a client keeps under `metadata`, an object kept as given. A key of the wrong shape, or any other key, is refused by name.";
 /// How a note action's `note` is described to its caller.
@@ -448,6 +452,22 @@ pub enum StreamGraphAction {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GROUP_ARGUMENT_DESCRIPTION))]
         group: String,
     },
+    /// Set the value one of a node's inputs holds while no link feeds it, or take it off so the
+    /// input reads its declared default.
+    SetNodeInputValue {
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
+        stream: Uuid,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        level: Vec<Uuid>,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_NODE_ARGUMENT_DESCRIPTION))]
+        node: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_ARGUMENT_DESCRIPTION))]
+        input: String,
+        #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION))]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<Value>,
+    },
 }
 
 /// What a node's `exposed_config_fields` are, as every tool that takes them says.
@@ -464,6 +484,7 @@ impl StreamGraphAction {
             | Self::Disconnect { level, .. }
             | Self::SetNodeConfig { level, .. }
             | Self::SetPinValue { level, .. }
+            | Self::SetNodeInputValue { level, .. }
             | Self::RenameNode { level, .. }
             | Self::SetStudioFields { level, .. }
             | Self::SetExposedConfigFields { level, .. }
@@ -489,6 +510,7 @@ impl StreamGraphAction {
             | Self::Disconnect { stream, .. }
             | Self::SetNodeConfig { stream, .. }
             | Self::SetPinValue { stream, .. }
+            | Self::SetNodeInputValue { stream, .. }
             | Self::RenameNode { stream, .. }
             | Self::SetStudioFields { stream, .. }
             | Self::ImportGraphGenerator { stream, .. }

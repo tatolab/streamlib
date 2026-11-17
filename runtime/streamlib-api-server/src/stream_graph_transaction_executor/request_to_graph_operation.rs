@@ -209,6 +209,16 @@ pub(super) fn graph_operation_for_the_request(
             let node = node_named(&node, node_by_label)?;
             StreamGraphOperation::set_pin_value_of(&staged_graph.node(node)?, input, value)
         }
+        StreamGraphAction::SetNodeInputValue {
+            node, input, value, ..
+        } => {
+            let node = node_named(&node, node_by_label)?;
+            Ok(StreamGraphOperation::set_node_input_value_of(
+                &staged_graph.node(node)?,
+                input,
+                value,
+            ))
+        }
         StreamGraphAction::RenameNode { node, name, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RenameNode {

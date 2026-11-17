@@ -67,6 +67,11 @@ impl LegacyConfigOfANodeType {
         }
     }
 
+    /// Whether a node of the type takes a config: its config schema lists a field.
+    pub(crate) fn takes_a_config(&self) -> bool {
+        !self.fields_its_config_schema_lists.is_empty()
+    }
+
     /// Whether a node holds its input value `name` as a config field rather than on an input.
     pub(crate) fn is_a_config_field(&self, name: &str) -> bool {
         self.fields_its_config_schema_lists.contains(name) || !self.its_input_ports.contains(name)

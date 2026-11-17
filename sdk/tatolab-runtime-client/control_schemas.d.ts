@@ -49,12 +49,15 @@ export interface ControlSchemasOfTheContract {
     readonly GraphTransactionConnectedLink: z.ZodType<ControlContract.GraphTransactionConnectedLink>;
     readonly GraphTransactionAddedGroup: z.ZodType<ControlContract.GraphTransactionAddedGroup>;
     readonly GraphTransactionAddedNote: z.ZodType<ControlContract.GraphTransactionAddedNote>;
+    readonly GraphTransactionRebuiltNode: z.ZodType<ControlContract.GraphTransactionRebuiltNode>;
+    readonly GraphTransactionInputOverriddenByALink: z.ZodType<ControlContract.GraphTransactionInputOverriddenByALink>;
     readonly AddNodeRequest: z.ZodType<ControlContract.AddNodeRequest>;
     readonly OneLinkGraphEditRequest: z.ZodType<ControlContract.OneLinkGraphEditRequest>;
     readonly ImportGraphGeneratorRequest: z.ZodType<ControlContract.ImportGraphGeneratorRequest>;
     readonly OneNodeGraphEditRequest: z.ZodType<ControlContract.OneNodeGraphEditRequest>;
     readonly SetNodeConfigRequest: z.ZodType<ControlContract.SetNodeConfigRequest>;
     readonly SetPinValueRequest: z.ZodType<ControlContract.SetPinValueRequest>;
+    readonly SetNodeInputValueRequest: z.ZodType<ControlContract.SetNodeInputValueRequest>;
     readonly RenameNodeRequest: z.ZodType<ControlContract.RenameNodeRequest>;
     readonly SetStudioFieldsRequest: z.ZodType<ControlContract.SetStudioFieldsRequest>;
     readonly SetExposedConfigFieldsRequest: z.ZodType<ControlContract.SetExposedConfigFieldsRequest>;

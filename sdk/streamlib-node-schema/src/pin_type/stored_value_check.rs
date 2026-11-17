@@ -1,0 +1,254 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Whether a JSON value is a stored value of a pin type, in the form `stored_pin_values` gives
+//! each type. The check is exact: nothing is filled in, converted or clamped.
+
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+
+use super::stored_pin_values::{
+    AssetPinValue, ColorPinValue, RectanglePinValue, TransformPinValue, VectorPinValue,
+};
+use super::{FloatSize, IntegerSize, PinType, VectorComponentCount};
+use crate::node_reference_in_config::NodeReferenceInConfig;
+
+/// The largest whole number a JSON number holds exactly, 2^53.
+const LARGEST_EXACT_WHOLE_NUMBER: i64 = 1 << 53;
+
+/// Why a value is not a stored value of a pin type: what the type takes, and one value it does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinValueNotTaken {
+    /// What the type takes, in words: `a whole number from 0 to 255`.
+    pub takes: String,
+    /// One value the type takes, as a caller would send it.
+    pub example: Value,
+}
+
+impl PinType {
+    /// Whether an input of this type holds a value while no link feeds it. A type that carries
+    /// only messages, such as a Texture, an Audio stream or a Trigger, holds none.
+    pub fn holds_a_stored_value(&self) -> bool {
+        match self {
+            Self::Texture { .. }
+            | Self::Audio {}
+            | Self::EncodedVideo { .. }
+            | Self::EncodedAudio { .. }
+            | Self::Tensor {}
+            | Self::Trigger {}
+            | Self::Named { .. } => false,
+            Self::Boolean {}
+            | Self::Integer { .. }
+            | Self::Float { .. }
+            | Self::String {}
+            | Self::Menu { .. }
+            | Self::Color {}
+            | Self::Vector { .. }
+            | Self::Rectangle {}
+            | Self::Transform {}
+            | Self::Asset { .. }
+            | Self::ListOf { .. }
+            | Self::Bundle { .. }
+            | Self::NodeReference { .. }
+            | Self::PinTypeChoice { .. } => true,
+        }
+    }
+
+    /// `value` taken as a stored value of this type, or what the type takes instead. A type
+    /// that holds no stored value takes none.
+    pub fn check_value(&self, value: &Value) -> Result<(), PinValueNotTaken> {
+        if self.is_a_stored_value(value) {
+            return Ok(());
+        }
+        Err(PinValueNotTaken {
+            takes: self.what_it_takes(),
+            example: self.an_example_value(),
+        })
+    }
+
+    fn is_a_stored_value(&self, value: &Value) -> bool {
+        match self {
+            Self::Boolean {} => value.is_boolean(),
+            Self::Integer { exact_size } => {
+                let (lowest, highest) = integer_bounds(*exact_size);
+                match value {
+                    Value::Number(number) => number
+                        .as_i64()
+                        .map(i128::from)
+                        .or_else(|| number.as_u64().map(i128::from))
+                        .is_some_and(|whole| (lowest..=highest).contains(&whole)),
+                    _ => false,
+                }
+            }
+            Self::Float { exact_size } => value.as_f64().is_some_and(|number| {
+                number.is_finite()
+                    && (*exact_size != Some(FloatSize::Float32)
+                        || number.abs() <= f64::from(f32::MAX))
+            }),
+            Self::String {} => value.is_string(),
+            Self::Menu { option_names } => value
+                .as_str()
+                .is_some_and(|chosen| option_names.iter().any(|option| option == chosen)),
+            Self::Color {} => reads_as::<ColorPinValue>(value),
+            Self::Vector { component_count } => {
+                serde_json::from_value::<VectorPinValue>(value.clone()).is_ok_and(|vector| {
+                    match component_count {
+                        VectorComponentCount::Two => vector.z.is_none() && vector.w.is_none(),
+                        VectorComponentCount::Three => vector.z.is_some() && vector.w.is_none(),
+                        VectorComponentCount::Four => vector.z.is_some() && vector.w.is_some(),
+                    }
+                })
+            }
+            Self::Rectangle {} => serde_json::from_value::<RectanglePinValue>(value.clone())
+                .is_ok_and(|rectangle| rectangle.width >= 0.0 && rectangle.height >= 0.0),
+            Self::Transform {} => reads_as::<TransformPinValue>(value),
+            Self::Asset { .. } => reads_as::<AssetPinValue>(value),
+            Self::ListOf { element_type } => value.as_array().is_some_and(|elements| {
+                elements
+                    .iter()
+                    .all(|element| element_type.is_a_stored_value(element))
+            }),
+            Self::Bundle { members } => value.as_object().is_some_and(|stored| {
+                stored
+                    .keys()
+                    .all(|key| members.iter().any(|member| &member.name == key))
+                    && members.iter().all(|member| match stored.get(&member.name) {
+                        Some(member_value) => member.member_type.is_a_stored_value(member_value),
+                        None => member.default_value.is_some(),
+                    })
+            }),
+            Self::NodeReference { .. } => reads_as::<NodeReferenceInConfig>(value),
+            Self::PinTypeChoice { among } => serde_json::from_value::<PinType>(value.clone())
+                .is_ok_and(|chosen| among.is_empty() || among.contains(&chosen)),
+            Self::Texture { .. }
+            | Self::Audio {}
+            | Self::EncodedVideo { .. }
+            | Self::EncodedAudio { .. }
+            | Self::Tensor {}
+            | Self::Trigger {}
+            | Self::Named { .. } => false,
+        }
+    }
+
+    fn what_it_takes(&self) -> String {
+        match self {
+            Self::Boolean {} => "true or false".to_owned(),
+            Self::Integer { exact_size } => {
+                let (lowest, highest) = integer_bounds(*exact_size);
+                format!("a whole number from {lowest} to {highest}")
+            }
+            Self::Float {
+                exact_size: Some(FloatSize::Float32),
+            } => "a number a 32-bit float holds".to_owned(),
+            Self::Float { .. } => "a number".to_owned(),
+            Self::String {} => "text".to_owned(),
+            Self::Menu { option_names } => format!(
+                "one of {}",
+                option_names
+                    .iter()
+                    .map(|option| format!("`{option}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::Color {} => "a colour, `{red, green, blue, alpha}`".to_owned(),
+            Self::Vector { component_count } => format!(
+                "a vector, `{}`",
+                match component_count {
+                    VectorComponentCount::Two => "{x, y}",
+                    VectorComponentCount::Three => "{x, y, z}",
+                    VectorComponentCount::Four => "{x, y, z, w}",
+                }
+            ),
+            Self::Rectangle {} => {
+                "a rectangle, `{x, y, width, height}` with no width or height below 0".to_owned()
+            }
+            Self::Transform {} => "a transform, a list of 16 numbers row by row".to_owned(),
+            Self::Asset { .. } => "an asset, `{\"asset\": \"<uuid>\"}`".to_owned(),
+            Self::ListOf { element_type } => {
+                format!("a list, each element {}", element_type.what_it_takes())
+            }
+            Self::Bundle { members } => format!(
+                "an object of the members {}",
+                members
+                    .iter()
+                    .map(|member| format!("`{}`", member.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::NodeReference { .. } => "a node reference, `{\"node\": \"<name>\"}`".to_owned(),
+            Self::PinTypeChoice { .. } => "a pin type, `{\"type\": \"<name>\"}`".to_owned(),
+            Self::Texture { .. }
+            | Self::Audio {}
+            | Self::EncodedVideo { .. }
+            | Self::EncodedAudio { .. }
+            | Self::Tensor {}
+            | Self::Trigger {}
+            | Self::Named { .. } => "no value, only a link".to_owned(),
+        }
+    }
+
+    fn an_example_value(&self) -> Value {
+        match self {
+            Self::Boolean {} => json!(true),
+            Self::Integer { .. } => json!(0),
+            Self::Float { .. } => json!(0.5),
+            Self::String {} => json!(""),
+            Self::Menu { option_names } => option_names
+                .first()
+                .map_or(Value::Null, |first| json!(first)),
+            Self::Color {} => json!({ "red": 1.0, "green": 1.0, "blue": 1.0, "alpha": 1.0 }),
+            Self::Vector { component_count } => match component_count {
+                VectorComponentCount::Two => json!({ "x": 0.0, "y": 0.0 }),
+                VectorComponentCount::Three => json!({ "x": 0.0, "y": 0.0, "z": 0.0 }),
+                VectorComponentCount::Four => json!({ "x": 0.0, "y": 0.0, "z": 0.0, "w": 0.0 }),
+            },
+            Self::Rectangle {} => json!({ "x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0 }),
+            Self::Transform {} => json!([
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0
+            ]),
+            Self::Asset { .. } => json!({ "asset": "00000000-0000-0000-0000-000000000000" }),
+            Self::ListOf { .. } => json!([]),
+            Self::Bundle { members } => Value::Object(
+                members
+                    .iter()
+                    .map(|member| (member.name.clone(), member.member_type.an_example_value()))
+                    .collect(),
+            ),
+            Self::NodeReference { .. } => json!({ "node": "<name>" }),
+            Self::PinTypeChoice { among } => among
+                .first()
+                .and_then(|first| serde_json::to_value(first).ok())
+                .unwrap_or_else(|| json!({ "type": "float" })),
+            Self::Texture { .. }
+            | Self::Audio {}
+            | Self::EncodedVideo { .. }
+            | Self::EncodedAudio { .. }
+            | Self::Tensor {}
+            | Self::Trigger {}
+            | Self::Named { .. } => Value::Null,
+        }
+    }
+}
+
+fn reads_as<StoredValue: DeserializeOwned>(value: &Value) -> bool {
+    serde_json::from_value::<StoredValue>(value.clone()).is_ok()
+}
+
+/// The lowest and highest whole number an Integer of `exact_size` holds; exact to 2^53 when it
+/// states no size.
+fn integer_bounds(exact_size: Option<IntegerSize>) -> (i128, i128) {
+    match exact_size {
+        None => (
+            -i128::from(LARGEST_EXACT_WHOLE_NUMBER),
+            i128::from(LARGEST_EXACT_WHOLE_NUMBER),
+        ),
+        Some(IntegerSize::Int8) => (i8::MIN.into(), i8::MAX.into()),
+        Some(IntegerSize::Int16) => (i16::MIN.into(), i16::MAX.into()),
+        Some(IntegerSize::Int32) => (i32::MIN.into(), i32::MAX.into()),
+        Some(IntegerSize::Int64) => (i64::MIN.into(), i64::MAX.into()),
+        Some(IntegerSize::UInt8) => (0, u8::MAX.into()),
+        Some(IntegerSize::UInt16) => (0, u16::MAX.into()),
+        Some(IntegerSize::UInt32) => (0, u32::MAX.into()),
+        Some(IntegerSize::UInt64) => (0, u64::MAX.into()),
+    }
+}

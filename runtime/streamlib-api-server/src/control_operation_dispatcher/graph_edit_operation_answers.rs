@@ -5,8 +5,8 @@ use streamlib_control_contract::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
     ImportGraphGeneratorRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
     RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest,
-    SetGroupFieldsRequest, SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetStudioFieldsRequest, TransactRequest, UnlockSubgraphRequest,
+    SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest,
+    SetPinValueRequest, SetStudioFieldsRequest, TransactRequest, UnlockSubgraphRequest,
 };
 use streamlib_project_repository::StreamGraphAction;
 
@@ -251,6 +251,39 @@ impl ControlOperationDispatcher {
         self.apply_a_graph_transaction(
             "set_pin_value",
             vec![StreamGraphAction::SetPinValue {
+                stream,
+                level: level.unwrap_or_default(),
+                node,
+                input,
+                value,
+            }],
+            mode,
+            author,
+            idempotency_key,
+            request_origin,
+        )
+        .await
+        .map(ControlOperationAnswer::GraphTransaction)
+    }
+
+    pub(super) async fn answer_set_node_input_value(
+        &self,
+        set_node_input_value_request: SetNodeInputValueRequest,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
+        let SetNodeInputValueRequest {
+            stream,
+            level,
+            node,
+            input,
+            value,
+            mode,
+            author,
+            idempotency_key,
+        } = set_node_input_value_request;
+        self.apply_a_graph_transaction(
+            "set_node_input_value",
+            vec![StreamGraphAction::SetNodeInputValue {
                 stream,
                 level: level.unwrap_or_default(),
                 node,

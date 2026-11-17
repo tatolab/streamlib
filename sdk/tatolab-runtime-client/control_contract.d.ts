@@ -129,7 +129,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -463,7 +463,7 @@ export interface GraphRequest {
  */
 export interface TransactRequest {
   /**
-   * The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project.
+   * The operations, applied in order and whole or not at all, each tagged by its `operation` — `add_node`, `remove_node`, `connect`, `disconnect`, `set_node_input_value`, `set_node_config`, `set_pin_value`, `rename_node`, `set_studio_fields`, `set_exposed_config_fields`, `import_graph_generator`, `add_group`, `set_group_fields`, `remove_group`, `add_note`, `set_note_fields`, `remove_note`, `use_dependency_stream`, `collapse_selection_into_subgraph` or `unlock_subgraph` — with the arguments that operation's own tool takes. Every `stream` they name is a stream of one project.
    */
   operations: Array<StreamGraphAction>;
   /**
@@ -861,6 +861,28 @@ export type StreamGraphAction = ({
    */
   group: string;
   operation: "remove_group";
+} | {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
+   */
+  level?: Array<string>;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.
+   */
+  input: string;
+  /**
+   * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
+   */
+  value?: unknown;
+  operation: "set_node_input_value";
 };
 
 /**
@@ -939,6 +961,14 @@ export interface GraphTransactionToolResult {
    * Each canvas note it placed.
    */
   added_notes?: Array<GraphTransactionAddedNote>;
+  /**
+   * Each node it built again to take a setting read at setup.
+   */
+  nodes_rebuilt?: Array<GraphTransactionRebuiltNode>;
+  /**
+   * Each input it set a value on that a link feeds, whose messages the node reads instead.
+   */
+  overridden_by_links?: Array<GraphTransactionInputOverriddenByALink>;
 }
 
 /**
@@ -1019,6 +1049,48 @@ export interface GraphTransactionAddedNote {
    * The UUID the runtime made for it.
    */
   note: string;
+}
+
+/**
+ * A node a graph transaction built again, so it reads a setting it takes only when it is set
+ * up.
+ */
+export interface GraphTransactionRebuiltNode {
+  /**
+   * The stream the node is in, by stream id.
+   */
+  stream: string;
+  /**
+   * The node's UUID.
+   */
+  node: string;
+}
+
+/**
+ * An input a graph transaction set a value on while a link feeds it, so the link's messages
+ * are what the node reads until the link is taken out.
+ */
+export interface GraphTransactionInputOverriddenByALink {
+  /**
+   * The stream the node is in, by stream id.
+   */
+  stream: string;
+  /**
+   * The node's UUID.
+   */
+  node: string;
+  /**
+   * The input set.
+   */
+  input: string;
+  /**
+   * The UUID of the node the link carries from.
+   */
+  from_node: string;
+  /**
+   * The output port the link carries from.
+   */
+  from_output: string;
 }
 
 /**
@@ -1229,6 +1301,44 @@ export interface SetPinValueRequest {
   value?: unknown;
   /**
    * `commit`, the default: the edit is applied to the running stream, written to the stream's graph document and recorded as one commit on the project's history, so it is kept on the next load and undo reverses it. `live`: applied to the running stream alone, gone on the next load, never in history. Send a continuous gesture as one transaction when it ends.
+   */
+  mode?: GraphEditMode | null;
+  /**
+   * Who the change is by, as history records it and undo follows it. Omit it to be the agent the MCP client named in its `clientInfo`.
+   */
+  author?: ProjectTransactionAuthorArgument | null;
+  /**
+   * A key the caller mints once per user gesture, such as a slider drag committed on release. Sent again under a key the project's history holds, the action applies nothing and answers the transaction the key first applied. Omit it to apply the action each time it is sent. A `live` edit is never recorded, so its key is not kept.
+   */
+  idempotency_key?: string | null;
+}
+
+/**
+ * `set_node_input_value`'s params.
+ */
+export interface SetNodeInputValueRequest {
+  /**
+   * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
+   */
+  stream: string;
+  /**
+   * The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.
+   */
+  level?: Array<string> | null;
+  /**
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
+   */
+  node: string;
+  /**
+   * The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.
+   */
+  input: string;
+  /**
+   * The value the input holds while no link feeds it, in its pin type's stored form; a link into the input wins over it. Omit it, or send `null`, to take the value off, so the input reads its declared default. A value the input does not take is refused with `input_value_not_valid`, never clamped.
+   */
+  value?: unknown;
+  /**
+   * `commit`, the default: the value is saved in the stream's graph document, set on the running node and recorded as one commit on the project's history, which undo reverses to the value it replaced. `live`: set on the running node alone, gone on the next load, never in history; send `commit` when a continuous gesture ends.
    */
   mode?: GraphEditMode | null;
   /**
@@ -4444,9 +4554,9 @@ export interface ControlOperations {
     result: GraphTransactionToolResult;
   };
   /**
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.
    *
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands.
+   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. A config value `{"asset": "<uuid>"}` references an asset of the project, which then cannot be deleted while the reference stands. Replaced by `set_node_input_value`, which sets one input or setting: this call is one such set for each key it names, and on a node type that still takes a config, one that takes off each config key it does not name.
    *
    * Since contract version 1, stable.
    */
@@ -4455,14 +4565,25 @@ export interface ControlOperations {
     result: GraphTransactionToolResult;
   };
   /**
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction.
+   * Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.
    *
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is.
+   * Set the value one of a node's inputs holds while no link feeds it, as one transaction; the value is saved in the graph document as a link is. Replaced by `set_node_input_value`, which this call is one set of.
    *
    * Since contract version 1, stable.
    */
   set_pin_value: {
     params: SetPinValueRequest;
+    result: GraphTransactionToolResult;
+  };
+  /**
+   * Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
+   *
+   * Set the value one input of one node holds while no link feeds it, as one transaction, on every kind of node: an input `graph` lists under the node's `ports.inputs`, or a setting it holds among its `input_values`. With `mode` `commit`, the default, the value is saved in the graph document, set on the running node and recorded as one commit that undo reverses to the value it replaced; with `mode` `live` it is set on the running node alone. Omit `value`, or send `null`, to take the value off, so the input reads its declared default. The value is checked before anything is set: an input the node does not have is refused with `port_not_found`, an input that takes only a link with `input_takes_no_value`, and a value of another type or outside its range with `input_value_not_valid`, never clamped; each refusal names the node and the input. A set on an input a link feeds is kept and answered under `overridden_by_links`, since the link's messages are what the node reads. It is also an operation of `transact`.
+   *
+   * Since contract version 3, experimental.
+   */
+  set_node_input_value: {
+    params: SetNodeInputValueRequest;
     result: GraphTransactionToolResult;
   };
   /**
@@ -4488,9 +4609,9 @@ export interface ControlOperations {
     result: GraphTransactionToolResult;
   };
   /**
-   * Replace the config fields a node takes as inputs, as one transaction.
+   * Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.
    *
-   * Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off.
+   * Replace the config fields a node takes as inputs, as one transaction. Each is a number or bool field of the node's config schema and becomes an input of the field's name: linked, it drives the field, a function node reading it at each evaluation and a process node taking each new value as a live config update; unlinked, it reads the node's config. A field still linked cannot be taken off. On a node type that takes no config it records nothing, and refuses a name that is not one of the node's inputs. Replaced by `set_node_input_value`, which sets the value of any input or setting.
    *
    * Since contract version 1, stable.
    */

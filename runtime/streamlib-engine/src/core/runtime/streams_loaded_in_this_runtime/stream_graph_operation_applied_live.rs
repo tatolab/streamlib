@@ -113,6 +113,21 @@ impl LoadedStreamInThisRuntime {
                     to,
                 })
             }
+            StreamGraphOperation::SetNodeInputValue {
+                node,
+                input,
+                from,
+                to,
+            } => {
+                self.set_one_input_value_of_the_node(node, &input, to.clone())
+                    .await?;
+                Ok(StreamGraphOperation::SetNodeInputValue {
+                    node,
+                    input,
+                    from,
+                    to,
+                })
+            }
             StreamGraphOperation::RenameNode { node, from, to } => {
                 let renamed = self.rename_node(&self.the_node_of_the_node(node)?, &to)?;
                 Ok(StreamGraphOperation::RenameNode {
@@ -326,6 +341,48 @@ impl LoadedStreamInThisRuntime {
             self.set_pin_value(&node_run_id, &input, Some(value))?;
         }
         Ok(())
+    }
+
+    /// Set the input value `input` of `node` to `value`, `None` taking it off: a setting its
+    /// type holds in its config is set in the running node's config, any other on its input.
+    async fn set_one_input_value_of_the_node(
+        &self,
+        node: Uuid,
+        input: &str,
+        value: Option<serde_json::Value>,
+    ) -> Result<()> {
+        let node_run_id = self.the_node_of_the_node(node)?;
+        let (node_type, config) = self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(&node_run_id)
+                .first()
+                .map(|running| {
+                    (
+                        running.node_type.clone(),
+                        running.config.clone().unwrap_or_default(),
+                    )
+                })
+                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))
+        })?;
+        let legacy_config =
+            LegacyConfigOfANodeType::of(self.node_types_this_stream_resolves(), &node_type);
+        if !legacy_config.is_a_config_field(input) {
+            return self.set_pin_value(&node_run_id, input, value);
+        }
+        let mut config = match config {
+            serde_json::Value::Object(config) => config,
+            _ => serde_json::Map::new(),
+        };
+        match value {
+            Some(value) => config.insert(input.to_owned(), value),
+            None => config.remove(input),
+        };
+        self.update_node_config_compiled_right_away(
+            &node_run_id,
+            &serde_json::Value::Object(config),
+        )
+        .await
     }
 
     fn the_node_of_the_node(&self, node: Uuid) -> Result<NodeRunId> {

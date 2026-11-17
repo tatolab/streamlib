@@ -22,6 +22,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "disconnect",
   "set_node_config",
   "set_pin_value",
+  "set_node_input_value",
   "rename_node",
   "set_studio_fields",
   "set_exposed_config_fields",

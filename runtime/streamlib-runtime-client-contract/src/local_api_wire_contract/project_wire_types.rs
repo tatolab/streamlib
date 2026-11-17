@@ -453,6 +453,14 @@ pub enum ControlOperationRefusalCode {
     NodeNotRunning,
     /// The runtime could not carry the request out, through no doing of the caller.
     RuntimeFailed,
+    /// The node has no input or setting of the name sent; the runtime's words list the ones it
+    /// has.
+    PortNotFound,
+    /// The input takes only a link, so it holds no value.
+    InputTakesNoValue,
+    /// The value sent is not one the input takes: of another type, or outside its range. The
+    /// runtime's words say what it takes.
+    InputValueNotValid,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.

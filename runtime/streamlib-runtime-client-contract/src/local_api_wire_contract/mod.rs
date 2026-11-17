@@ -13,8 +13,9 @@ mod stream_wire_types;
 
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
-    GraphTransactionAddedNote, GraphTransactionConnectedLink, GraphTransactionToolResult,
-    RefusedGraphLinkOnTheWire,
+    GraphTransactionAddedNote, GraphTransactionConnectedLink,
+    GraphTransactionInputOverriddenByALink, GraphTransactionRebuiltNode,
+    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
 };
 pub use log_wire_types::LogsToolResult;
 pub use project_wire_types::{

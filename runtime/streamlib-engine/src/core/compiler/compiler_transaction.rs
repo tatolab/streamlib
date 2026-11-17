@@ -23,6 +23,30 @@ impl CompilerTransactionHandle {
         self.inner.lock().push(op);
     }
 
+    /// Take out each config update logged for a node of `nodes`, in the order logged.
+    pub(crate) fn take_each_config_update_of(
+        &self,
+        nodes: &HashSet<NodeRunId>,
+    ) -> Vec<(NodeRunId, serde_json::Value)> {
+        self.inner
+            .lock()
+            .extract_if(.., |operation| {
+                matches!(
+                    operation,
+                    PendingOperation::UpdateNodeConfig { node_run_id, .. }
+                        if nodes.contains(node_run_id)
+                )
+            })
+            .filter_map(|operation| match operation {
+                PendingOperation::UpdateNodeConfig {
+                    node_run_id,
+                    config_to_apply,
+                } => Some((node_run_id, config_to_apply)),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn retract_every_operation_naming(
         &self,
         nodes: &HashSet<NodeRunId>,

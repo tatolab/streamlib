@@ -352,6 +352,17 @@ fn the_operation_with_each_node_and_group_renamed(
             from,
             to,
         }),
+        StreamGraphOperation::SetNodeInputValue {
+            node,
+            input,
+            from,
+            to,
+        } => Ok(StreamGraphOperation::SetNodeInputValue {
+            node: renamed_uuid(node),
+            input,
+            from,
+            to,
+        }),
         operation => {
             let mut renamed_operation = serde_json::to_value(operation)
                 .map_err(|not_written| format!("the operation does not write: {not_written}"))?;

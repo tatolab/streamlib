@@ -114,7 +114,7 @@ fn the_method_entry_of(
 ) -> Value {
     let request_schema = (declaration.request_json_schema)(schema_generator);
     let result_schema = (declaration.result_json_schema)(schema_generator);
-    json!({
+    let mut method = json!({
         "name": declaration.method_name,
         "summary": declaration.one_line_doc,
         "description": declaration.agent_usage_note,
@@ -135,7 +135,11 @@ fn the_method_entry_of(
         "x-exposures": declaration.exposures,
         "x-effect": declaration.effect,
         "x-agent-tool-listing": declaration.agent_tool_listing,
-    })
+    });
+    if let Some(replaced_by) = declaration.replaced_by {
+        method["x-replaced-by"] = json!(replaced_by);
+    }
+    method
 }
 
 fn the_agent_discovery_tool_entry_of(
@@ -268,6 +272,33 @@ mod tests {
             document["info"]["x-contract-version"],
             CONTROL_CONTRACT_VERSION
         );
+    }
+
+    #[test]
+    fn each_replaced_operation_names_the_operation_that_replaces_it() {
+        let document = control_contract_document();
+        let replaced_by_of = |name: &str| {
+            document["methods"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|method| method["name"] == name)
+                .unwrap_or_else(|| panic!("the document lists `{name}`"))
+                .get("x-replaced-by")
+                .cloned()
+        };
+        for replaced in [
+            "set_node_config",
+            "set_pin_value",
+            "set_exposed_config_fields",
+        ] {
+            assert_eq!(
+                replaced_by_of(replaced),
+                Some(serde_json::json!("set_node_input_value")),
+                "{replaced}"
+            );
+        }
+        assert_eq!(replaced_by_of("set_node_input_value"), None);
     }
 
     #[test]

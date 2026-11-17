@@ -662,7 +662,7 @@ pub struct ProjectTransactionReversal {
 }
 
 /// The transaction format this runtime writes; it reads and undoes every older one.
-pub const PROJECT_TRANSACTION_FORMAT_VERSION: u32 = 2;
+pub const PROJECT_TRANSACTION_FORMAT_VERSION: u32 = 3;
 
 fn project_transaction_format_version_before_it_was_recorded() -> u32 {
     1

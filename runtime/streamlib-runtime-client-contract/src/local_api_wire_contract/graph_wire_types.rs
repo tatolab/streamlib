@@ -78,6 +78,34 @@ pub struct GraphTransactionConnectedLink {
     pub error_reason: Option<String>,
 }
 
+/// An input a graph transaction set a value on while a link feeds it, so the link's messages
+/// are what the node reads until the link is taken out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GraphTransactionInputOverriddenByALink {
+    /// The stream the node is in, by stream id.
+    pub stream: String,
+    /// The node's UUID.
+    pub node: String,
+    /// The input set.
+    pub input: String,
+    /// The UUID of the node the link carries from.
+    pub from_node: String,
+    /// The output port the link carries from.
+    pub from_output: String,
+}
+
+/// A node a graph transaction built again, so it reads a setting it takes only when it is set
+/// up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GraphTransactionRebuiltNode {
+    /// The stream the node is in, by stream id.
+    pub stream: String,
+    /// The node's UUID.
+    pub node: String,
+}
+
 /// The result of a graph tool: the transaction it applied, committed or live.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -104,4 +132,10 @@ pub struct GraphTransactionToolResult {
     /// Each canvas note it placed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub added_notes: Vec<GraphTransactionAddedNote>,
+    /// Each node it built again to take a setting read at setup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes_rebuilt: Vec<GraphTransactionRebuiltNode>,
+    /// Each input it set a value on that a link feeds, whose messages the node reads instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
 }

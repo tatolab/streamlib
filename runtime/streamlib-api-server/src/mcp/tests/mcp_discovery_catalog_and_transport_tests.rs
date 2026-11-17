@@ -324,6 +324,8 @@ async fn a_listed_tool_with_one_result_shape_states_it_and_answers_it_as_structu
     );
 }
 
+/// The discovery tools list every operation the contract serves to agents but one it says is
+/// replaced, and describe each by name, a replaced one included.
 #[tokio::test]
 async fn the_discovery_tools_list_and_describe_every_operation_the_contract_serves_to_agents() {
     let runtime = || Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
@@ -340,6 +342,7 @@ async fn the_discovery_tools_list_and_describe_every_operation_the_contract_serv
     }
     let mut contract_operations_by_group: Vec<(Value, Value)> = served_to_agents
         .iter()
+        .filter(|method| method.get("x-replaced-by").is_none())
         .map(|method| (method["name"].clone(), method["x-group"].clone()))
         .collect();
     let by_name = |operation: &(Value, Value)| operation.0.to_string();

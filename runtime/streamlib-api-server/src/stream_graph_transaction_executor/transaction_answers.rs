@@ -39,9 +39,14 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             applied_live,
             &HashMap::new(),
+            Vec::new(),
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate piece of the transaction the caller already holds"
+    )]
     pub(super) fn the_answer_of_a_graph_transaction(
         &self,
         mode: GraphEditMode,
@@ -50,6 +55,7 @@ impl StreamGraphTransactionExecutor<'_> {
         stream_operations_of: &dyn Fn(&str) -> Option<Arc<dyn RuntimeOperations>>,
         applied_live: Vec<(String, StreamGraphOperation)>,
         labels_of_added_nodes: &HashMap<Uuid, String>,
+        overridden_by_links: Vec<GraphTransactionInputOverriddenByALink>,
     ) -> GraphTransactionToolResult {
         let mut added_nodes = Vec::new();
         let mut added_groups = Vec::new();
@@ -144,6 +150,8 @@ impl StreamGraphTransactionExecutor<'_> {
             connected_links,
             added_groups,
             added_notes,
+            nodes_rebuilt: Vec::new(),
+            overridden_by_links,
         }
     }
 }

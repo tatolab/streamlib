@@ -39,9 +39,9 @@ pub use graph_edit_requests::{
     AddGroupRequest, AddNodeRequest, AddNoteRequest, CollapseSelectionIntoSubgraphRequest,
     ImportGraphGeneratorRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest,
     RemoveGroupRequest, RemoveNoteRequest, RenameNodeRequest, SetExposedConfigFieldsRequest,
-    SetGroupFieldsRequest, SetNodeConfigRequest, SetNoteFieldsRequest, SetPinValueRequest,
-    SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest, UnlockSubgraphRequest,
-    WriteGraphInputRequest,
+    SetGroupFieldsRequest, SetNodeConfigRequest, SetNodeInputValueRequest, SetNoteFieldsRequest,
+    SetPinValueRequest, SetStudioFieldsRequest, TransactRequest, UndoOrRedoRequest,
+    UnlockSubgraphRequest, WriteGraphInputRequest,
 };
 pub use playback_and_stream_action_requests::{
     OneStreamActionRequest, STREAM_ACTION_ARGUMENT_DESCRIPTION,

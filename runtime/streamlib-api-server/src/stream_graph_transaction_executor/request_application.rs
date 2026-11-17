@@ -70,7 +70,13 @@ impl StreamGraphTransactionExecutor<'_> {
             );
         }
 
+        self.refuse_a_value_an_input_does_not_take_before_any_is_applied(
+            &requests_and_the_stream_id_each_names,
+            &streams,
+        )?;
+
         let mut node_by_label: HashMap<String, Uuid> = HashMap::new();
+        let mut overridden_by_links: Vec<GraphTransactionInputOverriddenByALink> = Vec::new();
         let mut labels_of_added_nodes: HashMap<Uuid, String> = HashMap::new();
         let mut applied_live: Vec<(String, StreamGraphOperation)> = Vec::new();
         let mut operations_answered: Vec<(String, StreamGraphOperation)> = Vec::new();
@@ -87,7 +93,7 @@ impl StreamGraphTransactionExecutor<'_> {
             .enumerate()
         {
             let what_the_request_names = what_a_graph_action_names(&request);
-            let applied = self.apply_one_request(
+            let applied = self.apply_one_action(
                 request,
                 &stream_id,
                 &mut streams,
@@ -108,17 +114,21 @@ impl StreamGraphTransactionExecutor<'_> {
                     ));
                 }
             };
-            operations_answered.push((stream_id.clone(), applied.operation_answered));
-            project_operations.extend(applied.project_operations);
-            made_live_once_the_documents_hold_them
-                .extend(applied.made_live_once_the_documents_hold_them);
-            if let Some(applied_live_now) = applied.applied_live {
-                applied_live.push((stream_id, applied_live_now));
+            for applied in applied {
+                operations_answered.push((stream_id.clone(), applied.operation_answered));
+                project_operations.extend(applied.project_operations);
+                made_live_once_the_documents_hold_them
+                    .extend(applied.made_live_once_the_documents_hold_them);
+                overridden_by_links.extend(applied.overridden_by_a_link);
+                if let Some(applied_live_now) = applied.applied_live {
+                    applied_live.push((stream_id.clone(), applied_live_now));
+                }
             }
         }
 
         let (transaction, commit) = match project_repository_held {
             None => (None, None),
+            Some(_) if project_operations.is_empty() => (None, None),
             Some(project_repository) => {
                 match project_repository.apply_project_operations(
                     author,
@@ -163,7 +173,249 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             operations_answered,
             &labels_of_added_nodes,
+            overridden_by_links,
         ))
+    }
+
+    /// Refuse, before any edit is applied, a value set on an input of a node of a stream's own
+    /// level that the input does not take; the value is checked again when it is applied, against
+    /// the node as the transaction has staged it by then.
+    fn refuse_a_value_an_input_does_not_take_before_any_is_applied(
+        &self,
+        requests_and_the_stream_id_each_names: &[(StreamGraphAction, String)],
+        streams: &BTreeMap<String, StreamATransactionEdits>,
+    ) -> Result<(), GraphTransactionRefusal> {
+        for (request_index, (request, stream_id)) in
+            requests_and_the_stream_id_each_names.iter().enumerate()
+        {
+            let (StreamGraphAction::SetNodeInputValue {
+                level,
+                node,
+                input,
+                value,
+                ..
+            }
+            | StreamGraphAction::SetPinValue {
+                level,
+                node,
+                input,
+                value,
+                ..
+            }) = request
+            else {
+                continue;
+            };
+            let Some(stream) = streams.get(stream_id) else {
+                continue;
+            };
+            let Some(set_on) = Uuid::parse_str(node)
+                .ok()
+                .filter(|_| level.is_empty())
+                .and_then(|node| stream.staged_graph.node(node).ok())
+            else {
+                continue;
+            };
+            let value = value.as_ref().filter(|value| !value.is_null());
+            let mut input_values_after_the_set = set_on.input_values.clone();
+            match value {
+                Some(value) => input_values_after_the_set.insert(input.clone(), value.clone()),
+                None => input_values_after_the_set.remove(input),
+            };
+            refuse_a_value_the_input_does_not_take(
+                stream.stream_operations.as_ref(),
+                &set_on,
+                &input_values_after_the_set,
+                input,
+                value,
+                "/value",
+            )
+            .map_err(|refusal| {
+                GraphTransactionRefusal::of_the_operation(
+                    request_index,
+                    what_a_graph_action_names(request),
+                    refusal,
+                )
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Apply `request` as [`Self::apply_one_request`] does, as each operation it stands for: a
+    /// `set_node_config` sets each input value it names that differs and, on a node type that
+    /// takes a config, takes off each config field it does not name; a `set_exposed_config_fields`
+    /// on a node type that takes no config records nothing.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate piece of the transaction the caller already holds"
+    )]
+    fn apply_one_action(
+        &self,
+        request: StreamGraphAction,
+        stream_id: &str,
+        streams: &mut BTreeMap<String, StreamATransactionEdits>,
+        staged_graph_of_each_stream_not_running: &mut BTreeMap<Uuid, StreamGraphDocument>,
+        streams_taking_their_edits_once_the_documents_hold_them: &mut BTreeSet<String>,
+        project_repository: Option<&ProjectRepository>,
+        node_by_label: &mut HashMap<String, Uuid>,
+        labels_of_added_nodes: &mut HashMap<Uuid, String>,
+    ) -> Result<Vec<OneGraphRequestApplied>, GraphRequestRefusal> {
+        let node_set_on = |level: &[Uuid], node: &str, streams: &BTreeMap<_, _>, staged: &_| {
+            let node = node_by_label
+                .get(node)
+                .copied()
+                .or_else(|| Uuid::parse_str(node).ok())?;
+            self.the_level_a_request_reaches(stream_id, level, streams, staged, project_repository)
+                .ok()?
+                .the_document_as_drawn()
+                .ok()?
+                .node(node)
+                .ok()
+                .filter(|held| {
+                    held.fragment.is_none()
+                        && held.node_type != STREAM_FRAGMENT_NODE_TYPE
+                        && !is_a_graph_interface_node_type(&held.node_type)
+                })
+        };
+        let stream_operations = streams
+            .get(stream_id)
+            .map(|stream| Arc::clone(&stream.stream_operations))
+            .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
+        let sets_of_a_config = match &request {
+            StreamGraphAction::SetNodeConfig {
+                stream,
+                level,
+                node,
+                config,
+            } => node_set_on(
+                level,
+                node,
+                streams,
+                staged_graph_of_each_stream_not_running,
+            )
+            .map(|configured| {
+                let sets = the_input_value_sets_a_config_stands_for(
+                    stream_operations.as_ref(),
+                    &configured,
+                    config,
+                )?;
+                Ok::<_, GraphRequestRefusal>(
+                    sets.into_iter()
+                        .map(|(input, value)| StreamGraphAction::SetNodeInputValue {
+                            stream: *stream,
+                            level: level.clone(),
+                            node: node.clone(),
+                            input,
+                            value,
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .transpose()?,
+            StreamGraphAction::SetExposedConfigFields {
+                level,
+                node,
+                exposed_config_fields,
+                ..
+            } => {
+                if let Some(exposed_on) = node_set_on(
+                    level,
+                    node,
+                    streams,
+                    staged_graph_of_each_stream_not_running,
+                ) && !stream_operations
+                    .an_exposure_of_config_fields_is_recorded_on(
+                        &exposed_on.node_type,
+                        exposed_config_fields,
+                    )
+                    .map_err(|refusal| refusal.to_string())?
+                {
+                    return Ok(Vec::new());
+                }
+                None
+            }
+            _ => None,
+        };
+        let Some(sets_of_a_config) = sets_of_a_config else {
+            return self
+                .apply_one_request(
+                    request,
+                    stream_id,
+                    streams,
+                    staged_graph_of_each_stream_not_running,
+                    streams_taking_their_edits_once_the_documents_hold_them,
+                    project_repository,
+                    node_by_label,
+                    labels_of_added_nodes,
+                    InputValueCheck::MadeOnApply,
+                )
+                .map(|applied| vec![applied]);
+        };
+        let mut applied_by_the_config = Vec::with_capacity(sets_of_a_config.len());
+        for set in sets_of_a_config {
+            let StreamGraphAction::SetNodeInputValue { input, .. } = &set else {
+                continue;
+            };
+            let input = input.clone();
+            match self.apply_one_request(
+                set,
+                stream_id,
+                streams,
+                staged_graph_of_each_stream_not_running,
+                streams_taking_their_edits_once_the_documents_hold_them,
+                project_repository,
+                node_by_label,
+                labels_of_added_nodes,
+                InputValueCheck::MadeBefore,
+            ) {
+                Ok(applied) => applied_by_the_config.push(applied),
+                Err(refusal) => {
+                    let applied_live = applied_by_the_config
+                        .into_iter()
+                        .filter_map(|applied: OneGraphRequestApplied| {
+                            Some((stream_id.to_owned(), applied.applied_live?))
+                        })
+                        .collect();
+                    self.reverse_what_was_applied_live(streams, applied_live);
+                    return Err(refusal.of_the_field(&input));
+                }
+            }
+        }
+        Ok(applied_by_the_config)
+    }
+
+    /// The level of the loaded stream `stream_id` that `level`, a path of placed streams,
+    /// reaches, as the transaction has staged each document on the way.
+    fn the_level_a_request_reaches(
+        &self,
+        stream_id: &str,
+        level: &[Uuid],
+        streams: &BTreeMap<String, StreamATransactionEdits>,
+        staged_graph_of_each_stream_not_running: &BTreeMap<Uuid, StreamGraphDocument>,
+        project_repository: Option<&ProjectRepository>,
+    ) -> Result<StreamGraphLevelOfAPlacedStream, String> {
+        let stream = streams
+            .get(stream_id)
+            .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
+        stream
+            .staged_graph
+            .clone()
+            .the_level_a_path_of_placed_streams_reaches(
+                stream.stream_location.stream_asset,
+                level,
+                &mut |placed_stream| {
+                    let project_repository = project_repository.ok_or_else(|| {
+                        "an edit inside a placed stream is refused live: it is made on the \
+                         project's graph documents, with `mode` `commit`"
+                            .to_owned()
+                    })?;
+                    the_staged_graph_of_the_stream(
+                        placed_stream,
+                        streams,
+                        staged_graph_of_each_stream_not_running,
+                        project_repository,
+                    )
+                },
+            )
     }
 
     /// Apply `request`, an action on the loaded stream `stream_id`: an edit of its own level
@@ -186,7 +438,8 @@ impl StreamGraphTransactionExecutor<'_> {
         project_repository: Option<&ProjectRepository>,
         node_by_label: &mut HashMap<String, Uuid>,
         labels_of_added_nodes: &mut HashMap<Uuid, String>,
-    ) -> Result<OneGraphRequestApplied, String> {
+        input_value_check: InputValueCheck,
+    ) -> Result<OneGraphRequestApplied, GraphRequestRefusal> {
         let label = match &request {
             StreamGraphAction::AddNode { label, .. }
             | StreamGraphAction::ImportGraphGenerator { label, .. }
@@ -202,27 +455,13 @@ impl StreamGraphTransactionExecutor<'_> {
             .ok_or_else(|| format!("stream `{stream_id}` is not loaded"))?;
         let stream_operations = Arc::clone(&stream.stream_operations);
         let stream_asset = stream.stream_location.stream_asset;
-        let reached = stream
-            .staged_graph
-            .clone()
-            .the_level_a_path_of_placed_streams_reaches(
-                stream_asset,
-                &level,
-                &mut |placed_stream| {
-                    let project_repository = project_repository.ok_or_else(|| {
-                        format!(
-                            "an edit inside a placed stream is refused live: {}",
-                            documents_first()
-                        )
-                    })?;
-                    the_staged_graph_of_the_stream(
-                        placed_stream,
-                        streams,
-                        staged_graph_of_each_stream_not_running,
-                        project_repository,
-                    )
-                },
-            )?;
+        let reached = self.the_level_a_request_reaches(
+            stream_id,
+            &level,
+            streams,
+            staged_graph_of_each_stream_not_running,
+            project_repository,
+        )?;
         let level_as_drawn = reached.the_document_as_drawn()?;
 
         let run_the_graph_generator =
@@ -300,6 +539,49 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             &mut placed_stream_a_collapse_saves,
         )?;
+        let overridden_by_a_link = match &edit_as_drawn {
+            StreamGraphOperation::SetNodeInputValue {
+                node,
+                input,
+                from: _,
+                to,
+            } => {
+                let set_on = level_as_drawn.node(*node)?;
+                if input_value_check == InputValueCheck::MadeOnApply
+                    && set_on.fragment.is_none()
+                    && set_on.node_type != STREAM_FRAGMENT_NODE_TYPE
+                    && !is_a_graph_interface_node_type(&set_on.node_type)
+                {
+                    let mut input_values_after_the_set = set_on.input_values.clone();
+                    match to {
+                        Some(to) => input_values_after_the_set.insert(input.clone(), to.clone()),
+                        None => input_values_after_the_set.remove(input),
+                    };
+                    refuse_a_value_the_input_does_not_take(
+                        stream_operations.as_ref(),
+                        &set_on,
+                        &input_values_after_the_set,
+                        input,
+                        to.as_ref(),
+                        "/value",
+                    )?;
+                }
+                to.as_ref().and_then(|_| {
+                    level_as_drawn
+                        .links_touching(*node)
+                        .into_iter()
+                        .find(|link| link.target.node == *node && link.target.port == *input)
+                        .map(|link| GraphTransactionInputOverriddenByALink {
+                            stream: stream_id.to_owned(),
+                            node: node.to_string(),
+                            input: input.clone(),
+                            from_node: link.source.node.to_string(),
+                            from_output: link.source.port,
+                        })
+                })
+            }
+            _ => None,
+        };
         let made_on_the_running_stream_now = reached.is_the_streams_own_level()
             && !edit_as_drawn.reaches_a_running_stream_once_the_documents_hold_it()
             && !streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
@@ -345,7 +627,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 return Err(format!(
                     "stream `{stream_id}`'s graph document does not hold what its running graph \
                      does: {why}"
-                ));
+                )
+                .into());
             }
             label_what_the_operation_adds(label, &applied, &|own| own, labels_of_added_nodes);
             project_operations.push(ProjectOperation::StreamGraph(
@@ -359,6 +642,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 applied_live: Some(applied),
                 project_operations,
                 made_live_once_the_documents_hold_them: Vec::new(),
+                overridden_by_a_link,
             });
         }
 
@@ -366,7 +650,8 @@ impl StreamGraphTransactionExecutor<'_> {
             return Err(format!(
                 "the edit places a stream, or is made inside one, and is refused live: {}",
                 documents_first()
-            ));
+            )
+            .into());
         }
         let edit = reached.the_operation_on_the_document(edit_as_drawn)?;
         if let Some((node_type, node_name, input_values)) =
@@ -446,6 +731,7 @@ impl StreamGraphTransactionExecutor<'_> {
             applied_live: None,
             project_operations,
             made_live_once_the_documents_hold_them,
+            overridden_by_a_link,
         })
     }
 
@@ -507,4 +793,96 @@ impl StreamGraphTransactionExecutor<'_> {
         }
         Ok(carried)
     }
+}
+
+/// Whether [`StreamGraphTransactionExecutor::apply_one_request`] checks a value it sets on an
+/// input, or the caller checked it already against every value its action sets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputValueCheck {
+    MadeOnApply,
+    MadeBefore,
+}
+
+/// Refuse `value`, set on input `input` of `set_on` with `None` taking it off, when the input
+/// does not take it, as the stream `stream_operations` runs resolves the node's type; the value
+/// is at `refused_params_pointer` in the action's params.
+fn refuse_a_value_the_input_does_not_take(
+    stream_operations: &dyn RuntimeOperations,
+    set_on: &StreamGraphDocumentNode,
+    input_values_after_the_set: &Map<String, Value>,
+    input: &str,
+    value: Option<&Value>,
+    refused_params_pointer: &str,
+) -> Result<(), GraphRequestRefusal> {
+    stream_operations
+        .refuse_an_input_value_its_input_does_not_take(
+            &set_on.node_type,
+            &set_on.name,
+            input_values_after_the_set,
+            input,
+            value,
+        )
+        .map_err(|refusal| {
+            GraphRequestRefusal::of_an_input_value(refusal, refused_params_pointer.to_owned())
+        })
+}
+
+/// The input values `config`, sent to `set_node_config`, sets on `configured`, checked: each it
+/// names that differs from what the node holds, and, on a node type that takes a config, each
+/// config field it does not name taken off.
+fn the_input_value_sets_a_config_stands_for(
+    stream_operations: &dyn RuntimeOperations,
+    configured: &StreamGraphDocumentNode,
+    config: &Map<String, Value>,
+) -> Result<Vec<(String, Option<Value>)>, GraphRequestRefusal> {
+    let takes_a_config = stream_operations
+        .an_exposure_of_config_fields_is_recorded_on(&configured.node_type, &[])
+        .map_err(|refusal| refusal.to_string())?;
+    let mut sets: Vec<(String, Option<Value>)> = config
+        .iter()
+        .map(|(input, value)| {
+            (
+                input.clone(),
+                Some(value.clone()).filter(|value| !value.is_null()),
+            )
+        })
+        .filter(|(input, value)| configured.input_values.get(input) != value.as_ref())
+        .collect();
+    if takes_a_config {
+        let config_held = stream_operations
+            .the_config_a_node_holding_the_input_values_takes(
+                &configured.node_type,
+                &configured.input_values,
+            )
+            .map_err(|refusal| refusal.to_string())?;
+        sets.extend(
+            config_held
+                .as_object()
+                .into_iter()
+                .flat_map(|config_held| config_held.keys())
+                .filter(|input| {
+                    !config.contains_key(*input) && configured.input_values.contains_key(*input)
+                })
+                .map(|input| (input.clone(), None)),
+        );
+    }
+    let mut input_values_after_the_sets = configured.input_values.clone();
+    for (input, value) in &sets {
+        match value {
+            Some(value) => input_values_after_the_sets.insert(input.clone(), value.clone()),
+            None => input_values_after_the_sets.remove(input),
+        };
+    }
+    for (input, value) in &sets {
+        refuse_a_value_the_input_does_not_take(
+            stream_operations,
+            configured,
+            &input_values_after_the_sets,
+            input,
+            value.as_ref(),
+            &format!("/config/{}", input.replace('~', "~0").replace('/', "~1")),
+        )
+        .map_err(|refusal| refusal.of_the_field(input))?;
+    }
+    Ok(sets)
 }

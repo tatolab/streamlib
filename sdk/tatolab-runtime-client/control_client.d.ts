@@ -72,13 +72,17 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   disconnect(params: ControlOperations["disconnect"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["disconnect"]["result"]>;
   /**
-   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit.
+   * Replace a node's config whole, as one transaction, applied to the running node at the stream's next commit. Replaced by `set_node_input_value`.
    */
   set_node_config(params: ControlOperations["set_node_config"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_node_config"]["result"]>;
   /**
-   * Set the value one of a node's inputs holds while no link feeds it, as one transaction.
+   * Set the value one of a node's inputs holds while no link feeds it, as one transaction. Replaced by `set_node_input_value`.
    */
   set_pin_value(params: ControlOperations["set_pin_value"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_pin_value"]["result"]>;
+  /**
+   * Set the value one input of one node holds while no link feeds it, saved or live, as one transaction.
+   */
+  set_node_input_value(params: ControlOperations["set_node_input_value"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_node_input_value"]["result"]>;
   /**
    * Give a node another name, a label, as one transaction.
    */
@@ -88,7 +92,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   set_studio_fields(params: ControlOperations["set_studio_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_studio_fields"]["result"]>;
   /**
-   * Replace the config fields a node takes as inputs, as one transaction.
+   * Replace the config fields a node takes as inputs, as one transaction. Replaced by `set_node_input_value`.
    */
   set_exposed_config_fields(params: ControlOperations["set_exposed_config_fields"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["set_exposed_config_fields"]["result"]>;
   /**

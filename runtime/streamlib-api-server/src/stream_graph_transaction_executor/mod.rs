@@ -36,7 +36,8 @@ use streamlib_project_repository::{
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
-    GraphTransactionToolResult, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    GraphTransactionInputOverriddenByALink, GraphTransactionToolResult,
+    ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -65,7 +66,8 @@ fn what_a_graph_action_names(action: &StreamGraphAction) -> WhatAGraphOperationN
         | StreamGraphAction::RenameNode { node, .. }
         | StreamGraphAction::SetStudioFields { node, .. }
         | StreamGraphAction::SetExposedConfigFields { node, .. } => names_a_node(node),
-        StreamGraphAction::SetPinValue { node, input, .. } => WhatAGraphOperationNames {
+        StreamGraphAction::SetPinValue { node, input, .. }
+        | StreamGraphAction::SetNodeInputValue { node, input, .. } => WhatAGraphOperationNames {
             field: Some(input.clone()),
             ..names_a_node(node)
         },
@@ -112,14 +114,16 @@ struct StreamATransactionEdits {
     staged_graph: StreamGraphDocument,
 }
 
-/// One graph action applied: the operation its answer reports, as the stream it names draws it;
-/// what it made on that running stream; the project operations it records, in order; and each
-/// operation a loaded stream takes once the project's documents hold it.
+/// One graph operation applied: the operation its answer reports, as the stream it names draws
+/// it; what it made on that running stream; the project operations it records, in order; each
+/// operation a loaded stream takes once the project's documents hold it; and the link that
+/// overrides the input value it sets, when one feeds that input.
 struct OneGraphRequestApplied {
     operation_answered: StreamGraphOperation,
     applied_live: Option<StreamGraphOperation>,
     project_operations: Vec<ProjectOperation>,
     made_live_once_the_documents_hold_them: Vec<(String, StreamGraphOperation)>,
+    overridden_by_a_link: Option<GraphTransactionInputOverriddenByALink>,
 }
 
 /// The stream a collapse saves: its stream asset, its graph document, and the operation
@@ -243,24 +247,78 @@ pub(crate) struct WhatAGraphOperationNames {
     field: Option<String>,
 }
 
+/// Why one graph action was refused: what kind of refusal it is, the runtime's own words, the
+/// input it refuses a value of when that is not the one the action names, and the JSON pointer,
+/// into the action's own params, of the value refused.
+pub(super) struct GraphRequestRefusal {
+    refusal_code: ControlOperationRefusalCode,
+    runtime_words: String,
+    refused_field: Option<String>,
+    refused_params_pointer: Option<String>,
+}
+
+impl GraphRequestRefusal {
+    /// A refusal of a value set on an input, coded by `refusal`; the value is at
+    /// `refused_params_pointer` in the action's params.
+    fn of_an_input_value(
+        refusal: streamlib::sdk::graph::input_values::InputValueRefusal,
+        refused_params_pointer: String,
+    ) -> Self {
+        use streamlib::sdk::graph::input_values::InputValueRefusalCode;
+        Self {
+            refusal_code: match refusal.code {
+                InputValueRefusalCode::PortNotFound => ControlOperationRefusalCode::PortNotFound,
+                InputValueRefusalCode::InputTakesNoValue => {
+                    ControlOperationRefusalCode::InputTakesNoValue
+                }
+                InputValueRefusalCode::InputValueNotValid => {
+                    ControlOperationRefusalCode::InputValueNotValid
+                }
+            },
+            runtime_words: refusal.words,
+            refused_field: None,
+            refused_params_pointer: Some(refused_params_pointer),
+        }
+    }
+
+    /// The refusal naming `input` as the field refused.
+    fn of_the_field(self, input: &str) -> Self {
+        Self {
+            refused_field: Some(input.to_owned()),
+            ..self
+        }
+    }
+}
+
+impl From<String> for GraphRequestRefusal {
+    fn from(runtime_words: String) -> Self {
+        Self {
+            refusal_code: ControlOperationRefusalCode::Refused,
+            runtime_words,
+            refused_field: None,
+            refused_params_pointer: None,
+        }
+    }
+}
+
 /// Why a graph action was refused, in the runtime's own words, and which of its operations
 /// was refused when one was.
 pub(crate) struct GraphTransactionRefusal {
     refused_operation_index: Option<usize>,
     what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
-    runtime_words: String,
+    refusal: GraphRequestRefusal,
 }
 
 impl GraphTransactionRefusal {
     fn of_the_operation(
         refused_operation_index: usize,
         what_the_refused_operation_names: WhatAGraphOperationNames,
-        runtime_words: String,
+        refusal: impl Into<GraphRequestRefusal>,
     ) -> Self {
         Self {
             refused_operation_index: Some(refused_operation_index),
             what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
-            runtime_words,
+            refusal: refusal.into(),
         }
     }
 
@@ -268,7 +326,7 @@ impl GraphTransactionRefusal {
         Self {
             refused_operation_index: None,
             what_the_refused_operation_names: Box::default(),
-            runtime_words,
+            refusal: runtime_words.into(),
         }
     }
 
@@ -278,16 +336,25 @@ impl GraphTransactionRefusal {
         tool_name: &str,
     ) -> ProjectActionRefusalOnTheWire {
         let what_the_refused_operation_names = *self.what_the_refused_operation_names;
+        let GraphRequestRefusal {
+            refusal_code,
+            runtime_words,
+            refused_field,
+            refused_params_pointer,
+        } = self.refusal;
+        let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
+            (Some(pointer), Some(index)) if tool_name == "transact" => {
+                Some(format!("/operations/{index}{pointer}"))
+            }
+            (pointer, _) => pointer,
+        };
         ProjectActionRefusalOnTheWire {
             refused_operation_index: self.refused_operation_index,
             refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
-            refused_field: what_the_refused_operation_names.field,
-            ..ProjectActionRefusalOnTheWire::of_the_action(
-                tool_name,
-                ControlOperationRefusalCode::Refused,
-                self.runtime_words,
-            )
+            refused_field: refused_field.or(what_the_refused_operation_names.field),
+            refused_params_pointer,
+            ..ProjectActionRefusalOnTheWire::of_the_action(tool_name, refusal_code, runtime_words)
         }
     }
 }

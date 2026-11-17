@@ -140,6 +140,23 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn refuse_an_input_value_its_input_does_not_take(
+            &self,
+            _node_type: &str,
+            _node_name: &str,
+            _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
+            _input: &str,
+            _value: ::std::option::Option<&::serde_json::Value>,
+        ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
+        fn an_exposure_of_config_fields_is_recorded_on(
+            &self,
+            _node_type: &str,
+            _exposed_config_fields: &[String],
+        ) -> ::streamlib::sdk::error::Result<bool> {
+            unreachable!(concat!("the control plane serves no graph edit ", $surface))
+        }
         fn apply_a_stream_graph_operation_live(
             &self,
             _graph_operation: ::streamlib_project_repository::StreamGraphOperation,
@@ -660,6 +677,23 @@ macro_rules! graph_mutation_ops_record_the_call {
             input_values: &::serde_json::Map<String, ::serde_json::Value>,
         ) -> ::streamlib::sdk::error::Result<::serde_json::Value> {
             Ok(::serde_json::Value::Object(input_values.clone()))
+        }
+        fn refuse_an_input_value_its_input_does_not_take(
+            &self,
+            _node_type: &str,
+            _node_name: &str,
+            _input_values_after_the_set: &::serde_json::Map<String, ::serde_json::Value>,
+            _input: &str,
+            _value: ::std::option::Option<&::serde_json::Value>,
+        ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
+            Ok(())
+        }
+        fn an_exposure_of_config_fields_is_recorded_on(
+            &self,
+            _node_type: &str,
+            _exposed_config_fields: &[String],
+        ) -> ::streamlib::sdk::error::Result<bool> {
+            Ok(true)
         }
         fn apply_a_stream_graph_operation_live(
             &self,

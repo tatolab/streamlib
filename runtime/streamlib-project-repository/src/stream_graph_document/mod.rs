@@ -608,6 +608,9 @@ impl StreamGraphDocument {
                 }),
             StreamGraphOperation::SetPinValue {
                 node, input, to, ..
+            }
+            | StreamGraphOperation::SetNodeInputValue {
+                node, input, to, ..
             } => self.change_the_input_values_of(*node, |input_values| match to {
                 Some(value) => {
                     input_values.insert(input.clone(), value.clone());
