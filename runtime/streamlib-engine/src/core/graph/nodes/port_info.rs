@@ -36,10 +36,24 @@ pub struct PortInfo {
     /// [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_default: Option<serde_json::Value>,
+    /// The pin type this port carries, resolved from what its node type declares; `None` on a
+    /// port whose type the code does not state exactly, which links by its family alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_type: Option<crate::core::descriptors::PinType>,
+    /// How this port's messages are read; `None` exactly when `pin_type` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<crate::core::descriptors::PinFlow>,
 }
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
     fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
+        let resolved_pin = port.declared_pin().and_then(|declared| {
+            declared
+                .exact_pin_type()
+                .cloned()
+                .map(|pin_type| (pin_type, declared.flow))
+        });
+        let (pin_type, flow) = resolved_pin.unzip();
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
@@ -49,6 +63,8 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             audio_window: port.audio_window.clone(),
             family: port.family.clone(),
             pin_default: port.pin_default.clone(),
+            pin_type,
+            flow,
         }
     }
 }

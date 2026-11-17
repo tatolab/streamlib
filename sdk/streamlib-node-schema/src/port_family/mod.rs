@@ -633,6 +633,10 @@ pub fn refusal_of_required_names(
 
 #[cfg(feature = "contract-json-schema")]
 mod contract_json_schema;
+mod exact_pin_type;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod exact_pin_type_tests;

@@ -379,3 +379,87 @@ fn a_pin_annotation_reuses_the_port_stream_fact_forms() {
         })
     );
 }
+
+#[test]
+fn a_type_flows_by_its_rows_first_flow_and_a_list_or_bundle_streams_when_a_member_does() {
+    let float = PinType::Float { exact_size: None };
+    let texture = PinType::Texture {
+        pixel_formats: vec![],
+    };
+    let member = |name: &str, member_type: PinType| BundleMember {
+        name: name.into(),
+        member_type,
+        meaning: None,
+        default_value: None,
+    };
+
+    assert_eq!(PinType::Boolean {}.default_flow(), PinFlow::Value);
+    assert_eq!(
+        PinType::Integer { exact_size: None }.default_flow(),
+        PinFlow::Value
+    );
+    assert_eq!(float.default_flow(), PinFlow::Value);
+    assert_eq!(texture.default_flow(), PinFlow::Stream);
+    assert_eq!(PinType::Audio {}.default_flow(), PinFlow::Stream);
+    assert_eq!(PinType::Trigger {}.default_flow(), PinFlow::Trigger);
+    assert_eq!(
+        PinType::ListOf {
+            element_type: Box::new(float.clone())
+        }
+        .default_flow(),
+        PinFlow::Value
+    );
+    assert_eq!(
+        PinType::ListOf {
+            element_type: Box::new(texture.clone())
+        }
+        .default_flow(),
+        PinFlow::Stream
+    );
+    assert_eq!(
+        PinType::Bundle {
+            members: vec![member("opacity", float.clone())]
+        }
+        .default_flow(),
+        PinFlow::Value
+    );
+    assert_eq!(
+        PinType::Bundle {
+            members: vec![member("opacity", float), member("frame", texture)]
+        }
+        .default_flow(),
+        PinFlow::Stream
+    );
+}
+
+#[test]
+fn a_port_of_exactly_one_type_is_read_in_its_default_flow_and_states_nothing_else() {
+    let declaration = PinDeclaration::exactly(PinType::Float { exact_size: None });
+
+    assert_eq!(
+        serde_json::to_value(&declaration).unwrap(),
+        json!({"pin_type": {"kind": "is", "pin_type": {"type": "float"}}, "flow": "value"})
+    );
+    assert_eq!(
+        declaration.exact_pin_type(),
+        Some(&PinType::Float { exact_size: None })
+    );
+    let followed = PinDeclaration {
+        pin_type: DeclaredPinType::SameAsInput {
+            input_port_name: "value".into(),
+        },
+        ..declaration
+    };
+    assert_eq!(followed.exact_pin_type(), None);
+}
+
+#[test]
+fn a_texture_pixel_format_is_found_by_its_wire_name_and_no_other() {
+    for format in TexturePixelFormat::EVERY_FORMAT {
+        assert_eq!(
+            TexturePixelFormat::of_wire_name(format.wire_name()),
+            Some(format)
+        );
+    }
+    assert_eq!(TexturePixelFormat::of_wire_name("yuv420"), None);
+}

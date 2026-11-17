@@ -11,6 +11,10 @@ use crate::core::descriptors::{
 };
 use crate::core::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use crate::iceoryx2::MAX_INPUT_PORT_BORROW_QUOTA;
+use ports_typed_by_a_signature::{
+    declare_each_typed_port, ports_a_function_node_signature_types,
+    ports_a_shader_node_program_types,
+};
 use streamlib_ipc_types::STATE_VALUES_ONE_FUNCTION_NODE_STATE_BOARD_ENTRY_HOLDS;
 
 const DESCRIBED_IMPORT_PATH_KEY: &str = "import_path";
@@ -79,6 +83,7 @@ impl PythonNodeDeclaration {
         if let Some(category) = read_category(described_node_type)? {
             descriptor = descriptor.with_category(category);
         }
+        let mut typed_ports = Vec::new();
         let how_a_python_node_of_the_type_runs =
             match read_described_node_kind(described_node_type)? {
                 NodeKind::Process => {
@@ -94,6 +99,7 @@ impl PythonNodeDeclaration {
                 }
                 function_kind @ NodeKind::Function { .. } => {
                     descriptor.node_kind = function_kind;
+                    typed_ports = ports_a_function_node_signature_types(described_node_type)?;
                     descriptor.function_node_state_fields =
                         read_function_node_state_fields(described_node_type)?;
                     descriptor.function_node_runs_as_python =
@@ -105,17 +111,18 @@ impl PythonNodeDeclaration {
                 }
                 NodeKind::Shader => {
                     descriptor.node_kind = NodeKind::Shader;
-                    HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(
-                        ShaderNodeProgram::read_from_described_shader(
-                            described_field(described_node_type, DESCRIBED_SHADER_SOURCE_KEY)?,
-                            described_field(described_node_type, DESCRIBED_SHADER_SIGNATURE_KEY)?,
-                        )?,
-                    )
+                    let program = ShaderNodeProgram::read_from_described_shader(
+                        described_field(described_node_type, DESCRIBED_SHADER_SOURCE_KEY)?,
+                        described_field(described_node_type, DESCRIBED_SHADER_SIGNATURE_KEY)?,
+                    )?;
+                    typed_ports = ports_a_shader_node_program_types(&program);
+                    HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(program)
                 }
             };
 
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
+        declare_each_typed_port(&mut descriptor, typed_ports)?;
         for output in &descriptor.outputs {
             if let Some(followed_input_port) = output.family.family_follows_input_port.as_deref()
                 && !descriptor
@@ -687,6 +694,8 @@ fn json_kind_name(value: &serde_json::Value) -> &'static str {
         serde_json::Value::Object(_) => "an object",
     }
 }
+
+mod ports_typed_by_a_signature;
 
 #[cfg(test)]
 mod tests;

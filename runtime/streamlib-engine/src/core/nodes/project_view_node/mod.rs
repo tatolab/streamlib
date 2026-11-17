@@ -115,6 +115,7 @@ fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
         audio_window: None,
         family: PortFamilyDeclaration::of_family(port.family),
         pin_default: None,
+        pin_declaration: None,
     }
 }
 
@@ -146,6 +147,7 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescripto
         audio_window: None,
         family: value_family,
         pin_default: None,
+        pin_declaration: None,
     }];
     Ok(descriptor)
 }

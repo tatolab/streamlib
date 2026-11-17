@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::core::descriptors::{
-    NodeValueLifetime, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
+    NodeValueLifetime, PinType, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
     refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::cast_exposed_name_to_url_safe;
@@ -767,8 +767,14 @@ impl GraphInterfacePort {
         })
     }
 
-    /// A port named `port_name` of the family this port declares, as `graph` renders a port.
+    /// A port named `port_name` of the family this port declares, as `graph` renders a port:
+    /// typed as a node's port of that family is.
     pub fn rendered_as_a_port_named(&self, port_name: &str) -> PortInfoOutput {
+        let pin_type = self
+            .family
+            .map(PortFamilyDeclaration::of_family)
+            .as_ref()
+            .and_then(PortFamilyDeclaration::exact_pin_type);
         PortInfoOutput {
             name: port_name.to_string(),
             description: String::new(),
@@ -780,6 +786,8 @@ impl GraphInterfacePort {
             values_checked: None,
             family: self.family.map(PortFamilyDeclaration::of_family),
             pin_default: None,
+            flow: pin_type.as_ref().map(PinType::default_flow),
+            pin_type,
         }
     }
 

@@ -110,6 +110,8 @@ mod tests {
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
+            pin_type: None,
+            flow: None,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
         }
     }

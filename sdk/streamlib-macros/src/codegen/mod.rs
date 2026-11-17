@@ -13,12 +13,14 @@ use syn::ItemStruct;
 use syn::spanned::Spanned;
 
 mod author_visibility;
+mod pin_declaration_tokens;
 mod port_marker_module;
 
 use author_visibility::{
     GENERATED_MODULE_MEMBER_DEPTH, GENERATED_PORT_MARKER_DEPTH,
     author_visibility_written_from_a_nested_module,
 };
+use pin_declaration_tokens::pin_declaration_tokens;
 use port_marker_module::generate_port_marker_module;
 
 pub(crate) fn generate_from_parsed_node_attr(
@@ -553,6 +555,7 @@ fn generate_descriptor_from_schema(
             };
             let audio_window_tokens = audio_window_contract_tokens(p.audio_window.as_ref());
             let family_tokens = port_family_declaration_tokens(&p.family);
+            let pin_declaration_tokens = pin_declaration_tokens(p.pin_type.as_ref());
             let borrow_quota_tokens = match p.borrow_quota {
                 Some(quota) => quote! { ::std::option::Option::Some(#quota) },
                 None => quote! { ::std::option::Option::None },
@@ -567,6 +570,7 @@ fn generate_descriptor_from_schema(
                     audio_window: #audio_window_tokens,
                     family: #family_tokens,
                     pin_default: ::std::option::Option::None,
+                    pin_declaration: #pin_declaration_tokens,
                 })
             }
         })
@@ -582,6 +586,7 @@ fn generate_descriptor_from_schema(
             let port_name = &p.name;
             let port_desc = declared_description_str_expression(*declared_description);
             let family_tokens = port_family_declaration_tokens(&p.family);
+            let pin_declaration_tokens = pin_declaration_tokens(p.pin_type.as_ref());
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
@@ -592,6 +597,7 @@ fn generate_descriptor_from_schema(
                     audio_window: #no_audio_window_tokens,
                     family: #family_tokens,
                     pin_default: ::std::option::Option::None,
+                    pin_declaration: #pin_declaration_tokens,
                 })
             }
         })

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::descriptors::PinType;
 
 #[test]
 fn image_formats_spell_every_engine_texture_format() {
@@ -185,19 +186,7 @@ fn a_described_rust_function_node_reads_as_a_function_node_run_inside_its_reader
 
 #[test]
 fn a_described_shader_reads_as_a_shader_node_on_its_native_evaluator() {
-    let mut described = described_node_type_with_input_ports(serde_json::json!([]));
-    described["kind"] = serde_json::json!("shader");
-    described["shader_source"] = serde_json::json!(
-        "float4 tint(ImageInput image, float amount) { return image.pixel * amount; }"
-    );
-    described["shader_signature"] = serde_json::json!({
-        "function_name": "tint",
-        "inputs": [
-            {"port": "image", "value_type": "image_frame"},
-            {"port": "amount", "value_type": "float"},
-        ],
-        "output_port": "result",
-    });
+    let mut described = a_described_tint_shader();
     let shader = read(&described).expect("reads");
     assert_eq!(shader.descriptor.node_kind, NodeKind::Shader);
     let HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(program) =
@@ -213,6 +202,131 @@ fn a_described_shader_reads_as_a_shader_node_on_its_native_evaluator() {
         .expect("an object")
         .remove("shader_source");
     assert!(refusal_of(&described).contains("shader_source"));
+}
+
+/// A described `@node.shader` taking an Image `image` and a float `amount`, returning `result`.
+fn a_described_tint_shader() -> serde_json::Value {
+    let mut described = described_node_type_with_input_ports(serde_json::json!([
+        {"name": "image", "family": {"family": "image"}, "description": "", "delivery_profile": "newest"},
+        {"name": "amount", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
+    ]));
+    described["output_ports"] =
+        serde_json::json!([{"name": "result", "family": {"family": "image"}, "description": ""}]);
+    described["kind"] = serde_json::json!("shader");
+    described["shader_source"] = serde_json::json!(
+        "float4 tint(ImageInput image, float amount) { return image.pixel * amount; }"
+    );
+    described["shader_signature"] = serde_json::json!({
+        "function_name": "tint",
+        "inputs": [
+            {"port": "image", "value_type": "image_frame"},
+            {"port": "amount", "value_type": "float"},
+        ],
+        "output_port": "result",
+    });
+    described
+}
+
+/// The pin type and flow the read declares on `port_name`, input or output.
+fn declared_pin_of(
+    declaration: &PythonNodeDeclaration,
+    port_name: &str,
+) -> Option<crate::core::descriptors::PinDeclaration> {
+    declaration
+        .descriptor
+        .inputs
+        .iter()
+        .chain(&declaration.descriptor.outputs)
+        .find(|port| port.name == port_name)
+        .unwrap_or_else(|| panic!("the node declares port {port_name:?}"))
+        .declared_pin()
+}
+
+fn exactly(pin_type: PinType) -> Option<crate::core::descriptors::PinDeclaration> {
+    Some(crate::core::descriptors::PinDeclaration::exactly(pin_type))
+}
+
+#[test]
+fn a_shaders_float_input_is_a_float_and_its_pictures_are_textures() {
+    let shader = read(&a_described_tint_shader()).expect("reads");
+    let texture = PinType::Texture {
+        pixel_formats: vec![],
+    };
+
+    assert_eq!(
+        declared_pin_of(&shader, "amount"),
+        exactly(PinType::Float { exact_size: None })
+    );
+    assert_eq!(declared_pin_of(&shader, "image"), exactly(texture.clone()));
+    assert_eq!(declared_pin_of(&shader, "result"), exactly(texture));
+}
+
+#[test]
+fn a_function_nodes_float_int_and_bool_values_are_typed_and_its_other_values_are_not() {
+    let mut described = described_node_type_with_input_ports(serde_json::json!([
+        {"name": "level", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
+        {"name": "count", "family": {"family": "channels"}, "description": "", "delivery_profile": "newest"},
+        {"name": "fields", "family": {"family": "records"}, "description": "", "delivery_profile": "newest"},
+        {"name": "anything", "family": {"family": "image", "also_takes_families": ["records"]}, "description": "", "delivery_profile": "newest"},
+    ]));
+    described["output_ports"] = serde_json::json!([
+        {"name": "open", "family": {"family": "channels", "names": {"stated": ["open"]}, "dtype": "f64"}, "description": ""},
+        {"name": "same", "family": {"family": "image", "family_follows_input_port": "anything"}, "description": ""},
+    ]);
+    described["kind"] = serde_json::json!("function");
+    described["language"] = serde_json::json!("python");
+    described["state_fields"] = serde_json::json!([]);
+    described["runs_as_python"] = serde_json::json!(false);
+    described["function_signature"] = serde_json::json!({
+        "inputs": [
+            {"parameter": "level", "port": "level", "value_type": "float", "optional": false},
+            {"parameter": "count", "port": "count", "value_type": "int", "optional": false},
+            {"parameter": "fields", "port": "fields", "value_type": "records", "optional": false},
+            {"parameter": "anything", "port": "anything", "value_type": "unread_message", "optional": false},
+        ],
+        "outputs": [
+            {"port": "open", "field": null, "value_type": "bool", "may_hand_out_nothing": false},
+            {"port": "same", "field": null, "value_type": "unread_message", "may_hand_out_nothing": false},
+        ],
+        "state_parameter": null,
+    });
+    let function = read(&described).expect("reads");
+
+    assert_eq!(
+        declared_pin_of(&function, "level"),
+        exactly(PinType::Float { exact_size: None })
+    );
+    assert_eq!(
+        declared_pin_of(&function, "count"),
+        exactly(PinType::Integer { exact_size: None })
+    );
+    assert_eq!(
+        declared_pin_of(&function, "open"),
+        exactly(PinType::Boolean {})
+    );
+    for untyped in ["fields", "anything", "same"] {
+        assert_eq!(declared_pin_of(&function, untyped), None, "{untyped}");
+    }
+
+    described["function_signature"]["outputs"][0]["port"] = serde_json::json!("closed");
+    assert!(refusal_of(&described).contains("\"closed\", which the node does not declare"));
+}
+
+#[test]
+fn a_process_nodes_picture_port_is_a_texture_and_its_other_ports_are_untyped() {
+    let process = read(&described_node_type_with_output_ports(serde_json::json!([
+        {"name": "frames", "family": {"family": "image", "formats": ["rgba8_unorm"]}, "description": ""},
+        {"name": "levels", "family": {"family": "channels"}, "description": ""},
+    ])))
+    .expect("reads");
+
+    assert_eq!(
+        declared_pin_of(&process, "frames"),
+        exactly(PinType::Texture {
+            pixel_formats: vec![crate::core::descriptors::TexturePixelFormat::Rgba8Unorm]
+        })
+    );
+    assert_eq!(declared_pin_of(&process, "levels"), None);
 }
 
 #[test]

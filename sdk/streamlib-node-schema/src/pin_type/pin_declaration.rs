@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::PinType;
+use super::{PinType, built_in_pin_type};
 use crate::{
     ArrayOutputPortResidency, ChannelsOutputPortSampleRate, ChannelsOutputPortSampleType,
     ImageOutputPortFrameRate,
@@ -31,6 +31,50 @@ pub struct PinDeclaration {
     /// Whether an input may hold no value and read as nothing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_be_unset: bool,
+}
+
+impl PinDeclaration {
+    /// A port of exactly `pin_type`, read in the type's default flow, stating nothing else.
+    pub fn exactly(pin_type: PinType) -> Self {
+        Self {
+            flow: pin_type.default_flow(),
+            pin_type: DeclaredPinType::Is { pin_type },
+            annotations: PinAnnotations::default(),
+            former_names: Vec::new(),
+            may_be_unset: false,
+        }
+    }
+
+    /// The type, when the port declares exactly one; `None` when it is found another way.
+    pub fn exact_pin_type(&self) -> Option<&PinType> {
+        match &self.pin_type {
+            DeclaredPinType::Is { pin_type } => Some(pin_type),
+            DeclaredPinType::OneOf { .. }
+            | DeclaredPinType::Any
+            | DeclaredPinType::SameAsInput { .. }
+            | DeclaredPinType::SetByInput { .. } => None,
+        }
+    }
+}
+
+impl PinType {
+    /// The flow a pin of this type has when its author states none: its row's first, except
+    /// that a List or a bundle holding a member that streams is one message read as a stream.
+    pub fn default_flow(&self) -> PinFlow {
+        match self {
+            Self::ListOf { element_type } if element_type.default_flow() == PinFlow::Stream => {
+                PinFlow::Stream
+            }
+            Self::Bundle { members }
+                if members
+                    .iter()
+                    .any(|member| member.member_type.default_flow() == PinFlow::Stream) =>
+            {
+                PinFlow::Stream
+            }
+            _ => built_in_pin_type(self.built_in_name()).flows[0],
+        }
+    }
 }
 
 /// The pin type a port declares, or how it is found.

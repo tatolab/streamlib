@@ -74,6 +74,8 @@ pub(crate) fn the_input_ports_of_the_exposed_config_fields(
             borrow_quota: None,
             audio_window: None,
             pin_default: None,
+            pin_type: None,
+            flow: None,
             family: PortFamilyDeclaration::of_family(PortFamily::Channels),
         });
     }

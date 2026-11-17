@@ -404,6 +404,8 @@ impl NodeTypesOneStreamResolves {
             audio_window: None,
             family,
             pin_default: None,
+            pin_type: None,
+            flow: None,
         };
         let mut placeholders: HashMap<NodeClassImportPath, PlaceholderOfANodeTypeNotDescribed> =
             HashMap::new();
@@ -763,6 +765,7 @@ mod tests {
                 crate::core::descriptors::PortFamily::Image,
             ),
             pin_default: None,
+            pin_declaration: None,
         }
     }
 

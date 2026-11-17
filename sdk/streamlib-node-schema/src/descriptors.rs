@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::pin_type::PinDeclaration;
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
     PortFamilyDeclaration,
@@ -50,6 +51,10 @@ pub struct PortDescriptor {
         skip_serializing_if = "Option::is_none"
     )]
     pub pin_default: Option<serde_json::Value>,
+    /// The pin type and flow the port's author states; `None` when the code states none
+    /// exactly. [`PortDescriptor::declared_pin`] is what the port declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_declaration: Option<PinDeclaration>,
 }
 
 fn deserialize_a_pin_default_that_may_be_null<'de, D>(
@@ -77,7 +82,23 @@ impl PortDescriptor {
             audio_window: None,
             family,
             pin_default: None,
+            pin_declaration: None,
         }
+    }
+
+    /// The pin type and flow the port declares: the ones its author states, else a Texture for
+    /// a picture port. `None` for a port whose type the code does not state exactly; it links
+    /// by its family alone.
+    pub fn declared_pin(&self) -> Option<PinDeclaration> {
+        self.pin_declaration
+            .clone()
+            .or_else(|| self.family.exact_pin_type().map(PinDeclaration::exactly))
+    }
+
+    /// Builder-style override for the pin type and flow the port's author states.
+    pub fn with_pin_declaration(mut self, pin_declaration: PinDeclaration) -> Self {
+        self.pin_declaration = Some(pin_declaration);
+        self
     }
 
     /// Builder-style override for the value an unlinked input port reads.
