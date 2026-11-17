@@ -399,6 +399,14 @@ impl NodeInterpreterSpawnHost {
             .node_configuration
             .clone()
             .unwrap_or(serde_json::Value::Null);
+        // The helper's writer keeps the last message of each, as a native node's does.
+        let output_ports_keeping_their_last_message: Vec<&str> = self
+            .descriptor
+            .outputs
+            .iter()
+            .filter(|output_port| output_port.flows_as_a_value())
+            .map(|output_port| output_port.name.as_str())
+            .collect();
         // Through the envelope, so the links it carries go out with this
         // command and every link held behind it is handed over after.
         let setup_command_sent = self
@@ -416,6 +424,8 @@ impl NodeInterpreterSpawnHost {
                         "node_run_id": self.node_run_id,
                         "ports": ports,
                         "loss_count_board": loss_count_board,
+                        "output_ports_keeping_their_last_message":
+                            output_ports_keeping_their_last_message,
                         "stream_clock": stream_clock_named_to_the_helper,
                     }))
                 },

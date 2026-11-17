@@ -301,6 +301,7 @@ fn run_manual_mode(
     let mut current_helper_process_started_at = Instant::now();
     let mut next_helper_process_restart_at: Option<Instant> = None;
     let mut helper_process_stopped_answering_at: Option<Instant> = None;
+    let output_writer = node.lock().iceoryx2_output_writer_inner();
 
     loop {
         // Check for shutdown
@@ -324,9 +325,8 @@ fn run_manual_mode(
         }
 
         // A manual node writes from its own threads, so this loop sends each kept last
-        // message to a reader that connected after it.
-        let output_writer = node.lock().iceoryx2_output_writer_inner();
-        if let Some(output_writer) = output_writer {
+        // message to a reader that connected after it while the node runs.
+        if let Some(output_writer) = output_writer.as_ref().filter(|_| !is_paused) {
             output_writer.send_each_kept_message_to_a_reader_it_missed();
         }
 

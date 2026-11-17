@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::iceoryx2::channel_sample_test_support::install_a_test_channel_publisher;
 
 /// A writer whose one output port `out` publishes onto `pubsub` and keeps its
 /// last message.
@@ -28,17 +29,7 @@ fn output_writer_keeping_the_last_message_of_one_unlinked_port() -> OutputWriter
 /// Install a channel publisher for `out` on `pubsub`, as a first link out of
 /// the port does.
 fn link_out_onto(inner: &OutputWriterInner, pubsub: &Iceoryx2Service) {
-    inner.set_channel_publisher(
-        "out",
-        pubsub,
-        pubsub.create_publisher(64).unwrap(),
-        ChannelEgressConfig {
-            service_name: "test/out".to_string(),
-            trust_tier: ChannelTrustTier::Trusted,
-            expected_payload_bytes: 64,
-            chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-        },
-    );
+    install_a_test_channel_publisher(inner, "out", pubsub);
 }
 
 /// A reader connected after a value was written reads that value once the port
@@ -248,4 +239,84 @@ fn a_port_with_a_loan_open_sends_no_kept_message() {
     drop(loan);
     inner.send_each_kept_message_to_a_reader_it_missed();
     assert!(late_reader.receive().unwrap().is_some());
+}
+
+/// A loan taken while no link reached the port and published after a link
+/// came and a reader read the older kept value reaches that reader: the kept
+/// message it replaced went out on no channel.
+#[test]
+fn a_loan_published_after_a_link_came_reaches_a_reader_the_older_value_reached() {
+    let inner = output_writer_keeping_the_last_message_of_one_unlinked_port();
+    inner
+        .write_bytes_with_timestamp("out", b"older", 0, MessageGroupBoundary::StartsGroup)
+        .unwrap();
+    let mut loan = inner.loan_output_port_payload("out", 5).unwrap();
+    loan.payload_bytes_mut().copy_from_slice(b"newer");
+
+    let pubsub = open_channel_data_service("kept/loan-across-a-link", 2);
+    link_out_onto(&inner, &pubsub);
+    let reader = pubsub.create_subscriber(4).unwrap();
+    inner.send_each_kept_message_to_a_reader_it_missed();
+    assert_eq!(
+        stamped_payload_of(&reader.receive().unwrap().expect("the older kept value")),
+        b"older"
+    );
+
+    inner
+        .publish_output_port_payload_loan(
+            loan,
+            1,
+            MessageGroupBoundary::StartsGroup,
+            DataChannelPayloadDescriptor::bytes(),
+        )
+        .unwrap();
+    inner.send_each_kept_message_to_a_reader_it_missed();
+    assert_eq!(
+        stamped_payload_of(&reader.receive().unwrap().expect("the newer kept value")),
+        b"newer"
+    );
+}
+
+/// A kept message larger than the port's new channel admits is forgotten
+/// after its first refusal, so nothing is sent again on later calls even once
+/// a reader of a channel that would admit it connects.
+#[test]
+fn a_kept_message_its_channel_refuses_is_forgotten() {
+    let inner = output_writer_keeping_the_last_message_of_one_unlinked_port();
+    let larger_than_the_ceiling = vec![7u8; 4096];
+    inner
+        .write_bytes_with_timestamp(
+            "out",
+            &larger_than_the_ceiling,
+            0,
+            MessageGroupBoundary::StartsGroup,
+        )
+        .unwrap();
+
+    let narrow = open_channel_data_service("kept/refused/narrow", 2);
+    inner.set_channel_publisher(
+        "out",
+        &narrow,
+        narrow.create_publisher(64).unwrap(),
+        ChannelEgressConfig {
+            service_name: "test/out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 64,
+            chunk_ceiling_bytes: 1024,
+        },
+    );
+    let narrow_reader = narrow.create_subscriber(4).unwrap();
+    inner.send_each_kept_message_to_a_reader_it_missed();
+    assert!(narrow_reader.receive().unwrap().is_none());
+    assert_eq!(refused_bag_count_of(&inner, "out"), 1);
+
+    assert!(inner.remove_channel_link("out", "no link was added"));
+    let wide = open_channel_data_service("kept/refused/wide", 2);
+    link_out_onto(&inner, &wide);
+    let wide_reader = wide.create_subscriber(4).unwrap();
+    inner.send_each_kept_message_to_a_reader_it_missed();
+    assert!(
+        wide_reader.receive().unwrap().is_none(),
+        "the refused message was forgotten"
+    );
 }

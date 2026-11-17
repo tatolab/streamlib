@@ -53,8 +53,9 @@ pub(crate) enum HowAnOpenedLinkStands {
 
 impl OpenedSourceSideOfALink {
     /// Have a native source send each kept last message to a reader that connected after it,
-    /// so a destination opened in this process reads its value at once. A helper source's
-    /// own scheduling loop sends its kept messages.
+    /// so a destination opened in this process reads its value at once. A helper source keeps
+    /// the last message of the ports its setup command names, and its own scheduling loop sends
+    /// them on its next pass.
     pub(crate) fn send_each_kept_message_to_a_reader_it_missed(&self) {
         if let Some(SourceSideOfALinkWiredOn::ANativeNodesOutputWriter(output_writer)) =
             &self.wired_on

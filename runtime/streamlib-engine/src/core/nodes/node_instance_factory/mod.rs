@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinFlow};
+use crate::core::descriptors::{NodeClassImportPath, NodeKind};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, PortInfo, is_in_exposed_name_cast_form};
@@ -134,10 +134,7 @@ impl NodeInstance {
                 descriptor
                     .outputs
                     .iter()
-                    .filter(|port| {
-                        port.declared_pin()
-                            .is_some_and(|pin| pin.flow == PinFlow::Value)
-                    })
+                    .filter(|port| port.flows_as_a_value())
                     .map(|port| port.name.clone()),
             );
         }

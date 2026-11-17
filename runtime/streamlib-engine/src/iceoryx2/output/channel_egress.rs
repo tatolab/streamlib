@@ -209,6 +209,19 @@ impl ChannelEgress {
         Ok(unsafe { loaned_sample.assume_init() })
     }
 
+    /// Whether a reader now connected to the channel connected after its last
+    /// send that may have delivered, so that send never reached it.
+    pub(super) fn has_a_reader_its_last_send_missed(&self) -> bool {
+        self.channel
+            .has_a_connected_subscriber_outside(&self.subscribers_connected_at_the_last_send)
+    }
+
+    /// Take every reader on the channel to be one its last send missed: what
+    /// the port keeps as its last message never went out on it.
+    pub(super) fn forget_the_readers_its_last_send_reached(&mut self) {
+        self.subscribers_connected_at_the_last_send.clear();
+    }
+
     /// Send `payload_bytes` under `user_header`, copied into one sample this
     /// admits and loans, as [`Self::send_loaned_sample`] does.
     pub(super) fn send_bytes(

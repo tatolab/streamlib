@@ -64,6 +64,9 @@ pub struct OutputWriterInner {
     /// one. Held apart from [`Self::channels`], so a port keeps it while no link reaches it.
     /// Locked after [`Self::channels`] wherever both are held.
     last_message_kept_by_output_port: Mutex<HashMap<String, Option<KeptOutputPortMessage>>>,
+    /// Whether any output port keeps its last message, read before either lock so a writer
+    /// whose ports keep none is never locked for it.
+    some_output_port_keeps_its_last_message: AtomicBool,
 }
 
 /// The last message an output port that keeps one wrote, whether a link carried it or none
@@ -72,6 +75,14 @@ struct KeptOutputPortMessage {
     payload_bytes: Vec<u8>,
     /// Its header as written; a send numbers it again.
     user_header: DataChannelSampleUserHeader,
+    /// Whether the last send of it again failed, so the next failure in a row is not warned.
+    the_last_send_again_failed: bool,
+}
+
+/// The bytes a port keeps as its last message: copied from what it wrote, or moved in.
+enum BytesKeptAsTheLastMessage<'written> {
+    CopiedFrom(&'written [u8]),
+    MovedIn(Vec<u8>),
 }
 
 /// The refusal for `what` on `port` while a loan of it is open.
@@ -157,6 +168,7 @@ impl OutputWriterInner {
             stream_facts_of_output_ports: std::sync::OnceLock::new(),
             stream_clock: std::sync::OnceLock::new(),
             last_message_kept_by_output_port: Mutex::new(HashMap::new()),
+            some_output_port_keeps_its_last_message: AtomicBool::new(false),
         }
     }
 
@@ -218,54 +230,114 @@ impl OutputWriterInner {
                 .entry(port_name)
                 .or_insert(None);
         }
+        if !last_message_kept_by_output_port.is_empty() {
+            self.some_output_port_keeps_its_last_message
+                .store(true, Ordering::Release);
+        }
     }
 
-    /// Keep `payload_bytes` under `user_header` as `port`'s last message, when `port` keeps one.
-    /// The bytes are read only for such a port.
+    /// Keep `bytes` under `user_header` as `port`'s last message, when `port` keeps one; the
+    /// bytes are read only for such a port. Whether `port` keeps it.
     fn keep_as_the_last_message_of(
         &self,
         port: &str,
-        payload_bytes: impl FnOnce() -> Vec<u8>,
+        bytes: BytesKeptAsTheLastMessage<'_>,
+        user_header: DataChannelSampleUserHeader,
+    ) -> bool {
+        if !self
+            .some_output_port_keeps_its_last_message
+            .load(Ordering::Acquire)
+        {
+            return false;
+        }
+        let mut last_message_kept_by_output_port = self.last_message_kept_by_output_port.lock();
+        let Some(kept_message_slot) = last_message_kept_by_output_port.get_mut(port) else {
+            return false;
+        };
+        match (kept_message_slot.as_mut(), bytes) {
+            (Some(kept_message), BytesKeptAsTheLastMessage::CopiedFrom(written)) => {
+                kept_message.payload_bytes.clear();
+                kept_message.payload_bytes.extend_from_slice(written);
+                kept_message.user_header = user_header;
+                kept_message.the_last_send_again_failed = false;
+            }
+            (_, bytes) => {
+                *kept_message_slot = Some(KeptOutputPortMessage {
+                    payload_bytes: match bytes {
+                        BytesKeptAsTheLastMessage::CopiedFrom(written) => written.to_vec(),
+                        BytesKeptAsTheLastMessage::MovedIn(moved) => moved,
+                    },
+                    user_header,
+                    the_last_send_again_failed: false,
+                });
+            }
+        }
+        true
+    }
+
+    /// Keep `bytes` as `port`'s last message where the port sent it nowhere — no link reached it,
+    /// or the link its loan was taken on went away — so a reader already on the port's channel
+    /// is one the kept message has not reached.
+    fn keep_unsent_as_the_last_message_of(
+        &self,
+        channels: &mut HashMap<String, ChannelEgress>,
+        port: &str,
+        bytes: BytesKeptAsTheLastMessage<'_>,
         user_header: DataChannelSampleUserHeader,
     ) {
-        if let Some(kept_message) = self.last_message_kept_by_output_port.lock().get_mut(port) {
-            *kept_message = Some(KeptOutputPortMessage {
-                payload_bytes: payload_bytes(),
-                user_header,
-            });
+        if self.keep_as_the_last_message_of(port, bytes, user_header)
+            && let Some(egress) = channels.get_mut(port)
+        {
+            egress.forget_the_readers_its_last_send_reached();
         }
     }
 
     /// Send the kept last message of each output port that keeps one again, on each port a
-    /// reader connected to after its last write: a linked destination, a viewer or an island's
+    /// reader connected to after its last send: a linked destination, a viewer or an island's
     /// reader. The send wakes every destination, as any write does.
     ///
     /// A port with a loan open is passed over, since its writer is about to send. A kept
-    /// message the channel refuses is forgotten, so it is not refused again on every call.
+    /// message larger than the port's channel admits is forgotten, since it is refused on every
+    /// send; one that fails otherwise is sent again on the next call, warned of once in a row.
     pub fn send_each_kept_message_to_a_reader_it_missed(&self) {
+        if !self
+            .some_output_port_keeps_its_last_message
+            .load(Ordering::Acquire)
+        {
+            return;
+        }
         let mut channels = self.channels.lock();
         let mut last_message_kept_by_output_port = self.last_message_kept_by_output_port.lock();
         for (port, kept_message_slot) in last_message_kept_by_output_port.iter_mut() {
             let (Some(kept_message), Some(egress)) =
-                (kept_message_slot.as_ref(), channels.get_mut(port))
+                (kept_message_slot.as_mut(), channels.get_mut(port))
             else {
                 continue;
             };
             if egress.a_loan_is_open.load(Ordering::Acquire)
-                || !egress.channel.has_a_connected_subscriber_outside(
-                    &egress.subscribers_connected_at_the_last_send,
-                )
+                || !egress.has_a_reader_its_last_send_missed()
             {
                 continue;
             }
-            if let Err(refusal) =
-                egress.send_bytes(port, &kept_message.payload_bytes, kept_message.user_header)
-            {
-                tracing::warn!(
-                    "output port '{port}' could not send its kept last message to a reader that \
-                     connected after it, so it forgets that message: {refusal}"
-                );
-                *kept_message_slot = None;
+            match egress.send_bytes(port, &kept_message.payload_bytes, kept_message.user_header) {
+                Ok(()) => kept_message.the_last_send_again_failed = false,
+                Err(refusal @ Error::PayloadExceedsChannelCeiling { .. }) => {
+                    tracing::warn!(
+                        "output port '{port}' forgets its kept last message, which its channel \
+                         refuses: {refusal}"
+                    );
+                    *kept_message_slot = None;
+                }
+                Err(failure) => {
+                    if !kept_message.the_last_send_again_failed {
+                        tracing::warn!(
+                            "output port '{port}' could not send its kept last message to a \
+                             reader that connected after it, and sends it again on its next \
+                             pass: {failure}"
+                        );
+                    }
+                    kept_message.the_last_send_again_failed = true;
+                }
             }
         }
     }
@@ -402,11 +474,10 @@ impl OutputWriterInner {
     /// sees each of them, and sees a link's destination only once its
     /// subscriber is open. A port with no channel has no reader.
     pub fn has_a_reader_the_last_write_missed(&self, output_port: &str) -> bool {
-        self.channels.lock().get(output_port).is_some_and(|egress| {
-            egress
-                .channel
-                .has_a_connected_subscriber_outside(&egress.subscribers_connected_at_the_last_send)
-        })
+        self.channels
+            .lock()
+            .get(output_port)
+            .is_some_and(ChannelEgress::has_a_reader_its_last_send_missed)
     }
 
     /// Reclaim the source-side egress for one disconnected `connect()` link.
@@ -483,7 +554,11 @@ impl OutputWriterInner {
             }
             egress.send_bytes(port, payload_bytes, user_header)?;
         }
-        self.keep_as_the_last_message_of(port, || payload_bytes.to_vec(), user_header);
+        self.keep_as_the_last_message_of(
+            port,
+            BytesKeptAsTheLastMessage::CopiedFrom(payload_bytes),
+            user_header,
+        );
         Ok(())
     }
 
@@ -559,20 +634,35 @@ impl OutputWriterInner {
                 _loan_marker,
             } => (loaned_sample, egress_installation, _loan_marker),
             OutputPortPayloadLoanTarget::NoLinkYet { scratch_bytes } => {
-                self.keep_as_the_last_message_of(&output_port, || scratch_bytes, user_header);
+                self.keep_unsent_as_the_last_message_of(
+                    &mut self.channels.lock(),
+                    &output_port,
+                    BytesKeptAsTheLastMessage::MovedIn(scratch_bytes),
+                    user_header,
+                );
                 return Ok(());
             }
         };
         let mut channels = self.channels.lock();
+        let loaned_bytes = &payload_area_bytes_mut(&mut loaned_sample)[..payload_byte_len];
+        if !channels
+            .get(&output_port)
+            .is_some_and(|egress| egress.installation == egress_installation)
+        {
+            self.keep_unsent_as_the_last_message_of(
+                &mut channels,
+                &output_port,
+                BytesKeptAsTheLastMessage::CopiedFrom(loaned_bytes),
+                user_header,
+            );
+            return Ok(());
+        }
         self.keep_as_the_last_message_of(
             &output_port,
-            || payload_area_bytes_mut(&mut loaned_sample)[..payload_byte_len].to_vec(),
+            BytesKeptAsTheLastMessage::CopiedFrom(loaned_bytes),
             user_header,
         );
-        let Some(egress) = channels
-            .get_mut(&output_port)
-            .filter(|egress| egress.installation == egress_installation)
-        else {
+        let Some(egress) = channels.get_mut(&output_port) else {
             return Ok(());
         };
         egress.send_loaned_sample(&output_port, loaned_sample, user_header)

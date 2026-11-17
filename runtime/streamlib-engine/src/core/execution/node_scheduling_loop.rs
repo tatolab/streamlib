@@ -68,8 +68,8 @@ pub trait NodeSchedulingLoopHost {
 
     fn input_mailboxes(&self) -> Option<Arc<InputMailboxesInner>>;
 
-    /// The writer of the node's output ports, which the loop has send each kept last message
-    /// to a reader that connected after it.
+    /// The writer of the node's output ports. On each pass while the node runs, the loop has
+    /// it send each kept last message to a reader that connected after that message.
     fn output_writer(&self) -> Option<Arc<OutputWriterInner>>;
 
     /// The fd that turns readable when a control arrives, which a reactive
@@ -220,6 +220,8 @@ pub fn run_reactive_scheduling_loop(
                 tracing::info!("[{node_name_for_logs}] its scheduling loop was stopped");
                 return;
             }
+            // A long drain still reaches a reader that connected during it.
+            send_each_kept_message_to_a_reader_it_missed(host);
 
             // Drained before the readiness check, so a bag whose notify this
             // clears is one that check sees.
@@ -243,8 +245,11 @@ fn wait_without_a_waiter_then_drain(
 
 /// Have the node's output ports send each kept last message to a reader that connected after
 /// it. Called on every pass of a loop, so a reader that connects while the node writes nothing
-/// still reads its value.
+/// still reads its value; a paused node sends nothing.
 fn send_each_kept_message_to_a_reader_it_missed(host: &impl NodeSchedulingLoopHost) {
+    if host.pause_requested() {
+        return;
+    }
     if let Some(output_writer) = host.output_writer() {
         output_writer.send_each_kept_message_to_a_reader_it_missed();
     }

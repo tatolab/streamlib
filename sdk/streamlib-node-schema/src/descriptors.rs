@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pin_type::PinDeclaration;
+use crate::pin_type::{PinDeclaration, PinFlow};
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
     NodeValueLifetime, PortFamilyDeclaration,
@@ -100,6 +100,13 @@ impl PortDescriptor {
         self.pin_declaration
             .clone()
             .or_else(|| self.family.exact_pin_type().map(PinDeclaration::exactly))
+    }
+
+    /// Whether the port's pin flows as a Value: an output port so declared keeps its last
+    /// message for a reader that connects after it.
+    pub fn flows_as_a_value(&self) -> bool {
+        self.declared_pin()
+            .is_some_and(|pin| pin.flow == PinFlow::Value)
     }
 
     /// Builder-style override for the pin type and flow the port's author states.

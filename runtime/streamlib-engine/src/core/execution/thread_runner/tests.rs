@@ -784,17 +784,13 @@ fn a_shutdown_ends_a_continuous_wait_before_its_deadline() {
     assert_eq!(outcome, ContinuousLoopWaitOutcome::Stopped);
 }
 
-/// A reactive loop sends its node's kept last message to a reader that connects while the node
-/// writes nothing and nothing arrives for it.
-///
-/// Fail-without-fix: drop the send from the reactive loop's pass, and the reader never reads.
-#[test]
-fn a_reactive_loop_sends_a_kept_message_to_a_reader_that_connects_while_it_idles() {
+/// A node whose output `out1` keeps its last message and has written it before any link.
+fn a_node_that_wrote_a_kept_message_before_any_link() -> (
+    Arc<Mutex<NodeInstance>>,
+    Arc<crate::iceoryx2::OutputWriterInner>,
+) {
     use crate::core::test_support::MockOutputOnlyNode;
-    use crate::iceoryx2::{
-        ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, MessageGroupBoundary,
-        TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-    };
+    use crate::iceoryx2::MessageGroupBoundary;
 
     let mut instance = NodeInstance::new(Box::new(
         <MockOutputOnlyNode::Node as crate::core::GeneratedNode>::from_config(Default::default())
@@ -810,55 +806,141 @@ fn a_reactive_loop_sends_a_kept_message_to_a_reader_that_connects_while_it_idles
     output_writer
         .write_bytes_with_timestamp("out1", b"the value", 0, MessageGroupBoundary::StartsGroup)
         .expect("a write to a declared port no link reached sends nothing");
-    let node = Arc::new(Mutex::new(instance));
+    (Arc::new(Mutex::new(instance)), output_writer)
+}
+
+/// Run `scheduling_loop` on its own thread over an engine thread's host for `node` on a stream
+/// clock of `stream_clock_spec`, link the node's `out1` and connect a reader while the loop
+/// idles, and answer what the reader read within `deadline`.
+fn what_a_reader_connected_while_the_loop_idles_reads(
+    node: Arc<Mutex<NodeInstance>>,
+    output_writer: &crate::iceoryx2::OutputWriterInner,
+    stream_clock_spec: crate::core::context::StreamClockSpec,
+    pause_gate_at_loop_start: PauseGateAtLoopStart,
+    deadline: Duration,
+    scheduling_loop: impl FnOnce(
+        &mut NodeSchedulingLoopHostOnAnEngineThread<'_, fn(NodeSchedulingCallback, bool)>,
+        &StreamClock,
+    ) + Send
+    + 'static,
+) -> Option<Vec<u8>> {
+    use crate::iceoryx2::channel_sample_test_support::{
+        a_test_channel, install_a_test_channel_publisher, stamped_payload_of,
+    };
 
     let (mut shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
     let shutdown_receiver = shutdown_channel
         .take_receiver()
         .expect("a fresh shutdown channel holds its receiver");
-    let loop_thread = std::thread::spawn({
-        let node = Arc::clone(&node);
-        move || {
-            run_reactive_scheduling_loop_recording_callbacks(
-                &node,
-                &shutdown_receiver,
-                Some(shutdown_wake_fd),
-                &AtomicBool::new(false),
-                |_| {},
-            )
-        }
+    let pause_gate = matches!(pause_gate_at_loop_start, PauseGateAtLoopStart::Closed);
+    let loop_thread = std::thread::spawn(move || {
+        let stream_clock = StreamClock::starting_now(stream_clock_spec);
+        let step_progress = StepProgressOfOneNode::default();
+        let pause_gate = AtomicBool::new(pause_gate);
+        let mut host = NodeSchedulingLoopHostOnAnEngineThread {
+            node: &node,
+            shutdown_rx: &shutdown_receiver,
+            shutdown_wake_fd: Some(shutdown_wake_fd),
+            pause_gate: &pause_gate,
+            stream_clock: &stream_clock,
+            step_progress: &step_progress,
+            call_node: (|_, _| {}) as fn(NodeSchedulingCallback, bool),
+        };
+        scheduling_loop(&mut host, &stream_clock);
     });
 
-    let channel = Iceoryx2Node::for_this_test_process()
-        .open_or_create_service(&unique_suffix("kept-message/pubsub"), 2, 4)
-        .expect("open the channel data service");
-    output_writer.set_channel_publisher(
-        "out1",
-        &channel,
-        channel.create_publisher(64).expect("the port's publisher"),
-        ChannelEgressConfig {
-            service_name: "test/runner/out1".to_string(),
-            trust_tier: ChannelTrustTier::Trusted,
-            expected_payload_bytes: 64,
-            chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
-        },
-    );
+    let channel = a_test_channel("runner/kept-message", 2);
+    install_a_test_channel_publisher(output_writer, "out1", &channel);
     let reader = channel.create_subscriber(4).expect("the port's reader");
-
     let started = Instant::now();
     let mut received = None;
-    while received.is_none() && started.elapsed() < Duration::from_secs(5) {
-        received = reader.receive().expect("the reader receives");
+    while received.is_none() && started.elapsed() < deadline {
+        received = reader
+            .receive()
+            .expect("the reader receives")
+            .map(|sample| stamped_payload_of(&sample).to_vec());
         std::thread::sleep(Duration::from_millis(5));
     }
     shutdown_channel.signal_shutdown();
     loop_thread
         .join()
         .expect("the scheduling loop must not panic");
+    received
+}
 
-    let received = received.expect("the loop sent the kept message to the late reader");
-    assert_eq!(
-        crate::iceoryx2::channel_sample_test_support::stamped_payload_of(&received),
-        b"the value"
+/// A reactive loop sends its node's kept last message to a reader that connects while the node
+/// writes nothing and nothing arrives for it.
+///
+/// Fail-without-fix: drop the send from the reactive loop's pass, and the reader never reads.
+#[test]
+fn a_reactive_loop_sends_a_kept_message_to_a_reader_that_connects_while_it_idles() {
+    let (node, output_writer) = a_node_that_wrote_a_kept_message_before_any_link();
+    let received = what_a_reader_connected_while_the_loop_idles_reads(
+        node,
+        &output_writer,
+        crate::core::context::StreamClockSpec::Real,
+        PauseGateAtLoopStart::Open,
+        Duration::from_secs(5),
+        |host, _| run_reactive_scheduling_loop("Preactive-kept-message", host),
     );
+    assert_eq!(received.as_deref(), Some(&b"the value"[..]));
+}
+
+/// A paused node sends no kept message.
+///
+/// Fail-without-fix: send whatever the pause, and the reader reads the value.
+#[test]
+fn a_paused_reactive_loop_sends_no_kept_message() {
+    let (node, output_writer) = a_node_that_wrote_a_kept_message_before_any_link();
+    let received = what_a_reader_connected_while_the_loop_idles_reads(
+        node,
+        &output_writer,
+        crate::core::context::StreamClockSpec::Real,
+        PauseGateAtLoopStart::Closed,
+        Duration::from_millis(500),
+        |host, _| run_reactive_scheduling_loop("Preactive-paused-kept-message", host),
+    );
+    assert_eq!(received, None);
+}
+
+/// A continuous loop waiting out a long interval sends a kept message while it waits.
+///
+/// Fail-without-fix: drop the send from the wait for a deadline, and the reader reads nothing
+/// before the minute-long interval ends.
+#[test]
+fn a_continuous_loop_waiting_for_its_deadline_sends_a_kept_message() {
+    let (node, output_writer) = a_node_that_wrote_a_kept_message_before_any_link();
+    let received = what_a_reader_connected_while_the_loop_idles_reads(
+        node,
+        &output_writer,
+        crate::core::context::StreamClockSpec::Real,
+        PauseGateAtLoopStart::Open,
+        Duration::from_secs(5),
+        |host, _| run_continuous_scheduling_loop_on_real_time(host, 60_000),
+    );
+    assert_eq!(received.as_deref(), Some(&b"the value"[..]));
+}
+
+/// A continuous loop behind the step barrier sends a kept message while no step opens.
+///
+/// Fail-without-fix: drop the send from the stepped loop's pass, and the reader reads nothing,
+/// since no step ever opens.
+#[test]
+fn a_continuous_loop_behind_the_step_barrier_sends_a_kept_message() {
+    let (node, output_writer) = a_node_that_wrote_a_kept_message_before_any_link();
+    let received = what_a_reader_connected_while_the_loop_idles_reads(
+        node,
+        &output_writer,
+        crate::core::context::StreamClockSpec::Scaled {
+            scale: 4.0,
+            step_ns: 1_000_000,
+        },
+        PauseGateAtLoopStart::Open,
+        Duration::from_secs(5),
+        |host, stepped_clock| {
+            assert!(stepped_clock.runs_behind_the_step_barrier());
+            run_continuous_scheduling_loop_on_its_stream_clock(host, stepped_clock, 10);
+        },
+    );
+    assert_eq!(received.as_deref(), Some(&b"the value"[..]));
 }
