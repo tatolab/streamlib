@@ -21,7 +21,7 @@ float4 Glow(ImageInput image, float glow, float warmth)
 }
 """,
 )
-def Glow(  # noqa: N802
+def Glow(
     image: ImageFrame,
     glow: float = 0.0,
     warmth: float = 0.0,

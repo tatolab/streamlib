@@ -34,7 +34,7 @@ class BeatReading:
     description="A glow that falls away after each beat, brighter on every accented beat.",
 )
 @node.function
-def Beat(  # noqa: N802
+def Beat(
     level: float = 0.5,
     beats_per_minute: float = 90.0,
     accent_every: int = 4,
@@ -45,7 +45,7 @@ def Beat(  # noqa: N802
     """`level` falling to nothing across each beat at `beats_per_minute`, and half again as
     bright on every `accent_every`th beat while `accent` is on."""
     beats = now / NANOSECONDS_PER_SECOND * beats_per_minute / SECONDS_PER_MINUTE
-    count = int(math.floor(beats))
+    count = math.floor(beats)
     accented = accent and accent_every > 0 and count % accent_every == 0
     glow = level * (1.0 - (beats - count))
     if accented:
@@ -58,7 +58,7 @@ def Beat(  # noqa: N802
     description="How warm the picture is: warmer on an accented beat, and a little warmer each beat of a bar.",
 )
 @node.function
-def Warmth(  # noqa: N802
+def Warmth(
     count: int = 0, accented: bool = False, beats_per_bar: int = 4, base: float = 0.1
 ) -> float:
     """`base`, plus a step for each beat into the bar of `beats_per_bar`, doubled while `accented`."""

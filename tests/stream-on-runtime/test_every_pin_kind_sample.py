@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
 from conftest import TatolabdUnderTest
 from local_api_client import LocalApiClient
 
@@ -61,29 +60,65 @@ PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME = {
     "tally": {"picture": "texture", "tally": None},
 }
 
+#: The nodes whose `process()`, or evaluation, must never raise while the stream plays.
+NODES_THAT_MUST_RUN_CLEANLY = ("beat", "warmth", "glow", "tally")
+
+#: The inputs of `glow` the function nodes drive, which read from their links, not a default.
+GLOW_INPUTS_FED_BY_A_LINK = ("glow", "warmth")
+
+#: What the sample's document holds where it differs from each input's declared default, so a
+#: value read at the first open comes from the document.
+VALUE_THE_DOCUMENT_HOLDS_BY_NODE_AND_INPUT = {
+    ("beat", "beats_per_minute"): 120.0,
+    ("tally", "report_every_frames"): 20,
+}
+
 #: The values saved over the sample's: a typed input of a function node, and the setting of
 #: the node not yet typed.
 SAVED_VALUE_BY_NODE_AND_INPUT = {("beat", "beats_per_minute"): 100.0, ("tally", "report_every_frames"): 15}
 
 
-def node_named(graph: "dict[str, Any]", node_name: str) -> "dict[str, Any]":
+def node_named(graph: dict[str, Any], node_name: str) -> dict[str, Any]:
     (node,) = [node for node in graph["nodes"] if node["name"] == node_name]
     return node
 
 
-def pin_type_of_each_port(node: "dict[str, Any]") -> "dict[str, str | None]":
+def pin_type_of_each_port(node: dict[str, Any]) -> dict[str, str | None]:
     return {
         port["name"]: (port.get("pin_type") or {}).get("type")
         for port in node["ports"]["inputs"] + node["ports"]["outputs"]
     }
 
 
-def values_the_node_holds(node: "dict[str, Any]") -> "dict[str, Any]":
+def input_port_named(node: dict[str, Any], input_name: str) -> dict[str, Any]:
+    (port,) = [port for port in node["ports"]["inputs"] if port["name"] == input_name]
+    return port
+
+
+def assert_the_stream_runs_cleanly_through_its_links(graph: dict[str, Any]) -> None:
+    """No node raises, and `glow` reads its numbers from the function nodes' links: a broken
+    function node would leave it drawing from its defaults, still writing pictures."""
+    raising_because_by_node_name = {
+        node_name: node_named(graph, node_name).get("components", {}).get(
+            "process_raising_because"
+        )
+        for node_name in NODES_THAT_MUST_RUN_CLEANLY
+    }
+    assert raising_because_by_node_name == dict.fromkeys(NODES_THAT_MUST_RUN_CLEANLY), (
+        raising_because_by_node_name
+    )
+    glow = node_named(graph, "glow")
+    for input_name in GLOW_INPUTS_FED_BY_A_LINK:
+        port = input_port_named(glow, input_name)
+        assert port.get("value_comes_from") == "wire" and "value" not in port, port
+
+
+def values_the_node_holds(node: dict[str, Any]) -> dict[str, Any]:
     """A node's saved values: its config's settings and the values saved on its inputs."""
     return {**(node.get("config") or {}), **node["pins"]}
 
 
-def tallies_written(graph: "dict[str, Any]") -> int:
+def tallies_written(graph: dict[str, Any]) -> int:
     written = (
         node_named(graph, "tally")
         .get("components", {})
@@ -95,7 +130,7 @@ def tallies_written(graph: "dict[str, Any]") -> int:
 
 def await_tallies_written(
     tatolabd: TatolabdUnderTest, local_api: LocalApiClient, stream_id: str
-) -> "dict[str, Any]":
+) -> dict[str, Any]:
     """Poll the live graph until the node not yet typed has written tallies, so pictures pass
     from the test pattern through the shader node driven by the function nodes; answer that
     graph."""
@@ -126,7 +161,7 @@ def play(local_api: LocalApiClient, project_directory: str, stream_id: str) -> N
     }, played
 
 
-def values_saved_in_the_document(main_graph_document: Path) -> "dict[tuple[str, str], Any]":
+def values_saved_in_the_document(main_graph_document: Path) -> dict[tuple[str, str], Any]:
     nodes_by_name = {
         node["name"]: node
         for node in json.loads(main_graph_document.read_text(encoding="utf-8"))["nodes"]
@@ -152,7 +187,7 @@ def await_the_values_saved_in_the_document(main_graph_document: Path) -> None:
 
 
 def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
-    start_tatolabd: "Callable[..., TatolabdUnderTest]",
+    start_tatolabd: Callable[..., TatolabdUnderTest],
     tmp_path: Path,
 ):
     tatolabd = start_tatolabd()
@@ -182,7 +217,13 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
         for node_name in PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     } == PIN_TYPE_OF_EACH_PORT_BY_NODE_NAME
     assert node_named(graph, "brightness")["type"] == "tatolab.stream:GraphInput"
-    assert values_the_node_holds(node_named(graph, "tally"))["report_every_frames"] == 30
+    assert_the_stream_runs_cleanly_through_its_links(graph)
+    beats_per_minute = input_port_named(node_named(graph, "beat"), "beats_per_minute")
+    assert beats_per_minute.get("value_comes_from") == "saved", beats_per_minute
+    for (node_name, input_name), value in VALUE_THE_DOCUMENT_HOLDS_BY_NODE_AND_INPUT.items():
+        assert values_the_node_holds(node_named(graph, node_name))[input_name] == value, (
+            node_named(graph, node_name)
+        )
 
     stream_asset = local_api.stream_asset_of(stream_id)
     for (node_name, input_name), value in SAVED_VALUE_BY_NODE_AND_INPUT.items():
@@ -209,6 +250,7 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
     assert reopened["state"] == "done", reopened
     play(local_api, project_directory, stream_id)
     graph_after_the_reopen = await_tallies_written(tatolabd, local_api, stream_id)
+    assert_the_stream_runs_cleanly_through_its_links(graph_after_the_reopen)
     for (node_name, input_name), value in SAVED_VALUE_BY_NODE_AND_INPUT.items():
         assert (
             values_the_node_holds(node_named(graph_after_the_reopen, node_name))[input_name]

@@ -117,7 +117,7 @@
     {
       "id": "f511b25f-7028-4320-b538-a152f38695f8",
       "input_values": {
-        "report_every_frames": 30
+        "report_every_frames": 20
       },
       "name": "tally",
       "type": "nodes.frame_tally:FrameTally"

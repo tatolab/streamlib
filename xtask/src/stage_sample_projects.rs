@@ -308,7 +308,9 @@ mod tests {
              {converted_examples:?}"
         );
         assert!(
-            converted_examples.contains(&"every-pin-kind".to_owned()),
+            converted_examples
+                .iter()
+                .any(|name| name == "every-pin-kind"),
             "the sample the Studio's recordings are made from, declaring each kind of pin, \
              ships: {converted_examples:?}"
         );

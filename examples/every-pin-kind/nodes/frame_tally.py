@@ -48,8 +48,8 @@ class FrameTally:
         self.report_every_frames = max(1, int(config.report_every_frames))
         self.frames_seen = 0
 
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read(self.picture)
+    def process(self, runtime_context: RuntimeContextLimitedAccess) -> None:
+        frame = runtime_context.inputs.read(self.picture)
         if frame is None:
             return
         self.frames_seen += 1
@@ -61,7 +61,7 @@ class FrameTally:
             width=frame.width,
             height=frame.height,
         )
-        ctx.outputs.write(
+        runtime_context.outputs.write(
             self.tally,
             {
                 "frames_seen": self.frames_seen,
