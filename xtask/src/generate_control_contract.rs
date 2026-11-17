@@ -37,5 +37,6 @@ pub fn run(workspace_root: &Path, check_only: bool) -> Result<()> {
         "wrote {CONTROL_CONTRACT_FILE_WORKSPACE_PATH} ({} operations)",
         CONTROL_OPERATIONS.len()
     );
-    crate::generate_runtime_client::run(workspace_root, false)
+    crate::generate_runtime_client::run(workspace_root, false)?;
+    crate::generate_python_pin_types::run(workspace_root, false)
 }
