@@ -130,6 +130,13 @@ impl NodeInstance {
         if let (Some(output_inner), Some(descriptor)) = (&output_inner, self.0.descriptor()) {
             output_inner
                 .declare_output_ports(descriptor.outputs.iter().map(|port| port.name.clone()));
+            output_inner.keep_the_last_message_of_output_ports(
+                descriptor
+                    .outputs
+                    .iter()
+                    .filter(|port| port.flows_as_a_value())
+                    .map(|port| port.name.clone()),
+            );
         }
         let input_inner =
             needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
@@ -522,10 +529,13 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 /// `descriptor` as its node type is registered: each input with a pin that
 /// states no delivery profile reads by its pin's default. Refuses a port not in
 /// cast form under a name of its own — every lookup casts its argument, so a
-/// port registered under an uncast name could never be reached — and a flow a
-/// port's pin type does not take.
+/// port registered under an uncast name could never be reached — a flow a
+/// port's pin type does not take, and a config field named as an input port.
 pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
     refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
+    crate::core::graph::legacy_config_of_a_node::refuse_a_config_field_named_as_an_input_port(
+        &descriptor,
+    )?;
     descriptor
         .with_input_deliveries_defaulted_by_pin()
         .map_err(Error::Configuration)

@@ -4509,7 +4509,8 @@
       ],
       "annotations": [
         "meaning",
-        "control"
+        "control",
+        "project_asset"
       ],
       "python_forms": [
         "str"
@@ -13471,6 +13472,17 @@
               }
             ],
             "description": "Where a Tensor output's values live."
+          },
+          "project_asset": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PinProjectAssetAnnotation"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "That a String holds the UUID of one of the project's assets, so a client offers the\nproject's assets to pick from."
           }
         },
         "description": "What a pin states besides its type. None of it decides a link."
@@ -13624,6 +13636,20 @@
           }
         ],
         "description": "Where an Array output's attributes live."
+      },
+      "PinProjectAssetAnnotation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAssetMedia"
+            },
+            "description": "The media an asset must hold one of; empty, any asset of the project."
+          }
+        },
+        "description": "The project's assets a String holding an asset's UUID is picked from."
       },
       "NodeInputMode": {
         "oneOf": [

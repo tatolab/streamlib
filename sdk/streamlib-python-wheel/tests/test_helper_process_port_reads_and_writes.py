@@ -403,6 +403,63 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_helper_output_keeping_its_last_message_reaches_a_reader_linked_later(
+    stand_in_parent,
+):
+    """A helper node that wrote once before any link reaches its output has
+    that message read by the destination of the output's first link, wired
+    after setup, with nothing written after it: the setup command names the
+    port as one keeping its last message.
+
+    Fail-without-fix: drop the setup command's list from the helper's writer,
+    or drop the write to an unlinked port before the writer, and the
+    destination never reads.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_node_class(f"{PROBE_MODULE}:WritesOnceInSetupProbe")
+    )
+
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {},
+            "output_ports_keeping_their_last_message": ["frames_to_downstream"],
+        }
+    )
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "continuous", "interval_ms": 60_000})
+
+    link_id = "L-kept-last-message"
+    downstream = _engine.open_node_link_data_access_for_helper_process()
+    node_interpreter_bootstrap.wire_link_data_access(
+        downstream, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "wire_link",
+            "direction": "output",
+            "link": engine_shaped_link_wiring("output", link_id),
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "link_wired", "link_id": link_id}
+
+    deadline = time.monotonic() + 10.0
+    while not downstream.any_input_port_has_data() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert json.loads(payload_bytes_read_from(downstream, "frames_from_upstream")) == {
+        "written": "once"
+    }
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def an_island_feeding_the_probes_level(*, then_double_it: bool) -> dict:
     held = {
         "node": "held-1",

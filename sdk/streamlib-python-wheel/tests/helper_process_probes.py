@@ -36,6 +36,17 @@ class PassThroughProbe:
             )
 
 
+@node.process(execution="continuous", interval_ms=60_000)
+class WritesOnceInSetupProbe:
+    """Writes one record in `setup`, before any link reaches its output, and never again;
+    its interval is long enough that it never runs again inside a test."""
+
+    frames_to_downstream = Output(Packets)
+
+    def setup(self, ctx) -> None:
+        ctx.outputs.write("frames_to_downstream", json.dumps({"written": "once"}).encode())
+
+
 class OuterProbe:
 
     @node.process(execution="manual")

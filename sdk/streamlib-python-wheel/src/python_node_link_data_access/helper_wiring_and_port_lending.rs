@@ -83,6 +83,10 @@ impl PythonNodeLinkDataAccess {
         self.input_mailboxes.get().cloned()
     }
 
+    pub(crate) fn output_writer_of_this_helper(&self) -> Option<Arc<OutputWriterInner>> {
+        self.output_writer.get().cloned()
+    }
+
     /// The loss-count board this helper notes its step callbacks on, once its
     /// setup opened it.
     pub(crate) fn loss_count_board_writer_of_this_helper(
@@ -300,17 +304,22 @@ impl PythonNodeLinkDataAccess {
         }
     }
 
-    /// The writer `port_name` publishes through; `None` for a declared output
-    /// port no link has reached yet, whose messages go nowhere rather than
+    /// The writer `port_name` publishes through, linked or not: the writer
+    /// sends nothing for a declared port no link has reached, and keeps the
+    /// last message of one that keeps it. `None` for a declared port of a data
+    /// plane with no writer of its own, whose messages go nowhere rather than
     /// raising.
     pub(super) fn output_writer_reaching(
         &self,
         port_name: &str,
     ) -> PyResult<Option<&Arc<OutputWriterInner>>> {
         self.refuse_a_python_write_to_a_port_lent_to_native_code(port_name)?;
+        let declared = self.declared_output_ports.lock().contains(port_name);
         match self.output_writer.get() {
-            Some(output_writer) if output_writer.has_port(port_name) => Ok(Some(output_writer)),
-            _ if self.declared_output_ports.lock().contains(port_name) => Ok(None),
+            Some(output_writer) if declared || output_writer.has_port(port_name) => {
+                Ok(Some(output_writer))
+            }
+            _ if declared => Ok(None),
             _ => Err(unwired_port_error("output", port_name)),
         }
     }

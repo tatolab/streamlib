@@ -178,3 +178,41 @@ impl TestChannelSample {
         self.send_under(publisher, self.user_header_numbered(0))
     }
 }
+
+/// A channel opened the way the engine opens one, under a name no other test
+/// shares on iceoryx2's machine-global namespace, with room for
+/// `max_subscribers` rings of four.
+pub(crate) fn a_test_channel(tag: &str, max_subscribers: usize) -> super::Iceoryx2Service {
+    super::Iceoryx2Node::for_this_test_process()
+        .open_or_create_service(
+            &format!(
+                "test/channel/{tag}/{}",
+                crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix()
+            ),
+            max_subscribers,
+            4,
+        )
+        .expect("open the test channel")
+}
+
+/// Install `output_writer`'s publisher for `port` on `channel`, under the
+/// trusted ceiling, as the first link out of the port does.
+pub(crate) fn install_a_test_channel_publisher(
+    output_writer: &super::OutputWriterInner,
+    port: &str,
+    channel: &super::Iceoryx2Service,
+) {
+    output_writer.set_channel_publisher(
+        port,
+        channel,
+        channel
+            .create_publisher(64)
+            .expect("the port's test publisher"),
+        super::ChannelEgressConfig {
+            service_name: format!("test/{port}"),
+            trust_tier: super::ChannelTrustTier::Trusted,
+            expected_payload_bytes: 64,
+            chunk_ceiling_bytes: super::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        },
+    );
+}
