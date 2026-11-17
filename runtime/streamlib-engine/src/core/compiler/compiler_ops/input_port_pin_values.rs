@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The pin value each helper's unlinked Channels input reads: the one set on
-//! its node, else the one its port declares.
+//! The config fields a helper's node exposes as inputs, the number a Channels input reads of a
+//! pin value, and the function node inputs no value reaches.
 
-use crate::core::descriptors::{NodeKind, PortFamily};
+use crate::core::descriptors::NodeKind;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, OutOfProcessLinkWiringComponent,
@@ -15,34 +15,6 @@ use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::graph::input_values::{
     refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
 };
-
-/// Hand each helper the pin values its input ports read while unlinked, when
-/// they differ from those it holds.
-pub(crate) fn hand_each_helper_the_pin_values_its_input_ports_read(graph: &Graph) -> Result<()> {
-    for node in graph.traversal().v(()).iter() {
-        hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)?;
-    }
-    Ok(())
-}
-
-/// Hand the helper `node` runs in, when it runs in one of its own, the pin values its input
-/// ports read while unlinked, when they differ from those it holds.
-pub(crate) fn hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(
-    graph: &Graph,
-    node: &GraphNode,
-) -> Result<()> {
-    if runs_inside_the_read_of_each_node_it_feeds(graph, &node.id) {
-        return Ok(());
-    }
-    let Some(link_wiring) = node.get::<OutOfProcessLinkWiringComponent>() else {
-        return Ok(());
-    };
-    link_wiring
-        .0
-        .record_the_pin_values_and_hand_them_to_a_far_side_past_its_setup_command(
-            the_pin_values_its_input_ports_read(graph, node),
-        )
-}
 
 /// Hand each helper the config fields its node takes as inputs, when they
 /// differ from those it holds.
@@ -63,35 +35,6 @@ pub(crate) fn hand_each_helper_the_config_fields_its_node_exposes_as_inputs(
             )?;
     }
     Ok(())
-}
-
-/// The value each Channels input of `node` in `graph` reads while unlinked, by
-/// port: the value set on it live, else its pin value, else its declared
-/// default, as a number.
-fn the_pin_values_its_input_ports_read(
-    graph: &Graph,
-    node: &GraphNode,
-) -> serde_json::Map<String, JsonValue> {
-    let pin_values = the_pin_values_with_the_live_ones_over_them(graph, node);
-    node.ports
-        .inputs
-        .iter()
-        .filter(|port| port.family.family == PortFamily::Channels)
-        .filter_map(|port| {
-            let pin_value = pin_values.get(&port.name).or(port.pin_default.as_ref())?;
-            the_control_value_of_a_pin(pin_value)
-                .map(|control_value| (port.name.clone(), JsonValue::from(control_value)))
-        })
-        .collect()
-}
-
-/// The number a Channels input reads of `pin_value`: the number, or 1 and 0 for a bool.
-pub(crate) fn the_control_value_of_a_pin(pin_value: &JsonValue) -> Option<f64> {
-    match pin_value {
-        JsonValue::Bool(pin_is_on) => Some(if *pin_is_on { 1.0 } else { 0.0 }),
-        JsonValue::Number(number) => number.as_f64(),
-        _ => None,
-    }
 }
 
 /// The inputs of function node `node` in `graph` that no link feeds, that carry
@@ -293,38 +236,6 @@ pub(crate) mod tests {
             .unwrap()
             .pins
             .insert(input.to_string(), pin);
-    }
-
-    #[test]
-    fn a_helpers_setup_carries_each_declared_default_and_a_pin_edit_after_it_is_handed_over() {
-        let mut graph = a_graph_resolving_a_process_node_type_with_channels_inputs();
-        let level_meter = a_level_meter_in_a_helper(&mut graph);
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        assert_eq!(
-            the_link_wiring_of(&graph, &level_meter).as_setup_command_ports()["pins"],
-            serde_json::json!({"level": 0.5}),
-            "an input declaring a default reads it, and one declaring none reads only its links"
-        );
-
-        let delivery = RecordingOutOfProcessFarSideLinkDelivery::default();
-        the_link_wiring_of(&graph, &level_meter)
-            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery.clone())
-            .unwrap();
-        set_a_pin(&mut graph, &level_meter, "gain", serde_json::json!(2));
-        set_a_pin(&mut graph, &level_meter, "level", serde_json::json!(true));
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        hand_each_helper_the_pin_values_its_input_ports_read(&graph).unwrap();
-        assert_eq!(
-            *delivery.pin_values_handed_over.lock(),
-            vec![
-                serde_json::json!({"gain": 2.0, "level": 1.0})
-                    .as_object()
-                    .unwrap()
-                    .clone()
-            ],
-            "a pin set wins over the default, a bool reads as 1 or 0, and pin values that did \
-             not change are not handed over again"
-        );
     }
 
     #[test]

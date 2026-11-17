@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use crate::core::media_clock::MediaClock;
 
 /// A loan is filled in place and published as one sample carrying its
 /// stamp; a loan dropped unpublished sends nothing.
