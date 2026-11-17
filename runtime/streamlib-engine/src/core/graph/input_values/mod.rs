@@ -11,7 +11,9 @@ use serde_json::{Map, Value};
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_control_value_of_a_pin;
 use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange};
 use crate::core::graph::PortInfo;
-use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
+use crate::core::graph::legacy_config_of_a_node::{
+    LegacyConfigOfANodeType, the_properties_of_a_config_schema,
+};
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
 mod live_input_values;
@@ -118,19 +120,12 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             _ => Ok(()),
         };
     }
-    let config_schema_lists_it = config_schema
-        .as_ref()
-        .and_then(|config_schema| config_schema.get("properties"))
-        .and_then(Value::as_object)
-        .is_some_and(|properties| properties.contains_key(input));
-    if !config_schema_lists_it {
+    let config_fields = the_properties_of_a_config_schema(config_schema.as_ref());
+    if !config_fields.is_some_and(|properties| properties.contains_key(input)) {
         let mut its_inputs: Vec<String> =
             input_ports.iter().map(|port| port.name.clone()).collect();
         its_inputs.extend(
-            config_schema
-                .as_ref()
-                .and_then(|config_schema| config_schema.get("properties"))
-                .and_then(Value::as_object)
+            config_fields
                 .into_iter()
                 .flat_map(|properties| properties.keys().cloned()),
         );

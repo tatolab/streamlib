@@ -45,7 +45,7 @@ export const BUILT_IN_PIN_TYPES = Object.freeze([
     label: "String",
     documentation: "Text.",
     flows: Object.freeze(["value", "stream"]),
-    annotations: Object.freeze(["meaning", "control"]),
+    annotations: Object.freeze(["meaning", "control", "project_asset"]),
     python_forms: Object.freeze(["str"]),
     typescript_form: "\"string\"",
     value_component: "StringPinValue",

@@ -5,12 +5,21 @@
 //! schema lists is an input that takes no wire, read when the node is set up, with the default
 //! the schema states and a pin type only where the schema states one exactly.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 
-use crate::core::descriptors::{IntegerSize, NodeDescriptor, PinType};
+use super::{the_description_of, the_properties_of_a_config_schema};
+use crate::core::descriptors::{
+    IntegerSize, NodeClassImportPath, NodeDescriptor, PinAnnotations, PinProjectAssetAnnotation,
+    PinType,
+};
 use crate::core::error::{Error, Result};
-use crate::core::graph::exposed_config_field_input_ports::the_number_and_bool_fields_of;
-use crate::core::nodes::NODE_REGISTRY;
+use crate::core::nodes::is_a_natively_compiled_node_type;
+
+/// The schema keyword a config field holding a project asset's UUID as a bare string carries;
+/// its value is the field's [`PinProjectAssetAnnotation`].
+const PROJECT_ASSET_SCHEMA_KEYWORD: &str = "x-tatolab-project-asset";
 
 /// One config field of a node type not yet typed, as the catalog describes it: an input that
 /// takes no wire, read when the node is set up.
@@ -25,6 +34,9 @@ pub(crate) struct ConfigFieldDescribedAsASetting {
     /// The type the schema states exactly; `None` for a field whose schema holds free-form data,
     /// may be null, or states a type no pin type holds exactly.
     pub(crate) pin_type: Option<PinType>,
+    /// What the schema states of the field besides its type: on a String holding a project
+    /// asset's UUID, the assets it is picked from.
+    pub(crate) annotations: PinAnnotations,
 }
 
 /// Each field the config schema of `descriptor` lists, in the order it lists them, described as
@@ -35,7 +47,7 @@ pub(crate) fn the_config_fields_described_as_settings(
     let Some(config_schema) = descriptor.config_schema.as_ref() else {
         return Vec::new();
     };
-    let Some(properties) = config_schema.get("properties").and_then(Value::as_object) else {
+    let Some(properties) = the_properties_of_a_config_schema(Some(config_schema)) else {
         return Vec::new();
     };
     let defaults_of_the_whole_config = config_schema.get("default").and_then(Value::as_object);
@@ -44,13 +56,17 @@ pub(crate) fn the_config_fields_described_as_settings(
         .map(|(name, field_schema)| {
             let field_schema =
                 the_field_schema_with_its_reference_resolved(config_schema, field_schema);
+            let pin_type = the_pin_type_a_field_schema_states_exactly(&field_schema);
+            let annotations = PinAnnotations {
+                project_asset: pin_type
+                    .as_ref()
+                    .filter(|pin_type| matches!(pin_type, PinType::String {}))
+                    .and_then(|_| the_project_asset_annotation_of(&field_schema)),
+                ..PinAnnotations::default()
+            };
             ConfigFieldDescribedAsASetting {
                 name: name.clone(),
-                description: field_schema
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+                description: the_description_of(&field_schema).to_owned(),
                 default_value: field_schema
                     .get("default")
                     .or_else(|| {
@@ -58,27 +74,34 @@ pub(crate) fn the_config_fields_described_as_settings(
                     })
                     .filter(|default| !default.is_null())
                     .cloned(),
-                pin_type: the_pin_type_a_field_schema_states_exactly(&field_schema),
+                pin_type,
+                annotations,
             }
         })
         .collect()
 }
 
-/// The number and Boolean config fields a node of `descriptor`'s type can expose as inputs, the
-/// fields `set_exposed_config_fields` takes on it; none for a natively compiled type, whose code
-/// reads no config field as an input.
+/// The config fields a node of `node_type`, whose config schema is `config_schema`, can expose
+/// as inputs, each with its description: the number and Boolean fields, which
+/// `set_exposed_config_fields` takes; none for a natively compiled type, whose code reads no
+/// config field as an input.
 pub(crate) fn the_config_fields_a_node_of_the_type_can_expose(
-    descriptor: &NodeDescriptor,
-) -> Vec<String> {
-    if NODE_REGISTRY
-        .descriptor(&descriptor.node_class_import_path)
-        .is_some()
-    {
+    node_type: &NodeClassImportPath,
+    config_schema: Option<&Value>,
+) -> Vec<(String, String)> {
+    if is_a_natively_compiled_node_type(node_type) {
         return Vec::new();
     }
-    the_number_and_bool_fields_of(descriptor.config_schema.as_ref())
+    the_properties_of_a_config_schema(config_schema)
         .into_iter()
-        .map(|(field, _)| field)
+        .flatten()
+        .filter(|(_, field_schema)| {
+            matches!(
+                field_schema.get("type").and_then(Value::as_str),
+                Some("number" | "integer" | "boolean")
+            )
+        })
+        .map(|(field, field_schema)| (field.clone(), the_description_of(field_schema).to_owned()))
         .collect()
 }
 
@@ -87,11 +110,7 @@ pub(crate) fn the_config_fields_a_node_of_the_type_can_expose(
 pub(crate) fn refuse_a_config_field_named_as_an_input_port(
     descriptor: &NodeDescriptor,
 ) -> Result<()> {
-    let Some(properties) = descriptor
-        .config_schema
-        .as_ref()
-        .and_then(|config_schema| config_schema.get("properties"))
-        .and_then(Value::as_object)
+    let Some(properties) = the_properties_of_a_config_schema(descriptor.config_schema.as_ref())
     else {
         return Ok(());
     };
@@ -114,14 +133,17 @@ pub(crate) fn refuse_a_config_field_named_as_an_input_port(
 /// `field_schema` with a `$ref` into the config schema's definitions, or the single `allOf` a
 /// schema wraps such a reference in to describe it, replaced by what it points to; the keys
 /// written beside the reference win.
-fn the_field_schema_with_its_reference_resolved(
+fn the_field_schema_with_its_reference_resolved<'schema>(
     config_schema: &Value,
-    field_schema: &Value,
-) -> Value {
+    field_schema: &'schema Value,
+) -> Cow<'schema, Value> {
     let reference = field_schema
         .get("$ref")
         .or_else(|| match field_schema.get("allOf") {
-            Some(Value::Array(all_of)) if all_of.len() == 1 => all_of[0].get("$ref"),
+            Some(Value::Array(all_of)) => match all_of.as_slice() {
+                [only] => only.get("$ref"),
+                _ => None,
+            },
             _ => None,
         });
     let Some(pointed_to) = reference
@@ -130,7 +152,7 @@ fn the_field_schema_with_its_reference_resolved(
         .and_then(|pointer| config_schema.pointer(pointer))
         .and_then(Value::as_object)
     else {
-        return field_schema.clone();
+        return Cow::Borrowed(field_schema);
     };
     let mut resolved = pointed_to.clone();
     if let Some(beside_the_reference) = field_schema.as_object() {
@@ -140,14 +162,14 @@ fn the_field_schema_with_its_reference_resolved(
             }
         }
     }
-    Value::Object(resolved)
+    Cow::Owned(Value::Object(resolved))
 }
 
-/// The pin type `field_schema` states exactly: a Boolean, an Integer, a Float, a String, or a
-/// Menu of the strings an `enum` or a `oneOf` of single strings lists. `None` for anything else,
-/// so no guessed type refuses a value the schema takes today: an object, a list, a node
-/// reference, a field that may be null, and an integer of 64 bits, which no single Integer
-/// holds exactly.
+/// The pin type `field_schema` states exactly: a Boolean, an Integer of 8, 16 or 32 bits, a
+/// Float, a String, or a Menu of the strings an `enum` or a `oneOf` of single strings lists.
+/// `None` for anything else, so no guessed type refuses a value the schema takes today: an
+/// object, a list, a node reference, a field that may be null, and an integer of no stated size
+/// or of 64 bits, which holds numbers past the 2^53 a single Integer holds.
 fn the_pin_type_a_field_schema_states_exactly(field_schema: &Value) -> Option<PinType> {
     if let Some(option_names) = the_option_names_of_a_menu(field_schema) {
         return Some(PinType::Menu { option_names });
@@ -156,14 +178,13 @@ fn the_pin_type_a_field_schema_states_exactly(field_schema: &Value) -> Option<Pi
         "boolean" => Some(PinType::Boolean {}),
         "number" => Some(PinType::Float { exact_size: None }),
         "string" => Some(PinType::String {}),
-        "integer" => match field_schema.get("format").and_then(Value::as_str) {
-            None => Some(PinType::Integer { exact_size: None }),
-            Some(format) => {
-                the_integer_size_of_a_format(format).map(|exact_size| PinType::Integer {
-                    exact_size: Some(exact_size),
-                })
-            }
-        },
+        "integer" => field_schema
+            .get("format")
+            .and_then(Value::as_str)
+            .and_then(the_integer_size_of_a_format)
+            .map(|exact_size| PinType::Integer {
+                exact_size: Some(exact_size),
+            }),
         _ => None,
     }
 }
@@ -213,4 +234,13 @@ fn the_option_names_of_a_menu(field_schema: &Value) -> Option<Vec<String>> {
         return None;
     };
     (!option_names.is_empty()).then_some(option_names)
+}
+
+/// The assets a field holding a project asset's UUID is picked from, as its schema's
+/// `x-tatolab-project-asset` keyword states them; `None` for a field that carries no such keyword,
+/// or one naming a medium no asset holds.
+fn the_project_asset_annotation_of(field_schema: &Value) -> Option<PinProjectAssetAnnotation> {
+    field_schema
+        .get(PROJECT_ASSET_SCHEMA_KEYWORD)
+        .and_then(|keyword| serde_json::from_value(keyword.clone()).ok())
 }

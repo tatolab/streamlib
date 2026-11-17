@@ -161,6 +161,35 @@ fn a_test_named_class_opts_out_of_pytest() {
     );
 }
 
+/// The catalog lists each config field under `inputs` too, as a setting; the config renders it,
+/// so the docstring's inputs name only the ports.
+#[test]
+fn a_setting_the_catalog_lists_among_the_inputs_is_no_input_of_the_docstring() {
+    let descriptor = json!({
+        "type": "tatolab.stream:Recorder",
+        "description": "Records",
+        "config_schema": {
+            "type": "object",
+            "properties": {"path": {"description": "The file.", "type": "string", "default": "recording.bin"}}
+        },
+        "inputs": [
+            {"name": "audio", "description": "What it records", "required": true,
+             "delivery_profile": "ordered"},
+            {"name": "path", "description": "The file.", "required": false,
+             "delivery_profile": null, "pin_type": {"kind": "is", "pin_type": {"type": "string"}},
+             "flow": "value", "input_mode": {"mode": "setting_only", "read": "at_setup"},
+             "default_value": "recording.bin"}
+        ],
+        "outputs": []
+    });
+    let rendered = render_built_in_node_classes_module(&[descriptor_from(descriptor)]).unwrap();
+    assert!(
+        rendered.contains("    Inputs:\n        `audio` (ordered): What it records.\n\n"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("`path`: The file."), "{rendered}");
+}
+
 #[test]
 fn an_image_outputs_frame_rate_renders_under_the_port_as_a_python_author_writes_it() {
     let descriptor = json!({

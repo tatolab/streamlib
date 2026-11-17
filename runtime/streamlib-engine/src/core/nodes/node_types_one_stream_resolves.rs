@@ -130,6 +130,12 @@ impl PlaceholderOfANodeTypeNotDescribed {
     }
 }
 
+/// Whether `node_type` names a node type compiled into the runtime, which every stream resolves
+/// alike.
+pub(crate) fn is_a_natively_compiled_node_type(node_type: &NodeClassImportPath) -> bool {
+    NODE_REGISTRY.descriptor(node_type).is_some()
+}
+
 impl NodeTypesOneStreamResolves {
     /// A stream that has described nothing yet: it resolves the native types alone.
     pub fn new() -> Self {
@@ -138,7 +144,7 @@ impl NodeTypesOneStreamResolves {
 
     /// Whether `node_type` is natively compiled, which no describe replaces.
     pub fn is_a_natively_compiled_node_type(&self, node_type: &NodeClassImportPath) -> bool {
-        NODE_REGISTRY.descriptor(node_type).is_some()
+        is_a_natively_compiled_node_type(node_type)
     }
 
     pub fn was_described_in_this_streams_node_interpreter(

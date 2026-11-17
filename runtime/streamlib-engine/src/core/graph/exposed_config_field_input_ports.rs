@@ -7,6 +7,7 @@
 use crate::core::descriptors::{NodeClassImportPath, PortFamily, PortFamilyDeclaration};
 use crate::core::error::{Error, Result};
 use crate::core::graph::PortInfo;
+use crate::core::graph::legacy_config_of_a_node::the_config_fields_a_node_of_the_type_can_expose;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 
 /// The input port each field of `exposed_config_fields` takes on node `node_name` of type
@@ -34,7 +35,8 @@ pub(crate) fn the_input_ports_of_the_exposed_config_fields(
     let config_schema = node_types
         .descriptor(node_type)
         .and_then(|descriptor| descriptor.config_schema);
-    let fields_it_can_expose = the_number_and_bool_fields_of(config_schema.as_ref());
+    let fields_it_can_expose =
+        the_config_fields_a_node_of_the_type_can_expose(node_type, config_schema.as_ref());
     let mut input_ports: Vec<PortInfo> = Vec::with_capacity(exposed_config_fields.len());
     for field in exposed_config_fields {
         let Some((_, field_description)) = fields_it_can_expose
@@ -76,37 +78,6 @@ pub(crate) fn the_input_ports_of_the_exposed_config_fields(
         });
     }
     Ok(input_ports)
-}
-
-/// Each number, integer or bool property `config_schema` declares, with its description.
-pub(super) fn the_number_and_bool_fields_of(
-    config_schema: Option<&serde_json::Value>,
-) -> Vec<(String, String)> {
-    let Some(properties) = config_schema
-        .and_then(|config_schema| config_schema.get("properties"))
-        .and_then(serde_json::Value::as_object)
-    else {
-        return Vec::new();
-    };
-    properties
-        .iter()
-        .filter(|(_, property)| {
-            matches!(
-                property.get("type").and_then(serde_json::Value::as_str),
-                Some("number" | "integer" | "boolean")
-            )
-        })
-        .map(|(field, property)| {
-            (
-                field.clone(),
-                property
-                    .get("description")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]
