@@ -94,9 +94,7 @@ impl ControlOperationDispatcher {
             Some(stream) => self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(&stream)
-                .map_err(|refusal| {
-                    ControlOperationRefusal::Failed(format!("graph failed: {refusal}"))
-                })?
+                .map_err(|refusal| ControlOperationRefusal::of_an_engine_error("graph", &refusal))?
                 .to_json_async()
                 .await
                 .map_err(|e| ControlOperationRefusal::Failed(format!("graph export failed: {e}"))),
@@ -261,7 +259,7 @@ impl ControlOperationDispatcher {
                 })
                 .collect::<streamlib::sdk::error::Result<Vec<_>>>()
                 .map_err(|refusal| {
-                    ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
+                    ControlOperationRefusal::of_an_engine_error(method_name, &refusal)
                 })?;
             subscriptions
                 .follow_the_streams(streams_as_loaded_now, what)

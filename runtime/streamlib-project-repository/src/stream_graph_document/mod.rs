@@ -321,6 +321,12 @@ impl StreamGraphDocument {
             .map_err(|not_a_node| format!("node {node} does not read: {not_a_node}"))
     }
 
+    /// Whether the document holds a node whose UUID is `node`.
+    pub fn holds_a_node(&self, node: Uuid) -> bool {
+        self.node_objects()
+            .any(|node_object| node_uuid_of(node_object) == Some(node))
+    }
+
     /// The top-level node named `name`, as the document holds it, if one is.
     pub fn node_named(&self, name: &str) -> Option<StreamGraphDocumentNode> {
         self.node_objects()

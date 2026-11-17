@@ -11,7 +11,7 @@ pub(super) fn graph_operation_for_the_request(
     node_by_label: &mut HashMap<String, Uuid>,
     what_the_request_reads: &WhatAGraphRequestReadsOfItsStreamAndProject<'_>,
     placed_stream_a_collapse_saves: &mut Option<PlacedStreamACollapseSaves>,
-) -> Result<StreamGraphOperation, String> {
+) -> Result<StreamGraphOperation, GraphRequestRefusal> {
     let WhatAGraphRequestReadsOfItsStreamAndProject {
         run_the_graph_generator,
         place_the_imported_stream,
@@ -20,22 +20,26 @@ pub(super) fn graph_operation_for_the_request(
         function_nodes_of_the_running_stream,
         config_a_node_takes,
     } = what_the_request_reads;
-    let node_named = |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, String> {
-        node_by_label
-            .get(node)
-            .copied()
-            .or_else(|| Uuid::parse_str(node).ok())
-            .ok_or_else(|| {
-                format!(
-                    "`{node}` is neither a node's UUID nor the `as` of a node an earlier \
-                     `add_node` of this transaction adds"
-                )
-            })
-    };
+    let node_named =
+        |node: &str, node_by_label: &HashMap<String, Uuid>| -> Result<Uuid, GraphRequestRefusal> {
+            node_by_label
+                .get(node)
+                .copied()
+                .or_else(|| Uuid::parse_str(node).ok())
+                .ok_or_else(|| {
+                    GraphRequestRefusal::of_a_node_not_found(
+                        node,
+                        format!(
+                            "`{node}` is neither a node's UUID nor the `as` of a node an earlier \
+                         `add_node` of this transaction adds"
+                        ),
+                    )
+                })
+        };
     let link_between = |source: &StreamGraphActionLinkEnd,
                         target: &StreamGraphActionLinkEnd,
                         node_by_label: &HashMap<String, Uuid>|
-     -> Result<StreamGraphDocumentLink, String> {
+     -> Result<StreamGraphDocumentLink, GraphRequestRefusal> {
         Ok(StreamGraphDocumentLink {
             source: StreamGraphDocumentLinkEnd {
                 node: node_named(&source.node, node_by_label)?,
@@ -126,7 +130,8 @@ pub(super) fn graph_operation_for_the_request(
                         "node {id} `{}` is a `{node_type}`, no fragment, so no graph \
                          generator's run refreshes it; give the import another `name`",
                         placed.name
-                    ));
+                    )
+                    .into());
                 }
             };
             Ok(operation)
@@ -170,7 +175,7 @@ pub(super) fn graph_operation_for_the_request(
         StreamGraphAction::RemoveNode { node, .. } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RemoveNode {
-                node: staged_graph.node(node)?,
+                node: the_node_the_document_holds(staged_graph, node)?,
                 links: staged_graph.links_touching(node),
             })
         }
@@ -196,7 +201,7 @@ pub(super) fn graph_operation_for_the_request(
         }
         StreamGraphAction::SetNodeConfig { node, config, .. } => {
             let node = node_named(&node, node_by_label)?;
-            let configured = staged_graph.node(node)?;
+            let configured = the_node_the_document_holds(staged_graph, node)?;
             Ok(StreamGraphOperation::set_node_config_of(
                 &configured,
                 config_a_node_takes(&configured.node_type, &configured.input_values)?,
@@ -207,14 +212,18 @@ pub(super) fn graph_operation_for_the_request(
             node, input, value, ..
         } => {
             let node = node_named(&node, node_by_label)?;
-            StreamGraphOperation::set_pin_value_of(&staged_graph.node(node)?, input, value)
+            Ok(StreamGraphOperation::set_pin_value_of(
+                &the_node_the_document_holds(staged_graph, node)?,
+                input,
+                value,
+            )?)
         }
         StreamGraphAction::SetNodeInputValue {
             node, input, value, ..
         } => {
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::set_node_input_value_of(
-                &staged_graph.node(node)?,
+                &the_node_the_document_holds(staged_graph, node)?,
                 input,
                 value,
             ))
@@ -223,7 +232,7 @@ pub(super) fn graph_operation_for_the_request(
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::RenameNode {
                 node,
-                from: staged_graph.node(node)?.name,
+                from: the_node_the_document_holds(staged_graph, node)?.name,
                 to: name,
             })
         }
@@ -231,7 +240,7 @@ pub(super) fn graph_operation_for_the_request(
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetStudioFields {
                 node,
-                from: staged_graph.node(node)?.studio,
+                from: the_node_the_document_holds(staged_graph, node)?.studio,
                 to: Box::new(StreamGraphNodeStudioFields::from_a_callers_studio(studio)?),
             })
         }
@@ -243,7 +252,7 @@ pub(super) fn graph_operation_for_the_request(
             let node = node_named(&node, node_by_label)?;
             Ok(StreamGraphOperation::SetExposedConfigFields {
                 node,
-                from: staged_graph.node(node)?.exposed_config_fields,
+                from: the_node_the_document_holds(staged_graph, node)?.exposed_config_fields,
                 to: exposed_config_fields,
             })
         }
@@ -255,12 +264,12 @@ pub(super) fn graph_operation_for_the_request(
             ..
         } => {
             if title.is_empty() {
-                return Err("a group needs a `title`".to_owned());
+                return Err("a group needs a `title`".to_owned().into());
             }
             let nodes = nodes
                 .iter()
                 .map(|node| node_named(node, node_by_label))
-                .collect::<Result<Vec<Uuid>, String>>()?;
+                .collect::<Result<Vec<Uuid>, GraphRequestRefusal>>()?;
             Ok(StreamGraphOperation::AddGroup {
                 group: StreamGraphDocumentGroup {
                     id: Uuid::new_v4(),
@@ -282,7 +291,7 @@ pub(super) fn graph_operation_for_the_request(
         } => {
             let from = staged_graph.group(the_group_named(&group)?)?;
             if title.as_deref() == Some("") {
-                return Err("a group needs a `title`".to_owned());
+                return Err("a group needs a `title`".to_owned().into());
             }
             let to = StreamGraphGroupFields {
                 title: title.unwrap_or_else(|| from.fields.title.clone()),
@@ -323,22 +332,21 @@ pub(super) fn graph_operation_for_the_request(
                 })?
                 .into_owned();
             if let Some(held) = staged_graph.node_named(&name) {
-                return Err(
-                    if held.node_type == STREAM_FRAGMENT_NODE_TYPE
-                        && held.input_values == input_values
-                    {
-                        format!(
-                            "node {} `{name}` already places this stream, and follows its import's \
+                return Err(if held.node_type == STREAM_FRAGMENT_NODE_TYPE
+                    && held.input_values == input_values
+                {
+                    format!(
+                        "node {} `{name}` already places this stream, and follows its import's \
                          folder as it is on disk, so there is nothing to place again",
-                            held.id
-                        )
-                    } else {
-                        format!(
-                            "node {} `{name}` is a `{}`; give the stream another `name`",
-                            held.id, held.node_type
-                        )
-                    },
-                );
+                        held.id
+                    )
+                } else {
+                    format!(
+                        "node {} `{name}` is a `{}`; give the stream another `name`",
+                        held.id, held.node_type
+                    )
+                }
+                .into());
             }
             label_the_node(label, node, node_by_label)?;
             Ok(StreamGraphOperation::AddNode {
@@ -404,7 +412,7 @@ pub(super) fn graph_operation_for_the_request(
             let nodes = nodes
                 .iter()
                 .map(|node| node_named(node, node_by_label))
-                .collect::<Result<Vec<Uuid>, String>>()?;
+                .collect::<Result<Vec<Uuid>, GraphRequestRefusal>>()?;
             let name = streamlib::sdk::graph::cast_exposed_name_to_url_safe(&name)
                 .map_err(|casts_to_nothing| {
                     format!("the subgraph name `{name}` names nothing: {casts_to_nothing}")
@@ -543,6 +551,21 @@ pub(super) fn the_previous_value_node_added_on_the_link(
             },
         ],
     }
+}
+
+/// The node `node` of `document`, or the refusal coded `node_not_found` when the document holds
+/// none of that UUID.
+fn the_node_the_document_holds(
+    document: &StreamGraphDocument,
+    node: Uuid,
+) -> Result<StreamGraphDocumentNode, GraphRequestRefusal> {
+    document.node(node).map_err(|why| {
+        if document.holds_a_node(node) {
+            GraphRequestRefusal::from(why)
+        } else {
+            GraphRequestRefusal::of_a_node_not_found(&node.to_string(), why)
+        }
+    })
 }
 
 fn the_note_named(note: &str) -> Result<Uuid, String> {

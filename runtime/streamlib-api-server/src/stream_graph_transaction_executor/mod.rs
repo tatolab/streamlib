@@ -46,6 +46,7 @@ use crate::control_operations_on_project_assets::{
     the_idempotency_key_a_caller_sent,
 };
 use crate::mcp_project_change_feed::project_transaction_on_the_wire;
+use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
 mod input_value_sets;
 mod input_values_set_live;
@@ -268,19 +269,24 @@ pub(crate) struct WhatAGraphOperationNames {
     field: Option<String>,
 }
 
-/// Why one graph action was refused: what kind of refusal it is, the runtime's own words, the
-/// input it refuses a value of when that is not the one the action names, the JSON pointer,
-/// into the action's own params, of the value refused, and why the node it reaches does not run
-/// when that is why.
+/// Why one graph action was refused: its code and the place it names, the runtime's own words,
+/// and the JSON pointer, into the action's own params, of the value refused.
 pub(super) struct GraphRequestRefusal {
-    refusal_code: ControlOperationRefusalCode,
+    code_and_place: Box<RefusalCodeAndPlace>,
     runtime_words: String,
-    refused_field: Option<String>,
     refused_params_pointer: Option<String>,
-    not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
 }
 
 impl GraphRequestRefusal {
+    /// A refusal coded and placed by `code_and_place`, in `runtime_words`.
+    fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
+        Self {
+            code_and_place: Box::new(code_and_place),
+            runtime_words,
+            refused_params_pointer: None,
+        }
+    }
+
     /// A refusal of a value set on an input, coded by `refusal`; the value is at
     /// `refused_params_pointer` in the action's params.
     fn of_an_input_value(
@@ -289,52 +295,79 @@ impl GraphRequestRefusal {
     ) -> Self {
         use streamlib::sdk::graph::input_values::InputValueRefusalCode;
         Self {
-            refusal_code: match refusal.code {
-                InputValueRefusalCode::PortNotFound => ControlOperationRefusalCode::PortNotFound,
-                InputValueRefusalCode::InputTakesNoValue => {
-                    ControlOperationRefusalCode::InputTakesNoValue
-                }
-                InputValueRefusalCode::InputValueNotValid => {
-                    ControlOperationRefusalCode::InputValueNotValid
-                }
-            },
-            runtime_words: refusal.words,
-            refused_field: None,
             refused_params_pointer: Some(refused_params_pointer),
-            not_running_because: None,
+            ..Self::coded(
+                RefusalCodeAndPlace::coded(match refusal.code {
+                    InputValueRefusalCode::PortNotFound => {
+                        ControlOperationRefusalCode::PortNotFound
+                    }
+                    InputValueRefusalCode::InputTakesNoValue => {
+                        ControlOperationRefusalCode::InputTakesNoValue
+                    }
+                    InputValueRefusalCode::InputValueNotValid => {
+                        ControlOperationRefusalCode::InputValueNotValid
+                    }
+                }),
+                refusal.words,
+            )
         }
     }
 
     /// A refusal of a value set live on a `reset` input while its stream's playback is stopped,
     /// in the runtime's words: coded `node_not_running`, because the playback is stopped.
     fn of_a_reset_input_while_stopped(runtime_words: String) -> Self {
-        Self {
-            refusal_code: ControlOperationRefusalCode::NodeNotRunning,
+        Self::coded(
+            RefusalCodeAndPlace {
+                not_running_because: Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
+                ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotRunning)
+            },
             runtime_words,
-            refused_field: None,
-            refused_params_pointer: None,
-            not_running_because: Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
-        }
+        )
+    }
+
+    /// The refusal of a node `node` the action names that its stream does not hold, in the
+    /// runtime's words `why_no_node_is_it`.
+    fn of_a_node_not_found(node: &str, why_no_node_is_it: String) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace {
+                refused_node: Some(node.to_owned()),
+                ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotFound)
+            },
+            why_no_node_is_it,
+        )
     }
 
     /// The refusal naming `input` as the field refused.
-    fn of_the_field(self, input: &str) -> Self {
-        Self {
-            refused_field: Some(input.to_owned()),
-            ..self
-        }
+    fn of_the_field(mut self, input: &str) -> Self {
+        self.code_and_place.refused_field = Some(input.to_owned());
+        self
     }
 }
 
 impl From<String> for GraphRequestRefusal {
     fn from(runtime_words: String) -> Self {
-        Self {
-            refusal_code: ControlOperationRefusalCode::Refused,
+        Self::coded(
+            RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused),
             runtime_words,
-            refused_field: None,
-            refused_params_pointer: None,
-            not_running_because: None,
-        }
+        )
+    }
+}
+
+impl From<streamlib::sdk::error::Error> for GraphRequestRefusal {
+    fn from(refusal: streamlib::sdk::error::Error) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::of_an_engine_error(&refusal),
+            refusal.to_string(),
+        )
+    }
+}
+
+impl From<ProjectRepositoryRefusal> for GraphRequestRefusal {
+    fn from(refusal: ProjectRepositoryRefusal) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::of_a_project_repository_refusal(&refusal),
+            refusal.to_string(),
+        )
     }
 }
 
@@ -359,48 +392,52 @@ impl GraphTransactionRefusal {
         }
     }
 
-    pub(crate) fn of_the_whole_transaction(runtime_words: String) -> Self {
+    pub(crate) fn of_the_whole_transaction(refusal: impl Into<GraphRequestRefusal>) -> Self {
         Self {
             refused_operation_index: None,
             what_the_refused_operation_names: Box::default(),
-            refusal: runtime_words.into(),
+            refusal: refusal.into(),
         }
     }
 
-    /// The refusal of the action the tool `tool_name` was sent, as the wire carries it.
+    /// The refusal of the action the tool `tool_name` was sent, as the wire carries it: the
+    /// node, link and field the refused operation names as its caller named them, else the ones
+    /// the refusal names.
     pub(crate) fn into_the_refusal_on_the_wire(
         self,
         tool_name: &str,
     ) -> ProjectActionRefusalOnTheWire {
         let what_the_refused_operation_names = *self.what_the_refused_operation_names;
         let GraphRequestRefusal {
-            refusal_code,
+            code_and_place,
             runtime_words,
-            refused_field,
             refused_params_pointer,
-            not_running_because,
         } = self.refusal;
+        let mut code_and_place = *code_and_place;
         let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
             (Some(pointer), Some(index)) if tool_name == <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME => {
                 Some(format!("/operations/{index}{pointer}"))
             }
             (pointer, _) => pointer,
         };
+        code_and_place.refused_node = what_the_refused_operation_names
+            .node
+            .or(code_and_place.refused_node);
+        code_and_place.refused_field = code_and_place
+            .refused_field
+            .or(what_the_refused_operation_names.field);
         ProjectActionRefusalOnTheWire {
             refused_operation_index: self.refused_operation_index,
-            refused_node: what_the_refused_operation_names.node,
             refused_link: what_the_refused_operation_names.link,
-            refused_field: refused_field.or(what_the_refused_operation_names.field),
             refused_params_pointer,
-            not_running_because,
-            ..ProjectActionRefusalOnTheWire::of_the_action(tool_name, refusal_code, runtime_words)
+            ..code_and_place.on_the_refusal_of(tool_name, runtime_words)
         }
     }
 }
 
 impl From<ProjectRepositoryRefusal> for GraphTransactionRefusal {
     fn from(refusal: ProjectRepositoryRefusal) -> Self {
-        Self::of_the_whole_transaction(refusal.to_string())
+        Self::of_the_whole_transaction(refusal)
     }
 }
 
@@ -581,15 +618,20 @@ impl StreamGraphTransactionExecutor<'_> {
                         GraphTransactionRefusal::of_the_operation(
                             request_index,
                             what_a_graph_action_names(request),
-                            format!(
-                                "no stream the runtime holds runs the stream asset {}; the stream \
-                                 assets it holds are: {}",
-                                request.stream(),
-                                if loaded_stream_assets.is_empty() {
-                                    "none".to_owned()
-                                } else {
-                                    loaded_stream_assets.join(", ")
-                                }
+                            GraphRequestRefusal::coded(
+                                RefusalCodeAndPlace::coded(
+                                    ControlOperationRefusalCode::StreamNotFound,
+                                ),
+                                format!(
+                                    "no stream the runtime holds runs the stream asset {}; the \
+                                     stream assets it holds are: {}",
+                                    request.stream(),
+                                    if loaded_stream_assets.is_empty() {
+                                        "none".to_owned()
+                                    } else {
+                                        loaded_stream_assets.join(", ")
+                                    }
+                                ),
                             ),
                         )
                     })
@@ -666,7 +708,7 @@ impl StreamGraphTransactionExecutor<'_> {
 /// A run of one of a stream's graph generators, `(generator, fragment name, promoted settings)`,
 /// answering the fragment node it placed or the refusal.
 type GraphGeneratorRunOfTheStream<'stream> =
-    dyn Fn(&str, Option<&str>, &Map<String, Value>) -> Result<Value, String> + 'stream;
+    dyn Fn(&str, Option<&str>, &Map<String, Value>) -> Result<Value, GraphRequestRefusal> + 'stream;
 
 /// The placement of an imported stream under the fragment node `(fragment node, held stream)`
 /// names, `held_stream` its config's `stream`: the fragment it places and the stream's name.
@@ -687,7 +729,7 @@ type FunctionNodesOfTheRunningStream<'stream> = dyn Fn() -> Result<HashSet<Uuid>
 /// The config a node of a type holding some input values takes whole, as the running stream
 /// resolves the type.
 type ConfigANodeOfTheRunningStreamTakes<'stream> =
-    dyn Fn(&str, &Map<String, Value>) -> Result<Value, String> + 'stream;
+    dyn Fn(&str, &Map<String, Value>) -> Result<Value, GraphRequestRefusal> + 'stream;
 
 /// What building a graph request's operation reads of the running stream and its project.
 struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {

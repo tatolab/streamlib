@@ -517,7 +517,7 @@ async fn a_refused_transact_answers_its_code_and_the_operation_it_refused_over_c
 
     assert_eq!(refused["error"]["code"], 1, "{refused}");
     let refusal = &refused["error"]["data"];
-    assert_eq!(refusal["refusal_code"], "refused", "{refusal}");
+    assert_eq!(refusal["refusal_code"], "node_not_found", "{refusal}");
     assert_eq!(refusal["action"], "transact", "{refusal}");
     assert_eq!(refusal["refused_operation_index"], 0, "{refusal}");
     assert_eq!(
@@ -531,6 +531,55 @@ async fn a_refused_transact_answers_its_code_and_the_operation_it_refused_over_c
             "transact failed: {}",
             refusal["runtime_words"].as_str().unwrap()
         )
+    );
+}
+
+#[tokio::test]
+async fn a_transact_naming_a_stream_asset_no_stream_runs_answers_stream_not_found_over_control() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let refused = served
+        .control_call(
+            "transact",
+            json!({
+                "mode": "live",
+                "operations": [{
+                    "operation": "remove_node",
+                    "stream": uuid::Uuid::new_v4(),
+                    "node": uuid::Uuid::new_v4(),
+                }],
+            }),
+        )
+        .await;
+
+    assert_eq!(refused["error"]["code"], 1, "{refused}");
+    let refusal = &refused["error"]["data"];
+    assert_eq!(refusal["refusal_code"], "stream_not_found", "{refusal}");
+    assert_eq!(refusal["refused_operation_index"], 0, "{refusal}");
+}
+
+/// An engine error an operation answers reaches the caller with the code its one match gives
+/// it, on the failed operation's JSON-RPC code.
+#[tokio::test]
+async fn an_engine_error_answers_its_code_over_control() {
+    let served = ControlServedWithAnMcpClient::over_the_stub().await;
+    let refused = served
+        .control_call(
+            "write_graph_input",
+            json!({
+                "stream": crate::control_plane_stub_support::STUB_STREAM_ID,
+                "input": "speed",
+                "value": 1.0,
+            }),
+        )
+        .await;
+
+    assert_eq!(refused["error"]["code"], 2, "{refused}");
+    let refusal = &refused["error"]["data"];
+    assert_eq!(refusal["refusal_code"], "node_not_found", "{refusal}");
+    assert_eq!(refusal["action"], "write_graph_input", "{refusal}");
+    assert_eq!(
+        refusal["runtime_words"], refused["error"]["message"],
+        "{refused}"
     );
 }
 

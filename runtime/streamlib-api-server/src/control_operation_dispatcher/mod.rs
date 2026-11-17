@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 use serde_json::Value;
-use streamlib::sdk::error::{PrivacyGatedCaptureDevice, WhyANodeOfAStreamIsNotRunning};
+use streamlib::sdk::error::PrivacyGatedCaptureDevice;
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, StreamActionQueued, StreamActionStep,
     StreamListingState, StreamLocation,
@@ -37,14 +37,13 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     DuplicateProjectToolResult, GraphTransactionToolResult, ImportProjectToolResult,
     ListAssetsToolResult, ListDependenciesToolResult, ListProjectFilesToolResult,
     ListProjectNodeTypesToolResult, ListProjectViewsToolResult, ListSamplesToolResult,
-    ListStreamsToolResult, ListedStreamState, LogsToolResult, NodeNotRunningBecauseOnTheWire,
-    OpenViewerToolResult, PausePlaybackToolResult, ProjectActionRefusalOnTheWire,
-    ProjectFileTransactionToolResult, ProjectSettingsTransactionToolResult,
-    ProjectStreamActionQueuedToolResult, ProjectTransactionOnTheWire,
-    ProjectTransactionsResourceContents, ReadAssetPreviewToolResult, ReadProjectFileToolResult,
-    RemoveProjectToolResult, ResumePlaybackToolResult, SetStreamClockScaleToolResult,
-    StreamActionStepOnTheWire, StreamLocationOnTheWire, UpdateDependencyToolResult,
-    WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
+    ListStreamsToolResult, ListedStreamState, LogsToolResult, OpenViewerToolResult,
+    PausePlaybackToolResult, ProjectActionRefusalOnTheWire, ProjectFileTransactionToolResult,
+    ProjectSettingsTransactionToolResult, ProjectStreamActionQueuedToolResult,
+    ProjectTransactionOnTheWire, ProjectTransactionsResourceContents, ReadAssetPreviewToolResult,
+    ReadProjectFileToolResult, RemoveProjectToolResult, ResumePlaybackToolResult,
+    SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
+    UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
 use uuid::Uuid;
 
@@ -56,6 +55,7 @@ use crate::mcp_project_change_feed::{
     ProjectActionTheRuntimeRefused, ProjectActionsRefusedSinceTheRuntimeStarted,
 };
 use crate::project_node_types_followed_for_changes::ProjectNodeTypesLastListed;
+use crate::refusal_code_and_place::RefusalCodeAndPlace;
 use crate::stream_graph_transaction_executor::{
     GraphTransactionRefusal, StreamGraphTransactionExecutor,
 };
@@ -185,6 +185,12 @@ pub(crate) enum ControlOperationRefusal {
     /// The runtime could not carry the operation out through no doing of the caller, in its own
     /// words.
     RuntimeFailed(String),
+    /// The operation was not carried out for a reason a typed refusal coded and placed, in the
+    /// runtime's own words.
+    Coded {
+        code_and_place: Box<RefusalCodeAndPlace>,
+        why: String,
+    },
     /// The client was built against another contract version than the runtime serves.
     ContractVersionMismatch(ControlContractVersionMismatch),
 }
@@ -207,6 +213,10 @@ impl ControlOperationRefusal {
                 ControlOperationRefusalCode::RuntimeFailed,
                 why,
             ),
+            Self::Coded {
+                code_and_place,
+                why,
+            } => code_and_place.on_the_refusal_of(action, why),
             Self::ContractVersionMismatch(mismatch) => {
                 ProjectActionRefusalOnTheWire::of_the_action(
                     action,
@@ -222,12 +232,50 @@ impl ControlOperationRefusal {
         match self {
             Self::Failed(why) => Self::Failed(format!("{context}: {why}")),
             Self::RuntimeFailed(why) => Self::RuntimeFailed(format!("{context}: {why}")),
+            Self::Coded {
+                code_and_place,
+                why,
+            } => Self::Coded {
+                code_and_place,
+                why: format!("{context}: {why}"),
+            },
             Self::RefusedAction(mut refused) => {
                 refused.runtime_words = format!("{context}: {}", refused.runtime_words);
                 Self::RefusedAction(refused)
             }
             Self::ContractVersionMismatch(mismatch) => Self::ContractVersionMismatch(mismatch),
         }
+    }
+
+    /// A refusal coded and placed by `code_and_place`, in the runtime's words `why`.
+    pub(crate) fn coded(code_and_place: RefusalCodeAndPlace, why: String) -> Self {
+        Self::Coded {
+            code_and_place: Box::new(code_and_place),
+            why,
+        }
+    }
+
+    /// The refusal of `method_name` for the project repository's `refusal`, with its code and
+    /// place.
+    pub(crate) fn of_a_project_repository_refusal(
+        method_name: &str,
+        refusal: &ProjectRepositoryRefusal,
+    ) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::of_a_project_repository_refusal(refusal),
+            format!("{method_name} failed: {refusal}"),
+        )
+    }
+
+    /// The refusal of `method_name` for the engine's `refusal`, with its code and place.
+    pub(crate) fn of_an_engine_error(
+        method_name: &str,
+        refusal: &streamlib::sdk::error::Error,
+    ) -> Self {
+        Self::coded(
+            RefusalCodeAndPlace::of_an_engine_error(refusal),
+            format!("{method_name} failed: {refusal}"),
+        )
     }
 
     /// The refusal of a task handed off the async runtime that did not finish, `task` naming it,
@@ -249,7 +297,9 @@ impl std::fmt::Display for ControlOperationRefusal {
                     refused.action, refused.runtime_words
                 )
             }
-            Self::Failed(why) | Self::RuntimeFailed(why) => formatter.write_str(why),
+            Self::Failed(why) | Self::RuntimeFailed(why) | Self::Coded { why, .. } => {
+                formatter.write_str(why)
+            }
             Self::ContractVersionMismatch(mismatch) => mismatch.fmt(formatter),
         }
     }
@@ -642,7 +692,7 @@ impl ControlOperationDispatcher {
             "{method_name} failed: the call"
         )))?
         .map_err(|refusal| {
-            ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
+            ControlOperationRefusal::of_a_project_repository_refusal(method_name, &refusal)
         })
     }
 
@@ -655,9 +705,7 @@ impl ControlOperationDispatcher {
     ) -> Result<Arc<dyn streamlib::sdk::runtime::RuntimeOperations>, ControlOperationRefusal> {
         self.operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(stream)
-            .map_err(|refusal| {
-                ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
-            })
+            .map_err(|refusal| ControlOperationRefusal::of_an_engine_error(method_name, &refusal))
     }
 
     /// Run the blocking stream action `action` over the runtime's streams on a blocking task; a
@@ -678,7 +726,12 @@ impl ControlOperationDispatcher {
             .map_err(ControlOperationRefusal::the_task_did_not_finish(
                 "the stream action",
             ))?
-            .map_err(|refusal| ControlOperationRefusal::Failed(refusal.to_string()))
+            .map_err(|refusal| {
+                ControlOperationRefusal::coded(
+                    RefusalCodeAndPlace::of_an_engine_error(&refusal),
+                    refusal.to_string(),
+                )
+            })
     }
 
     async fn a_project_stream_action_queued_by(
@@ -859,38 +912,21 @@ pub(crate) fn stream_action_step_on_the_wire(step: StreamActionStep) -> StreamAc
     }
 }
 
-/// Why a reach for a node of a stream was refused: structured, naming `not_running_because`,
-/// when the node does not run, and the runtime's words otherwise.
+/// Why a reach for a node of a stream was refused: refused as an action, naming
+/// `not_running_because`, when the node does not run, and otherwise coded and placed by the
+/// engine's error.
 pub(crate) fn the_refusal_of_a_reach_for_a_node(
     method_name: &str,
     refusal: streamlib::sdk::error::Error,
 ) -> ControlOperationRefusal {
-    match refusal {
-        streamlib::sdk::error::Error::NodeOfAStreamIsNotRunning {
-            not_running_because,
-            runtime_words,
-        } => ControlOperationRefusal::RefusedAction(Box::new(ProjectActionRefusalOnTheWire {
-            not_running_because: Some(match not_running_because {
-                WhyANodeOfAStreamIsNotRunning::PlaybackStopped => {
-                    NodeNotRunningBecauseOnTheWire::PlaybackStopped
-                }
-                WhyANodeOfAStreamIsNotRunning::PlaybackPaused => {
-                    NodeNotRunningBecauseOnTheWire::PlaybackPaused
-                }
-                WhyANodeOfAStreamIsNotRunning::Preparing => {
-                    NodeNotRunningBecauseOnTheWire::Preparing
-                }
-                WhyANodeOfAStreamIsNotRunning::NodeFailed => {
-                    NodeNotRunningBecauseOnTheWire::NodeFailed
-                }
-            }),
-            ..ProjectActionRefusalOnTheWire::of_the_action(
-                method_name,
-                ControlOperationRefusalCode::NodeNotRunning,
-                runtime_words,
-            )
-        })),
-        refusal => ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}")),
+    match &refusal {
+        streamlib::sdk::error::Error::NodeOfAStreamIsNotRunning { runtime_words, .. } => {
+            ControlOperationRefusal::RefusedAction(Box::new(
+                RefusalCodeAndPlace::of_an_engine_error(&refusal)
+                    .on_the_refusal_of(method_name, runtime_words.clone()),
+            ))
+        }
+        _ => ControlOperationRefusal::of_an_engine_error(method_name, &refusal),
     }
 }
 

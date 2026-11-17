@@ -461,6 +461,22 @@ pub enum ControlOperationRefusalCode {
     /// The value sent is not one the input takes: of another type, or outside its range. The
     /// runtime's words say what it takes.
     InputValueNotValid,
+    /// No stream the runtime holds is the one named; the runtime's words list the ones it holds.
+    StreamNotFound,
+    /// The stream holds no node of the UUID or `as` label sent; `refused_node` names it, when the
+    /// call named one.
+    NodeNotFound,
+    /// No node type of the name sent is one the stream can add.
+    NodeTypeNotFound,
+    /// Another node of the graph already has the name sent.
+    NodeNameTaken,
+    /// The link sent is already in the graph.
+    LinkAlreadyExists,
+    /// The project holds no file or folder at the path sent; `refused_file` names it.
+    FileNotFound,
+    /// The file changed, or was taken out, since it was read, so the write was not made;
+    /// `refused_file` names it. Read it again to see what it holds now.
+    FileChangedSinceItWasRead,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.

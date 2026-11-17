@@ -32,9 +32,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let stream_operations = self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)
-                .map_err(|refusal| {
-                    GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
-                })?;
+                .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
             let stream_location = stream_locations.get(stream_id).cloned().ok_or_else(|| {
                 GraphTransactionRefusal::of_the_whole_transaction(format!(
                     "stream `{stream_id}` is not loaded"
@@ -55,9 +53,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 _ => StreamGraphDocument::from_value(
                     self.async_runtime
                         .block_on(stream_operations.to_json_async())
-                        .map_err(|refusal| {
-                            GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
-                        })?,
+                        .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
                 )
                 .map_err(GraphTransactionRefusal::of_the_whole_transaction)?,
             };
@@ -267,7 +263,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         fragment_name,
                         promoted_settings,
                     )
-                    .map_err(|refusal| refusal.to_string())
+                    .map_err(GraphRequestRefusal::from)
             };
         let place_the_imported_stream = |fragment_node: Uuid, held_stream: &Value| {
             let project_repository = project_repository.ok_or_else(|| {
@@ -314,7 +310,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
                 .the_config_a_node_holding_the_input_values_takes(node_type, input_values)
-                .map_err(|refusal| refusal.to_string())
+                .map_err(GraphRequestRefusal::from)
         };
         let mut placed_stream_a_collapse_saves = None;
         let mut edit_as_drawn = graph_operation_for_the_request(
@@ -367,8 +363,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 .map(|held| held.name)
                 .collect();
             node.name = stream_operations
-                .the_name_a_node_added_with_none_takes(&node.node_type, &names_at_the_level)
-                .map_err(|refusal| refusal.to_string())?;
+                .the_name_a_node_added_with_none_takes(&node.node_type, &names_at_the_level)?;
         }
 
         let mut project_operations = Vec::new();
@@ -383,8 +378,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     Some(the_value_a_running_node_holds_on_the_input(
                         &self
                             .async_runtime
-                            .block_on(stream_operations.to_json_async())
-                            .map_err(|refusal| refusal.to_string())?,
+                            .block_on(stream_operations.to_json_async())?,
                         *node,
                         input,
                     ))
@@ -393,8 +387,7 @@ impl StreamGraphTransactionExecutor<'_> {
             };
             let applied = self
                 .async_runtime
-                .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))
-                .map_err(|refusal| refusal.to_string())?;
+                .block_on(stream_operations.apply_a_stream_graph_operation_live(edit_as_drawn))?;
             let applied_on_the_running_stream = match (&applied, value_the_running_input_held) {
                 (
                     StreamGraphOperation::SetNodeInputValue {
@@ -458,13 +451,13 @@ impl StreamGraphTransactionExecutor<'_> {
         if let Some((node_type, node_name, input_values)) =
             the_graph_node_an_edit_adds_or_configures(&edit, &reached.document)
         {
-            self.async_runtime
-                .block_on(stream_operations.refuse_a_node_a_live_add_would_refuse(
+            self.async_runtime.block_on(
+                stream_operations.refuse_a_node_a_live_add_would_refuse(
                     &node_type,
                     &node_name,
                     &input_values,
-                ))
-                .map_err(|refusal| refusal.to_string())?;
+                ),
+            )?;
         }
         let mut placed_document_after_the_edit = reached.document.clone();
         placed_document_after_the_edit.apply(&edit)?;

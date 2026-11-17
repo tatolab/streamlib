@@ -545,7 +545,7 @@ async fn a_refused_graph_edit_answers_a_structured_refusal_naming_what_it_refuse
     assert_eq!(refusal["action"], "transact", "{refusal}");
     assert_eq!(refusal["refused_operation_index"], 1, "{refusal}");
     assert_eq!(refusal["refused_node"], absent_node, "{refusal}");
-    assert_eq!(refusal["refusal_code"], "refused", "{refusal}");
+    assert_eq!(refusal["refusal_code"], "node_not_found", "{refusal}");
     the_refusal_of_a_tool_result(&body);
 
     let body = tool_call_result(
