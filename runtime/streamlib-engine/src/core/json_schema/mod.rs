@@ -499,15 +499,22 @@ pub struct NodeDescriptorOutput {
     /// Entrypoint for non-Rust runtimes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
-    /// The config type's JSON Schema, as JSON Schema draft 2020-12 — what an
-    /// agent reads to learn which keys this node's config takes.
+    /// The config type's JSON Schema, as JSON Schema draft 2020-12, of a node
+    /// type not yet typed. Served while the published Studio reads it, and
+    /// removed at the closing: each field it lists is under `inputs` too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_schema: Option<serde_json::Value>,
+    /// The number and Boolean config fields `set_exposed_config_fields` takes on
+    /// a node of this type not yet typed; absent when it takes none. Removed at
+    /// the closing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposable_config_fields: Vec<String>,
     /// Whether the node paces itself on real time, as a live device does: in a
     /// stepped stream it stands outside the step barrier.
     #[serde(default)]
     pub paced_by_real_time: bool,
-    /// Input port descriptors.
+    /// Every input: each input port, then each setting, an input that takes
+    /// no wire, which `set_node_input_value` sets by its name.
     pub inputs: Vec<PortDescriptorOutput>,
     /// Output port descriptors.
     pub outputs: Vec<PortDescriptorOutput>,
@@ -540,13 +547,62 @@ pub struct PortDescriptorOutput {
     /// Absent on every other family.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values_checked: Option<bool>,
-    /// The port family this port declares and its family's keys.
-    pub family: crate::core::descriptors::PortFamilyDeclaration,
+    /// The port family this port declares and its family's keys. Absent on a
+    /// setting, which carries nothing on a wire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<crate::core::descriptors::PortFamilyDeclaration>,
     /// The pin type this port declares, or how it is found, as `pin_type`, and
     /// its flow, as `flow`. Both are absent from the rendering on a port whose
-    /// type the code does not state exactly, which links by its family alone.
+    /// type the code does not state exactly, which links by its family alone,
+    /// and on a setting whose schema states no type exactly.
     #[serde(flatten)]
     pub pin: Option<PortDeclaredPinOutput>,
+    /// Whether the input takes a wire, a stored value, or both, tagged by
+    /// `mode`: `{"mode": "setting_only", "read": "at_setup"}` on a setting.
+    /// Absent on an input port, and on an output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Value>")]
+    #[schema(value_type = Option<Object>)]
+    pub input_mode: Option<crate::core::descriptors::NodeInputMode>,
+    /// The value the input reads while nothing is linked into it and no value
+    /// is set on its node. Absent when it declares none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_value: Option<serde_json::Value>,
+}
+
+impl PortDescriptorOutput {
+    /// Whether a link may end at this input: every input but a setting.
+    pub fn takes_a_wire(&self) -> bool {
+        !matches!(
+            self.input_mode,
+            Some(crate::core::descriptors::NodeInputMode::SettingOnly { .. })
+        )
+    }
+
+    /// The input a config field of a node type not yet typed is: one that takes
+    /// no wire, read when the node is set up.
+    fn of_a_config_field(
+        setting: crate::core::graph::legacy_config_of_a_node::ConfigFieldDescribedAsASetting,
+    ) -> Self {
+        Self {
+            name: setting.name,
+            description: setting.description,
+            required: false,
+            delivery_profile: None,
+            borrow_quota: None,
+            audio_window: None,
+            values_checked: None,
+            family: None,
+            pin: setting.pin_type.map(|pin_type| PortDeclaredPinOutput {
+                flow: pin_type.default_flow(),
+                pin_type: crate::core::descriptors::DeclaredPinType::Is { pin_type },
+            }),
+            input_mode: Some(crate::core::descriptors::NodeInputMode::SettingOnly {
+                read: crate::core::descriptors::SettingReadTime::AtSetup,
+            }),
+            default_value: setting.default_value,
+        }
+    }
 }
 
 /// The pin type a catalog port declares, and its flow.
@@ -841,8 +897,19 @@ impl From<&crate::core::NodeDescriptor> for NodeDescriptorOutput {
             runtime: NodeRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),
             config_schema: desc.config_schema.clone(),
+            exposable_config_fields:
+                crate::core::graph::legacy_config_of_a_node::the_config_fields_a_node_of_the_type_can_expose(desc),
             paced_by_real_time: desc.paced_by_real_time,
-            inputs: desc.inputs.iter().map(PortDescriptorOutput::from).collect(),
+            inputs: desc
+                .inputs
+                .iter()
+                .map(PortDescriptorOutput::from)
+                .chain(
+                    crate::core::graph::legacy_config_of_a_node::the_config_fields_described_as_settings(desc)
+                        .into_iter()
+                        .map(PortDescriptorOutput::of_a_config_field),
+                )
+                .collect(),
             outputs: desc
                 .outputs
                 .iter()
@@ -872,11 +939,13 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
             borrow_quota: port.borrow_quota,
             audio_window: port.audio_window.clone(),
             values_checked: values_checked_of(&port.family),
-            family: port.family.clone(),
+            family: Some(port.family.clone()),
             pin: port.declared_pin().map(|declared| PortDeclaredPinOutput {
                 pin_type: declared.pin_type,
                 flow: declared.flow,
             }),
+            input_mode: None,
+            default_value: port.pin_default.clone(),
         }
     }
 }

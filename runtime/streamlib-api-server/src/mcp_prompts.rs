@@ -371,10 +371,11 @@ fn node_with_output_port_named<'graph>(
     Ok(node)
 }
 
-/// A registered type's input, when it has exactly one for a recipe to wire.
+/// A registered type's input that takes a wire, when it has exactly one for a recipe to wire.
 fn sole_input_port(entry: &NodeDescriptorOutput) -> Option<&PortDescriptorOutput> {
-    match entry.inputs.as_slice() {
-        [sole_input] => Some(sole_input),
+    let mut inputs_taking_a_wire = entry.inputs.iter().filter(|input| input.takes_a_wire());
+    match (inputs_taking_a_wire.next(), inputs_taking_a_wire.next()) {
+        (Some(sole_input), None) => Some(sole_input),
         _ => None,
     }
 }
@@ -610,7 +611,11 @@ fn show_channel_on_virtual_camera_recipe(
             format!(
                 "`{VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH}` is registered with {} input \
              ports rather than one",
-                virtual_camera_sink.inputs.len()
+                virtual_camera_sink
+                    .inputs
+                    .iter()
+                    .filter(|input| input.takes_a_wire())
+                    .count()
             ),
             None,
         )

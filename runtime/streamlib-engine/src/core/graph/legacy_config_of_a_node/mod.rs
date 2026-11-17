@@ -18,6 +18,13 @@ use serde_json::{Map, Value};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 
+mod config_fields_described_as_settings;
+
+pub(crate) use config_fields_described_as_settings::{
+    ConfigFieldDescribedAsASetting, refuse_a_config_field_named_as_an_input_port,
+    the_config_fields_a_node_of_the_type_can_expose, the_config_fields_described_as_settings,
+};
+
 /// How one node type splits its nodes' input values into a config and the values on its inputs.
 pub(crate) struct LegacyConfigOfANodeType {
     fields_its_config_schema_lists: HashSet<String>,

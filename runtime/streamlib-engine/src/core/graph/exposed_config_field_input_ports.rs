@@ -79,7 +79,7 @@ pub(crate) fn the_input_ports_of_the_exposed_config_fields(
 }
 
 /// Each number, integer or bool property `config_schema` declares, with its description.
-fn the_number_and_bool_fields_of(
+pub(super) fn the_number_and_bool_fields_of(
     config_schema: Option<&serde_json::Value>,
 ) -> Vec<(String, String)> {
     let Some(properties) = config_schema
@@ -236,9 +236,9 @@ mod tests {
         )
         .with_config_schema(json!({
             "type": "object",
-            "properties": {"x": {"type": "number"}, "gain": {"type": "number"}},
+            "properties": {"result": {"type": "number"}, "gain": {"type": "number"}},
         }))]);
-        let refusal = add_a_node_exposing(&mut graph, SCALE, &["x"])
+        let refusal = add_a_node_exposing(&mut graph, SCALE, &["result"])
             .unwrap_err()
             .to_string();
         assert!(refusal.contains("already has a port"), "got {refusal}");
