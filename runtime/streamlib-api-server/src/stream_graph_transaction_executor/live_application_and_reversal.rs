@@ -79,6 +79,11 @@ impl StreamGraphTransactionExecutor<'_> {
             Vec::new();
         let mut streams_taking_their_operations_once_the_documents_hold_them: BTreeSet<String> =
             BTreeSet::new();
+        self.refuse_an_input_value_set_its_input_no_longer_takes(
+            &project_repository,
+            &stream_id_of_each_stream_asset,
+            &reversal.operations,
+        )?;
         for operation in &reversal.operations {
             let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
                 stream,
@@ -186,6 +191,63 @@ impl StreamGraphTransactionExecutor<'_> {
                 Err(refusal.to_string())
             }
         }
+    }
+
+    /// Refuse, before any of `operations` is applied, an input value one of them sets on a node
+    /// of a running stream when the input no longer takes it, as the stream resolves the node's
+    /// type now: an undo or redo of an edit whose input was taken out since stops there, in the
+    /// runtime's words. Each node holds every value an earlier set of `operations` left it.
+    fn refuse_an_input_value_set_its_input_no_longer_takes(
+        &self,
+        project_repository: &ProjectRepository,
+        stream_id_of_each_stream_asset: &HashMap<Uuid, String>,
+        operations: &[ProjectOperation],
+    ) -> Result<(), String> {
+        let mut node_as_the_operations_leave_it: HashMap<(Uuid, Uuid), StreamGraphDocumentNode> =
+            HashMap::new();
+        for operation in operations {
+            let ProjectOperation::StreamGraph(StreamGraphOperationOnAStream {
+                stream,
+                graph_operation:
+                    StreamGraphOperation::SetNodeInputValue {
+                        node, input, to, ..
+                    },
+            }) = operation
+            else {
+                continue;
+            };
+            let Some(stream_id) = stream_id_of_each_stream_asset.get(stream) else {
+                continue;
+            };
+            let held = match node_as_the_operations_leave_it.remove(&(*stream, *node)) {
+                Some(held) => Some(held),
+                None => project_repository
+                    .stream_graph_document(*stream)
+                    .ok()
+                    .and_then(|document| document.node(*node).ok()),
+            };
+            let Some(mut set_on) = held.filter(its_input_values_are_checked) else {
+                continue;
+            };
+            let stream_operations = self
+                .operations_on_the_loaded_streams
+                .runtime_operations_of_the_stream_a_call_names(stream_id)
+                .map_err(|refusal| refusal.to_string())?;
+            let input_values_after_the_set =
+                input_values_after_the_set(&set_on.input_values, input, to.as_ref());
+            refuse_a_value_the_input_does_not_take(
+                stream_operations.as_ref(),
+                &set_on,
+                &input_values_after_the_set,
+                input,
+                to.as_ref(),
+                "/value",
+            )
+            .map_err(|refusal| refusal.runtime_words)?;
+            set_on.input_values = input_values_after_the_set;
+            node_as_the_operations_leave_it.insert((*stream, *node), set_on);
+        }
+        Ok(())
     }
 
     /// Apply the inverse of each operation of `applied_live`, newest first, to the running

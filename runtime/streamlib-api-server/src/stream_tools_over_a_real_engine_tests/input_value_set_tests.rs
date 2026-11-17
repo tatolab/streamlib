@@ -46,13 +46,18 @@ impl ManualNode for InputValueTestNode::Node {
     }
 }
 
-const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
+/// Register [`InputValueTestNode`] with the node registry, once per test binary.
+pub(super) fn register_the_input_value_test_node_once() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<InputValueTestNode::Node>());
+}
+
+pub(super) const MIXER_NODE_UUID: &str = "6b6b6b6b-6b6b-4b6b-8b6b-6b6b6b6b6b6b";
 
 /// A project whose stream `main` holds an [`InputValueTestNode`] `mixer`, by
 /// [`MIXER_NODE_UUID`], and a [`StreamToolsTestSink`] `monitor`.
 fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
-    static REGISTERED: std::sync::Once = std::sync::Once::new();
-    REGISTERED.call_once(|| NODE_REGISTRY.register::<InputValueTestNode::Node>());
+    register_the_input_value_test_node_once();
     register_the_stream_tools_test_sink_once();
     ProjectWithGraphDocuments::holding(json!({
         "stream": "main",
@@ -68,7 +73,7 @@ fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDocuments {
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The answer of the tool `tool_name` sent `arguments`, or its refusal as the wire carries it.
-    async fn the_answer_or_the_refusal_of(
+    pub(super) async fn the_answer_or_the_refusal_of(
         &self,
         tool_name: &str,
         arguments: Value,
@@ -89,7 +94,7 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
 }
 
 /// The input values `node` holds in `graph_document`; none when it holds none.
-fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
+pub(super) fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
     graph_document["nodes"]
         .as_array()
         .into_iter()
@@ -103,7 +108,7 @@ fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
 }
 
 /// The pin values `rendered_node`, a node of a `graph` render, holds; none when it renders none.
-fn the_pin_values_of(rendered_node: &Value) -> Value {
+pub(super) fn the_pin_values_of(rendered_node: &Value) -> Value {
     match &rendered_node["pins"] {
         Value::Null => json!({}),
         pins => pins.clone(),
