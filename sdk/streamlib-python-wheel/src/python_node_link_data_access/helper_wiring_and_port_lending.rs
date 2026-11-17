@@ -83,6 +83,10 @@ impl PythonNodeLinkDataAccess {
         self.input_mailboxes.get().cloned()
     }
 
+    pub(crate) fn output_writer_of_this_helper(&self) -> Option<Arc<OutputWriterInner>> {
+        self.output_writer.get().cloned()
+    }
+
     /// The loss-count board this helper notes its step callbacks on, once its
     /// setup opened it.
     pub(crate) fn loss_count_board_writer_of_this_helper(

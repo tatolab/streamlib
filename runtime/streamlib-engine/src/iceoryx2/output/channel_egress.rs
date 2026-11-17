@@ -209,6 +209,20 @@ impl ChannelEgress {
         Ok(unsafe { loaned_sample.assume_init() })
     }
 
+    /// Send `payload_bytes` under `user_header`, copied into one sample this
+    /// admits and loans, as [`Self::send_loaned_sample`] does.
+    pub(super) fn send_bytes(
+        &mut self,
+        port: &str,
+        payload_bytes: &[u8],
+        user_header: DataChannelSampleUserHeader,
+    ) -> Result<()> {
+        let mut loaned_sample = self.admit_and_loan(payload_bytes.len())?;
+        super::payload_area_bytes_mut(&mut loaned_sample)[..payload_bytes.len()]
+            .copy_from_slice(payload_bytes);
+        self.send_loaned_sample(port, loaned_sample, user_header)
+    }
+
     /// Send `loaned_sample` under `user_header`, numbered as this port's next
     /// send, then wake every destination.
     pub(super) fn send_loaned_sample(

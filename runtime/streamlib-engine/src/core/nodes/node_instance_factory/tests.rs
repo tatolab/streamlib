@@ -355,3 +355,101 @@ fn a_built_in_that_moved_to_a_module_is_refused_naming_the_module_to_install() {
     assert!(message.contains("`tatolab.moved:MovedOut`"), "{message}");
     assert!(message.contains("tatolab-moved"), "{message}");
 }
+
+/// A source with one output of each flow its pin defaults to: `level` a Value, `frames` a
+/// Stream.
+#[crate::node(
+    execution = manual,
+    output("level", pin_type = Float),
+    output("frames", pin_type = Texture),
+)]
+struct ValueAndStreamSource;
+
+impl crate::core::ManualNode for ValueAndStreamSource::Node {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// A node's Value output keeps its last message from before any link, and sends it to the
+/// reader of the port's first link; its Stream output keeps none.
+#[test]
+fn a_value_output_keeps_its_last_message_and_a_stream_output_does_not() {
+    use crate::iceoryx2::{
+        ChannelEgressConfig, ChannelTrustTier, DataChannelPayloadDescriptor, Iceoryx2Node,
+        MessageGroupBoundary, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    };
+
+    let mut instance = NodeInstance::new(Box::new(
+        <ValueAndStreamSource::Node as GeneratedNode>::from_config(Default::default())
+            .expect("the source constructs from its default config"),
+    ));
+    instance
+        .install_iceoryx2_resources()
+        .expect("the source accepts its iceoryx2 resources");
+    let output_writer = instance
+        .iceoryx2_output_writer_inner()
+        .expect("a source holds an output writer");
+    let mut readers = Vec::new();
+    for port in ["level", "frames"] {
+        output_writer
+            .write_bytes_described_by(
+                port,
+                port.as_bytes(),
+                0,
+                MessageGroupBoundary::StartsGroup,
+                DataChannelPayloadDescriptor::bytes(),
+            )
+            .expect("a write to a declared port no link reached sends nothing");
+        let channel = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &format!(
+                    "test/factory/kept/{port}/{}",
+                    crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix(
+                    )
+                ),
+                2,
+                4,
+            )
+            .expect("open the channel data service");
+        output_writer.set_channel_publisher(
+            port,
+            &channel,
+            channel.create_publisher(64).expect("the port's publisher"),
+            ChannelEgressConfig {
+                service_name: format!("test/{port}"),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        readers.push(channel.create_subscriber(4).expect("the port's reader"));
+    }
+
+    output_writer.send_each_kept_message_to_a_reader_it_missed();
+
+    let [level_reader, frames_reader] = readers.as_slice() else {
+        unreachable!("one reader per port");
+    };
+    let level = level_reader
+        .receive()
+        .expect("the level reader receives")
+        .expect("the Value output sent its kept message");
+    assert_eq!(
+        crate::iceoryx2::channel_sample_test_support::stamped_payload_of(&level),
+        b"level"
+    );
+    assert!(
+        frames_reader
+            .receive()
+            .expect("the frames reader receives")
+            .is_none(),
+        "a Stream output keeps no last message"
+    );
+}

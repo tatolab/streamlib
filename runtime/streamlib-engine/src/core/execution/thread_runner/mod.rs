@@ -151,6 +151,10 @@ where
         self.node.lock().iceoryx2_input_mailboxes_inner()
     }
 
+    fn output_writer(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
+        self.node.lock().iceoryx2_output_writer_inner()
+    }
+
     #[cfg(unix)]
     fn control_arrival_fd(&self) -> Option<std::os::fd::RawFd> {
         use std::os::fd::AsRawFd;
@@ -317,6 +321,13 @@ fn run_manual_mode(
         } else if !is_paused && was_paused {
             dispatch_on_resume(id, node, runtime_ctx);
             was_paused = false;
+        }
+
+        // A manual node writes from its own threads, so this loop sends each kept last
+        // message to a reader that connected after it.
+        let output_writer = node.lock().iceoryx2_output_writer_inner();
+        if let Some(output_writer) = output_writer {
+            output_writer.send_each_kept_message_to_a_reader_it_missed();
         }
 
         if let Some(restart_at) = next_helper_process_restart_at {

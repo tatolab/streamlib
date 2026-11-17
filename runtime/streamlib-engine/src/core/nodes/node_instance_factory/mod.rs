@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::{NodeClassImportPath, NodeKind};
+use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinFlow};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, PortInfo, is_in_exposed_name_cast_form};
@@ -130,6 +130,16 @@ impl NodeInstance {
         if let (Some(output_inner), Some(descriptor)) = (&output_inner, self.0.descriptor()) {
             output_inner
                 .declare_output_ports(descriptor.outputs.iter().map(|port| port.name.clone()));
+            output_inner.keep_the_last_message_of_output_ports(
+                descriptor
+                    .outputs
+                    .iter()
+                    .filter(|port| {
+                        port.declared_pin()
+                            .is_some_and(|pin| pin.flow == PinFlow::Value)
+                    })
+                    .map(|port| port.name.clone()),
+            );
         }
         let input_inner =
             needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));

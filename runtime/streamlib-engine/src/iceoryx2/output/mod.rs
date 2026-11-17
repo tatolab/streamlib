@@ -60,6 +60,18 @@ pub struct OutputWriterInner {
     bag_counts: Arc<BagCountsByOutputPort>,
     stream_facts_of_output_ports: std::sync::OnceLock<Arc<StreamFactsOfOutputPorts>>,
     stream_clock: std::sync::OnceLock<Arc<StreamClock>>,
+    /// Each output port that keeps its last message, by name, with that message once it wrote
+    /// one. Held apart from [`Self::channels`], so a port keeps it while no link reaches it.
+    /// Locked after [`Self::channels`] wherever both are held.
+    last_message_kept_by_output_port: Mutex<HashMap<String, Option<KeptOutputPortMessage>>>,
+}
+
+/// The last message an output port that keeps one wrote, whether a link carried it or none
+/// reached the port.
+struct KeptOutputPortMessage {
+    payload_bytes: Vec<u8>,
+    /// Its header as written; a send numbers it again.
+    user_header: DataChannelSampleUserHeader,
 }
 
 /// The refusal for `what` on `port` while a loan of it is open.
@@ -144,6 +156,7 @@ impl OutputWriterInner {
             bag_counts: Arc::new(BagCountsByOutputPort::default()),
             stream_facts_of_output_ports: std::sync::OnceLock::new(),
             stream_clock: std::sync::OnceLock::new(),
+            last_message_kept_by_output_port: Mutex::new(HashMap::new()),
         }
     }
 
@@ -190,6 +203,71 @@ impl OutputWriterInner {
 
     pub fn declare_output_ports(&self, port_names: impl IntoIterator<Item = String>) {
         self.declared_output_ports.lock().extend(port_names);
+    }
+
+    /// Have each of `port_names` keep the last message written to it, which
+    /// [`Self::send_each_kept_message_to_a_reader_it_missed`] sends again to a reader that
+    /// connected after it.
+    pub fn keep_the_last_message_of_output_ports(
+        &self,
+        port_names: impl IntoIterator<Item = String>,
+    ) {
+        let mut last_message_kept_by_output_port = self.last_message_kept_by_output_port.lock();
+        for port_name in port_names {
+            last_message_kept_by_output_port
+                .entry(port_name)
+                .or_insert(None);
+        }
+    }
+
+    /// Keep `payload_bytes` under `user_header` as `port`'s last message, when `port` keeps one.
+    /// The bytes are read only for such a port.
+    fn keep_as_the_last_message_of(
+        &self,
+        port: &str,
+        payload_bytes: impl FnOnce() -> Vec<u8>,
+        user_header: DataChannelSampleUserHeader,
+    ) {
+        if let Some(kept_message) = self.last_message_kept_by_output_port.lock().get_mut(port) {
+            *kept_message = Some(KeptOutputPortMessage {
+                payload_bytes: payload_bytes(),
+                user_header,
+            });
+        }
+    }
+
+    /// Send the kept last message of each output port that keeps one again, on each port a
+    /// reader connected to after its last write: a linked destination, a viewer or an island's
+    /// reader. The send wakes every destination, as any write does.
+    ///
+    /// A port with a loan open is passed over, since its writer is about to send. A kept
+    /// message the channel refuses is forgotten, so it is not refused again on every call.
+    pub fn send_each_kept_message_to_a_reader_it_missed(&self) {
+        let mut channels = self.channels.lock();
+        let mut last_message_kept_by_output_port = self.last_message_kept_by_output_port.lock();
+        for (port, kept_message_slot) in last_message_kept_by_output_port.iter_mut() {
+            let (Some(kept_message), Some(egress)) =
+                (kept_message_slot.as_ref(), channels.get_mut(port))
+            else {
+                continue;
+            };
+            if egress.a_loan_is_open.load(Ordering::Acquire)
+                || !egress.channel.has_a_connected_subscriber_outside(
+                    &egress.subscribers_connected_at_the_last_send,
+                )
+            {
+                continue;
+            }
+            if let Err(refusal) =
+                egress.send_bytes(port, &kept_message.payload_bytes, kept_message.user_header)
+            {
+                tracing::warn!(
+                    "output port '{port}' could not send its kept last message to a reader that \
+                     connected after it, so it forgets that message: {refusal}"
+                );
+                *kept_message_slot = None;
+            }
+        }
     }
 
     /// Whether a channel publisher has already been installed for this output
@@ -392,26 +470,21 @@ impl OutputWriterInner {
         group_boundary: MessageGroupBoundary,
         payload_descriptor: DataChannelPayloadDescriptor,
     ) -> Result<()> {
+        let user_header = DataChannelSampleUserHeader::new(
+            timestamp_ns,
+            payload_bytes.len() as u32,
+            group_boundary,
+            payload_descriptor,
+        );
         let mut channels = self.channels.lock();
-        let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? else {
-            return Ok(());
-        };
-        if egress.a_loan_is_open.load(Ordering::Acquire) {
-            return Err(the_open_loan_refuses(port, "a write"));
+        if let Some(egress) = self.linked_egress_of_a_declared_port(&mut channels, port)? {
+            if egress.a_loan_is_open.load(Ordering::Acquire) {
+                return Err(the_open_loan_refuses(port, "a write"));
+            }
+            egress.send_bytes(port, payload_bytes, user_header)?;
         }
-        let mut loaned_sample = egress.admit_and_loan(payload_bytes.len())?;
-        payload_area_bytes_mut(&mut loaned_sample)[..payload_bytes.len()]
-            .copy_from_slice(payload_bytes);
-        egress.send_loaned_sample(
-            port,
-            loaned_sample,
-            DataChannelSampleUserHeader::new(
-                timestamp_ns,
-                payload_bytes.len() as u32,
-                group_boundary,
-                payload_descriptor,
-            ),
-        )
+        self.keep_as_the_last_message_of(port, || payload_bytes.to_vec(), user_header);
+        Ok(())
     }
 
     /// Loan a sample of `payload_byte_len` bytes on `port` for its writer to
@@ -459,7 +532,8 @@ impl OutputWriterInner {
     /// by `payload_descriptor`, on the port it was loaned from.
     ///
     /// A loan whose port was unwired since, or never linked, is given back
-    /// unpublished, as a write to such a port sends nothing.
+    /// unpublished, as a write to such a port sends nothing. A port that keeps
+    /// its last message keeps the loan's either way.
     pub fn publish_output_port_payload_loan(
         &self,
         loan: OutputPortPayloadLoan,
@@ -472,31 +546,36 @@ impl OutputWriterInner {
             payload_byte_len,
             loaned_to,
         } = loan;
-        let OutputPortPayloadLoanTarget::LoanedSample {
-            loaned_sample,
-            egress_installation,
-            _loan_marker,
-        } = loaned_to
-        else {
-            return Ok(());
+        let user_header = DataChannelSampleUserHeader::new(
+            timestamp_ns,
+            payload_byte_len as u32,
+            group_boundary,
+            payload_descriptor,
+        );
+        let (mut loaned_sample, egress_installation, _loan_marker) = match loaned_to {
+            OutputPortPayloadLoanTarget::LoanedSample {
+                loaned_sample,
+                egress_installation,
+                _loan_marker,
+            } => (loaned_sample, egress_installation, _loan_marker),
+            OutputPortPayloadLoanTarget::NoLinkYet { scratch_bytes } => {
+                self.keep_as_the_last_message_of(&output_port, || scratch_bytes, user_header);
+                return Ok(());
+            }
         };
         let mut channels = self.channels.lock();
+        self.keep_as_the_last_message_of(
+            &output_port,
+            || payload_area_bytes_mut(&mut loaned_sample)[..payload_byte_len].to_vec(),
+            user_header,
+        );
         let Some(egress) = channels
             .get_mut(&output_port)
             .filter(|egress| egress.installation == egress_installation)
         else {
             return Ok(());
         };
-        egress.send_loaned_sample(
-            &output_port,
-            loaned_sample,
-            DataChannelSampleUserHeader::new(
-                timestamp_ns,
-                payload_byte_len as u32,
-                group_boundary,
-                payload_descriptor,
-            ),
-        )
+        egress.send_loaned_sample(&output_port, loaned_sample, user_header)
     }
 
     fn linked_egress_of_a_declared_port<'channels>(

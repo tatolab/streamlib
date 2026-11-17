@@ -783,3 +783,82 @@ fn a_shutdown_ends_a_continuous_wait_before_its_deadline() {
 
     assert_eq!(outcome, ContinuousLoopWaitOutcome::Stopped);
 }
+
+/// A reactive loop sends its node's kept last message to a reader that connects while the node
+/// writes nothing and nothing arrives for it.
+///
+/// Fail-without-fix: drop the send from the reactive loop's pass, and the reader never reads.
+#[test]
+fn a_reactive_loop_sends_a_kept_message_to_a_reader_that_connects_while_it_idles() {
+    use crate::core::test_support::MockOutputOnlyNode;
+    use crate::iceoryx2::{
+        ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, MessageGroupBoundary,
+        TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    };
+
+    let mut instance = NodeInstance::new(Box::new(
+        <MockOutputOnlyNode::Node as crate::core::GeneratedNode>::from_config(Default::default())
+            .expect("the mock constructs from its default config"),
+    ));
+    instance
+        .install_iceoryx2_resources()
+        .expect("the mock accepts its iceoryx2 resources");
+    let output_writer = instance
+        .iceoryx2_output_writer_inner()
+        .expect("an output-only mock holds an output writer");
+    output_writer.keep_the_last_message_of_output_ports(["out1".to_string()]);
+    output_writer
+        .write_bytes_with_timestamp("out1", b"the value", 0, MessageGroupBoundary::StartsGroup)
+        .expect("a write to a declared port no link reached sends nothing");
+    let node = Arc::new(Mutex::new(instance));
+
+    let (mut shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
+    let shutdown_receiver = shutdown_channel
+        .take_receiver()
+        .expect("a fresh shutdown channel holds its receiver");
+    let loop_thread = std::thread::spawn({
+        let node = Arc::clone(&node);
+        move || {
+            run_reactive_scheduling_loop_recording_callbacks(
+                &node,
+                &shutdown_receiver,
+                Some(shutdown_wake_fd),
+                &AtomicBool::new(false),
+                |_| {},
+            )
+        }
+    });
+
+    let channel = Iceoryx2Node::for_this_test_process()
+        .open_or_create_service(&unique_suffix("kept-message/pubsub"), 2, 4)
+        .expect("open the channel data service");
+    output_writer.set_channel_publisher(
+        "out1",
+        &channel,
+        channel.create_publisher(64).expect("the port's publisher"),
+        ChannelEgressConfig {
+            service_name: "test/runner/out1".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 64,
+            chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+        },
+    );
+    let reader = channel.create_subscriber(4).expect("the port's reader");
+
+    let started = Instant::now();
+    let mut received = None;
+    while received.is_none() && started.elapsed() < Duration::from_secs(5) {
+        received = reader.receive().expect("the reader receives");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    shutdown_channel.signal_shutdown();
+    loop_thread
+        .join()
+        .expect("the scheduling loop must not panic");
+
+    let received = received.expect("the loop sent the kept message to the late reader");
+    assert_eq!(
+        crate::iceoryx2::channel_sample_test_support::stamped_payload_of(&received),
+        b"the value"
+    );
+}
