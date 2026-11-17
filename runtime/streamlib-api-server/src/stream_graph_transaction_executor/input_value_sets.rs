@@ -347,8 +347,9 @@ pub(super) fn the_link_overriding_the_input(
 }
 
 /// The value node `node` of `rendered_graph`, a running stream's `graph` render, holds on its
-/// input `input`: its pin value, else its config field; `None` when it holds none, so a set
-/// made on the running node is reversed to what the node held, saved or live.
+/// input `input`: the value set live on it, else its pin value, else its config field; `None`
+/// when it holds none, so a set made on the running node is reversed to what the node held,
+/// saved or live.
 pub(super) fn the_value_a_running_node_holds_on_the_input(
     rendered_graph: &Value,
     node: Uuid,
@@ -358,8 +359,14 @@ pub(super) fn the_value_a_running_node_holds_on_the_input(
         .as_array()?
         .iter()
         .find(|rendered| rendered["id"] == node.to_string())?;
-    rendered_node["pins"]
-        .get(input)
+    let value_set_live = rendered_node["ports"]["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|port| port["name"] == input && port["value_comes_from"] == "live")
+        .map(|port| &port["value"]);
+    value_set_live
+        .or_else(|| rendered_node["pins"].get(input))
         .or_else(|| rendered_node["config"].get(input))
         .filter(|value| !value.is_null())
         .cloned()

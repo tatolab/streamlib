@@ -41,6 +41,7 @@ impl<Key: Ord + Clone, Notification> NotificationsSentAtMostOnceEachInterval<Key
         notification: Notification,
         now: Instant,
     ) -> Option<Notification> {
+        self.forget_each_key_not_held_whose_interval_ran(now);
         let interval_runs = self
             .last_sent_at
             .get(&key)
@@ -84,10 +85,17 @@ impl<Key: Ord + Clone, Notification> NotificationsSentAtMostOnceEachInterval<Key
                 taken.push(notification);
             }
         }
+        self.forget_each_key_not_held_whose_interval_ran(now);
+        taken
+    }
+
+    /// Forget when each key held no more was last sent, once its interval has run at `now`, so
+    /// a key heard once is not remembered for the connection's life.
+    fn forget_each_key_not_held_whose_interval_ran(&mut self, now: Instant) {
+        let interval = self.interval;
         let held = &self.held;
         self.last_sent_at
             .retain(|key, last_sent_at| held.contains_key(key) || now < *last_sent_at + interval);
-        taken
     }
 }
 

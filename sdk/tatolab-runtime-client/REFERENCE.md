@@ -909,7 +909,7 @@ A change in the live graph of a stream the connection subscribed to: an edit, a 
 
 ### `input_value_changed`
 
-The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.
 
 - Sent after `subscribe_input_value_changes`.
 - Since contract version 3, experimental.

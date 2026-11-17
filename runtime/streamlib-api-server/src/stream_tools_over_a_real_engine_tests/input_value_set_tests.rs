@@ -68,7 +68,7 @@ pub(super) fn a_project_whose_main_stream_holds_a_mixer() -> ProjectWithGraphDoc
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The answer of the tool `tool_name` sent `arguments`, or its refusal as the wire carries it.
-    async fn the_answer_or_the_refusal_of(
+    pub(super) async fn the_answer_or_the_refusal_of(
         &self,
         tool_name: &str,
         arguments: Value,
@@ -103,6 +103,17 @@ fn the_input_values_of(graph_document: &Value, node: &str) -> Value {
 }
 
 /// The pin values `rendered_node`, a node of a `graph` render, holds; none when it renders none.
+/// The input `input` of `rendered_node`, a node of a `graph` render.
+pub(super) fn the_input_named(rendered_node: &Value, input: &str) -> Value {
+    rendered_node["ports"]["inputs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|port| port["name"] == input)
+        .cloned()
+        .unwrap_or_else(|| panic!("the node renders no input `{input}`: {rendered_node}"))
+}
+
 fn the_pin_values_of(rendered_node: &Value) -> Value {
     match &rendered_node["pins"] {
         Value::Null => json!({}),
@@ -215,10 +226,16 @@ async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_save
     assert!(applied.get("transaction").is_none(), "{applied}");
     assert_eq!(project.the_graph_document_of("main"), saved_before);
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    let gain = the_input_named(&mixer, "gain");
+    assert_eq!(
+        (&gain["value"], &gain["value_comes_from"]),
+        (&json!(0.25), &json!("live")),
+        "{gain}"
+    );
     assert_eq!(
         the_pin_values_of(&mixer),
-        json!({ "gain": 0.25 }),
-        "{mixer}"
+        json!({}),
+        "pins stay saved: {mixer}"
     );
 
     engine
@@ -241,7 +258,11 @@ async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_save
         .await
         .expect("the live value is taken off");
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-    assert_eq!(the_pin_values_of(&mixer), json!({}), "{mixer}");
+    assert_ne!(
+        the_input_named(&mixer, "gain")["value_comes_from"],
+        "live",
+        "{mixer}"
+    );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
@@ -665,11 +686,8 @@ async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_b
         .expect_err("the rename of a node the stream does not hold is refused");
     assert_eq!(project.the_graph_document_of("main"), saved_before);
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
-    assert_eq!(
-        the_pin_values_of(&mixer),
-        json!({ "gain": 0.25 }),
-        "{mixer}"
-    );
+    let gain = the_input_named(&mixer, "gain");
+    assert_eq!(gain["value"], json!(0.25), "{gain}");
     assert_eq!(mixer["config"], json!({ "frame_width": 800 }), "{mixer}");
 
     engine

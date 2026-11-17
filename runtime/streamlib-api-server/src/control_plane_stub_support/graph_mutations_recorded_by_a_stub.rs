@@ -84,25 +84,14 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
         }
-        fn how_a_live_input_value_is_held(
-            &self,
-            _node: ::uuid::Uuid,
-            _input: &str,
-            _value: ::std::option::Option<&::serde_json::Value>,
-        ) -> ::std::result::Result<
-            ::streamlib::sdk::graph::input_values::LiveInputValueHolding,
-            ::streamlib::sdk::graph::input_values::InputValueRefusal,
-        > {
-            Ok(::streamlib::sdk::graph::input_values::LiveInputValueHolding::OnTheGraph)
-        }
         fn set_input_values_live(
             &self,
-            _node: ::uuid::Uuid,
-            _sets: Vec<(String, ::std::option::Option<::serde_json::Value>)>,
-        ) -> ::streamlib::sdk::error::Result<
-            Vec<::streamlib::sdk::graph::input_values::InputValueSetLive>,
+            _sets: &[::streamlib::sdk::graph::input_values::InputValueToSetLive],
+        ) -> ::std::result::Result<
+            ::streamlib::sdk::graph::input_values::InputValuesSetLive,
+            ::streamlib::sdk::graph::input_values::LiveInputValueSetRefusal,
         > {
-            unreachable!("a stub holds every live input value on its graph")
+            Ok(::streamlib::sdk::graph::input_values::InputValuesSetLive::OnTheGraph)
         }
         fn node_type_takes_a_config(
             &self,

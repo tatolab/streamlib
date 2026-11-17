@@ -4319,7 +4319,7 @@
     },
     {
       "name": "input_value_changed",
-      "summary": "The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.",
+      "summary": "The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -12012,7 +12012,7 @@
           {
             "type": "string",
             "const": "edited",
-            "description": "A node or a link was added, removed or reconfigured, or, on a connection not subscribed\nto the stream's input value changes, an input's value changed, told at most once each\n500 ms for each stream."
+            "description": "A node or a link was added, removed or reconfigured; or an input's value changed, told\nat most once each 500 ms for each stream to a connection not subscribed to the stream's\ninput value changes."
           },
           {
             "type": "string",
@@ -12096,13 +12096,6 @@
           "input": {
             "type": "string",
             "description": "The input, by name."
-          },
-          "member": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The member of a bundle input whose value changed; absent for a whole input."
           },
           "value": {
             "description": "The value the input reads now, as `graph` renders it: null when a link feeds it or it\nreads nothing."

@@ -548,7 +548,7 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
     let mut drops_raises_and_link_states_last_sampled =
         StreamGraphDropsRaisesAndLinkStatesLastSampled::default();
     let mut input_value_changes = NotificationsSentAtMostOnceEachInterval::<
-        (String, String, String, Option<String>),
+        OneInputOfAStream,
         InputValueChangedNotificationParams,
     >::new(ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY);
     let mut value_changes_told_as_edited = NotificationsSentAtMostOnceEachInterval::<
@@ -627,12 +627,11 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
                         let now = std::time::Instant::now();
                         let stream = input_value_change.stream.clone();
                         if subscriptions.follows(&stream, WhatAConnectionFollowsOfAStream::InputValues) {
-                            let key = (
+                            let key = OneInputOfAStream {
                                 stream,
-                                input_value_change.node.clone(),
-                                input_value_change.input.clone(),
-                                input_value_change.member.clone(),
-                            );
+                                node: input_value_change.node.clone(),
+                                input: input_value_change.input.clone(),
+                            };
                             match input_value_changes.heard(key, input_value_change, now) {
                                 Some(changed) => {
                                     send_a_notification::<InputValueChanged>(
@@ -728,6 +727,15 @@ async fn send_stream_graph_and_action_changes_until_the_connection_ends(
 }
 
 /// Wait until `due_at`, or for ever when nothing is due.
+/// One input of a stream, which changes of its value are sent at most once each interval for:
+/// the stream, by stream id, the node, by its graph `id`, and the input, by name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OneInputOfAStream {
+    stream: String,
+    node: String,
+    input: String,
+}
+
 async fn sleep_until_due(due_at: Option<std::time::Instant>) {
     match due_at {
         Some(due_at) => tokio::time::sleep_until(tokio::time::Instant::from_std(due_at)).await,

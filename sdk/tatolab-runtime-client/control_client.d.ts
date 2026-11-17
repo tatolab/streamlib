@@ -340,7 +340,7 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   on_stream_graph_changed(listener: (params: ControlNotifications["stream_graph_changed"]) => void): () => void;
   /**
-   * Hear each `input_value_changed` the connection is sent, checked against the contract; the returned function stops it. The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+   * Hear each `input_value_changed` the connection is sent, checked against the contract; the returned function stops it. The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.
    */
   on_input_value_changed(listener: (params: ControlNotifications["input_value_changed"]) => void): () => void;
   /**

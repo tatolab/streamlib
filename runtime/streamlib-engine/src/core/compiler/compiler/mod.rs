@@ -141,6 +141,10 @@ impl Compiler {
     /// Flush transaction. Callable from any thread - compile() is dispatched to main thread.
     #[tracing::instrument(name = "compiler.commit", skip_all)]
     pub(crate) fn commit(&self, runtime_ctx: &Arc<RuntimeContext>) -> Result<()> {
+        #[cfg(any(test, feature = "test-support"))]
+        crate::core::runtime::graph_renders_and_commits_counted_for_a_test::count_a_commit_begun_of(
+            runtime_ctx.loaded_stream_identity(),
+        );
         let _one_commit_at_a_time = self.one_commit_at_a_time.lock();
         let operations = self.take_the_logged_operations_to_compile();
         if operations.is_empty() {

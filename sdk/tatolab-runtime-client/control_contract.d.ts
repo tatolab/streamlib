@@ -4177,10 +4177,6 @@ export interface InputValueChangedNotificationParams {
    */
   input: string;
   /**
-   * The member of a bundle input whose value changed; absent for a whole input.
-   */
-  member?: string | null;
-  /**
    * The value the input reads now, as `graph` renders it: null when a link feeds it or it
    * reads nothing.
    */
@@ -5345,7 +5341,7 @@ export interface ControlNotifications {
    */
   stream_graph_changed: StreamGraphChangedNotificationParams;
   /**
-   * The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input and member, ending on the last value.
+   * The value an input of a stream the connection subscribed to reads changed, set live or saved, with the `value` and `value_comes_from` `graph` renders for it; sent at most once each 33 ms for one input, ending on the last value.
    *
    * Since contract version 3, experimental.
    */

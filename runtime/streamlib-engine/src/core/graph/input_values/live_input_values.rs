@@ -5,7 +5,7 @@
 //! node, link or port, and the value each input reads while no link feeds it: its live value,
 //! else its saved one, else its declared default.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -14,39 +14,33 @@ use uuid::Uuid;
 
 use crate::core::descriptors::NodeKind;
 use crate::core::graph::{Graph, GraphNode, PortInfo};
+use crate::core::pubsub::RuntimeEvent;
 
-/// One input a value is set live on: its node's UUID, its name, and the member of a bundle input
-/// it sets, `None` for the whole input.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct LiveInputValueKey {
-    /// The node, by UUID.
-    pub node: Uuid,
-    /// The input, by name.
-    pub input: String,
-    /// The member of a bundle input, `None` for the whole input.
-    pub member: Option<String>,
-}
-
-/// The values set live on one stream's inputs, keyed by node UUID, input and member. A set takes
-/// no graph lock, so a running stream's live values change while its graph is read.
+/// The values set live on one stream's inputs, by node UUID and then input. A set takes no graph
+/// write lock, so a running stream's live values change while its graph is read.
 #[derive(Debug, Default)]
 pub struct LiveInputValuesOfAStream {
-    values: RwLock<BTreeMap<LiveInputValueKey, Value>>,
+    values: RwLock<HashMap<Uuid, BTreeMap<String, Value>>>,
 }
 
 impl LiveInputValuesOfAStream {
     /// Set `value` live on input `input` of `node`, `None` taking the live value off, answering
     /// the live value it held before.
     pub fn set(&self, node: Uuid, input: &str, value: Option<Value>) -> Option<Value> {
-        let key = LiveInputValueKey {
-            node,
-            input: input.to_owned(),
-            member: None,
-        };
         let mut values = self.values.write();
         match value {
-            Some(value) => values.insert(key, value),
-            None => values.remove(&key),
+            Some(value) => values
+                .entry(node)
+                .or_default()
+                .insert(input.to_owned(), value),
+            None => {
+                let values_of_the_node = values.get_mut(&node)?;
+                let before = values_of_the_node.remove(input);
+                if values_of_the_node.is_empty() {
+                    values.remove(&node);
+                }
+                before
+            }
         }
     }
 
@@ -54,22 +48,25 @@ impl LiveInputValuesOfAStream {
     pub fn value_of(&self, node: Uuid, input: &str) -> Option<Value> {
         self.values
             .read()
-            .get(&LiveInputValueKey {
-                node,
-                input: input.to_owned(),
-                member: None,
-            })
+            .get(&node)
+            .and_then(|values_of_the_node| values_of_the_node.get(input))
             .cloned()
     }
 
-    /// Each value set live on a whole input of `node`, by input.
+    /// Each value set live on an input of `node`, by input.
     pub fn values_of_the_node(&self, node: Uuid) -> Map<String, Value> {
         self.values
             .read()
-            .iter()
-            .filter(|(key, _)| key.node == node && key.member.is_none())
-            .map(|(key, value)| (key.input.clone(), value.clone()))
+            .get(&node)
+            .into_iter()
+            .flatten()
+            .map(|(input, value)| (input.clone(), value.clone()))
             .collect()
+    }
+
+    /// Forget every value set live on an input of `node`, as the node leaves the graph.
+    pub fn forget_the_node(&self, node: Uuid) {
+        self.values.write().remove(&node);
     }
 }
 
@@ -180,16 +177,27 @@ pub(crate) fn the_value_an_input_reads(
     })
 }
 
-/// Whether a link of `graph` feeds input `input` of `node`.
-pub(crate) fn a_link_feeds_the_input(graph: &Graph, node: &GraphNode, input: &str) -> bool {
-    graph
-        .traversal()
-        .e(())
-        .iter()
-        .any(|link| link.to_port().node_run_id() == &node.id && link.to_port().port_name() == input)
+/// The `InputValueDidChange` announcing what input `input` of `node` in `graph` reads now; `None`
+/// when the node has no such input.
+pub(crate) fn the_input_value_change(
+    graph: &Graph,
+    node: &GraphNode,
+    input: &str,
+) -> Option<RuntimeEvent> {
+    let port = node.input_port(input)?;
+    Some(RuntimeEvent::InputValueDidChange {
+        node: node.node_uuid,
+        input: input.to_owned(),
+        value_read: the_value_an_input_reads(
+            graph,
+            node,
+            port,
+            graph.link_into(&node.id, input).is_some(),
+        ),
+    })
 }
 
-/// The pin values `node` of `graph` holds, each value set live on one of its inputs over the
+/// The pin values `node` of `graph` reads, each value set live on one of its inputs over the
 /// saved one.
 pub(crate) fn the_pin_values_with_the_live_ones_over_them(
     graph: &Graph,
@@ -200,15 +208,42 @@ pub(crate) fn the_pin_values_with_the_live_ones_over_them(
     pin_values
 }
 
-/// How a value set live on one input of a running node is held: apart from the graph, for an
-/// input the node reads each run, or on the graph, for a setting, a config field exposed as an
-/// input, or a node the running graph does not hold, which takes the path a graph edit takes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LiveInputValueHolding {
-    /// Held in the stream's live values; no node, link or port changes.
-    ApartFromTheGraph,
-    /// Made on the graph as an edit of it.
+/// One value a live set makes: the node, by UUID, its input, and the value, `None` taking the
+/// input's live value off.
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputValueToSetLive {
+    /// The node, by UUID.
+    pub node: Uuid,
+    /// The input, by name.
+    pub input: String,
+    /// The value, `None` taking the live value off.
+    pub value: Option<Value>,
+}
+
+/// What a live set of values made: each set apart from the graph, or none, because one is held
+/// on the graph and the set takes the path a graph edit takes.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InputValuesSetLive {
+    /// Each value set live apart from the graph, in the order asked; no node, link or port
+    /// changed.
+    ApartFromTheGraph(Vec<InputValueSetLive>),
+    /// One value is held on the graph: a setting, a config field exposed as an input, an input
+    /// its node does not have, or a node the graph does not hold. None was set.
     OnTheGraph,
+}
+
+/// Why a live set of values was refused, every value left as it was.
+#[derive(Debug)]
+pub enum LiveInputValueSetRefusal {
+    /// The input of the value at `set_index` does not take it.
+    TheInputDoesNotTakeIt {
+        /// The index of the refused value among those asked.
+        set_index: usize,
+        /// Why its input does not take it.
+        refusal: super::InputValueRefusal,
+    },
+    /// A helper or island reading one of the values was not handed it.
+    NotHandedOver(crate::core::Error),
 }
 
 /// One value set live apart from the graph: the input, the live value it held before, the

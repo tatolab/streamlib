@@ -16,6 +16,9 @@ use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
+use crate::core::graph::input_values::{
+    InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
     NodeRunId, PendingDeletionComponent, StateComponent, node_named_or_refused,
@@ -100,7 +103,7 @@ fn take_out_now_each_node_and_link_pending_deletion_no_commit_builds(compiler: &
             this_streams_graph.traversal_mut().e(link_id).drop();
         }
         for node_run_id in &nodes_pending_deletion {
-            this_streams_graph.traversal_mut().v(node_run_id).drop();
+            this_streams_graph.drop_the_node(node_run_id);
         }
     });
 }
@@ -291,7 +294,7 @@ pub(super) async fn add_node_impl(
                     )
                 })
             {
-                graph.traversal_mut().v(&node_id).drop();
+                graph.drop_the_node(&node_id);
                 return Err(refusal);
             }
         }
@@ -788,24 +791,11 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         )
     }
 
-    fn how_a_live_input_value_is_held(
-        &self,
-        node: uuid::Uuid,
-        input: &str,
-        value: Option<&serde_json::Value>,
-    ) -> std::result::Result<
-        crate::core::graph::input_values::LiveInputValueHolding,
-        crate::core::graph::input_values::InputValueRefusal,
-    > {
-        LoadedStreamInThisRuntime::how_a_live_input_value_is_held(self, node, input, value)
-    }
-
     fn set_input_values_live(
         &self,
-        node: uuid::Uuid,
-        sets: Vec<(String, Option<serde_json::Value>)>,
-    ) -> Result<Vec<crate::core::graph::input_values::InputValueSetLive>> {
-        LoadedStreamInThisRuntime::set_input_values_live(self, node, sets)
+        sets: &[InputValueToSetLive],
+    ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal> {
+        LoadedStreamInThisRuntime::set_input_values_live(self, sets)
     }
 
     fn an_exposure_of_config_fields_is_recorded_on(

@@ -341,7 +341,6 @@ pub enum RuntimeEvent {
     InputValueDidChange {
         node: uuid::Uuid,
         input: String,
-        member: Option<String>,
         value_read: Option<crate::core::graph::input_values::InputValueRead>,
     },
 

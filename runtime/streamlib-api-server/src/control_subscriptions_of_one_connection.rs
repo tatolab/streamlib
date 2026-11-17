@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use parking_lot::Mutex;
 use streamlib::sdk::error::Result as StreamlibResult;
-use streamlib::sdk::graph::input_values::{InputValueComesFrom, InputValueRead};
+use streamlib::sdk::graph::input_values::InputValueComesFrom;
 use streamlib::sdk::nodes::NodeState;
 use streamlib::sdk::pubsub::{
     Event, EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics,
@@ -427,23 +427,18 @@ impl EventListener for StreamChangesForwardedToOneConnection {
             RuntimeEvent::InputValueDidChange {
                 node,
                 input,
-                member,
                 value_read,
             } => {
-                let InputValueRead {
-                    value,
-                    value_comes_from,
-                } = value_read.clone().unwrap_or(InputValueRead {
-                    value: None,
-                    value_comes_from: None,
-                });
+                let (value, value_comes_from) = value_read
+                    .as_ref()
+                    .map(|read| (read.value.as_ref(), read.value_comes_from))
+                    .unwrap_or_default();
                 self.send(HeardOfAFollowedStream::InputValueChanged(
                     InputValueChangedNotificationParams {
                         stream: self.stream_id.clone(),
                         node: node.to_string(),
                         input: input.clone(),
-                        member: member.clone(),
-                        value: value.filter(|value| !value.is_null()),
+                        value: value.filter(|value| !value.is_null()).cloned(),
                         value_comes_from: value_comes_from.map(input_value_comes_from_on_the_wire),
                     },
                 ));

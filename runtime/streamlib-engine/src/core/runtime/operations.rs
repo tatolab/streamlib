@@ -3,6 +3,9 @@
 
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::Result;
+use crate::core::graph::input_values::{
+    InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 use crate::core::graph::{LinkUniqueId, NodeRunId};
 use crate::core::nodes::NodeSpec;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
@@ -108,27 +111,15 @@ pub trait RuntimeOperations: Send + Sync {
         exposed_config_fields: &[String],
     ) -> Result<bool>;
 
-    /// How `value`, set live on input `input` of the node `node`, by UUID, is held, refused when
-    /// the input does not take it: apart from the graph for an input the node reads each run, on
-    /// the graph, as an edit of it, for anything else.
-    fn how_a_live_input_value_is_held(
-        &self,
-        node: uuid::Uuid,
-        input: &str,
-        value: Option<&serde_json::Value>,
-    ) -> std::result::Result<
-        crate::core::graph::input_values::LiveInputValueHolding,
-        crate::core::graph::input_values::InputValueRefusal,
-    >;
-
-    /// Set each of `sets`, each held apart from the graph, live on the node `node`, by UUID,
-    /// `None` taking an input's live value off, with no graph edit and no compile; each input's
-    /// new value is announced as `InputValueDidChange`.
+    /// Set each of `sets` live, apart from the graph, when each is on an input its node reads
+    /// each run: every value checked before any is set, then each handed to the helper and the
+    /// islands reading it and announced as `InputValueDidChange`, with no graph edit and no
+    /// compile; whole or not at all. None is set when one is held on the graph, so the set takes
+    /// the path a graph edit takes.
     fn set_input_values_live(
         &self,
-        node: uuid::Uuid,
-        sets: Vec<(String, Option<serde_json::Value>)>,
-    ) -> Result<Vec<crate::core::graph::input_values::InputValueSetLive>>;
+        sets: &[InputValueToSetLive],
+    ) -> std::result::Result<InputValuesSetLive, LiveInputValueSetRefusal>;
 
     /// Bring each stream fragment of this stream's live graph to the stream it references, as
     /// that stream's graph document, or its import's, is on disk now.

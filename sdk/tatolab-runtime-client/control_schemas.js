@@ -1477,7 +1477,6 @@ const InputValueChangedNotificationParams = z.looseObject({
   stream: z.string(),
   node: z.string(),
   input: z.string(),
-  member: z.string().nullable().optional(),
   value: z.unknown().optional(),
   value_comes_from: InputValueComesFromOnTheWire.nullable().optional(),
 });

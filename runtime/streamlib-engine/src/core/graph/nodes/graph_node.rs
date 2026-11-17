@@ -182,6 +182,11 @@ impl GraphNode {
         self.exposed_config_fields.iter().any(|field| field == name)
     }
 
+    /// The input port named `name`.
+    pub fn input_port(&self, name: &str) -> Option<&PortInfo> {
+        self.ports.inputs.iter().find(|port| port.name == name)
+    }
+
     pub fn has_input(&self, name: &str) -> bool {
         self.ports.inputs.iter().any(|p| p.name == name)
     }

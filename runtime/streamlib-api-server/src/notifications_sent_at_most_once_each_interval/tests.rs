@@ -60,3 +60,33 @@ fn each_key_has_an_interval_of_its_own() {
     assert_eq!(coalesced.take_the_due(start + INTERVAL), vec![3]);
     assert_eq!(coalesced.heard("width", 4, start + INTERVAL), Some(4));
 }
+
+/// A key sent once and heard no more is forgotten once its interval runs, though nothing is held
+/// and no held notification falls due.
+#[test]
+fn a_key_heard_once_is_forgotten_once_its_interval_runs() {
+    let start = Instant::now();
+    let mut coalesced = NotificationsSentAtMostOnceEachInterval::new(INTERVAL);
+    for (index, key) in ["gain", "pan", "mix"].into_iter().enumerate() {
+        coalesced.heard(key, index, start);
+    }
+    coalesced.heard("gain", 3, start + INTERVAL * 2);
+    assert_eq!(coalesced.last_sent_at.len(), 1);
+}
+
+/// The intervals the contract names for `input_value_changed`, and for `edited` sent for a value
+/// change, are the ones a connection keeps.
+#[test]
+fn the_contract_names_the_intervals_a_connection_keeps() {
+    let contract = streamlib_control_contract::control_contract_file_contents();
+    for interval in [
+        ONE_INPUT_VALUE_CHANGE_SENT_AT_MOST_EVERY,
+        A_VALUE_CHANGE_TOLD_AS_EDITED_AT_MOST_EVERY,
+    ] {
+        let named = format!("at most once each {} ms", interval.as_millis());
+        assert!(
+            contract.contains(&named),
+            "the contract does not say {named}"
+        );
+    }
+}

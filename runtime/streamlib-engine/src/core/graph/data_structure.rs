@@ -17,9 +17,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
-use crate::core::graph::input_values::{
-    LiveInputValuesOfAStream, the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
-};
+use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
 use crate::core::json_schema::{GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId};
 
 /// Graph state.
@@ -101,6 +99,29 @@ impl Graph {
     /// The values set live on this graph's inputs, which change under its read lock.
     pub fn live_input_values(&self) -> &Arc<LiveInputValuesOfAStream> {
         &self.live_input_values
+    }
+
+    /// The node whose UUID is `node_uuid`.
+    pub fn node_by_uuid(&self, node_uuid: uuid::Uuid) -> Option<&GraphNode> {
+        self.digraph
+            .node_weights()
+            .find(|node| node.node_uuid == node_uuid)
+    }
+
+    /// The link feeding input `input` of the node `node_run_id`.
+    pub fn link_into(&self, node_run_id: &NodeRunId, input: &str) -> Option<&Link> {
+        self.digraph.edge_weights().find(|link| {
+            link.to_port().node_run_id() == node_run_id && link.to_port().port_name() == input
+        })
+    }
+
+    /// Drop the node `node_run_id` and the links into and out of it, and forget each value set
+    /// live on its inputs; whether the graph still holds it.
+    pub fn drop_the_node(&mut self, node_run_id: &NodeRunId) -> bool {
+        if let Some(node) = self.traversal().v(node_run_id).first() {
+            self.live_input_values.forget_the_node(node.node_uuid);
+        }
+        self.traversal_mut().v(node_run_id).drop().exists()
     }
 
     /// The node types this graph's stream resolves.
@@ -248,7 +269,6 @@ impl Graph {
         let render_a_node = |node: &GraphNode| {
             let mut rendered = GraphNodeOutput {
                 inputs_waiting_for_a_value: the_inputs_a_function_node_has_no_value_for(self, node),
-                pins: the_pin_values_with_the_live_ones_over_them(self, node),
                 ..GraphNodeOutput::from(node)
             };
             for (rendered_input, port) in rendered.ports.inputs.iter_mut().zip(&node.ports.inputs) {

@@ -17,11 +17,11 @@ use crate::core::nodes::NodeTypesOneStreamResolves;
 mod live_input_values;
 
 pub use live_input_values::{
-    InputValueComesFrom, InputValueRead, InputValueSetLive, LiveInputValueHolding,
-    LiveInputValueKey, LiveInputValuesOfAStream,
+    InputValueComesFrom, InputValueRead, InputValueSetLive, InputValueToSetLive,
+    InputValuesSetLive, LiveInputValueSetRefusal, LiveInputValuesOfAStream,
 };
 pub(crate) use live_input_values::{
-    a_link_feeds_the_input, the_input_port_takes_a_value,
+    the_input_port_takes_a_value, the_input_value_change,
     the_pin_values_with_the_live_ones_over_them, the_value_an_input_reads,
 };
 

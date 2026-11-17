@@ -1,130 +1,106 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A `live` transaction of value sets alone, each on an input its node reads each run: resolved,
-//! every value checked, every value set live apart from the graph, and answered, with no graph
-//! write lock, no graph render, no compile and no document staged.
+//! A `live` transaction of value sets alone, on one stream, each on an input its node reads each
+//! run: handed to the stream whole, which checks every value, sets each apart from the graph and
+//! announces it, with no graph write lock, no graph render, no compile and no document staged.
 
-use streamlib::sdk::graph::input_values::{InputValueSetLive, LiveInputValueHolding};
+use streamlib::sdk::graph::input_values::{
+    InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 
 use super::*;
 
-/// One value a live transaction sets: the index of its action, the loaded stream and node it
-/// names, its input and its value, `None` taking the live value off.
-struct OneInputValueSetLive {
-    request_index: usize,
+/// The values a live transaction sets on one stream: the stream, and each value with the index
+/// of the action setting it.
+struct InputValuesALiveTransactionSets {
     stream_id: String,
-    node: Uuid,
-    input: String,
-    value: Option<Value>,
+    sets: Vec<InputValueToSetLive>,
+    request_index_of_each_set: Vec<usize>,
 }
 
 impl StreamGraphTransactionExecutor<'_> {
     /// Apply `requests`, a `live` transaction whose actions name the loaded streams
-    /// `stream_id_of_each_request`, when each is a value set on an input its node reads each
-    /// run, at the stream's own level: every value checked before any is set, then every one set
-    /// live apart from the graph, adjacent sets on one node together. `None` when one action is
-    /// anything else, so the transaction takes the staged path.
+    /// `stream_id_of_each_request`, when each is a value set at the stream's own level on one
+    /// stream, on an input its node reads each run: every value set live apart from the graph,
+    /// whole or not at all. `None` when one action is anything else, so the transaction takes
+    /// the staged path.
     pub(super) fn apply_input_values_set_live_apart_from_the_graph(
         &self,
         requests: &[StreamGraphAction],
         stream_id_of_each_request: &[String],
     ) -> Result<Option<GraphTransactionToolResult>, GraphTransactionRefusal> {
-        let Some(sets) =
-            the_input_values_a_transaction_sets_live(requests, stream_id_of_each_request)
+        let Some(InputValuesALiveTransactionSets {
+            stream_id,
+            sets,
+            request_index_of_each_set,
+        }) = the_input_values_a_transaction_sets_live(requests, stream_id_of_each_request)
         else {
             return Ok(None);
         };
-        let mut stream_operations_of_each_stream: HashMap<String, Arc<dyn RuntimeOperations>> =
-            HashMap::new();
-        for set in &sets {
-            if stream_operations_of_each_stream.contains_key(&set.stream_id) {
-                continue;
-            }
-            let stream_operations = self
-                .operations_on_the_loaded_streams
-                .runtime_operations_of_the_stream_a_call_names(&set.stream_id)
-                .map_err(|refusal| {
-                    GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
-                })?;
-            stream_operations_of_each_stream.insert(set.stream_id.clone(), stream_operations);
-        }
-        let stream_operations_of = |stream_id: &str| {
-            stream_operations_of_each_stream
-                .get(stream_id)
-                .cloned()
-                .ok_or_else(|| {
-                    GraphTransactionRefusal::of_the_whole_transaction(format!(
-                        "stream `{stream_id}` is not loaded"
-                    ))
-                })
+        let stream_operations = self
+            .operations_on_the_loaded_streams
+            .runtime_operations_of_the_stream_a_call_names(&stream_id)
+            .map_err(|refusal| {
+                GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
+            })?;
+        let refusal_of_the_set = |set_index: usize, refusal: GraphRequestRefusal| {
+            let request_index = request_index_of_each_set
+                .get(set_index)
+                .copied()
+                .unwrap_or_default();
+            GraphTransactionRefusal::of_the_operation(
+                request_index,
+                requests
+                    .get(request_index)
+                    .map(what_a_graph_action_names)
+                    .unwrap_or_default(),
+                refusal,
+            )
         };
-
-        for set in &sets {
-            match stream_operations_of(&set.stream_id)?.how_a_live_input_value_is_held(
-                set.node,
-                &set.input,
-                set.value.as_ref(),
-            ) {
-                Ok(LiveInputValueHolding::ApartFromTheGraph) => {}
-                Ok(LiveInputValueHolding::OnTheGraph) => return Ok(None),
-                Err(refusal) => {
-                    return Err(GraphTransactionRefusal::of_the_operation(
-                        set.request_index,
-                        what_a_graph_action_names(&requests[set.request_index]),
-                        GraphRequestRefusal::of_an_input_value(refusal, "/value".to_owned()),
-                    ));
-                }
+        let made = match stream_operations.set_input_values_live(&sets) {
+            Ok(InputValuesSetLive::ApartFromTheGraph(made)) => made,
+            Ok(InputValuesSetLive::OnTheGraph) => return Ok(None),
+            Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt { set_index, refusal }) => {
+                return Err(refusal_of_the_set(
+                    set_index,
+                    GraphRequestRefusal::of_an_input_value(refusal, "/value".to_owned()),
+                ));
             }
-        }
-
-        let mut made: Vec<(&OneInputValueSetLive, InputValueSetLive)> =
-            Vec::with_capacity(sets.len());
-        for sets_on_one_node in
-            sets.chunk_by(|one, next| one.stream_id == next.stream_id && one.node == next.node)
-        {
-            let first = &sets_on_one_node[0];
-            let set_live = stream_operations_of(&first.stream_id)?.set_input_values_live(
-                first.node,
-                sets_on_one_node
-                    .iter()
-                    .map(|set| (set.input.clone(), set.value.clone()))
-                    .collect(),
-            );
-            match set_live {
-                Ok(made_on_the_node) => made.extend(sets_on_one_node.iter().zip(made_on_the_node)),
-                Err(refusal) => {
-                    self.reverse_the_input_values_set_live(&stream_operations_of_each_stream, made);
-                    return Err(GraphTransactionRefusal::of_the_operation(
-                        first.request_index,
-                        what_a_graph_action_names(&requests[first.request_index]),
-                        refusal.to_string(),
-                    ));
-                }
+            Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => {
+                return Err(GraphTransactionRefusal::of_the_whole_transaction(
+                    not_handed_over.to_string(),
+                ));
             }
-        }
+        };
 
         let mut overridden_by_links = Vec::new();
         let mut operations_answered = Vec::with_capacity(made.len());
-        for (set, made_live) in made {
+        for (set, made_live) in sets.into_iter().zip(made) {
+            let InputValueSetLive {
+                input,
+                live_value_before,
+                saved_value,
+                linked_from,
+            } = made_live;
             if set.value.is_some()
-                && let Some((from_node, from_output)) = &made_live.linked_from
+                && let Some((from_node, from_output)) = linked_from
             {
                 overridden_by_links.push(GraphTransactionInputOverriddenByALink {
-                    stream: set.stream_id.clone(),
+                    stream: stream_id.clone(),
                     node: set.node.to_string(),
-                    input: set.input.clone(),
+                    input: input.clone(),
                     from_node: from_node.to_string(),
-                    from_output: from_output.clone(),
+                    from_output,
                 });
             }
             operations_answered.push((
-                set.stream_id.clone(),
+                stream_id.clone(),
                 StreamGraphOperation::SetNodeInputValue {
                     node: set.node,
-                    input: set.input.clone(),
-                    from: made_live.live_value_before.or(made_live.saved_value),
-                    to: set.value.clone(),
+                    input,
+                    from: live_value_before.or(saved_value),
+                    to: set.value,
                 },
             ));
         }
@@ -132,7 +108,7 @@ impl StreamGraphTransactionExecutor<'_> {
             GraphEditMode::Live,
             None,
             None,
-            &|stream_id| stream_operations_of_each_stream.get(stream_id).cloned(),
+            &|asked| (asked == stream_id).then(|| Arc::clone(&stream_operations)),
             operations_answered,
             WhatAnAnswerNamesBesideItsOperations {
                 labels_of_added_nodes: &HashMap::new(),
@@ -140,72 +116,51 @@ impl StreamGraphTransactionExecutor<'_> {
             },
         )))
     }
-
-    /// Set back, last first, the live value each of `made` replaced; one not set back is logged.
-    fn reverse_the_input_values_set_live(
-        &self,
-        stream_operations_of_each_stream: &HashMap<String, Arc<dyn RuntimeOperations>>,
-        made: Vec<(&OneInputValueSetLive, InputValueSetLive)>,
-    ) {
-        for (set, made_live) in made.into_iter().rev() {
-            let Some(stream_operations) = stream_operations_of_each_stream.get(&set.stream_id)
-            else {
-                continue;
-            };
-            if let Err(not_reversed) = stream_operations.set_input_values_live(
-                set.node,
-                vec![(set.input.clone(), made_live.live_value_before)],
-            ) {
-                tracing::error!(
-                    stream = %set.stream_id,
-                    node = %set.node,
-                    input = set.input,
-                    %not_reversed,
-                    "could not set back a live value of a refused live transaction"
-                );
-            }
-        }
-    }
 }
 
 /// Each value `requests` sets live, in order, when every one is a `set_node_input_value` or a
-/// `set_pin_value` at its stream's own level naming its node by UUID; `None` otherwise.
+/// `set_pin_value` at its stream's own level naming its node by UUID, and all name one stream;
+/// `None` otherwise.
 fn the_input_values_a_transaction_sets_live(
     requests: &[StreamGraphAction],
     stream_id_of_each_request: &[String],
-) -> Option<Vec<OneInputValueSetLive>> {
-    requests
-        .iter()
-        .zip(stream_id_of_each_request)
-        .enumerate()
-        .map(|(request_index, (request, stream_id))| {
-            let (StreamGraphAction::SetNodeInputValue {
-                level,
-                node,
-                input,
-                value,
-                ..
-            }
-            | StreamGraphAction::SetPinValue {
-                level,
-                node,
-                input,
-                value,
-                ..
-            }) = request
-            else {
-                return None;
-            };
-            if !level.is_empty() {
-                return None;
-            }
-            Some(OneInputValueSetLive {
-                request_index,
-                stream_id: stream_id.clone(),
-                node: Uuid::parse_str(node).ok()?,
-                input: input.clone(),
-                value: value.clone().filter(|value| !value.is_null()),
-            })
-        })
-        .collect()
+) -> Option<InputValuesALiveTransactionSets> {
+    let stream_id = stream_id_of_each_request.first()?;
+    let mut sets = Vec::with_capacity(requests.len());
+    let mut request_index_of_each_set = Vec::with_capacity(requests.len());
+    for (request_index, (request, request_stream_id)) in
+        requests.iter().zip(stream_id_of_each_request).enumerate()
+    {
+        let (StreamGraphAction::SetNodeInputValue {
+            level,
+            node,
+            input,
+            value,
+            ..
+        }
+        | StreamGraphAction::SetPinValue {
+            level,
+            node,
+            input,
+            value,
+            ..
+        }) = request
+        else {
+            return None;
+        };
+        if !level.is_empty() || request_stream_id != stream_id {
+            return None;
+        }
+        sets.push(InputValueToSetLive {
+            node: Uuid::parse_str(node).ok()?,
+            input: input.clone(),
+            value: value.clone().filter(|value| !value.is_null()),
+        });
+        request_index_of_each_set.push(request_index);
+    }
+    Some(InputValuesALiveTransactionSets {
+        stream_id: stream_id.clone(),
+        sets,
+        request_index_of_each_set,
+    })
 }

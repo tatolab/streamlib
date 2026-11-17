@@ -8,11 +8,17 @@ use serde::Serialize;
 
 use super::LoadedStreamInThisRuntime;
 use crate::core::compiler::PendingOperation;
+use crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed;
+use crate::core::compiler::compiler_ops::input_port_pin_values::{
+    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read,
+    refuse_a_pin_value_a_process_node_cannot_read,
+};
 use crate::core::graph::graph_snapshot::{GraphSnapshot, NodeChangeADrawnLinkBlocks};
+use crate::core::graph::input_values::the_input_value_change;
 use crate::core::graph::legacy_config_of_a_node::{
     input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
-use crate::core::graph::{LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
+use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
@@ -82,83 +88,24 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Set the saved value `value` on input `input` of the node `node_run_id`, `None` taking it
-    /// off, in place of any value set live on the input; hand it to each helper and island
-    /// reading it, and announce the graph's change and the input's new value.
+    /// off, in place of any value set live on the input; hand it to each island and the helper
+    /// reading it, and announce the input's new value. No node, link or port changes, so no
+    /// graph change is announced and nothing compiles.
     pub(crate) fn set_pin_value(
         &self,
         node_run_id: &NodeRunId,
         input: &str,
         value: Option<serde_json::Value>,
     ) -> Result<()> {
-        let input_value_changed = self.compiler.scope(|graph, _tx| -> Result<RuntimeEvent> {
-            let node = graph
-                .traversal_mut()
-                .v(node_run_id)
-                .first_mut()
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-            let node_uuid = node.node_uuid;
-            if !node.has_input(input) {
-                return Err(Error::NodePortNotFound {
-                    node_run_id: node.display_name.clone(),
-                    port_name: input.to_string(),
-                    direction: crate::core::PortDirection::Input,
-                });
+        self.with_no_other_input_value_change(|| {
+            let input_value_changed = self.compiler.scope(|graph, _tx| {
+                set_the_saved_value_and_hand_it_over(graph, node_run_id, input, value)
+            })?;
+            if let Some(input_value_changed) = input_value_changed {
+                self.publish_on_this_streams_topic(input_value_changed);
             }
-            if value.is_some() && node.is_an_exposed_config_field_input(input) {
-                return Err(Error::Configuration(format!(
-                    "input `{input}` of `{}` is a config field it exposes, which reads the node's \
-                     config while no link feeds it, and takes no pin value. To fix: set `{input}` \
-                     in its config",
-                    node.display_name
-                )));
-            }
-            match value {
-                Some(value) => {
-                    crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_value_a_process_node_cannot_read(
-                        node, input, &value,
-                    )?;
-                    node.pins.insert(input.to_string(), value);
-                }
-                None => {
-                    node.pins.remove(input);
-                }
-            }
-            crate::core::compiler::compiler_ops::function_node_island::hand_each_reader_the_island_a_compile_changed(
-                graph,
-                &[],
-            )?;
-            graph.live_input_values().set(node_uuid, input, None);
-            crate::core::compiler::compiler_ops::input_port_pin_values::hand_each_helper_the_pin_values_its_input_ports_read(
-                graph,
-            )?;
-            let node = graph
-                .traversal()
-                .v(node_run_id)
-                .first()
-                .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
-            let value_read = node
-                .ports
-                .inputs
-                .iter()
-                .find(|port| port.name == input)
-                .and_then(|port| {
-                    crate::core::graph::input_values::the_value_an_input_reads(
-                        graph,
-                        node,
-                        port,
-                        crate::core::graph::input_values::a_link_feeds_the_input(graph, node, input),
-                    )
-                });
-            Ok(RuntimeEvent::InputValueDidChange {
-                node: node_uuid,
-                input: input.to_owned(),
-                member: None,
-                value_read,
-            })
-        })?;
-        self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        self.publish_on_this_streams_topic(input_value_changed);
-        Ok(())
+            Ok(())
+        })
     }
 
     pub(crate) fn set_exposed_config_fields(
@@ -514,4 +461,54 @@ impl LoadedStreamInThisRuntime {
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
         Ok(())
     }
+}
+
+/// Set the saved value `value` on input `input` of the node `node_run_id` in `graph`, `None`
+/// taking it off, dropping any value set live on the input first, then hand each island and the
+/// node's helper what the input reads now; answers the change of the input to announce.
+pub(in crate::core::runtime) fn set_the_saved_value_and_hand_it_over(
+    graph: &mut Graph,
+    node_run_id: &NodeRunId,
+    input: &str,
+    value: Option<serde_json::Value>,
+) -> Result<Option<RuntimeEvent>> {
+    let node = graph
+        .traversal_mut()
+        .v(node_run_id)
+        .first_mut()
+        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+    let node_uuid = node.node_uuid;
+    if !node.has_input(input) {
+        return Err(Error::NodePortNotFound {
+            node_run_id: node.display_name.clone(),
+            port_name: input.to_string(),
+            direction: crate::core::PortDirection::Input,
+        });
+    }
+    if value.is_some() && node.is_an_exposed_config_field_input(input) {
+        return Err(Error::Configuration(format!(
+            "input `{input}` of `{}` is a config field it exposes, which reads the \
+             node's config while no link feeds it, and takes no pin value. To fix: \
+             set `{input}` in its config",
+            node.display_name
+        )));
+    }
+    match value {
+        Some(value) => {
+            refuse_a_pin_value_a_process_node_cannot_read(node, input, &value)?;
+            node.pins.insert(input.to_string(), value);
+        }
+        None => {
+            node.pins.remove(input);
+        }
+    }
+    graph.live_input_values().set(node_uuid, input, None);
+    hand_each_reader_the_island_a_compile_changed(graph, &[])?;
+    let node = graph
+        .traversal()
+        .v(node_run_id)
+        .first()
+        .ok_or_else(|| Error::NodeNotFound(node_run_id.to_string()))?;
+    hand_the_helper_of_the_node_the_pin_values_its_input_ports_read(graph, node)?;
+    Ok(the_input_value_change(graph, node, input))
 }
