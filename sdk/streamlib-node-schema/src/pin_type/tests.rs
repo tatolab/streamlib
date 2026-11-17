@@ -162,6 +162,10 @@ fn annotations_stating(name: PinAnnotationName) -> PinAnnotations {
             residency: Some(crate::ArrayOutputPortResidency::Gpu),
             ..none
         },
+        PinAnnotationName::ProjectAsset => PinAnnotations {
+            project_asset: Some(PinProjectAssetAnnotation::default()),
+            ..none
+        },
     }
 }
 
@@ -179,6 +183,7 @@ fn each_annotation_name_is_the_key_of_the_one_field_it_names() {
         sample_rate: Some(crate::ChannelsOutputPortSampleRate::Stated(48_000)),
         sample_type: Some(crate::ChannelsOutputPortSampleType::F32),
         residency: Some(crate::ArrayOutputPortResidency::Gpu),
+        project_asset: Some(PinProjectAssetAnnotation::default()),
     };
     let every_key: Vec<String> = serde_json::to_value(every_field_stated)
         .expect("writes")

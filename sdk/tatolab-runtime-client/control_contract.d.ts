@@ -35,6 +35,7 @@ import type {
   ChannelsOutputPortSampleRate,
   ChannelsOutputPortSampleType,
   ArrayOutputPortResidency,
+  PinProjectAssetAnnotation,
   BuiltInPinTypeName,
 } from "./pin_types.js";
 export type {
@@ -69,6 +70,7 @@ export type {
   ChannelsOutputPortSampleRate,
   ChannelsOutputPortSampleType,
   ArrayOutputPortResidency,
+  PinProjectAssetAnnotation,
   BuiltInPinTypeName,
 } from "./pin_types.js";
 
@@ -4677,6 +4679,7 @@ export interface ControlContractComponents {
   ChannelsOutputPortSampleRate: ChannelsOutputPortSampleRate;
   ChannelsOutputPortSampleType: ChannelsOutputPortSampleType;
   ArrayOutputPortResidency: ArrayOutputPortResidency;
+  PinProjectAssetAnnotation: PinProjectAssetAnnotation;
   NodeInputMode: NodeInputMode;
   SettingReadTime: SettingReadTime;
   NodeUiManifest: NodeUiManifest;

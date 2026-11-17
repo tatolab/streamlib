@@ -371,10 +371,11 @@ fn node_with_output_port_named<'graph>(
     Ok(node)
 }
 
-/// A registered type's input, when it has exactly one for a recipe to wire.
+/// A registered type's input that takes a wire, when it has exactly one for a recipe to wire.
 fn sole_input_port(entry: &NodeDescriptorOutput) -> Option<&PortDescriptorOutput> {
-    match entry.inputs.as_slice() {
-        [sole_input] => Some(sole_input),
+    let mut inputs_taking_a_wire = entry.inputs_taking_a_wire();
+    match (inputs_taking_a_wire.next(), inputs_taking_a_wire.next()) {
+        (Some(sole_input), None) => Some(sole_input),
         _ => None,
     }
 }
@@ -408,7 +409,9 @@ fn catalog_introduction_for(
     match entry {
         Some(entry) => Ok(format!(
             "This node's catalog entry for `{node_type}`, read now — `config_schema` is what \
-             `add_node`'s `config` takes, and `inputs` and `outputs` are its ports:\n{}",
+             `add_node`'s `config` takes, `outputs` are its output ports, and `inputs` lists \
+             its input ports, then each setting, whose `input_mode` is `setting_only`: a \
+             setting takes no wire and is set with `set_node_input_value`:\n{}",
             catalog_entry_json_block(entry)?
         )),
         None => Ok(format!(
@@ -610,7 +613,7 @@ fn show_channel_on_virtual_camera_recipe(
             format!(
                 "`{VIRTUAL_CAMERA_SINK_NODE_CLASS_IMPORT_PATH}` is registered with {} input \
              ports rather than one",
-                virtual_camera_sink.inputs.len()
+                virtual_camera_sink.inputs_taking_a_wire().count()
             ),
             None,
         )

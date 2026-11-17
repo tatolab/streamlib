@@ -50,6 +50,7 @@ __all__ = [
     "PinDeclarationOnTheWire",
     "PinFlow",
     "PinNumberRange",
+    "PinProjectAssetAnnotation",
     "PinType",
     "PinTypeChoicePinType",
     "PinTypeDescription",
@@ -82,6 +83,7 @@ type PinAnnotationName = Literal[
     "sample_rate",
     "sample_type",
     "residency",
+    "project_asset",
 ]
 """An annotation a pin may state: a key of `PinAnnotations`."""
 
@@ -457,6 +459,11 @@ class PinAnnotations(TypedDict):
     residency: NotRequired[ArrayOutputPortResidency | None]
     """Where a Tensor output's values live."""
 
+    project_asset: NotRequired[PinProjectAssetAnnotation | None]
+    """That a String holds the UUID of one of the project's assets, so a client offers
+    the project's assets to pick from.
+    """
+
 
 class PinNumberRange(TypedDict):
     """The lowest and highest number a pin holds; either may be left open."""
@@ -528,6 +535,13 @@ type ChannelsOutputPortSampleType = Literal["f32", "f64"]
 
 type ArrayOutputPortResidency = Literal["gpu", "cpu"]
 """Where an Array output's attributes live."""
+
+
+class PinProjectAssetAnnotation(TypedDict):
+    """The project's assets a String holding an asset's UUID is picked from."""
+
+    media: NotRequired[list[ProjectAssetMedia]]
+    """The media an asset must hold one of; empty, any asset of the project."""
 
 
 type BuiltInPinTypeName = Literal[
@@ -662,7 +676,7 @@ BUILT_IN_PIN_TYPES: tuple[PinTypeDescription, ...] = (
         label="String",
         documentation="Text.",
         flows=("value", "stream"),
-        annotations=("meaning", "control"),
+        annotations=("meaning", "control", "project_asset"),
         python_forms=("str",),
         value_component="StringPinValue",
         since=3,

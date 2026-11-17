@@ -255,6 +255,31 @@ fn a_descriptor_declaring_one_port_name_twice_is_refused_by_name() {
     );
 }
 
+/// A config field named as an input port would make one value both the config's and the
+/// input's, so either registration refuses the type, naming the name.
+///
+/// Mental-revert: without the refusal both registrations accept the type.
+#[test]
+fn a_descriptor_whose_config_field_is_named_as_an_input_port_is_refused_by_name() {
+    let path = "my_app.filters:BlurNode";
+    assert_refused_by_either_registration(
+        descriptor_for(path)
+            .with_input(port_named("strength"))
+            .with_config_schema(serde_json::json!({
+                "type": "object",
+                "properties": {"radius": {"type": "number"}, "strength": {"type": "number"}},
+            })),
+        |refusal| {
+            matches!(
+                refusal,
+                Error::Configuration(words)
+                    if words.contains(path) && words.contains("config field `strength`")
+                        && words.contains("input port `strength`")
+            )
+        },
+    );
+}
+
 /// The port marker names the port in the author's spelling and resolves to
 /// the cast the descriptor registered.
 #[test]
