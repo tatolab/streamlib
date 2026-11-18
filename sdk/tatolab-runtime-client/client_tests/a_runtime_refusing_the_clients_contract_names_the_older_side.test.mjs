@@ -18,7 +18,7 @@ import {
   TatolabRuntimeClient,
   controlAnswerResult,
 } from "../index.js";
-import { DISCOVERED, startALocalApiThatAnswersOnlyWhenTold, untilTrue } from "./local_api_stand_in.mjs";
+import { DISCOVERED, describedRuntime, startALocalApiThatAnswersOnlyWhenTold, untilTrue } from "./local_api_stand_in.mjs";
 
 const CLIENT_NAME = "contract mismatch test";
 
@@ -161,6 +161,52 @@ test("a connected client names the revision `discover` answered when an experime
       return true;
     });
     await client.close();
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("a runtime built before the contract had a revision, which refuses `contract_revision`, is named the older side", async () => {
+  const refusedAsARuntimeBeforeTheRevisionRefusesIt = {
+    code: -32602,
+    message: "unknown field `contract_revision`, expected `contract_version`",
+    data: {
+      refusal_code: "params_do_not_match_schema",
+      action: "discover",
+      runtime_words: "unknown field `contract_revision`, expected `contract_version`",
+      refused_params_pointer: "/contract_revision",
+    },
+  };
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold({ discoverError: refusedAsARuntimeBeforeTheRevisionRefusesIt });
+  try {
+    const connecting = TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME });
+    await untilTrue(() => localApi.requestsHeardOnTheConnection.length === 1);
+    const describing = localApi.requestsHeardOnTheConnection[0];
+    assert.equal(describing.method, "describe_runtime");
+    localApi.answerOnTheConnection(describing.id, describedRuntime("0.68.82"));
+    await assert.rejects(connecting, (refusal) => {
+      assert.ok(refusal instanceof ControlContractMismatch, `${refusal}`);
+      assert.deepEqual(refusal.mismatch, {
+        client_contract_version: CONTROL_CONTRACT_VERSION,
+        runtime_contract_version: CONTROL_CONTRACT_VERSION,
+        client_contract_revision: CONTROL_CONTRACT_REVISION,
+        runtime_contract_revision: 0,
+        older_side: "runtime",
+        runtime_version: "0.68.82",
+      });
+      return true;
+    });
+  } finally {
+    await localApi.stop();
+  }
+});
+
+test("any other refusal of `discover`'s params is handed on as it came", async () => {
+  const localApi = await startALocalApiThatAnswersOnlyWhenTold({
+    discoverError: { code: -32602, message: "no", data: { refusal_code: "params_do_not_match_schema", action: "discover", runtime_words: "no", refused_params_pointer: "/other" } },
+  });
+  try {
+    await assert.rejects(TatolabRuntimeClient.connect({ socketPath: localApi.socketPath, clientName: CLIENT_NAME }), (refusal) => refusal instanceof ControlOperationError && refusal.code === -32602);
   } finally {
     await localApi.stop();
   }

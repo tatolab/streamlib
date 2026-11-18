@@ -45,11 +45,12 @@ function theClientFramesOf(bytes) {
   return { frames, bytesLeft: bytes };
 }
 
-/** A local API stand-in on a Unix socket: it answers `discover` on a WebSocket with `discovered`, and every other request on it or in a POST only when told to; `refusesTheUpgradeWith`, a status and a body, refuses the WebSocket instead. */
+/** A local API stand-in on a Unix socket: it answers `discover` on a WebSocket with `discovered`, or with `discoverError` when one is given, and every other request on it or in a POST only when told to; `refusesTheUpgradeWith`, a status and a body, refuses the WebSocket instead. */
 export async function startALocalApiThatAnswersOnlyWhenTold({
   answersTheUpgrade = true,
   endsTheConnectionWhenTheClientDoes = true,
   discovered = DISCOVERED,
+  discoverError = undefined,
   refusesTheUpgradeWith = undefined,
 } = {}) {
   const socketDirectory = await mkdtemp(join(tmpdir(), "runtime-client-test-"));
@@ -88,7 +89,8 @@ export async function startALocalApiThatAnswersOnlyWhenTold({
         const message = JSON.parse(frame.payload.toString("utf8"));
         if (message.method === "discover") {
           discoverParamsHeard.push(message.params);
-          socket.write(aServerTextFrame(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: discovered })));
+          const discoverAnswer = discoverError === undefined ? { result: discovered } : { error: discoverError };
+          socket.write(aServerTextFrame(JSON.stringify({ jsonrpc: "2.0", id: message.id, ...discoverAnswer })));
         } else {
           requestsHeardOnTheConnection.push(message);
         }

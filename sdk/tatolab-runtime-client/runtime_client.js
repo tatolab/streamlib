@@ -1,11 +1,28 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-import { CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION } from "./control_contract.js";
-import { controlAnswerResult, controlNotificationParams, controlRequestMessage } from "./control_messages.js";
+import { CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, JSON_RPC_INVALID_PARAMS_ERROR_CODE } from "./control_contract.js";
+import {
+  ControlContractMismatch,
+  ControlOperationError,
+  controlAnswerResult,
+  controlNotificationParams,
+  controlRequestMessage,
+} from "./control_messages.js";
 import { ControlWebSocketTransport } from "./control_transports.js";
 
 const A_TRANSPORT_THAT_NEVER_CLOSES = new Promise(() => {});
+
+const THE_CONTRACT_REVISION_PARAM_POINTER = "/contract_revision";
+
+/** Whether `discoverRefusal` is a runtime of this client's version refusing `contract_revision` as a param it does not take: one built before the contract had a revision, which serves revision 0. */
+function isARuntimeFromBeforeTheRevision(discoverRefusal) {
+  return (
+    discoverRefusal instanceof ControlOperationError &&
+    discoverRefusal.code === JSON_RPC_INVALID_PARAMS_ERROR_CODE &&
+    discoverRefusal.refusal?.refused_params_pointer === THE_CONTRACT_REVISION_PARAM_POINTER
+  );
+}
 
 export class TatolabRuntimeClientCallsOverATransport {
   #transport;
@@ -24,10 +41,25 @@ export class TatolabRuntimeClientCallsOverATransport {
         { signal },
       );
     } catch (discoverRefusal) {
-      await client.close();
-      throw discoverRefusal;
+      try {
+        throw isARuntimeFromBeforeTheRevision(discoverRefusal) ? await client.#theMismatchOfARuntimeFromBeforeTheRevision(signal) : discoverRefusal;
+      } finally {
+        await client.close();
+      }
     }
     return client;
+  }
+
+  async #theMismatchOfARuntimeFromBeforeTheRevision(signal) {
+    const { version } = await this.call("describe_runtime", {}, { signal });
+    return new ControlContractMismatch({
+      client_contract_version: CONTROL_CONTRACT_VERSION,
+      runtime_contract_version: CONTROL_CONTRACT_VERSION,
+      client_contract_revision: CONTROL_CONTRACT_REVISION,
+      runtime_contract_revision: 0,
+      older_side: "runtime",
+      runtime_version: version,
+    });
   }
 
   constructor(transport) {
