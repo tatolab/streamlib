@@ -31,7 +31,7 @@ pub struct NodeInTheGraph {
 pub enum WhatALiveConnectMakesOfALink {
     /// It would make the link: the verdict of two typed ends that connect, `None` for ends
     /// their families judge.
-    Makes(Option<crate::core::descriptors::PinLinkVerdict>),
+    Makes(Option<Box<crate::core::descriptors::PinLinkVerdict>>),
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
     JudgesItOnlyAsItIsMade,

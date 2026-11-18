@@ -473,7 +473,7 @@ impl LoadedStreamInThisRuntime {
         }
         let (from, to) = self.the_ends_of_the_link(link)?;
         the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
-            .map(WhatALiveConnectMakesOfALink::Makes)
+            .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
     }
 
     /// The output and the input `link` names, each node by its UUID.

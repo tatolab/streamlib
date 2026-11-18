@@ -112,7 +112,7 @@ impl ControlOperationDispatcher {
         }
         match stream_operations.what_a_live_connect_makes_of_the_link(&link) {
             Ok(WhatALiveConnectMakesOfALink::Makes(verdict)) => {
-                Ok(LinkCheckResult::of_a_link_connect_makes(verdict.as_ref()))
+                Ok(LinkCheckResult::of_a_link_connect_makes(verdict.as_deref()))
             }
             Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade) => {
                 Err(ControlOperationRefusal::failed(format!(
