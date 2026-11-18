@@ -27,6 +27,7 @@ from tatolab.runtime._engine import (
     note_stop_request_from_parent_on_runtime_context,
     read_each_unlinked_input_port_as_its_pin_value,
     run_the_scheduling_loop_of_this_helper,
+    take_each_function_node_raise_newly_noted,
     why_each_function_node_its_islands_call_is_raising,
 )
 from tatolab.runtime._function_node_compilation import (
@@ -511,7 +512,18 @@ class HelperProcessLifecycle:
         raised when a run of its raises begins, and `None` when a clean call
         ends one, so the graph shows the function node raising while this node
         keeps running. A report the parent refused or did not answer is sent
-        again after the next call."""
+        again after the next call. The first raise of each run is logged once,
+        with its traceback."""
+        for function_node, raising_because, raised_traceback in (
+            take_each_function_node_raise_newly_noted(link_data_access=self._link_data_access)
+        ):
+            log.error(
+                "a function node this node's islands call raised; it hands out nothing until "
+                "it runs cleanly",
+                function_node=function_node,
+                error=raising_because,
+                traceback=raised_traceback,
+            )
         raising_because_by_function_node = why_each_function_node_its_islands_call_is_raising(
             link_data_access=self._link_data_access
         )

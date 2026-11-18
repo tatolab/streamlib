@@ -423,7 +423,7 @@ def test_a_process_that_keeps_raising_is_reported_once_and_cleared_once_it_runs_
 
 
 def test_a_function_node_raising_in_the_read_of_a_node_is_reported_on_the_function_node(
-    stand_in_parent,
+    stand_in_parent, log_records_this_process_sends_its_stand_in_parent
 ):
     """A function node whose call raises inside its reader's read is reported
     on the function node, once per run of raises, while the reader runs
@@ -485,6 +485,20 @@ def test_a_function_node_raising_in_the_read_of_a_node_is_reported_on_the_functi
         assert frame is None or frame.get("op") == "log", (
             f"a raise after the first of the run, or the reader's process(), sent {frame}"
         )
+
+    logs_naming_the_function_node = [
+        (level, attrs)
+        for level, _, attrs in log_records_this_process_sends_its_stand_in_parent
+        if (attrs or {}).get("function_node") == "beat-1"
+    ]
+    assert len(logs_naming_the_function_node) == 1, (
+        f"the first raise of the run is logged once: {logs_naming_the_function_node}"
+    )
+    ((logged_level, logged_attrs),) = logs_naming_the_function_node
+    assert logged_level == "error"
+    assert logged_attrs["error"] == raising["raising_because"]
+    assert "Traceback (most recent call last)" in logged_attrs["traceback"]
+    assert "RuntimeError: the function node broke on purpose" in logged_attrs["traceback"]
 
     stand_in_parent.send(
         {"cmd": "feed_island", "island": an_island_feeding_the_level_its_pin_sets(0.5)}

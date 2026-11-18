@@ -471,6 +471,30 @@ def test_a_function_node_that_raises_leaves_its_port_reading_nothing_and_is_name
     assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
 
 
+def test_a_port_fed_again_by_an_island_of_another_node_forgets_the_raise_of_the_node_it_no_longer_calls():
+    raising_path = f"{__name__}:build_an_object_then_answer_the_level_raising_on_a_negative_one"
+    data_plane = _engine.open_node_link_data_access_for_helper_process()
+    data_plane.declare_ports(["level"], [])
+    fed = feed_each_input_port_from_its_function_node_island(
+        data_plane,
+        [an_island_feeding_the_level_its_pin_sets(-1.0)],
+        {
+            raising_path: build_an_object_then_answer_the_level_raising_on_a_negative_one,
+            **_FUNCTION_NODES_FED_AGAIN_BY_IMPORT_PATH,
+        }.__getitem__,
+    )
+    assert data_plane.read_from_input_port("level") is None
+    assert list(
+        _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane)
+    ) == ["beat-1"]
+
+    fed.feed_an_input_port_from_its_island(
+        an_island_of_the_counter_feeding("level", then_remap_it=False)
+    )
+
+    assert _engine.why_each_function_node_its_islands_call_is_raising(link_data_access=data_plane) == {}
+
+
 def test_a_live_feed_of_a_stateful_node_another_port_reads_is_refused_and_leaves_both_ports_as_they_were():
     data_plane = _engine.open_node_link_data_access_for_helper_process()
     data_plane.declare_ports(["count", "also_count"], [])

@@ -655,12 +655,10 @@ pub(crate) fn the_report_of_how_its_helpers_ran_a_function_node(
     if let Some(component) = node.get::<FunctionNodeRanCompiledComponent>() {
         return Some(std::sync::Arc::clone(&component.0));
     }
-    let how_it_ran = std::sync::Arc::new(match node.get::<StateComponent>() {
-        Some(function_node_state) => {
-            HowItsHelpersRanAFunctionNode::showing_its_raises_on(function_node_state.clone_inner())
-        }
-        None => HowItsHelpersRanAFunctionNode::default(),
-    });
+    let function_node_state = node.get::<StateComponent>()?.clone_inner();
+    let how_it_ran = std::sync::Arc::new(HowItsHelpersRanAFunctionNode::showing_its_raises_on(
+        function_node_state,
+    ));
     node.insert(FunctionNodeRanCompiledComponent(std::sync::Arc::clone(
         &how_it_ran,
     )));

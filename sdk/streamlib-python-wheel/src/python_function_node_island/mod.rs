@@ -30,7 +30,7 @@ mod function_node_call_shapes;
 mod function_node_island_evaluators;
 mod function_node_raises_in_this_helper;
 
-use function_node_call_shapes::HowAFunctionNodeIsCalled;
+use function_node_call_shapes::{FunctionNodeCallFailure, HowAFunctionNodeIsCalled};
 use function_node_island_evaluators::FunctionNodeHandedOverByTheBootstrap;
 pub(crate) use function_node_island_evaluators::{
     FunctionNodeEvaluatedAsAStandaloneNode, FunctionNodeIslandEvaluatedInThisHelper,
@@ -556,9 +556,7 @@ impl FunctionNodeIslandEvaluation {
                             && !function_node.inputs_that_take_none.contains(&input_index)
                     });
             if an_input_that_needs_a_value_has_none {
-                for output_value in &mut function_node.output_values {
-                    *output_value = FunctionNodeValue::Nothing;
-                }
+                hand_out_nothing_on_every_output(&mut function_node.output_values);
                 continue;
             }
             let called = call_noting_its_breadcrumb_on(
@@ -570,14 +568,10 @@ impl FunctionNodeIslandEvaluation {
                 &input_values,
                 now_ns,
             );
-            if let Err(raised) = called {
+            if let Err(call_failure) = called {
                 self.where_it_notes_the_raises_of_its_function_nodes
-                    .note_that_it_raised(&function_node.node_id, || {
-                        the_words_a_function_node_call_failure_is_shown_in(raised)
-                    });
-                for output_value in &mut function_node.output_values {
-                    *output_value = FunctionNodeValue::Nothing;
-                }
+                    .note_that_it_raised(&function_node.node_id, || call_failure.described());
+                hand_out_nothing_on_every_output(&mut function_node.output_values);
                 continue;
             }
             self.where_it_notes_the_raises_of_its_function_nodes
@@ -596,12 +590,10 @@ impl FunctionNodeIslandEvaluation {
     }
 }
 
-/// The words the graph shows on a function node whose call failed: what its
-/// body raised, or why its call did not answer.
-fn the_words_a_function_node_call_failure_is_shown_in(call_failure: Error) -> String {
-    match call_failure {
-        Error::Runtime(words) => words,
-        call_failure => call_failure.to_string(),
+/// Set every output of a node that answered nothing this evaluation to nothing.
+fn hand_out_nothing_on_every_output(output_values: &mut [FunctionNodeValue]) {
+    for output_value in output_values {
+        *output_value = FunctionNodeValue::Nothing;
     }
 }
 
@@ -615,7 +607,7 @@ fn call_noting_its_breadcrumb_on(
     output_values: &mut [FunctionNodeValue],
     input_values: &[&FunctionNodeValue],
     now_ns: i64,
-) -> Result<()> {
+) -> std::result::Result<(), FunctionNodeCallFailure> {
     let call_under_way = call_breadcrumb_board_writer.map(|board_writer| {
         board_writer.note_a_function_node_call_started(breadcrumb_number, monotonic_clock_now_ns())
     });
@@ -722,6 +714,9 @@ pub(crate) fn feed_an_input_port_from_a_function_node_island(
              `{function_node_id}` compile, or read the port from Python"
         )));
     }
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .forget_the_island_feeding(input_port);
     input_mailboxes.feed_an_input_port_from_a_function_node_island(input_port, Arc::new(island));
     Ok(())
 }
@@ -756,6 +751,28 @@ pub(crate) fn why_each_function_node_its_islands_call_is_raising(
     link_data_access
         .function_node_raises_in_this_helper()
         .why_each_function_node_is_raising()
+}
+
+/// Each first raise of a run of a function node's raises noted since the last
+/// call, in the order noted: the node's id, what it raised as the graph shows
+/// it, and its Python traceback, `None` for a call refused outside Python.
+#[pyfunction]
+#[pyo3(signature = (*, link_data_access))]
+pub(crate) fn take_each_function_node_raise_newly_noted(
+    link_data_access: &PythonNodeLinkDataAccess,
+) -> Vec<(String, String, Option<String>)> {
+    link_data_access
+        .function_node_raises_in_this_helper()
+        .take_each_raise_newly_noted()
+        .into_iter()
+        .map(|newly_noted| {
+            (
+                newly_noted.function_node_id,
+                newly_noted.raise.raising_because,
+                newly_noted.raise.traceback,
+            )
+        })
+        .collect()
 }
 
 /// The message `input_port` holds for this read, handed back unread: an

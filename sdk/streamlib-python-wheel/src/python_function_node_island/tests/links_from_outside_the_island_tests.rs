@@ -527,12 +527,7 @@ fn a_call_handing_out_a_token_naming_no_message_input_keeps_the_state_it_started
         FunctionNodeIslandOutputValue::Nothing,
         "a call handing out a token naming no message input hands out nothing"
     );
-    let raises = island
-        .evaluation
-        .lock()
-        .where_it_notes_the_raises_of_its_function_nodes
-        .function_node_raises_in_this_helper
-        .why_each_function_node_is_raising();
+    let raises = the_raises_noted_by(&island);
     assert!(
         raises["hand_on"].contains("names none of its message inputs"),
         "{raises:?}"

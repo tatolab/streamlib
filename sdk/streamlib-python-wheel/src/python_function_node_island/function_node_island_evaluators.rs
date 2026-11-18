@@ -429,7 +429,7 @@ impl FunctionNodeEvaluatedAsAStandaloneNode {
                 &input_value_references,
                 now_ns,
             )
-            .map_err(|refusal| PyValueError::new_err(refusal.to_string()))?;
+            .map_err(FunctionNodeCallFailure::into_py_err)?;
             if let Some(board_writer) = call_breadcrumb_board_writer
                 && function_node.writes_its_state_on_the_board
             {

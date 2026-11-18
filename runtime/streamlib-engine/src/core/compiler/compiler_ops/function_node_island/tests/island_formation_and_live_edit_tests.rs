@@ -169,6 +169,63 @@ fn each_island_node_renders_how_its_readers_helper_ran_it() {
     assert_eq!(ran_compiled(&graph, &remap), Some(JsonValue::Bool(false)));
 }
 
+/// `graph` renders a raise the reader's helper reports for an island node as
+/// that node's own `process_raising_because`, and `null` once it runs cleanly.
+#[test]
+fn each_island_node_renders_the_raise_its_readers_helper_reports_on_it() {
+    let mut graph = a_graph_resolving_three_function_node_types();
+    let lfo = add_a_node(&mut graph, "test_ops:lfo", JsonValue::Null);
+    let remap = add_a_node(&mut graph, "test_ops:remap", JsonValue::Null);
+    let reader = a_helper_reader_before_its_setup(&mut graph);
+    link(&mut graph, (&lfo, "result"), (&remap, "x"));
+    let into_the_reader = link(&mut graph, (&remap, "result"), (&reader, "in1"));
+    wire_a_link_from_a_function_node_island_into_its_reader(
+        &mut graph,
+        &into_the_reader,
+        &Iceoryx2Node::for_this_test_process(),
+    )
+    .unwrap();
+    let process_raising_because = |graph: &Graph, node_id: &NodeRunId| {
+        graph
+            .traversal()
+            .v(node_id)
+            .first()
+            .unwrap()
+            .serialize_components()
+            .get("process_raising_because")
+            .cloned()
+    };
+    let how_the_readers_helper_ran_each_function_node = graph
+        .traversal()
+        .v(&reader)
+        .first()
+        .unwrap()
+        .get::<OutOfProcessLinkWiringComponent>()
+        .unwrap()
+        .0
+        .how_its_far_side_ran_each_function_node();
+    assert_eq!(process_raising_because(&graph, &lfo), Some(JsonValue::Null));
+
+    how_the_readers_helper_ran_each_function_node.note_why_the_helper_finds_it_raising(
+        lfo.as_str(),
+        Some("raised RuntimeError: broke on purpose (nodes/lfo.py, line 3)".to_string()),
+    );
+    assert_eq!(
+        process_raising_because(&graph, &lfo),
+        Some(JsonValue::from(
+            "raised RuntimeError: broke on purpose (nodes/lfo.py, line 3)"
+        ))
+    );
+    assert_eq!(
+        process_raising_because(&graph, &remap),
+        Some(JsonValue::Null)
+    );
+
+    how_the_readers_helper_ran_each_function_node
+        .note_why_the_helper_finds_it_raising(lfo.as_str(), None);
+    assert_eq!(process_raising_because(&graph, &lfo), Some(JsonValue::Null));
+}
+
 #[test]
 fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
     let mut graph = a_graph_resolving_three_function_node_types();

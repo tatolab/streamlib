@@ -52,5 +52,17 @@ fn raises_noted_in_a_record_of_its_own() -> WhereAnIslandNotesTheRaisesOfItsFunc
     }
 }
 
+/// What each function node of `island` raised at its last call, by node id.
+fn the_raises_noted_by(
+    island: &FunctionNodeIslandEvaluatedInThisHelper,
+) -> std::collections::BTreeMap<String, String> {
+    island
+        .evaluation
+        .lock()
+        .where_it_notes_the_raises_of_its_function_nodes
+        .function_node_raises_in_this_helper
+        .why_each_function_node_is_raising()
+}
+
 mod island_evaluation_tests;
 mod links_from_outside_the_island_tests;

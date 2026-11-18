@@ -55,13 +55,14 @@ pub use streamlib_node_schema::{
 pub use traits::{GraphEdgeWithComponents, GraphNodeWithComponents, GraphWeight};
 pub use validation::validate_graph;
 
+pub(crate) use components::HowOneReadersHelperRanEachFunctionNode;
 pub use components::{
     Component, ComponentMap, ComponentSerializer, DeviceMatchedAudioWindowContractsComponent,
     FunctionNodeHostComponent, FunctionNodePromotedToItsOwnProcessComponent,
     FunctionNodePromotionOutOfItsReadersIslands, FunctionNodeRanCompiledComponent,
     HelperProcessRestartRecord, HelperProcessRestartsComponent, HowItsHelpersRanAFunctionNode,
-    HowOneReadersHelperRanEachFunctionNode, Iceoryx2ServicesHeldOpenForLinkComponent,
-    JsonSerializableComponent, LinkCarriedThroughTheFunctionNodePoolComponent,
+    Iceoryx2ServicesHeldOpenForLinkComponent, JsonSerializableComponent,
+    LinkCarriedThroughTheFunctionNodePoolComponent,
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent, LinkStateComponent,
     LinkTypeInfoComponent, LossCountsOfPortsInThisProcess, NodeFailureReasonComponent,
     NodeInstanceComponent, NodeLossCounts, NodeMetrics, NodeNotReadyBecauseComponent,

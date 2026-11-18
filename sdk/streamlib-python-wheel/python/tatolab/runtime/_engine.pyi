@@ -47,6 +47,7 @@ __all__ = [
     "read_the_message_at_an_input_port_unread",
     "run_the_scheduling_loop_of_this_helper",
     "stop_feeding_an_input_port_from_a_function_node_island",
+    "take_each_function_node_raise_newly_noted",
     "why_each_function_node_its_islands_call_is_raising",
 ]
 
@@ -125,6 +126,12 @@ def stop_feeding_an_input_port_from_a_function_node_island(
     input_port: str,
 ) -> bool:
     """Stop feeding `input_port` from the island feeding it; whether one did."""
+
+def take_each_function_node_raise_newly_noted(
+    *,
+    link_data_access: _stream_protocols.NodeLinkDataAccess,
+) -> list[tuple[str, str, str | None]]:
+    """Each first raise of a run of a function node's raises noted since the last call, in the order noted: the node's id, what it raised as the graph shows it, and its Python traceback, `None` for a call refused outside Python."""
 
 def why_each_function_node_its_islands_call_is_raising(
     *,

@@ -10,7 +10,53 @@ use tatolab_module_sdk::module_host_table_abi::{
     MODULE_HOST_TABLE_STATUS_OK, ModuleHostTableFunctionNodeEvaluateEntry,
 };
 
+use super::function_node_raises_in_this_helper::FunctionNodeRaiseDescribed;
 use super::*;
+
+/// Why a function node's call answered no outputs.
+#[derive(Debug)]
+pub(super) enum FunctionNodeCallFailure {
+    /// Its body, run as Python, raised.
+    RaisedInItsBody(PyErr),
+    /// The call was refused outside Python: by its compiled evaluate entry, or
+    /// over a value it was handed or gave.
+    Refused(Error),
+}
+
+impl From<Error> for FunctionNodeCallFailure {
+    fn from(refusal: Error) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl FunctionNodeCallFailure {
+    /// The failure as the graph shows it and the log records it.
+    pub(super) fn described(&self) -> FunctionNodeRaiseDescribed {
+        match self {
+            Self::RaisedInItsBody(raise) => Python::attach(|python| FunctionNodeRaiseDescribed {
+                raising_because: the_words_a_raise_is_shown_in(python, raise),
+                traceback: the_traceback_of(python, raise),
+            }),
+            Self::Refused(Error::Runtime(words)) => FunctionNodeRaiseDescribed {
+                raising_because: words.clone(),
+                traceback: None,
+            },
+            Self::Refused(refusal) => FunctionNodeRaiseDescribed {
+                raising_because: refusal.to_string(),
+                traceback: None,
+            },
+        }
+    }
+
+    /// The failure raised in Python: what the body raised, or a `ValueError`
+    /// naming the refusal.
+    pub(super) fn into_py_err(self) -> PyErr {
+        match self {
+            Self::RaisedInItsBody(raise) => raise,
+            Self::Refused(refusal) => PyValueError::new_err(refusal.to_string()),
+        }
+    }
+}
 
 /// A function node's evaluate entry, compiled for its signature, and the f64
 /// buffers it is called with.
@@ -198,7 +244,7 @@ impl HowAFunctionNodeIsCalled {
         input_values: &[&FunctionNodeValue],
         output_values: &mut [FunctionNodeValue],
         now_ns: i64,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), FunctionNodeCallFailure> {
         match self {
             Self::ThroughItsEvaluateEntry(compiled) => {
                 let own_input_count = compiled.input_values.len();
@@ -387,10 +433,9 @@ impl FunctionNodeCalledAsPython {
         input_values: &[&FunctionNodeValue],
         output_values: &mut [FunctionNodeValue],
         now_ns: i64,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), FunctionNodeCallFailure> {
         Python::attach(|python| {
-            let raised =
-                |raise: PyErr| Error::Runtime(the_words_a_raise_is_shown_in(python, &raise));
+            let raised = FunctionNodeCallFailure::RaisedInItsBody;
             let input_objects = input_values
                 .iter()
                 .map(|input_value| input_value.to_python(python))
@@ -404,11 +449,11 @@ impl FunctionNodeCalledAsPython {
                 .map_err(raised)?;
             let returned: Vec<Bound<'_, PyAny>> = returned.extract().map_err(raised)?;
             if returned.len() != output_values.len() {
-                return Err(Error::Runtime(format!(
+                return Err(FunctionNodeCallFailure::Refused(Error::Runtime(format!(
                     "answered {} outputs, and it has {}",
                     returned.len(),
                     output_values.len()
-                )));
+                ))));
             }
             let mut outputs_given = Vec::with_capacity(returned.len());
             for output in &returned {
@@ -444,4 +489,15 @@ fn the_words_a_raise_is_shown_in(python: Python<'_>, raise: &PyErr) -> String {
         .and_then(|word_a_raise| word_a_raise.call1((raise.value(python),)))
         .and_then(|words| words.extract::<String>())
         .unwrap_or_else(|_| format!("raised {raise}"))
+}
+
+/// The Python traceback of `raise`, as `traceback.format_exception` gives it;
+/// `None` when it cannot be formatted.
+fn the_traceback_of(python: Python<'_>, raise: &PyErr) -> Option<String> {
+    python
+        .import("traceback")
+        .and_then(|traceback| traceback.call_method1("format_exception", (raise.value(python),)))
+        .and_then(|lines| lines.extract::<Vec<String>>())
+        .map(|lines| lines.concat())
+        .ok()
 }

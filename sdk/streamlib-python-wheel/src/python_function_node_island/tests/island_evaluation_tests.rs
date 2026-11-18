@@ -180,18 +180,6 @@ fn an_island_is_evaluated_once_per_stream_time() {
     );
 }
 
-/// What each function node of `island` raised at its last call, by node id.
-fn the_raises_noted_by(
-    island: &FunctionNodeIslandEvaluatedInThisHelper,
-) -> std::collections::BTreeMap<String, String> {
-    island
-        .evaluation
-        .lock()
-        .where_it_notes_the_raises_of_its_function_nodes
-        .function_node_raises_in_this_helper
-        .why_each_function_node_is_raising()
-}
-
 #[test]
 fn a_refused_evaluation_hands_out_nothing_keeps_its_state_and_is_noted_as_the_nodes_raise() {
     let island =

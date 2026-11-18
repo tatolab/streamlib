@@ -428,7 +428,9 @@ impl OutOfProcessLinkWiringEnvelope {
             ),
             loss_counts: Arc::default(),
             output_frames_kept_by_its_output_links: Arc::default(),
-            how_its_far_side_ran_each_function_node: Arc::default(),
+            how_its_far_side_ran_each_function_node: Arc::new(
+                HowOneReadersHelperRanEachFunctionNode::for_a_new_helper(),
+            ),
             far_side_process_execution,
             function_node_promotion_out_of_its_islands: Default::default(),
             function_node_states_its_far_side_writes: Mutex::new(None),
