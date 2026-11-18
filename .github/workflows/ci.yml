@@ -738,7 +738,9 @@ jobs:
   # paravirtual Metal device through MoltenVK.
   build-macos:
     name: Build (macOS)
-    if: github.event_name != 'pull_request'
+    # Off while GitHub cannot allocate macos-26 runners: queued jobs are never
+    # acquired, and the merge queue waits on them until it times out.
+    if: false
     runs-on: macos-26
     timeout-minutes: 60
     permissions:
@@ -918,7 +920,9 @@ jobs:
   # inside the lend. Nightly on `main` and on a manual dispatch only.
   integration-test-macos:
     name: Integration test (macOS)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Off while GitHub cannot allocate macos-26 runners: queued jobs are never
+    # acquired, and the merge queue waits on them until it times out.
+    if: false
     runs-on: macos-26
     timeout-minutes: 60
     permissions:

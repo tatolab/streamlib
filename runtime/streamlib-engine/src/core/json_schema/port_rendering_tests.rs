@@ -83,7 +83,7 @@ fn port_info_output_renders_exactly_the_declared_keys() {
         range: None,
         meaning: None,
     };
-    let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+    let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
     assert_eq!(json["name"], "video_in");
     assert_eq!(json["description"], "Frames to convert");
@@ -303,7 +303,7 @@ fn port_info_output_carries_no_type_key_under_any_spelling() {
         range: None,
         meaning: None,
     };
-    let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+    let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
     assert_carries_no_type_key(&json);
 }
 
@@ -359,7 +359,7 @@ fn a_contract_bearing_port_renders_its_contract_beside_the_four() {
         range: None,
         meaning: None,
     };
-    let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+    let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
     assert_eq!(
         json["audio_window"],
@@ -407,7 +407,7 @@ fn a_port_that_declared_no_channel_count_renders_it_as_the_source() {
         range: None,
         meaning: None,
     };
-    let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+    let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
     assert_eq!(
         json["audio_window"],
@@ -443,7 +443,7 @@ fn a_port_declaring_the_sentinel_renders_it_as_a_whole_contract() {
         range: None,
         meaning: None,
     };
-    let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+    let json = serde_json::to_value(GraphNodePortOnTheWire::from(&port)).unwrap();
 
     assert_eq!(
         json["audio_window"],

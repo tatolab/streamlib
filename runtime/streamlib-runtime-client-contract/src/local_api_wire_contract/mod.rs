@@ -5,12 +5,19 @@
 //! port, and the shape of each result a client parses, written once for the runtime that serves
 //! them and every client that calls them.
 
+mod graph_answer_wire_types;
 mod graph_wire_types;
 mod log_wire_types;
 mod project_wire_types;
 mod runtime_health_wire_types;
 mod stream_wire_types;
 
+pub use graph_answer_wire_types::{
+    ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
+    GraphNodeKindOnTheWire, GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
+    GraphToolResult, InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
+    MachineWideGraphOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
+};
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,

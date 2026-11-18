@@ -122,6 +122,23 @@ impl<'de> Deserialize<'de> for NodeClassImportPath {
     }
 }
 
+/// A plain string in the control contract, which reads a node's `type` and never checks its
+/// grammar: the runtime refuses a path it cannot read where the path is given.
+#[cfg(feature = "contract-json-schema")]
+impl schemars_1::JsonSchema for NodeClassImportPath {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "NodeClassImportPath".into()
+    }
+
+    fn json_schema(_generator: &mut schemars_1::SchemaGenerator) -> schemars_1::Schema {
+        schemars_1::json_schema!({ "type": "string" })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

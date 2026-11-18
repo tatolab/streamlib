@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde_json::Value;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    DescribeRuntimeToolResult, ListStreamsToolResult, LogsToolResult,
+    DescribeRuntimeToolResult, GraphToolResult, ListStreamsToolResult, LogsToolResult,
     ProjectTransactionsResourceContents,
 };
 
@@ -195,10 +194,10 @@ pub struct Graph;
 
 impl ControlOperation for Graph {
     type Request = GraphRequest;
-    type Result = Value;
+    type Result = GraphToolResult;
     const METHOD_NAME: &'static str = "graph";
     const ONE_LINE_DOC: &'static str = "Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.";
-    const AGENT_USAGE_NOTE: &'static str = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.";
+    const AGENT_USAGE_NOTE: &'static str = "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Experimental;
     const GROUP: ControlOperationGroup = ControlOperationGroup::Observe;

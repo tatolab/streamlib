@@ -62,25 +62,9 @@ async fn a_started_stream_holding_a_mixer(
     crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient,
 ) {
     let project = a_project_whose_main_stream_holds_a_mixer();
-    let operations_on_the_loaded_streams = engine.operations_on_the_loaded_streams();
-    the_run_of_the_project_once_finished(&operations_on_the_loaded_streams, project.path()).await;
-    let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
-        Arc::clone(&operations_on_the_loaded_streams),
-    )
-    .await;
-    let queued = served
-        .control_call(
-            "start_playback",
-            json!({ "project_directory": project.path() }),
-        )
+    let (stream_id, served) = engine
+        .the_stream_main_of_the_project_started_and_served(&project)
         .await;
-    let action = queued["result"]["action"]
-        .as_str()
-        .unwrap_or_else(|| panic!("start_playback is queued: {queued}"))
-        .to_owned();
-    let started = the_stream_action_once_finished(&operations_on_the_loaded_streams, &action).await;
-    assert_eq!(started["state"], "done", "{started}");
-    let stream_id = project.stream_id_of("main");
     (project, stream_id, served)
 }
 

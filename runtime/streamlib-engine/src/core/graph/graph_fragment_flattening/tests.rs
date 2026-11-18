@@ -318,7 +318,7 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
     let names: Vec<&str> = render.nodes.iter().map(|node| node.name.as_str()).collect();
     assert_eq!(names, ["camera", "look", "display"]);
     let look = &render.nodes[1];
-    assert_eq!(look.kind, Some(NodeKindOutput::Fragment));
+    assert_eq!(look.kind, Some(GraphNodeKindOnTheWire::Fragment));
     assert_eq!(look.id, LOOK_UUID);
     assert_eq!(look.ports.inputs[0].name, "video");
     assert_eq!(look.ports.outputs[0].name, "video");
@@ -330,7 +330,7 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
         .collect();
     assert_eq!(names, ["source", "soft", "out"]);
     let soft = &look_holds.nodes[1];
-    assert_eq!(soft.kind, Some(NodeKindOutput::Fragment));
+    assert_eq!(soft.kind, Some(GraphNodeKindOnTheWire::Fragment));
     let soft_holds = soft.fragment.as_ref().expect("soft holds its fragment");
     let names: Vec<&str> = soft_holds
         .nodes

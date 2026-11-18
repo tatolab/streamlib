@@ -20,15 +20,15 @@ use crate::core::graph::graph_fragment_flattening::{
 };
 use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode};
 use crate::core::graph::legacy_config_of_a_node::{
-    LegacyConfigOfANodeType, config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
+    LegacyConfigOfANodeType, config_of_a_node_as_drawn,
 };
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
-    PortInfoOutput, PortKindOutput,
+    GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse,
+    InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
+    redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
-use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, Result};
 
 pub use streamlib_project_repository::{
@@ -203,10 +203,7 @@ impl GraphVariablesAsDrawn {
             if config_of_a_node_as_drawn(&config_naming_a_get.as_resolved, &node.pins)
                 == running_config
             {
-                let config_as_drawn =
-                    config_of_a_node_as_drawn(&config_naming_a_get.as_drawn, &node.pins);
-                node.config_checksum = compute_json_checksum(&config_as_drawn);
-                node.config = Some(config_as_drawn);
+                redraw_a_node_over_its_pins(node, &config_naming_a_get.as_drawn);
             }
         }
         for (variable_node, drawn_position) in self
@@ -222,10 +219,10 @@ impl GraphVariablesAsDrawn {
                     GRAPH_VARIABLE_NAME_CONFIG_KEY: variable_by_node_cast.get(&variable_node_cast)
                 }),
             );
-            let value_port = PortInfoOutput {
+            let value_port = GraphNodePortOnTheWire {
                 name: GRAPH_VARIABLE_VALUE_PORT_NAME.to_string(),
                 description: String::new(),
-                port_kind: PortKindOutput::default(),
+                port_kind: PortKindOnTheWire::default(),
                 delivery_profile: None,
                 borrow_quota: None,
                 audio_window: None,
@@ -237,7 +234,8 @@ impl GraphVariablesAsDrawn {
                 value_read: None,
             };
             let is_a_setter = variable_node.node_type.as_str() == SET_VARIABLE_NODE_TYPE;
-            let config = config_of_a_node_holding_no_pin_value(&variable_node.input_values);
+            let values =
+                InputValuesRendered::of_a_node_holding_no_pin_value(&variable_node.input_values);
             let position = (*drawn_position).min(graph_response.nodes.len());
             graph_response.nodes.insert(
                 position,
@@ -250,13 +248,9 @@ impl GraphVariablesAsDrawn {
                     kind: None,
                     language: None,
                     name: variable_node_cast,
-                    config_checksum: compute_json_checksum(&config),
-                    config: Some(config),
-                    pins: serde_json::Map::new(),
-                    exposed_config_fields: variable_node.exposed_config_fields.clone(),
-                    studio: variable_node.studio.clone(),
-                    inputs_waiting_for_a_value: Vec::new(),
-                    ports: GraphNodePortsOutput {
+                    config: Some(values.config),
+                    config_checksum: values.config_checksum,
+                    ports: GraphNodePortsOnTheWire {
                         inputs: if is_a_setter {
                             vec![value_port.clone()]
                         } else {
@@ -268,6 +262,11 @@ impl GraphVariablesAsDrawn {
                             vec![value_port]
                         },
                     },
+                    input_values: values.input_values,
+                    pins: values.pins,
+                    exposed_config_fields: variable_node.exposed_config_fields.clone(),
+                    studio: variable_node.studio.clone(),
+                    inputs_waiting_for_a_value: Vec::new(),
                     components,
                     fragment: None,
                 },

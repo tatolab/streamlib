@@ -224,6 +224,8 @@ jobs:
           "$RUNNER_TEMP"/linux-runtime-tarball/tatolab-runtime-*-x86_64-linux.tar.gz
 
   prove-the-runtime-unit-on-macos:
+    # Off while GitHub cannot allocate macos-26 runners.
+    if: false
     permissions:
       contents: read
     uses: ./.github/workflows/reusable-macos-runtime-unit.yml
@@ -253,9 +255,7 @@ jobs:
           - wheel_platform: manylinux
             runs-on: ubuntu-latest
             wheel_glob: '*manylinux*.whl'
-          - wheel_platform: macos
-            runs-on: macos-26
-            wheel_glob: '*macosx*.whl'
+          # The macOS wheel is off while GitHub cannot allocate macos-26 runners.
     runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 30
     permissions:
