@@ -598,6 +598,7 @@ impl LoadedStreamInThisRuntime {
     ) -> Result<()> {
         self.log_a_node_config_update_for_the_next_commit(node_run_id, config)?;
         commit_live_graph_change(&self.compiler, self.live_commit_context()).await?;
+        self.hold_each_live_value_whose_lifetime_the_config_changed(node_run_id);
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         Ok(())
     }

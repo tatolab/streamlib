@@ -594,3 +594,28 @@ fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none(
     node.set_config(serde_json::json!({ "port": "fader", "family": "channels" }));
     assert_eq!(value_input(&node).family.family, PortFamily::Channels);
 }
+
+/// A `GraphInput` renders its saved `value` under `default`, and a config written before its
+/// value was an input, holding `default` and no `value`, renders that `default`.
+///
+/// Mental-revert: rendering only `value` drops the `default` a legacy config holds, which its
+/// validation took as the saved value.
+#[test]
+fn a_graph_input_renders_its_saved_value_else_its_legacy_default_as_its_default() {
+    let graph_input = NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string()).unwrap();
+    assert_eq!(
+        the_config_a_graph_interface_node_renders(
+            &graph_input,
+            serde_json::json!({ "port": "cue", "default": { "track": "intro" } }),
+        ),
+        serde_json::json!({ "port": "cue", "default": { "track": "intro" } })
+    );
+    assert_eq!(
+        the_config_a_graph_interface_node_renders(
+            &graph_input,
+            serde_json::json!({ "port": "cue", "value": { "track": "drop" },
+                                "default": { "track": "intro" } }),
+        ),
+        serde_json::json!({ "port": "cue", "default": { "track": "drop" } })
+    );
+}

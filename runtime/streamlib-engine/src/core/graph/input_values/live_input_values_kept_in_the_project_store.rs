@@ -77,10 +77,12 @@ impl LiveInputValuesKeptInTheProjectStore {
     }
 
     /// Carry the value the top-level `GraphInput` `node` kept in its own store before its value
-    /// was an input: read from the `node_store` table and, when `lifetime` keeps it, kept here as
-    /// the live value of its input `input`. The old key is forgotten only once the value is kept
-    /// here, or when `lifetime` keeps nothing, so a carry that fails runs again at the next load,
-    /// and one that succeeds runs once and needs no marker.
+    /// was an input: read from the `node_store` table and, when `lifetime` keeps it and the store
+    /// holds no live value of its input `input` yet, kept here as that live value. A live value
+    /// already held wins, and the old key is forgotten. The old key is forgotten only once the
+    /// value is kept here, a live value is held, or `lifetime` keeps nothing, so a carry whose
+    /// read or write fails runs again at the next load, and one that succeeds runs once and needs
+    /// no marker.
     pub(crate) fn carry_the_value_a_graph_input_kept_under_its_old_key(
         &self,
         node: Uuid,
@@ -106,7 +108,19 @@ impl LiveInputValuesKeptInTheProjectStore {
                 return;
             }
         };
-        if !lifetime.is_kept() || self.keep(node, input, &kept) {
+        let live_value_held_already =
+            match project_store.read(LIVE_INPUT_VALUES_TABLE, &key_of_the_node(node, input)) {
+                Ok(live) => live.is_some(),
+                Err(not_read) => {
+                    tracing::error!(
+                        %node,
+                        "the live value of a `GraphInput` was not read, so the value it kept \
+                         before its value was an input stays for the next load: {not_read}"
+                    );
+                    return;
+                }
+            };
+        if live_value_held_already || !lifetime.is_kept() || self.keep(node, input, &kept) {
             forget_the_value_the_node_keeps_under(
                 &project_store,
                 node,

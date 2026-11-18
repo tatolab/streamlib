@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use serial_test::serial;
 use streamlib_ipc_types::{
-    DataChannelPayloadDescriptorKind, MessageReadFromAReservedSlot, OutputPortViewerReader,
+    ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, DataChannelPayloadDescriptorKind,
+    MessageReadFromAReservedSlot, OutputPortViewerReader, array_frame_attribute_table_of,
 };
 use streamlib_project_repository::{
     PROJECT_FILE_NAME, ProjectStore, ProjectStoreTableName, StreamGraphOperation,
@@ -36,6 +37,8 @@ use crate::core::test_support::{
     MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
 };
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
+
+mod graph_input_relink_lifetime_and_range_tests;
 
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
 
@@ -127,6 +130,28 @@ fn the_next_message_read(reader: &mut OutputPortViewerReader) -> MessageReadFrom
         assert!(Instant::now() < gave_up_at, "no message reached the reader");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// The numbers the one attribute of the array frame `message` holds.
+fn the_numbers_an_array_frame_holds(message: &MessageReadFromAReservedSlot) -> Vec<f64> {
+    let rows = array_frame_attribute_table_of(
+        ArrayFrameDescriptorBody::from_descriptor_body(&message.payload_descriptor.body),
+        &message.payload,
+    )
+    .expect("an array frame reads");
+    let ArrayFrameAttributeResidency::Cpu {
+        payload_byte_offset,
+        byte_len,
+    } = rows[0].residency
+    else {
+        panic!("a CPU attribute");
+    };
+    message.payload[payload_byte_offset as usize..(payload_byte_offset + byte_len) as usize]
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|element| f64::from_le_bytes(*element))
+        .collect()
 }
 
 fn the_value_read(reader: &mut OutputPortViewerReader) -> Value {
@@ -366,11 +391,20 @@ fn an_array_set_on_a_graph_input_reaches_its_reader_as_an_array_frame() {
 
     set_live(&stream, fader, json!(0.25)).expect("the value is set live");
 
-    let message = the_next_message_read(&mut reader);
-    assert_eq!(
-        message.payload_descriptor.known_kind().ok(),
-        Some(DataChannelPayloadDescriptorKind::ArrayFrame)
-    );
+    let gave_up_at = Instant::now() + ARRIVES_WITHIN;
+    loop {
+        if let Some(message) = reader.read_the_latest_message().expect("the reader reads") {
+            assert_eq!(
+                message.payload_descriptor.known_kind().ok(),
+                Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+            );
+            if the_numbers_an_array_frame_holds(&message) == [0.25] {
+                break;
+            }
+        }
+        assert!(Instant::now() < gave_up_at, "0.25 never reached the reader");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     stream.stop().expect("the stream ends");
 }
 

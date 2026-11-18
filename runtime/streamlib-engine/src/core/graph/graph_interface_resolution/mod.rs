@@ -204,7 +204,8 @@ impl GraphInterfaceNodeAsDrawn {
 }
 
 /// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s saved
-/// `value` under `default`, as [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
+/// `value`, else the `default` a config written before its value was an input holds, under
+/// `default`, as [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
 pub(crate) fn the_config_a_graph_interface_node_renders(
     node_type: &NodeClassImportPath,
     mut config: serde_json::Value,
@@ -213,7 +214,9 @@ pub(crate) fn the_config_a_graph_interface_node_renders(
         return config;
     }
     if let Some(config) = config.as_object_mut() {
-        let saved_value = config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        let saved_value = config
+            .remove(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            .or_else(|| config.remove(GRAPH_INPUT_VALUE_FORMER_NAME));
         render_the_saved_value_of_a_graph_input_as_its_default(config, saved_value);
     }
     config

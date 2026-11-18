@@ -108,11 +108,12 @@ fn a_number_outside_its_declared_range_is_refused_and_never_clamped() {
         maximum: Some(1.0),
     };
     assert_eq!(
-        refuse_a_number_outside_the_range("mixer", "gain", 0.5, range),
+        refuse_a_value_holding_a_number_outside_the_range("mixer", "gain", &json!(0.5), range),
         Ok(())
     );
-    let refusal = refuse_a_number_outside_the_range("mixer", "gain", 1.5, range)
-        .expect_err("1.5 lies above the range");
+    let refusal =
+        refuse_a_value_holding_a_number_outside_the_range("mixer", "gain", &json!(1.5), range)
+            .expect_err("1.5 lies above the range");
     assert_eq!(refusal.code, InputValueRefusalCode::InputValueNotValid);
     assert!(refusal.words.contains("from 0 to 1"), "{refusal}");
 }

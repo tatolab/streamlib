@@ -116,11 +116,11 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             port,
             value,
         )?;
-        return match (port.range, value.as_f64()) {
-            (Some(range), Some(number)) => {
-                refuse_a_number_outside_the_range(node.name, &port.name, number, range.0)
-            }
-            _ => Ok(()),
+        return match port.range {
+            Some(range) => refuse_a_value_holding_a_number_outside_the_range(
+                node.name, &port.name, value, range.0,
+            ),
+            None => Ok(()),
         };
     }
     let config_fields = the_properties_of_a_config_schema(config_schema.as_ref());
@@ -298,17 +298,27 @@ pub fn an_exposure_of_config_fields_is_recorded_on(
 
 /// Refuse `number`, set on the input `input` of the node named `node_name`, when it lies outside
 /// `range`; it is never clamped.
-fn refuse_a_number_outside_the_range(
+/// Refuse `value` set on input `input` of `node_name` when a number it holds, itself or each
+/// number of an Array value, lies outside `range`, naming the first that does.
+fn refuse_a_value_holding_a_number_outside_the_range(
     node_name: &str,
     input: &str,
-    number: f64,
+    value: &Value,
     range: PinNumberRange,
 ) -> Result<(), InputValueRefusal> {
-    let below = range.minimum.is_some_and(|minimum| number < minimum);
-    let above = range.maximum.is_some_and(|maximum| number > maximum);
-    if !below && !above {
+    let mut numbers = Vec::new();
+    every_number_a_value_holds(value, &mut numbers);
+    let Some(number) = numbers.into_iter().find(|number| {
+        range.minimum.is_some_and(|minimum| *number < minimum)
+            || range.maximum.is_some_and(|maximum| *number > maximum)
+    }) else {
         return Ok(());
-    }
+    };
+    let what_it_is = if value.is_number() {
+        format!("is {number}")
+    } else {
+        format!("is {value}, which holds {number}")
+    };
     let takes = match (range.minimum, range.maximum) {
         (Some(minimum), Some(maximum)) => format!("a number from {minimum} to {maximum}"),
         (Some(minimum), None) => format!("a number of {minimum} or more"),
@@ -318,9 +328,28 @@ fn refuse_a_number_outside_the_range(
     Err(InputValueRefusal::of(
         InputValueRefusalCode::InputValueNotValid,
         format!(
-            "the value of input `{input}` of `{node_name}` is {number}, and `{input}` takes {takes}"
+            "the value of input `{input}` of `{node_name}` {what_it_is}, and `{input}` takes {takes}"
         ),
     ))
+}
+
+/// Push each number `value` holds onto `numbers`, in order: itself when it is one, and each
+/// number inside an array or an object.
+fn every_number_a_value_holds(value: &Value, numbers: &mut Vec<f64>) {
+    match value {
+        Value::Number(number) => numbers.extend(number.as_f64()),
+        Value::Array(elements) => {
+            for element in elements {
+                every_number_a_value_holds(element, numbers);
+            }
+        }
+        Value::Object(members) => {
+            for member in members.values() {
+                every_number_a_value_holds(member, numbers);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) => {}
+    }
 }
 
 fn names_in_backticks(names: &[String]) -> String {
