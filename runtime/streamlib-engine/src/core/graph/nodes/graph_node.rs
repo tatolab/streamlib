@@ -51,7 +51,8 @@ pub struct GraphNode {
     components: ComponentMap,
     /// Serializers for each inserted component type.
     #[serde(skip, default = "default_component_serializers")]
-    component_serializers: Vec<ComponentSerializer>,
+    component_serializers:
+        Vec<ComponentSerializer<crate::core::json_schema::GraphNodeComponentsOnTheWire>>,
     /// The entries this node's output ports carry now, shared with whatever
     /// replaces them and with every node an inbound link reads them from.
     #[serde(skip)]
@@ -286,11 +287,15 @@ impl GraphNodeWithComponents for GraphNode {
         &mut self.components
     }
 
-    fn component_serializers(&self) -> &[ComponentSerializer] {
+    fn component_serializers(
+        &self,
+    ) -> &[ComponentSerializer<crate::core::json_schema::GraphNodeComponentsOnTheWire>] {
         &self.component_serializers
     }
 
-    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
+    fn component_serializers_mut(
+        &mut self,
+    ) -> &mut Vec<ComponentSerializer<crate::core::json_schema::GraphNodeComponentsOnTheWire>> {
         &mut self.component_serializers
     }
 }

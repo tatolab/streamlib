@@ -538,7 +538,7 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },
-        components: serde_json::Map::new(),
+        components: Default::default(),
         input_values: serde_json::Map::new(),
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
@@ -555,9 +555,7 @@ fn a_rendered_link(id: &str, source: (&str, &str), target: (&str, &str)) -> Link
         source,
         target,
         capacity: 4,
-        state: Default::default(),
-        error_reason: None,
-        components: serde_json::Map::new(),
+        ..LinkOutput::default()
     }
 }
 

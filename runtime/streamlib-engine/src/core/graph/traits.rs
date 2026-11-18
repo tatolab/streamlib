@@ -3,11 +3,10 @@
 
 //! Trait hierarchy for graph weights with embedded component storage.
 
-use serde_json::Value as JsonValue;
-
 use crate::core::graph::components::{
-    Component, ComponentMap, ComponentSerializer, StorableComponent,
+    ComponentMap, ComponentSerializer, LinkComponent, NodeComponent, StorableComponent,
 };
+use crate::core::json_schema::{GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire};
 
 /// Base trait for all graph weights (nodes and edges).
 pub trait GraphWeight {
@@ -23,18 +22,22 @@ pub trait GraphNodeWithComponents: GraphWeight {
     fn components_mut(&mut self) -> &mut ComponentMap;
 
     /// Access the component serializers.
-    fn component_serializers(&self) -> &[ComponentSerializer];
+    fn component_serializers(&self) -> &[ComponentSerializer<GraphNodeComponentsOnTheWire>];
 
     /// Access the component serializers mutably.
-    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer>;
+    fn component_serializers_mut(
+        &mut self,
+    ) -> &mut Vec<ComponentSerializer<GraphNodeComponentsOnTheWire>>;
 
     /// Insert a component, replacing any existing component of the same type.
-    fn insert<C: Component>(&mut self, component: C) {
+    fn insert<C: NodeComponent>(&mut self, component: C) {
         self.components_mut().insert(component);
-        self.component_serializers_mut().push(Box::new(|map| {
-            map.get::<C>()
-                .map(|c| (c.json_key().to_string(), c.to_json()))
-        }));
+        self.component_serializers_mut()
+            .push(Box::new(|map, rendered| {
+                if let Some(component) = map.get::<C>() {
+                    component.render_onto(rendered);
+                }
+            }));
     }
 
     /// Insert a component that the control plane reads through something other
@@ -71,15 +74,13 @@ pub trait GraphNodeWithComponents: GraphWeight {
         self.components().contains::<C>()
     }
 
-    /// Serialize all components to a JSON map.
-    fn serialize_components(&self) -> serde_json::Map<String, JsonValue> {
-        let mut map = serde_json::Map::new();
+    /// Every component `graph` renders, each under its own key.
+    fn serialize_components(&self) -> GraphNodeComponentsOnTheWire {
+        let mut rendered = GraphNodeComponentsOnTheWire::default();
         for serializer in self.component_serializers() {
-            if let Some((key, value)) = serializer(self.components()) {
-                map.insert(key, value);
-            }
+            serializer(self.components(), &mut rendered);
         }
-        map
+        rendered
     }
 }
 
@@ -92,18 +93,22 @@ pub trait GraphEdgeWithComponents: GraphWeight {
     fn components_mut(&mut self) -> &mut ComponentMap;
 
     /// Access the component serializers.
-    fn component_serializers(&self) -> &[ComponentSerializer];
+    fn component_serializers(&self) -> &[ComponentSerializer<GraphLinkComponentsOnTheWire>];
 
     /// Access the component serializers mutably.
-    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer>;
+    fn component_serializers_mut(
+        &mut self,
+    ) -> &mut Vec<ComponentSerializer<GraphLinkComponentsOnTheWire>>;
 
     /// Insert a component, replacing any existing component of the same type.
-    fn insert<C: Component>(&mut self, component: C) {
+    fn insert<C: LinkComponent>(&mut self, component: C) {
         self.components_mut().insert(component);
-        self.component_serializers_mut().push(Box::new(|map| {
-            map.get::<C>()
-                .map(|c| (c.json_key().to_string(), c.to_json()))
-        }));
+        self.component_serializers_mut()
+            .push(Box::new(|map, rendered| {
+                if let Some(component) = map.get::<C>() {
+                    component.render_onto(rendered);
+                }
+            }));
     }
 
     /// Insert a component `graph` never renders, replacing any existing
@@ -132,14 +137,12 @@ pub trait GraphEdgeWithComponents: GraphWeight {
         self.components().contains::<C>()
     }
 
-    /// Serialize all components to a JSON map.
-    fn serialize_components(&self) -> serde_json::Map<String, JsonValue> {
-        let mut map = serde_json::Map::new();
+    /// Every component `graph` renders, each under its own key.
+    fn serialize_components(&self) -> GraphLinkComponentsOnTheWire {
+        let mut rendered = GraphLinkComponentsOnTheWire::default();
         for serializer in self.component_serializers() {
-            if let Some((key, value)) = serializer(self.components()) {
-                map.insert(key, value);
-            }
+            serializer(self.components(), &mut rendered);
         }
-        map
+        rendered
     }
 }

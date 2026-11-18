@@ -132,8 +132,13 @@ fn a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_ow
             .v(NodeRunId::from(newest_consumer_id.as_str()))
             .first()
             .expect("the newest consumer is in the graph")
-            .serialize_components()["metrics"]["dropped_bags_by_link"][newest_link.as_str()],
-        serde_json::json!(0),
+            .serialize_components()
+            .metrics
+            .and_then(|metrics| metrics
+                .dropped_bags_by_link
+                .get(newest_link.as_str())
+                .copied()),
+        Some(0),
         "the newest port's ring, not its mailbox, held it to its depth"
     );
     assert_eq!(
@@ -265,9 +270,10 @@ fn link_state_in_graph(
         .e(link_id)
         .first()
         .expect("the link must be in the graph");
-    let rendered = crate::core::json_schema::LinkOutput::of_a_link(
+    let rendered = crate::core::json_schema::rendered_link(
         link,
         &crate::core::json_schema::NodeNamesByNodeRunId::holding_no_node(),
+        None,
     );
     (rendered.state, rendered.error_reason)
 }

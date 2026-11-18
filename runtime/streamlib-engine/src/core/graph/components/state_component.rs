@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use parking_lot::{Condvar, Mutex};
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::HelperProcessRestartsOnTheWire;
 
-use super::JsonSerializableComponent;
+use super::NodeComponentGraphRenders;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::graph::NodeRunId;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::core::nodes::NodeState;
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 
@@ -256,68 +257,47 @@ impl StateComponent {
 
 pub struct HelperProcessRestartsComponent(pub Arc<ObservableNodeState>);
 
-impl JsonSerializableComponent for HelperProcessRestartsComponent {
-    fn json_key(&self) -> &'static str {
-        "helper_process_restarts"
-    }
-
-    fn to_json(&self) -> JsonValue {
+impl NodeComponentGraphRenders for HelperProcessRestartsComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         let record = self.0.helper_process_restart_record();
-        serde_json::json!({
-            "restart_count": record.restart_count,
-            "last_exit_reason": record.last_exit_reason,
-        })
+        components.helper_process_restarts = Some(HelperProcessRestartsOnTheWire {
+            restart_count: record.restart_count,
+            last_exit_reason: record.last_exit_reason,
+        });
     }
 }
 
 pub struct NodeFailureReasonComponent(pub Arc<ObservableNodeState>);
 
-impl JsonSerializableComponent for NodeFailureReasonComponent {
-    fn json_key(&self) -> &'static str {
-        "failed_because"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        if self.0.current() != NodeState::Error {
-            return JsonValue::Null;
-        }
-        serde_json::json!(self.0.failure_reason())
+impl NodeComponentGraphRenders for NodeFailureReasonComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.failed_because = (self.0.current() == NodeState::Error)
+            .then(|| self.0.failure_reason())
+            .flatten();
     }
 }
 
 pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableNodeState>);
 
-impl JsonSerializableComponent for ProcessRaisingBecauseComponent {
-    fn json_key(&self) -> &'static str {
-        "process_raising_because"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!(self.0.why_process_is_raising())
+impl NodeComponentGraphRenders for ProcessRaisingBecauseComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.process_raising_because = self.0.why_process_is_raising();
     }
 }
 
 /// Why a running node is not ready, rendered beside its state as
-/// `not_ready_because`: the node's own words while it says so, or `null`.
+/// `not_ready_because`: the node's own words while it says so, else absent.
 pub struct NodeNotReadyBecauseComponent(pub Arc<ObservableNodeState>);
 
-impl JsonSerializableComponent for NodeNotReadyBecauseComponent {
-    fn json_key(&self) -> &'static str {
-        "not_ready_because"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!(self.0.why_the_node_is_not_ready())
+impl NodeComponentGraphRenders for NodeNotReadyBecauseComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.not_ready_because = self.0.why_the_node_is_not_ready();
     }
 }
 
-impl JsonSerializableComponent for StateComponent {
-    fn json_key(&self) -> &'static str {
-        "state"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!(self.current().to_string())
+impl NodeComponentGraphRenders for StateComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.state = Some(self.current().into());
     }
 }
 
@@ -325,7 +305,20 @@ impl JsonSerializableComponent for StateComponent {
 mod tests {
     use std::time::Duration;
 
+    use serde_json::Value as JsonValue;
+
     use super::*;
+
+    /// What `graph` renders of `component` under its key, null when it renders none.
+    fn the_rendering_of(component: &impl NodeComponentGraphRenders) -> JsonValue {
+        let mut components = GraphNodeComponentsOnTheWire::default();
+        component.render_onto(&mut components);
+        serde_json::to_value(components)
+            .unwrap()
+            .as_object()
+            .and_then(|rendered| rendered.values().next().cloned())
+            .unwrap_or(JsonValue::Null)
+    }
 
     /// A deadline far enough out that reaching it means the wait failed to
     /// observe the transition, rather than that the machine was slow.
@@ -409,12 +402,12 @@ mod tests {
     fn a_not_ready_reason_is_held_while_the_node_runs_and_forgotten_once_it_stops() {
         let state = Arc::new(ObservableNodeState::new(NodeState::Idle));
         let rendered = NodeNotReadyBecauseComponent(Arc::clone(&state));
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
         state.transition_to(NodeState::Running);
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("`riv_path` is not set"),
             "a report made from `setup()` survives into the run"
         );
@@ -422,26 +415,26 @@ mod tests {
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("`riv_path` is not set")
         );
 
         state.transition_to(NodeState::Paused);
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("`riv_path` is not set")
         );
 
         state.note_why_the_node_is_not_ready(None);
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
         state.transition_to(NodeState::Stopped);
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.note_why_the_node_is_not_ready(Some("`riv_path` is not set".to_string()));
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             JsonValue::Null,
             "a node that does not run holds no not-ready reason"
         );
@@ -537,7 +530,7 @@ mod tests {
         let state = Arc::new(ObservableNodeState::new(NodeState::Running));
         let rendered = HelperProcessRestartsComponent(Arc::clone(&state));
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!({"restart_count": 0, "last_exit_reason": null})
         );
 
@@ -546,14 +539,14 @@ mod tests {
         state.note_a_helper_process_restart();
 
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!({
                 "restart_count": 1,
                 "last_exit_reason": "its helper process ended with exit status: 1",
             })
         );
         assert_eq!(
-            StateComponent(state).to_json(),
+            the_rendering_of(&StateComponent(state)),
             serde_json::json!("Restarting")
         );
     }
@@ -562,13 +555,13 @@ mod tests {
     fn the_failure_reason_renders_only_once_the_node_has_failed() {
         let state = Arc::new(ObservableNodeState::new(NodeState::Running));
         let rendered = NodeFailureReasonComponent(Arc::clone(&state));
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.fail_with("start() raised: no such file \"lower_third.riv\"");
         state.transition_to_unless_already_failed(NodeState::Stopped);
 
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("start() raised: no such file \"lower_third.riv\"")
         );
     }
@@ -577,26 +570,26 @@ mod tests {
     fn a_raise_renders_beside_a_running_state_until_process_runs_cleanly() {
         let state = Arc::new(ObservableNodeState::new(NodeState::Running));
         let rendered = ProcessRaisingBecauseComponent(Arc::clone(&state));
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.note_that_process_raised(|| "process() failed: the first raise".to_string());
         state.note_that_process_raised(|| unreachable!("a raise is already held"));
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("process() failed: the first raise")
         );
         assert_eq!(state.current(), NodeState::Running);
 
         state.note_that_process_ran_cleanly();
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
 
         state.note_why_process_is_raising(Some("process() raised KeyError: 'frame'".to_string()));
         assert_eq!(
-            rendered.to_json(),
+            the_rendering_of(&rendered),
             serde_json::json!("process() raised KeyError: 'frame'")
         );
         state.note_why_process_is_raising(None);
-        assert_eq!(rendered.to_json(), JsonValue::Null);
+        assert_eq!(the_rendering_of(&rendered), JsonValue::Null);
     }
 
     struct EveryStateChangeHeardOnOneTopic(

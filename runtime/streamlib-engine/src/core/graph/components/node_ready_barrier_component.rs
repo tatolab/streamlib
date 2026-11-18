@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crossbeam_channel::{Receiver, Sender};
-use serde_json::Value as JsonValue;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeReadyBarrierOnTheWire;
 
-use super::JsonSerializableComponent;
+use super::NodeComponentGraphRenders;
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct NodeReadyBarrierComponent {
     ready_sender: Option<Sender<()>>,
@@ -55,15 +56,11 @@ impl Default for NodeReadyBarrierComponent {
     }
 }
 
-impl JsonSerializableComponent for NodeReadyBarrierComponent {
-    fn json_key(&self) -> &'static str {
-        "ready_barrier"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!({
-            "ready_signaled": self.ready_sender.is_none(),
-            "continue_received": self.continue_receiver.is_none()
-        })
+impl NodeComponentGraphRenders for NodeReadyBarrierComponent {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        components.ready_barrier = Some(NodeReadyBarrierOnTheWire {
+            ready_signaled: self.ready_sender.is_none(),
+            continue_received: self.continue_receiver.is_none(),
+        });
     }
 }

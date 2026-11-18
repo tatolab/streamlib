@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
-use serde_json::Value as JsonValue;
 use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeMetricsOnTheWire;
 
-use super::{FunctionNodePromotionOutOfItsReadersIslands, JsonSerializableComponent};
+use super::{FunctionNodePromotionOutOfItsReadersIslands, NodeComponentGraphRenders};
+use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::iceoryx2::{
     BagCountsByOutputPort, DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     HelperPlacedNodeLossCounts, NodeLossCountSnapshot,
@@ -106,15 +107,10 @@ impl NodeMetrics {
     }
 }
 
-impl JsonSerializableComponent for NodeMetrics {
-    fn json_key(&self) -> &'static str {
-        "metrics"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        // One snapshot for every key: taken apart, an eviction landing between
-        // them renders a total smaller than the per-link counts it claims to be
-        // the sum of.
+impl NodeComponentGraphRenders for NodeMetrics {
+    fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
+        // One snapshot for every key: taken apart, an eviction landing between them renders a
+        // total smaller than the per-link counts it claims to be the sum of.
         let NodeLossCountSnapshot {
             dropped_bags_by_inbound_link,
             taken_bags_by_inbound_link: _,
@@ -123,42 +119,37 @@ impl JsonSerializableComponent for NodeMetrics {
             written_bags_by_output_port,
             given_up_groups_by_output_port,
         } = self.loss_counts.loss_count_snapshot();
-        let mut rendered = serde_json::json!({
-            "frames_dropped": dropped_bags_by_inbound_link.values().sum::<u64>(),
-            "dropped_bags_by_link": dropped_bags_by_inbound_link,
-            "refused_bags_by_output_port": refused_bags_by_output_port,
-            "written_bags_by_output_port": written_bags_by_output_port,
+        components.metrics = Some(NodeMetricsOnTheWire {
+            frames_dropped: dropped_bags_by_inbound_link.values().sum(),
+            dropped_bags_by_link: dropped_bags_by_inbound_link,
+            refused_bags_by_output_port,
+            written_bags_by_output_port,
+            discarded_samples_by_link: discarded_samples_by_inbound_link,
+            given_up_groups_by_output_port,
+            promoted_out_of_its_readers_islands: self
+                .promotion_out_of_its_readers_islands
+                .as_ref()
+                .map(FunctionNodePromotionOutOfItsReadersIslands::rendered),
         });
-        let Some(rendered_keys) = rendered.as_object_mut() else {
-            return rendered;
-        };
-        if let Some(promotion) = &self.promotion_out_of_its_readers_islands {
-            rendered_keys.insert(
-                "promoted_out_of_its_readers_islands".to_string(),
-                promotion.to_json(),
-            );
-        }
-        for (key, counts_by_name) in [
-            (
-                "discarded_samples_by_link",
-                discarded_samples_by_inbound_link,
-            ),
-            (
-                "given_up_groups_by_output_port",
-                given_up_groups_by_output_port,
-            ),
-        ] {
-            if !counts_by_name.is_empty() {
-                rendered_keys.insert(key.to_string(), serde_json::json!(counts_by_name));
-            }
-        }
-        rendered
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    trait RenderedAsGraphAnswersIt {
+        /// The node's `metrics`, as `graph` answers it.
+        fn rendered_as_graph_answers_it(&self) -> serde_json::Value;
+    }
+
+    impl RenderedAsGraphAnswersIt for NodeMetrics {
+        fn rendered_as_graph_answers_it(&self) -> serde_json::Value {
+            let mut components = GraphNodeComponentsOnTheWire::default();
+            self.render_onto(&mut components);
+            serde_json::to_value(components.metrics).unwrap()
+        }
+    }
 
     fn metrics_counted_here(counted_here: LossCountsOfPortsInThisProcess) -> NodeMetrics {
         NodeMetrics {
@@ -181,7 +172,7 @@ mod tests {
             dropped_bag_counts_by_inbound_link: counts,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
 
         assert_eq!(
             rendered,
@@ -207,7 +198,7 @@ mod tests {
             bag_counts_by_output_port: bag_counts,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
 
         assert_eq!(
             rendered,
@@ -234,7 +225,7 @@ mod tests {
             bag_counts_by_output_port: bag_counts,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
 
         assert_eq!(
             rendered,
@@ -261,7 +252,7 @@ mod tests {
             bag_counts_by_output_port: Arc::clone(&bag_counts),
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
         assert_eq!(
             rendered,
             serde_json::json!({
@@ -277,7 +268,7 @@ mod tests {
             bag_counts_by_output_port: Arc::new(BagCountsByOutputPort::default()),
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
         assert!(
             with_nothing_given_up
                 .get("given_up_groups_by_output_port")
@@ -301,7 +292,7 @@ mod tests {
             discarded_sample_counts_by_inbound_link: discarded,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
         assert_eq!(
             rendered,
             serde_json::json!({
@@ -318,7 +309,7 @@ mod tests {
             dropped_bag_counts_by_inbound_link: dropped,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
         assert!(
             with_no_windowed_link
                 .get("discarded_samples_by_link")
@@ -337,7 +328,7 @@ mod tests {
             dropped_bag_counts_by_inbound_link: counts,
             ..Default::default()
         })
-        .to_json();
+        .rendered_as_graph_answers_it();
 
         assert_eq!(
             rendered,

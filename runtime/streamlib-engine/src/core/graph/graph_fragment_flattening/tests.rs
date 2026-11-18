@@ -5,6 +5,7 @@ use super::*;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_OUTPUT_NODE_TYPE,
 };
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeStateOnTheWire;
 
 const LOOK_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a01";
 const SOFT_UUID: &str = "6f0a1c52-3d0e-4c1b-9a43-6a0c1f8f0a02";
@@ -277,7 +278,10 @@ fn a_fragment_written_as_its_graph_document_reads_back_unchanged() {
 
 fn rendered_as_running(node: &GraphSnapshotNode) -> GraphNodeOutput {
     GraphNodeOutput {
-        components: serde_json::Map::from_iter([("running".to_string(), serde_json::json!(true))]),
+        components: GraphNodeComponentsOnTheWire {
+            state: Some(NodeStateOnTheWire::Running),
+            ..GraphNodeComponentsOnTheWire::default()
+        },
         ..rendered_as_stored(node, &NodeTypesOneStreamResolves::new())
     }
 }
@@ -354,8 +358,8 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
         "`tint` feeds the `GraphOutput` `out`"
     );
     assert_eq!(
-        soft_holds.nodes[1].components["running"],
-        serde_json::json!(true)
+        soft_holds.nodes[1].components.state,
+        Some(NodeStateOnTheWire::Running)
     );
     let blur_into_tint = &soft_holds.links[1];
     assert_eq!(

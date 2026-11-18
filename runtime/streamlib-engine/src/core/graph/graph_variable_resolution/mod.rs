@@ -24,12 +24,13 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refusal};
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse,
-    InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
+    GraphNodeComponentsOnTheWire, GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
+    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
     redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
+use streamlib_runtime_client_contract::local_api_wire_contract::GraphVariableOnTheWire;
 
 pub use streamlib_project_repository::{
     GET_VARIABLE_NODE_TYPE, GRAPH_VARIABLE_NAME_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
@@ -70,10 +71,6 @@ pub struct ConfigNamingAGet {
     /// The input values the runtime runs, naming the setter's node.
     pub as_resolved: serde_json::Map<String, serde_json::Value>,
 }
-
-/// The component key a variable node, and a drawn link with an end on one,
-/// renders its variable under.
-pub const GRAPH_VARIABLE_COMPONENT_KEY: &str = "graph_variable";
 
 impl GraphVariablesAsDrawn {
     /// Render the variables into `graph_response`, a render of the graph the
@@ -159,10 +156,9 @@ impl GraphVariablesAsDrawn {
             let mut components = runtime_link
                 .map(|rendered| rendered.components.clone())
                 .unwrap_or_default();
-            components.insert(
-                GRAPH_VARIABLE_COMPONENT_KEY.to_string(),
-                serde_json::json!({ GRAPH_VARIABLE_NAME_CONFIG_KEY: variable }),
-            );
+            components.graph_variable = Some(GraphVariableOnTheWire {
+                variable: Some(variable.to_string()),
+            });
             let position = (*drawn_position).min(graph_response.links.len());
             graph_response.links.insert(
                 position,
@@ -185,6 +181,10 @@ impl GraphVariablesAsDrawn {
                         .map(|rendered| rendered.state)
                         .unwrap_or_default(),
                     error_reason: runtime_link.and_then(|rendered| rendered.error_reason.clone()),
+                    free_conversion: runtime_link.is_some_and(|rendered| rendered.free_conversion),
+                    warnings: runtime_link
+                        .map(|rendered| rendered.warnings.clone())
+                        .unwrap_or_default(),
                     components,
                 },
             );
@@ -212,13 +212,14 @@ impl GraphVariablesAsDrawn {
             .zip(&self.variable_node_positions)
         {
             let variable_node_cast = cast(&variable_node.name);
-            let mut components = serde_json::Map::new();
-            components.insert(
-                GRAPH_VARIABLE_COMPONENT_KEY.to_string(),
-                serde_json::json!({
-                    GRAPH_VARIABLE_NAME_CONFIG_KEY: variable_by_node_cast.get(&variable_node_cast)
+            let components = GraphNodeComponentsOnTheWire {
+                graph_variable: Some(GraphVariableOnTheWire {
+                    variable: variable_by_node_cast
+                        .get(&variable_node_cast)
+                        .map(|variable| variable.to_string()),
                 }),
-            );
+                ..GraphNodeComponentsOnTheWire::default()
+            };
             let value_port = GraphNodePortOnTheWire {
                 name: GRAPH_VARIABLE_VALUE_PORT_NAME.to_string(),
                 description: String::new(),

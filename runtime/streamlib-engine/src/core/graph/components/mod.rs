@@ -11,7 +11,6 @@ mod json_component_trait;
 mod link_carried_through_the_function_node_pool_component;
 mod link_read_through_the_reader_of_its_function_node_island_component;
 mod link_state_component;
-mod link_type_info_component;
 mod node_instance_component;
 mod node_metrics;
 mod node_pause_gate_component;
@@ -27,8 +26,8 @@ mod step_progress_of_one_node_component;
 mod thread_handle_component;
 
 pub use component_map::{
-    Component, ComponentMap, ComponentSerializer, StorableComponent, default_component_serializers,
-    default_components,
+    ComponentMap, ComponentSerializer, LinkComponent, NodeComponent, StorableComponent,
+    default_component_serializers, default_components,
 };
 pub use device_matched_audio_window_contracts_component::DeviceMatchedAudioWindowContractsComponent;
 pub use function_node_host_component::FunctionNodeHostComponent;
@@ -40,14 +39,13 @@ pub use function_node_ran_compiled_component::{
     FunctionNodeRanCompiledComponent, HowItsHelpersRanAFunctionNode,
 };
 pub use iceoryx2_services_held_open_for_link_component::Iceoryx2ServicesHeldOpenForLinkComponent;
-pub use json_component_trait::JsonSerializableComponent;
+pub use json_component_trait::{LinkComponentGraphRenders, NodeComponentGraphRenders};
 pub use link_carried_through_the_function_node_pool_component::LinkCarriedThroughTheFunctionNodePoolComponent;
 pub use link_read_through_the_reader_of_its_function_node_island_component::{
     LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent,
     ReadOfALinkByTheReaderOfAFunctionNodeIsland,
 };
 pub use link_state_component::LinkStateComponent;
-pub use link_type_info_component::LinkTypeInfoComponent;
 pub use node_instance_component::NodeInstanceComponent;
 pub use node_metrics::{LossCountsOfPortsInThisProcess, NodeLossCounts, NodeMetrics};
 pub use node_pause_gate_component::NodePauseGateComponent;

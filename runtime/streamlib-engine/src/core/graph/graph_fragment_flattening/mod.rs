@@ -30,9 +30,9 @@ use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
 };
 use crate::core::json_schema::{
-    GraphFragmentOutput, GraphNodeKindOnTheWire, GraphNodeOutput, GraphNodePortsOnTheWire,
-    GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, LinkStateOutput,
-    redraw_a_node_over_its_pins,
+    GraphFragmentOutput, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire, GraphNodeOutput,
+    GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
+    LinkStateOutput, redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
@@ -526,7 +526,7 @@ impl GraphFragmentAsDrawn {
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            components: serde_json::Map::new(),
+            components: GraphNodeComponentsOnTheWire::default(),
             fragment: Some(GraphFragmentOutput {
                 nodes,
                 links,
@@ -805,7 +805,7 @@ fn rendered_as_stored(
         exposed_config_fields: node.exposed_config_fields.clone(),
         studio: node.studio.clone(),
         inputs_waiting_for_a_value: Vec::new(),
-        components: serde_json::Map::new(),
+        components: GraphNodeComponentsOnTheWire::default(),
         fragment: None,
     }
 }
@@ -822,10 +822,7 @@ fn rendered_as_drawn(link: &GraphSnapshotLink) -> LinkOutput {
             node: cast_or_as_written(&link.target.node),
             port: link.target.port.clone(),
         },
-        capacity: Default::default(),
-        state: Default::default(),
-        error_reason: None,
-        components: serde_json::Map::new(),
+        ..LinkOutput::default()
     }
 }
 

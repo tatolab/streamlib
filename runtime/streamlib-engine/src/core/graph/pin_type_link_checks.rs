@@ -102,6 +102,18 @@ pub(crate) fn the_pin_types_refuse_the_link(
     })
 }
 
+/// The judgement of a link from `from` to `to` by its two ends' pin types, among
+/// `conversions`; `None` when either end is no node of `graph`, or either port is untyped.
+pub(crate) fn the_verdict_on_a_link_between_typed_ends(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    conversions: &[PinConversion],
+) -> Option<PinLinkVerdict> {
+    the_typed_ends_of(graph, from, to)
+        .map(|ends| pin_link_verdict(ends.output, ends.input, conversions))
+}
+
 /// The pin types of a link from `from` to `to`, output then input; `None` when either end is
 /// no node of `graph`, or either port is untyped.
 pub(crate) fn the_pin_types_at_the_ends_of(

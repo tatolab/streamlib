@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use anymap2::Map;
-use serde_json::Value as JsonValue;
 
-use crate::core::JsonSerializableComponent;
+use super::{LinkComponentGraphRenders, NodeComponentGraphRenders};
 
 /// Anything a node's component map can hold.
 ///
@@ -17,22 +16,27 @@ pub trait StorableComponent: anymap2::any::Any + Send + Sync + 'static {}
 
 impl<T: anymap2::any::Any + Send + Sync + 'static> StorableComponent for T {}
 
-/// A component that also renders as its own key in `graph`.
-pub trait Component: StorableComponent + JsonSerializableComponent {}
+/// A node's component that also renders as its own key in `graph`.
+pub trait NodeComponent: StorableComponent + NodeComponentGraphRenders {}
 
-impl<T: StorableComponent + JsonSerializableComponent> Component for T {}
+impl<T: StorableComponent + NodeComponentGraphRenders> NodeComponent for T {}
+
+/// A link's component that also renders as its own key in `graph`.
+pub trait LinkComponent: StorableComponent + LinkComponentGraphRenders {}
+
+impl<T: StorableComponent + LinkComponentGraphRenders> LinkComponent for T {}
 
 /// TypeMap for component storage (Send + Sync).
 pub type ComponentMap = Map<dyn anymap2::any::Any + Send + Sync>;
 
-/// Closure that serializes a component from the map.
-pub type ComponentSerializer =
-    Box<dyn Fn(&ComponentMap) -> Option<(String, JsonValue)> + Send + Sync>;
+/// Closure that renders one component of the map onto what `graph` renders of its node or link,
+/// `Rendered`.
+pub type ComponentSerializer<Rendered> = Box<dyn Fn(&ComponentMap, &mut Rendered) + Send + Sync>;
 
 pub fn default_components() -> ComponentMap {
     ComponentMap::new()
 }
 
-pub fn default_component_serializers() -> Vec<ComponentSerializer> {
+pub fn default_component_serializers<Rendered>() -> Vec<ComponentSerializer<Rendered>> {
     Vec::new()
 }

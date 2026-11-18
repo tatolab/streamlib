@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use parking_lot::{Condvar, Mutex, RwLock};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 use streamlib_ipc_types::{
     STREAM_CLOCK_BOARD_MODE_REAL, STREAM_CLOCK_BOARD_MODE_SCALED, STREAM_CLOCK_BOARD_MODE_STEPPED,
     StreamClockBoardEntry,
@@ -18,106 +16,59 @@ use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 use crate::iceoryx2::StreamClockBoard;
 
-/// Stream nanoseconds per step a scaled clock takes when its spec names none:
-/// one frame at 60 Hz.
-pub const DEFAULT_SCALED_STREAM_CLOCK_STEP_NS: u64 = 16_666_667;
+pub use streamlib_runtime_client_contract::local_api_wire_contract::{
+    DEFAULT_SCALED_STREAM_CLOCK_STEP_NS, StreamClockSpec,
+};
 
-fn default_scaled_stream_clock_step_ns() -> u64 {
-    DEFAULT_SCALED_STREAM_CLOCK_STEP_NS
-}
-
-/// The clock a stream's spec names: the graph document's `clock` key.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
-)]
-#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StreamClockSpec {
-    /// The machine's monotonic clock.
-    #[default]
-    Real,
-    /// `base + scale × elapsed` on the machine's monotonic clock.
-    Scaled {
-        /// Stream seconds per machine second; greater than zero.
-        scale: f64,
-        /// Stream nanoseconds per step when the scale runs behind the step barrier.
-        #[serde(default = "default_scaled_stream_clock_step_ns")]
-        step_ns: u64,
-    },
-    /// Advances `step_ns` at a time, once every node finished the step.
-    Stepped {
-        /// Stream nanoseconds per step; greater than zero.
-        step_ns: u64,
-        /// The multiple of real time steps are paced to; unpaced when absent.
-        #[serde(default)]
-        pace: Option<f64>,
-        /// The step after which the stream stops itself.
-        #[serde(default)]
-        stop_after_steps: Option<u64>,
-    },
-}
-
-impl StreamClockSpec {
-    /// Whether this is the machine's own clock.
-    pub fn is_real(&self) -> bool {
-        matches!(self, Self::Real)
-    }
-
-    /// The mode's name, as the graph document spells it.
-    pub fn mode_name(&self) -> &'static str {
-        match self {
-            Self::Real => "real",
-            Self::Scaled { .. } => "scaled",
-            Self::Stepped { .. } => "stepped",
+/// Refuse `spec` when it names a value no clock can run on, or a mode this runtime does not run
+/// yet, naming `stream_id`.
+pub fn refuse_a_stream_clock_this_runtime_cannot_run(
+    spec: &StreamClockSpec,
+    stream_id: &str,
+) -> Result<()> {
+    match *spec {
+        StreamClockSpec::Real => Ok(()),
+        StreamClockSpec::Scaled { scale, step_ns } => {
+            if !(scale.is_finite() && scale > 0.0) {
+                return Err(Error::GraphError(format!(
+                    "the stream `{stream_id}` names a scaled clock with scale {scale}; a \
+                     scale is a finite number greater than zero"
+                )));
+            }
+            if step_ns == 0 {
+                return Err(Error::GraphError(format!(
+                    "the stream `{stream_id}` names a scaled clock with a step of 0 ns; a \
+                     step is greater than zero"
+                )));
+            }
+            Ok(())
         }
-    }
-
-    /// Refuse a spec with a value no clock can run on, or a mode this runtime
-    /// does not run yet, naming `stream_id`.
-    pub fn refusal_unless_this_runtime_runs_it(&self, stream_id: &str) -> Result<()> {
-        match *self {
-            Self::Real => Ok(()),
-            Self::Scaled { scale, step_ns } => {
-                if !(scale.is_finite() && scale > 0.0) {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a scaled clock with scale {scale}; a \
-                         scale is a finite number greater than zero"
-                    )));
-                }
-                if step_ns == 0 {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a scaled clock with a step of 0 ns; a \
-                         step is greater than zero"
-                    )));
-                }
-                Ok(())
+        StreamClockSpec::Stepped {
+            step_ns,
+            pace,
+            stop_after_steps,
+        } => {
+            if step_ns == 0 {
+                return Err(Error::GraphError(format!(
+                    "the stream `{stream_id}` names a stepped clock with a step of 0 ns; a \
+                     step is greater than zero"
+                )));
             }
-            Self::Stepped {
-                step_ns,
-                pace,
-                stop_after_steps,
-            } => {
-                if step_ns == 0 {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a stepped clock with a step of 0 ns; a \
-                         step is greater than zero"
-                    )));
-                }
-                if let Some(pace) = pace
-                    && !(pace.is_finite() && pace > 0.0)
-                {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a stepped clock paced at {pace}; a pace \
-                         is a finite number greater than zero, or absent to run unpaced"
-                    )));
-                }
-                if stop_after_steps == Some(0) {
-                    return Err(Error::GraphError(format!(
-                        "the stream `{stream_id}` names a stepped clock that stops after 0 steps; \
-                         a stream runs at least one step"
-                    )));
-                }
-                Ok(())
+            if let Some(pace) = pace
+                && !(pace.is_finite() && pace > 0.0)
+            {
+                return Err(Error::GraphError(format!(
+                    "the stream `{stream_id}` names a stepped clock paced at {pace}; a pace \
+                     is a finite number greater than zero, or absent to run unpaced"
+                )));
             }
+            if stop_after_steps == Some(0) {
+                return Err(Error::GraphError(format!(
+                    "the stream `{stream_id}` names a stepped clock that stops after 0 steps; \
+                     a stream runs at least one step"
+                )));
+            }
+            Ok(())
         }
     }
 }
@@ -405,7 +356,7 @@ impl StreamClock {
             )));
         };
         let rescaled_spec = StreamClockSpec::Scaled { scale, step_ns };
-        rescaled_spec.refusal_unless_this_runtime_runs_it(stream_id)?;
+        refuse_a_stream_clock_this_runtime_cannot_run(&rescaled_spec, stream_id)?;
         if scale > 1.0
             && let Some(node_that_paces_its_own_callbacks) = a_node_that_paces_its_own_callbacks()
         {

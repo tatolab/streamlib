@@ -543,7 +543,7 @@ export interface StreamGraphOnTheWire {
    * The clock the stream runs on, tagged by its `mode`: a spec key. Absent when it runs on
    * real time.
    */
-  clock?: unknown;
+  clock?: StreamClockSpec | null;
   /**
    * Every node of the stream's own level.
    */
@@ -551,7 +551,7 @@ export interface StreamGraphOnTheWire {
   /**
    * Every link between those nodes' ports.
    */
-  links: Array<unknown>;
+  links: Array<GraphLinkOnTheWire>;
   /**
    * Every reference edge: a node's config key naming another node. A live key, read back
    * from the configs; absent when the graph holds none.
@@ -579,6 +579,37 @@ export interface StreamGraphOnTheWire {
    */
   function_node_pool?: GraphNodeOnTheWire | null;
 }
+
+/**
+ * The clock a stream's spec names: the graph document's `clock` key, tagged by its `mode`.
+ */
+export type StreamClockSpec = {
+  mode: "real";
+} | ({
+  /**
+   * Stream seconds per machine second; greater than zero.
+   */
+  scale: number;
+  /**
+   * Stream nanoseconds per step when the scale runs behind the step barrier.
+   */
+  step_ns?: number | bigint;
+  mode: "scaled";
+}) | ({
+  /**
+   * Stream nanoseconds per step; greater than zero.
+   */
+  step_ns: number | bigint;
+  /**
+   * The multiple of real time steps are paced to; unpaced when absent.
+   */
+  pace?: number | null;
+  /**
+   * The step after which the stream stops itself.
+   */
+  stop_after_steps?: number | bigint | null;
+  mode: "stepped";
+});
 
 /**
  * A node of a stream's graph, a fragment holding the nodes and links of its graph generator's
@@ -646,7 +677,7 @@ export interface GraphNodeOnTheWire {
   /**
    * The node's live state and counters, by component.
    */
-  components: { [key: string]: unknown };
+  components: GraphNodeComponentsOnTheWire;
   /**
    * What a fragment holds: its graph generator's stored output, each node rendered as this
    * node is. A spec key, present on a fragment alone.
@@ -759,6 +790,303 @@ export type PortKindOnTheWire = "data" | "event" | "control";
 export type InputValueComesFromOnTheWire = "live" | "saved" | "default" | "wire";
 
 /**
+ * What the runtime keeps on a node, each under its own key; a key is absent where the node
+ * keeps nothing of that kind.
+ */
+export interface GraphNodeComponentsOnTheWire {
+  /**
+   * The node's state now.
+   */
+  state?: NodeStateOnTheWire | null;
+  /**
+   * Why the node failed, while its state is `Error`.
+   */
+  failed_because?: string | null;
+  /**
+   * What the node's `process()` keeps raising, while it does.
+   */
+  process_raising_because?: string | null;
+  /**
+   * Why a running node is not ready, in its own words, while it says so.
+   */
+  not_ready_because?: string | null;
+  /**
+   * On a node in a helper process of its own, the helper processes started for it since its
+   * stream loaded.
+   */
+  helper_process_restarts?: HelperProcessRestartsOnTheWire | null;
+  /**
+   * The node's counters: the bags lost on its inbound links and refused and sent on its
+   * output ports.
+   */
+  metrics?: NodeMetricsOnTheWire | null;
+  /**
+   * Whether the node is paused with its stream.
+   */
+  paused?: boolean | null;
+  /**
+   * `true` on a node a removal is deleting.
+   */
+  pending_deletion?: boolean | null;
+  /**
+   * Whether the node's thread has signalled it is ready, and has been told to continue.
+   */
+  ready_barrier?: NodeReadyBarrierOnTheWire | null;
+  /**
+   * The channel the node's thread is told to shut down on.
+   */
+  shutdown_channel?: NodeShutdownChannelOnTheWire | null;
+  /**
+   * The thread the node runs on.
+   */
+  thread_handle?: NodeThreadHandleOnTheWire | null;
+  /**
+   * The node's instance in the runtime's own process.
+   */
+  node_instance?: NodeInstanceOnTheWire | null;
+  /**
+   * Where a function node is evaluated.
+   */
+  host?: FunctionNodeHostOnTheWire | null;
+  /**
+   * Whether the helper that last evaluated a function node ran it compiled; absent until one
+   * reports.
+   */
+  ran_compiled?: boolean | null;
+  /**
+   * The shader nodes evaluated with this one as one island.
+   */
+  fused_group?: ShaderNodeFusedGroupOnTheWire | null;
+  /**
+   * On a stateful function node, each field of the state its stream carries now, by field.
+   */
+  function_node_state?: { [key: string]: unknown } | null;
+  /**
+   * On a graph interface node, the port of the stream it declares.
+   */
+  graph_interface?: GraphInterfacePortOnTheWire | null;
+  /**
+   * On a graph variable's node, the variable.
+   */
+  graph_variable?: GraphVariableOnTheWire | null;
+}
+
+/**
+ * A node's state as `graph` renders it. The set grows: a state a client does not know is one it
+ * shows as written.
+ */
+export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
+
+/**
+ * The helper processes started for a node since its stream loaded.
+ */
+export interface HelperProcessRestartsOnTheWire {
+  /**
+   * New helper processes started since the stream loaded.
+   */
+  restart_count: number;
+  /**
+   * The last death's exit and the end of its standard error; null before the first.
+   */
+  last_exit_reason?: string | null;
+}
+
+/**
+ * A node's counters, each by the link or the port it counts on.
+ */
+export interface NodeMetricsOnTheWire {
+  /**
+   * The bags lost on every inbound link, summed.
+   */
+  frames_dropped: number | bigint;
+  /**
+   * The bags lost on each inbound link, by link id.
+   */
+  dropped_bags_by_link: { [key: string]: number | bigint };
+  /**
+   * The bags refused at the ceiling on each output port with a channel, by port.
+   */
+  refused_bags_by_output_port: { [key: string]: number | bigint };
+  /**
+   * The bags sent on each output port with a channel, by port: what the losses downstream
+   * are counted against.
+   */
+  written_bags_by_output_port: { [key: string]: number | bigint };
+  /**
+   * The samples discarded on each inbound link into a windowed port, by link id; absent when
+   * none was.
+   */
+  discarded_samples_by_link?: { [key: string]: number | bigint };
+  /**
+   * The groups given up upstream on each output port whose writer gave one up, by port;
+   * absent when none was.
+   */
+  given_up_groups_by_output_port?: { [key: string]: number | bigint };
+  /**
+   * What moved this function node out of its readers' islands into a process of its own;
+   * absent on a node never moved.
+   */
+  promoted_out_of_its_readers_islands?: FunctionNodePromotionOnTheWire | null;
+}
+
+/**
+ * What moved a function node out of its readers' islands into a process of its own.
+ */
+export interface FunctionNodePromotionOnTheWire {
+  /**
+   * The times it was moved; a node is moved once.
+   */
+  promotions: number;
+  /**
+   * The name in the graph of the reader whose helper the node crashed or stalled.
+   */
+  after_crashing_the_helper_of: string;
+  /**
+   * Why that helper was lost, as its death was reported.
+   */
+  reason: string;
+}
+
+/**
+ * Whether a node's thread has signalled it is ready, and has been told to continue.
+ */
+export interface NodeReadyBarrierOnTheWire {
+  /**
+   * Whether the node's thread signalled it is ready.
+   */
+  ready_signaled: boolean;
+  /**
+   * Whether the node's thread was told to continue.
+   */
+  continue_received: boolean;
+}
+
+/**
+ * The channel a node's thread is told to shut down on.
+ */
+export interface NodeShutdownChannelOnTheWire {
+  /**
+   * Always `true`: the channel is attached.
+   */
+  attached: boolean;
+  /**
+   * Whether the node's thread has taken the channel's receiver.
+   */
+  receiver_taken: boolean;
+}
+
+/**
+ * The thread a node runs on.
+ */
+export interface NodeThreadHandleOnTheWire {
+  /**
+   * Always `true`: the thread is attached.
+   */
+  attached: boolean;
+  /**
+   * The thread's id, as the runtime prints it.
+   */
+  thread_id: string;
+  /**
+   * The thread's name.
+   */
+  thread_name: string;
+}
+
+/**
+ * A node's instance in the runtime's own process.
+ */
+export interface NodeInstanceOnTheWire {
+  /**
+   * Always `true`: the instance is attached.
+   */
+  attached: boolean;
+  /**
+   * The strong references held to the instance.
+   */
+  arc_strong_count: number;
+  /**
+   * The weak references held to the instance.
+   */
+  arc_weak_count: number;
+}
+
+/**
+ * Where a function node is evaluated.
+ */
+export type FunctionNodeHostOnTheWire = {
+  inside_the_read_of: Array<string>;
+} | {
+  in_a_helper_process_of_its_own: boolean;
+};
+
+/**
+ * The shader nodes one evaluator runs as one island, and how its evaluations cut them into
+ * kernels.
+ */
+export interface ShaderNodeFusedGroupOnTheWire {
+  /**
+   * The node that evaluates the island.
+   */
+  evaluated_by: string;
+  /**
+   * The island's members, by name, in evaluation order.
+   */
+  members: Array<string>;
+  /**
+   * The members each kernel of the last evaluation fused, by name; null before the first.
+   */
+  kernels?: Array<Array<string>> | null;
+  /**
+   * The submissions every evaluation so far recorded.
+   */
+  submissions: number | bigint;
+  /**
+   * The dispatches every evaluation so far recorded.
+   */
+  dispatches: number | bigint;
+}
+
+/**
+ * The port of its stream a graph interface node declares, on the node and on each link with an
+ * end on it.
+ */
+export interface GraphInterfacePortOnTheWire {
+  /**
+   * Whether the stream takes the port in or gives it out.
+   */
+  direction: GraphInterfacePortDirectionOnTheWire;
+  /**
+   * The port's name on the stream.
+   */
+  port: string;
+  /**
+   * The port family the port carries; null while the runtime waits for a link to settle it.
+   */
+  family?: string | null;
+  /**
+   * On a `GraphInput` node, the value its `value` input reads now: the one set live, else its
+   * saved one. Absent elsewhere, and where it reads none.
+   */
+  current_value?: unknown;
+}
+
+/**
+ * Whether a stream takes a port it declares in or gives it out.
+ */
+export type GraphInterfacePortDirectionOnTheWire = "input" | "output";
+
+/**
+ * The graph variable a variable's node, or a link with an end on one, stands for.
+ */
+export interface GraphVariableOnTheWire {
+  /**
+   * The variable's name; null on a node no setter or getter names one for.
+   */
+  variable?: string | null;
+}
+
+/**
  * The nodes and links a fragment holds, each link end naming a node of the fragment.
  */
 export interface GraphFragmentOnTheWire {
@@ -769,11 +1097,172 @@ export interface GraphFragmentOnTheWire {
   /**
    * Every link between those nodes' ports.
    */
-  links: Array<unknown>;
+  links: Array<GraphLinkOnTheWire>;
   /**
    * Every labelled group of the fragment's nodes, made by its graph generator.
    */
   groups?: Array<LabelledNodeGroup>;
+}
+
+/**
+ * One link of a stream's graph, from an output port to an input port.
+ */
+export interface GraphLinkOnTheWire {
+  /**
+   * The link's id; empty on a link drawn with an end on a node that runs as no node of its
+   * own, a graph interface node or a fragment, which no running link stands for.
+   */
+  id: string;
+  /**
+   * The output port the link carries from.
+   */
+  source: GraphLinkPortRefOnTheWire;
+  /**
+   * The input port the link carries into.
+   */
+  target: GraphLinkPortRefOnTheWire;
+  /**
+   * The samples the link's channel holds.
+   */
+  capacity?: number;
+  /**
+   * The link's state now.
+   */
+  state: GraphLinkStateOnTheWire;
+  /**
+   * Why the link is in the `error` state, in the words of the helper process that could not
+   * open its port, or of the graph's validation that refused it as its stream loaded. Absent
+   * in every other state, so a reader that finds it knows the link carries nothing and will
+   * not start to: disconnect it and wire again.
+   */
+  error_reason?: string | null;
+  /**
+   * `true` when the input reads what the output carries as its own type at no cost: Boolean,
+   * Integer and Float among themselves, a Vector into a Vector or a Color, one number into a
+   * Vector or a Color, or a Menu into a String. Absent on every other link.
+   */
+  free_conversion?: boolean;
+  /**
+   * What the link does that a person may not expect, as the judgement of its two ends' pin
+   * types says; none of these blocks it. Absent when it warns of nothing.
+   */
+  warnings?: Array<PinLinkWarningOnTheWire>;
+  /**
+   * What the runtime keeps on the link, by what it is.
+   */
+  components: GraphLinkComponentsOnTheWire;
+}
+
+/**
+ * One end of a link of a stream's graph: a node by its name, and one of its ports.
+ */
+export interface GraphLinkPortRefOnTheWire {
+  /**
+   * The node's name.
+   */
+  node: string;
+  /**
+   * The port's own name on that node.
+   */
+  port: string;
+}
+
+/**
+ * The state of a link of a stream's graph. The set grows: a state a client does not know is
+ * one it shows as written.
+ */
+export type GraphLinkStateOnTheWire = "pending" | "wired" | "disconnecting" | "disconnected" | "error";
+
+/**
+ * What a link does that a person may not expect, tagged by its `warning`.
+ */
+export type PinLinkWarningOnTheWire = {
+  /**
+   * The output's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input's meaning.
+   */
+  input_meaning: string;
+  warning: "meanings_differ";
+} | {
+  /**
+   * The member.
+   */
+  member: string;
+  /**
+   * The output member's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input member's meaning.
+   */
+  input_meaning: string;
+  warning: "member_meanings_differ";
+} | {
+  warning: "vector_read_as_a_color";
+} | {
+  /**
+   * Each such option, as the output names it.
+   */
+  option_names: Array<string>;
+  warning: "menu_options_the_input_does_not_list";
+} | {
+  warning: "texture_output_states_no_format";
+};
+
+/**
+ * What the runtime keeps on a link, each under its own key; a key is absent where the link
+ * keeps nothing of that kind.
+ */
+export interface GraphLinkComponentsOnTheWire {
+  /**
+   * The link's state as wiring stamped it, spelled with a capital: always the link's `state`.
+   */
+  state?: GraphLinkStateComponentOnTheWire | null;
+  /**
+   * `true` on a link a disconnect is removing.
+   */
+  pending_deletion?: boolean | null;
+  /**
+   * On a link from a function node island into a reader that cannot evaluate it, the ports of
+   * the stream's function node pool it is carried through.
+   */
+  carried_through_the_function_node_pool?: LinkCarriedThroughTheFunctionNodePoolOnTheWire | null;
+  /**
+   * On a link out of a function node island that its reader evaluates, each input port of
+   * that reader the link is read through, sorted.
+   */
+  read_through_the_reader_of_its_function_node_island?: Array<string> | null;
+  /**
+   * On a link with an end on a graph interface node, the port of the stream that node
+   * declares.
+   */
+  graph_interface?: GraphInterfacePortOnTheWire | null;
+  /**
+   * On a link with an end on a graph variable's node, the variable.
+   */
+  graph_variable?: GraphVariableOnTheWire | null;
+}
+
+/**
+ * A link's state as wiring stamped it on the link, spelled with a capital.
+ */
+export type GraphLinkStateComponentOnTheWire = "Pending" | "Wired" | "Disconnecting" | "Disconnected" | "Error";
+
+/**
+ * The two ports of the stream's function node pool a link is carried through.
+ */
+export interface LinkCarriedThroughTheFunctionNodePoolOnTheWire {
+  /**
+   * The pool's input port the island's output feeds.
+   */
+  input_port: string;
+  /**
+   * The pool's output port that feeds the reader.
+   */
+  output_port: string;
 }
 
 /**
@@ -1629,45 +2118,6 @@ export interface ConvertNodeToInsertOnTheWire {
    */
   output_pin_type: PinType;
 }
-
-/**
- * What a link does that a person may not expect, tagged by its `warning`.
- */
-export type PinLinkWarningOnTheWire = {
-  /**
-   * The output's meaning.
-   */
-  output_meaning: string;
-  /**
-   * The input's meaning.
-   */
-  input_meaning: string;
-  warning: "meanings_differ";
-} | {
-  /**
-   * The member.
-   */
-  member: string;
-  /**
-   * The output member's meaning.
-   */
-  output_meaning: string;
-  /**
-   * The input member's meaning.
-   */
-  input_meaning: string;
-  warning: "member_meanings_differ";
-} | {
-  warning: "vector_read_as_a_color";
-} | {
-  /**
-   * Each such option, as the output names it.
-   */
-  option_names: Array<string>;
-  warning: "menu_options_the_input_does_not_list";
-} | {
-  warning: "texture_output_states_no_format";
-};
 
 /**
  * `import_graph_generator`'s params.
@@ -4625,11 +5075,6 @@ export interface StreamGraphChangedNotificationParams {
 export type StreamGraphChangeKindOnTheWire = "edited" | "node_state_changed" | "playback_state_changed" | "drops_raises_or_link_states_changed" | "missed";
 
 /**
- * A node's state as `graph` renders it.
- */
-export type NodeStateOnTheWire = "Pending" | "Idle" | "Running" | "Paused" | "Stopping" | "Stopped" | "Error" | "Restarting";
-
-/**
  * `input_value_changed`'s params.
  */
 export interface InputValueChangedNotificationParams {
@@ -4954,6 +5399,7 @@ export interface ControlContractComponents {
   GraphRequest: GraphRequest;
   GraphToolResult: GraphToolResult;
   StreamGraphOnTheWire: StreamGraphOnTheWire;
+  StreamClockSpec: StreamClockSpec;
   GraphNodeOnTheWire: GraphNodeOnTheWire;
   GraphNodeKindOnTheWire: GraphNodeKindOnTheWire;
   FunctionNodeLanguageOnTheWire: FunctionNodeLanguageOnTheWire;
@@ -4970,7 +5416,28 @@ export interface ControlContractComponents {
   NamedPinTypeImportPath: NamedPinTypeImportPath;
   PinFlow: PinFlow;
   InputValueComesFromOnTheWire: InputValueComesFromOnTheWire;
+  GraphNodeComponentsOnTheWire: GraphNodeComponentsOnTheWire;
+  NodeStateOnTheWire: NodeStateOnTheWire;
+  HelperProcessRestartsOnTheWire: HelperProcessRestartsOnTheWire;
+  NodeMetricsOnTheWire: NodeMetricsOnTheWire;
+  FunctionNodePromotionOnTheWire: FunctionNodePromotionOnTheWire;
+  NodeReadyBarrierOnTheWire: NodeReadyBarrierOnTheWire;
+  NodeShutdownChannelOnTheWire: NodeShutdownChannelOnTheWire;
+  NodeThreadHandleOnTheWire: NodeThreadHandleOnTheWire;
+  NodeInstanceOnTheWire: NodeInstanceOnTheWire;
+  FunctionNodeHostOnTheWire: FunctionNodeHostOnTheWire;
+  ShaderNodeFusedGroupOnTheWire: ShaderNodeFusedGroupOnTheWire;
+  GraphInterfacePortOnTheWire: GraphInterfacePortOnTheWire;
+  GraphInterfacePortDirectionOnTheWire: GraphInterfacePortDirectionOnTheWire;
+  GraphVariableOnTheWire: GraphVariableOnTheWire;
   GraphFragmentOnTheWire: GraphFragmentOnTheWire;
+  GraphLinkOnTheWire: GraphLinkOnTheWire;
+  GraphLinkPortRefOnTheWire: GraphLinkPortRefOnTheWire;
+  GraphLinkStateOnTheWire: GraphLinkStateOnTheWire;
+  PinLinkWarningOnTheWire: PinLinkWarningOnTheWire;
+  GraphLinkComponentsOnTheWire: GraphLinkComponentsOnTheWire;
+  GraphLinkStateComponentOnTheWire: GraphLinkStateComponentOnTheWire;
+  LinkCarriedThroughTheFunctionNodePoolOnTheWire: LinkCarriedThroughTheFunctionNodePoolOnTheWire;
   LabelledNodeGroup: LabelledNodeGroup;
   ConfigNodeReferenceEdgeOnTheWire: ConfigNodeReferenceEdgeOnTheWire;
   MachineWideGraphOnTheWire: MachineWideGraphOnTheWire;
@@ -4993,7 +5460,6 @@ export interface ControlContractComponents {
   LinkCheckResult: LinkCheckResult;
   PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
   ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
-  PinLinkWarningOnTheWire: PinLinkWarningOnTheWire;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -5121,7 +5587,6 @@ export interface ControlContractComponents {
   NodeTypeOfOneProjectSource: NodeTypeOfOneProjectSource;
   StreamGraphChangedNotificationParams: StreamGraphChangedNotificationParams;
   StreamGraphChangeKindOnTheWire: StreamGraphChangeKindOnTheWire;
-  NodeStateOnTheWire: NodeStateOnTheWire;
   InputValueChangedNotificationParams: InputValueChangedNotificationParams;
   StreamActionChangedNotificationParams: StreamActionChangedNotificationParams;
   StreamActionChangeKindOnTheWire: StreamActionChangeKindOnTheWire;
@@ -5264,7 +5729,7 @@ export interface ControlOperations {
   /**
    * Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.
    *
-   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
+   * Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, each link between two typed pins with `free_conversion` `true` where the input reads the output as its own type at no cost and the `warnings` that judgement gave, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.
    *
    * Since contract version 1, experimental.
    */
@@ -6097,7 +6562,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 7;
+export declare const CONTROL_CONTRACT_REVISION: 8;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

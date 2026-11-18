@@ -1,10 +1,9 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use serde_json::Value as JsonValue;
-
-use super::JsonSerializableComponent;
+use super::LinkComponentGraphRenders;
 use crate::core::graph::edges::LinkState;
+use crate::core::json_schema::GraphLinkComponentsOnTheWire;
 
 pub struct LinkStateComponent(pub LinkState);
 
@@ -14,12 +13,8 @@ impl Default for LinkStateComponent {
     }
 }
 
-impl JsonSerializableComponent for LinkStateComponent {
-    fn json_key(&self) -> &'static str {
-        "state"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        serde_json::json!(format!("{:?}", self.0))
+impl LinkComponentGraphRenders for LinkStateComponent {
+    fn render_onto(&self, components: &mut GraphLinkComponentsOnTheWire) {
+        components.state = Some(crate::core::json_schema::link_state_rendered(self.0).into());
     }
 }

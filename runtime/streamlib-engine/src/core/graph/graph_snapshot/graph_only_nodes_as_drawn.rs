@@ -187,7 +187,7 @@ impl GraphOnlyNodesAsDrawn {
                     capacity: 0,
                     state: crate::core::json_schema::LinkStateOutput::Error,
                     error_reason: Some(set_aside.why_its_validation_refused_it.clone()),
-                    components: serde_json::Map::new(),
+                    ..crate::core::json_schema::LinkOutput::default()
                 });
         }
     }

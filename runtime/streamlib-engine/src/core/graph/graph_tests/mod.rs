@@ -4,10 +4,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::{Value as JsonValue, json};
-
-use crate::core::JsonSerializableComponent;
 use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
+use crate::core::graph::{LinkComponentGraphRenders, NodeComponentGraphRenders};
+use crate::core::json_schema::{GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire};
 use crate::core::nodes::NodeState;
 use crate::core::test_support::{
     MockInputOnlyNode, MockNode, MockOutputOnlyNode, ensure_test_mocks_registered,
@@ -41,26 +40,16 @@ impl Default for MockState {
     }
 }
 
-impl JsonSerializableComponent for MockState {
-    fn json_key(&self) -> &'static str {
-        "mock_state"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "state": format!("{:?}", self.0) })
-    }
+impl NodeComponentGraphRenders for MockState {
+    /// A mock `graph` renders under no key: these tests read the component itself.
+    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
 }
 
 struct MockNodeInstance;
 
-impl JsonSerializableComponent for MockNodeInstance {
-    fn json_key(&self) -> &'static str {
-        "mock_node_instance"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "type": "MockNodeInstance" })
-    }
+impl NodeComponentGraphRenders for MockNodeInstance {
+    /// A mock `graph` renders under no key: these tests read the component itself.
+    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
 }
 
 /// Mock pause gate component.
@@ -92,14 +81,9 @@ impl Clone for MockPauseGate {
     }
 }
 
-impl JsonSerializableComponent for MockPauseGate {
-    fn json_key(&self) -> &'static str {
-        "mock_pause_gate"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "paused": self.is_paused() })
-    }
+impl NodeComponentGraphRenders for MockPauseGate {
+    /// A mock `graph` renders under no key: these tests read the component itself.
+    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
 }
 
 /// Mock link instance component.
@@ -113,25 +97,15 @@ impl MockLinkInstance {
     }
 }
 
-impl JsonSerializableComponent for MockLinkInstance {
-    fn json_key(&self) -> &'static str {
-        "mock_link_instance"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "capacity": self.capacity })
-    }
+impl LinkComponentGraphRenders for MockLinkInstance {
+    /// A mock `graph` renders under no key: these tests read the component itself.
+    fn render_onto(&self, _components: &mut GraphLinkComponentsOnTheWire) {}
 }
 
 /// Counter component for mutation tests.
 struct CounterComponent(i32);
 
-impl JsonSerializableComponent for CounterComponent {
-    fn json_key(&self) -> &'static str {
-        "counter"
-    }
-
-    fn to_json(&self) -> JsonValue {
-        json!({ "value": self.0 })
-    }
+impl NodeComponentGraphRenders for CounterComponent {
+    /// A mock `graph` renders under no key: these tests read the component itself.
+    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
 }

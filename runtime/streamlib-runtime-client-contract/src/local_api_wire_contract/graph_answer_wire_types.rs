@@ -2,17 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 //! The answer `graph` gives: a stream's graph, its nodes, their ports and the value each input
-//! reads. The engine builds these types and nothing mirrors them.
+//! reads, its links and what the runtime keeps on each. The engine builds these types and
+//! nothing mirrors them.
 //!
-//! A link and a stream's clock are typed by the engine alone, so each type holding one takes its
-//! type as `Link` or `Clock`: the engine renders its own, and a client reads the default, open
-//! JSON. A port's family, audio window and stream facts and a node's live components are open
-//! JSON here as well.
+//! A port's family, audio window and stream facts are open JSON here: their types derive another
+//! JSON Schema generator than the contract's.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use streamlib_node_schema::NodeClassImportPath;
 use streamlib_node_schema::pin_type::ResolvedPin;
+
+use super::{GraphLinkOnTheWire, GraphNodeComponentsOnTheWire, StreamClockSpec};
 
 /// `graph`'s answer: the graph of the stream it names, or every loaded stream's graph under the
 /// machine's name when it names none.
@@ -28,29 +29,19 @@ pub enum GraphToolResult {
 
 /// Every loaded stream's graph under the machine's name.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "json-schema",
-    derive(schemars::JsonSchema),
-    schemars(rename = "MachineWideGraphOnTheWire")
-)]
-#[serde(bound(deserialize = "Link: Deserialize<'de>, Clock: Deserialize<'de>"))]
-pub struct MachineWideGraphOnTheWire<Link = Value, Clock = Value> {
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct MachineWideGraphOnTheWire {
     /// The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`.
     pub machine: String,
     /// Each loaded stream's graph, as a call naming that stream answers it.
-    pub streams: Vec<StreamGraphOnTheWire<Link, Clock>>,
+    pub streams: Vec<StreamGraphOnTheWire>,
 }
 
 /// One stream's graph: its spec keys, the stream document's own, with the live keys beside
 /// them, so it loads back as a graph document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "json-schema",
-    derive(schemars::JsonSchema),
-    schemars(rename = "StreamGraphOnTheWire")
-)]
-#[serde(bound(deserialize = "Link: Deserialize<'de>, Clock: Deserialize<'de>"))]
-pub struct StreamGraphOnTheWire<Link = Value, Clock = Value> {
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct StreamGraphOnTheWire {
     /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
@@ -63,11 +54,11 @@ pub struct StreamGraphOnTheWire<Link = Value, Clock = Value> {
     /// The clock the stream runs on, tagged by its `mode`: a spec key. Absent when it runs on
     /// real time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clock: Option<Clock>,
+    pub clock: Option<StreamClockSpec>,
     /// Every node of the stream's own level.
-    pub nodes: Vec<GraphNodeOnTheWire<Link>>,
+    pub nodes: Vec<GraphNodeOnTheWire>,
     /// Every link between those nodes' ports.
-    pub links: Vec<Link>,
+    pub links: Vec<GraphLinkOnTheWire>,
     /// Every reference edge: a node's config key naming another node. A live key, read back
     /// from the configs; absent when the graph holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -87,7 +78,7 @@ pub struct StreamGraphOnTheWire<Link = Value, Clock = Value> {
     /// carries renders as the link it was given, naming the pool's ports under
     /// `carried_through_the_function_node_pool`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub function_node_pool: Option<GraphNodeOnTheWire<Link>>,
+    pub function_node_pool: Option<GraphNodeOnTheWire>,
 }
 
 /// A labelled group of one level's nodes, which a node joins by naming its `id` as its
@@ -124,13 +115,8 @@ pub struct ConfigNodeReferenceEdgeOnTheWire {
 /// A node of a stream's graph, a fragment holding the nodes and links of its graph generator's
 /// stored output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "json-schema",
-    derive(schemars::JsonSchema),
-    schemars(rename = "GraphNodeOnTheWire")
-)]
-#[serde(bound(deserialize = "Link: Deserialize<'de>"))]
-pub struct GraphNodeOnTheWire<Link = Value> {
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GraphNodeOnTheWire {
     /// The node's UUID: a spec key, kept across every run and restart of its stream.
     pub id: String,
     /// The import path of the class this node is.
@@ -174,11 +160,11 @@ pub struct GraphNodeOnTheWire<Link = Value> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs_waiting_for_a_value: Vec<String>,
     /// The node's live state and counters, by component.
-    pub components: Map<String, Value>,
+    pub components: GraphNodeComponentsOnTheWire,
     /// What a fragment holds: its graph generator's stored output, each node rendered as this
     /// node is. A spec key, present on a fragment alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fragment: Option<GraphFragmentOnTheWire<Link>>,
+    pub fragment: Option<GraphFragmentOnTheWire>,
 }
 
 /// How a node's code runs.
@@ -237,17 +223,12 @@ impl FunctionNodeLanguageOnTheWire {
 
 /// The nodes and links a fragment holds, each link end naming a node of the fragment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "json-schema",
-    derive(schemars::JsonSchema),
-    schemars(rename = "GraphFragmentOnTheWire")
-)]
-#[serde(bound(deserialize = "Link: Deserialize<'de>"))]
-pub struct GraphFragmentOnTheWire<Link = Value> {
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+pub struct GraphFragmentOnTheWire {
     /// Every node of the fragment, a fragment it holds rendered as a container in turn.
-    pub nodes: Vec<GraphNodeOnTheWire<Link>>,
+    pub nodes: Vec<GraphNodeOnTheWire>,
     /// Every link between those nodes' ports.
-    pub links: Vec<Link>,
+    pub links: Vec<GraphLinkOnTheWire>,
     /// Every labelled group of the fragment's nodes, made by its graph generator.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<LabelledNodeGroup>,

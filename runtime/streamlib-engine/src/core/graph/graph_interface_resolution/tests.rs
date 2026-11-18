@@ -204,8 +204,11 @@ fn an_interface_node_naming_no_family_and_linked_to_nothing_runs_nothing() {
     let rendered = resolution.interface_as_drawn.interface_nodes[0].rendered_as_a_node();
     assert_eq!(rendered.ports.outputs[0].family, None);
     assert_eq!(
-        rendered.components[GRAPH_INTERFACE_COMPONENT_KEY]["family"],
-        serde_json::Value::Null
+        rendered
+            .components
+            .graph_interface
+            .map(|graph_interface| graph_interface.family),
+        Some(None)
     );
 }
 
@@ -513,7 +516,7 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },
-        components: serde_json::Map::new(),
+        components: Default::default(),
         input_values: serde_json::Map::new(),
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
@@ -536,7 +539,7 @@ fn the_render_puts_each_interface_node_and_link_back_where_it_was_drawn() {
         .collect();
     assert_eq!(names, ["camera", "video", "overlay", "display"]);
     assert_eq!(
-        graph_response.nodes[1].components[GRAPH_INTERFACE_COMPONENT_KEY],
+        serde_json::to_value(&graph_response.nodes[1].components.graph_interface).unwrap(),
         serde_json::json!({"direction": "output", "port": "video", "family": "image"})
     );
     assert_eq!(graph_response.links.len(), 2);

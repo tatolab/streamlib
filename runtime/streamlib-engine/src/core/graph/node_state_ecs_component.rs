@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use serde::{Deserialize, Serialize};
+use streamlib_runtime_client_contract::local_api_wire_contract::NodeStateOnTheWire;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum NodeState {
@@ -49,6 +50,21 @@ impl std::fmt::Display for NodeState {
             Self::Stopped => write!(f, "Stopped"),
             Self::Error => write!(f, "Error"),
             Self::Restarting => write!(f, "Restarting"),
+        }
+    }
+}
+
+impl From<NodeState> for NodeStateOnTheWire {
+    fn from(node_state: NodeState) -> Self {
+        match node_state {
+            NodeState::Pending => Self::Pending,
+            NodeState::Idle => Self::Idle,
+            NodeState::Running => Self::Running,
+            NodeState::Paused => Self::Paused,
+            NodeState::Stopping => Self::Stopping,
+            NodeState::Stopped => Self::Stopped,
+            NodeState::Error => Self::Error,
+            NodeState::Restarting => Self::Restarting,
         }
     }
 }

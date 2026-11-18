@@ -30,7 +30,8 @@ pub struct Link {
     components: ComponentMap,
     /// Serializers for each inserted component type.
     #[serde(skip, default = "default_component_serializers")]
-    component_serializers: Vec<ComponentSerializer>,
+    component_serializers:
+        Vec<ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>>,
 }
 
 impl PartialEq for Link {
@@ -119,11 +120,15 @@ impl GraphEdgeWithComponents for Link {
         &mut self.components
     }
 
-    fn component_serializers(&self) -> &[ComponentSerializer] {
+    fn component_serializers(
+        &self,
+    ) -> &[ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>] {
         &self.component_serializers
     }
 
-    fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
+    fn component_serializers_mut(
+        &mut self,
+    ) -> &mut Vec<ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>> {
         &mut self.component_serializers
     }
 }

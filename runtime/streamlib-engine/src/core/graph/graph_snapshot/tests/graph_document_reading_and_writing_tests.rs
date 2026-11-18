@@ -448,10 +448,9 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
     let node_schema =
         crate::core::json_schema::the_control_contract_schema_named("GraphNodeOnTheWire");
     let link_schema =
-        serde_json::to_value(schemars::schema_for!(crate::core::json_schema::LinkOutput)).unwrap();
-    let link_definitions = link_schema
-        .get("definitions")
-        .expect("a link's schema defines its ends");
+        crate::core::json_schema::the_control_contract_schema_named("GraphLinkOnTheWire");
+    let link_end_schema =
+        crate::core::json_schema::the_control_contract_schema_named("GraphLinkPortRefOnTheWire");
     let keys_rendered_on = |object_schema: &serde_json::Value| -> HashSet<String> {
         object_schema["properties"]
             .as_object()
@@ -465,7 +464,7 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
         (&render_schema, &GRAPH_DOCUMENT_KEYS),
         (&node_schema, &GRAPH_NODE_KEYS),
         (&link_schema, &GRAPH_LINK_KEYS),
-        (&link_definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
+        (&link_end_schema, &GRAPH_LINK_END_KEYS),
     ] {
         let rendered = keys_rendered_on(object_schema);
         for key in &rendered {
