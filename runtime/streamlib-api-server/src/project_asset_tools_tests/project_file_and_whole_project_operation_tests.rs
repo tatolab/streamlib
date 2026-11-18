@@ -105,6 +105,7 @@ async fn undo_and_add_dependency_answer_the_code_and_file_of_a_project_file_that
     let served = AssetToolsServedOverAProject::over_a_new_project().await;
     let project_file = served.project_directory().join("tatolab-project.json");
     std::fs::write(&project_file, b"not json").unwrap();
+    let project_file_as_the_runtime_resolves_it = std::fs::canonicalize(&project_file).unwrap();
     let source = served.a_file_outside_the_project("imported.zip", b"PK");
 
     for (tool_name, arguments) in [
@@ -121,7 +122,11 @@ async fn undo_and_add_dependency_answer_the_code_and_file_of_a_project_file_that
         );
         assert_eq!(
             refusal.refused_file.map(|place| place.path),
-            Some(project_file.to_string_lossy().into_owned()),
+            Some(
+                project_file_as_the_runtime_resolves_it
+                    .to_string_lossy()
+                    .into_owned()
+            ),
             "{tool_name}: {}",
             refusal.runtime_words
         );
