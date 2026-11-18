@@ -19,7 +19,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     NodeRunId, PendingDeletionComponent, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
     cast_exposed_name_to_url_safe, the_ends_a_link_is_judged_by,
 };
@@ -76,17 +76,15 @@ impl LinksAReconcileMakes {
             RunningLinkBetweenTwoNodesByUuid,
             TheEndsALinkIsJudgedBy,
         >,
-    ) -> ALinkThePinTypesRefuse {
+    ) -> ALinkConnected {
         match self {
-            Self::EachAsASavedGraphsLink => ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            Self::EachAsASavedGraphsLink => ALinkConnected::OfASavedGraph,
             Self::ThoseTheLiveGraphKeptThoughConnectRefusesThem
                 if ends_now.is_some() && kept_though_connect_refuses_them.get(link) == ends_now =>
             {
-                ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
+                ALinkConnected::OfASavedGraph
             }
-            Self::ThoseTheLiveGraphKeptThoughConnectRefusesThem => {
-                ALinkThePinTypesRefuse::IsRefused
-            }
+            Self::ThoseTheLiveGraphKeptThoughConnectRefusesThem => ALinkConnected::MadeNow,
         }
     }
 }
@@ -361,18 +359,12 @@ impl LoadedStreamInThisRuntime {
             let ends_now = self
                 .compiler
                 .scope_reading(|graph| the_ends_a_link_is_judged_by(graph, &from, &to));
-            let a_link_the_pin_types_refuse = links_it_makes.for_a_link(
+            let a_link_connected = links_it_makes.for_a_link(
                 document_link,
                 ends_now.as_ref(),
                 &kept_though_connect_refuses_them,
             );
-            connect_impl(
-                self.live_graph_change(),
-                from,
-                to,
-                a_link_the_pin_types_refuse,
-            )
-            .await?;
+            connect_impl(self.live_graph_change(), from, to, a_link_connected).await?;
         }
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
         saved_values_handed_over

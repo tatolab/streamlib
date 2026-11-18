@@ -129,6 +129,31 @@ pub struct OneLinkGraphEditRequest {
     pub idempotency_key: Option<String>,
 }
 
+/// `check_link`'s params: the link `connect` takes, without what a kept edit carries.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CheckLinkRequest {
+    /// The stream the link would be in.
+    #[schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION)]
+    pub stream: GraphEditStream,
+    /// The subgraph the link would be inside, by the fragment nodes leading to it; the stream's
+    /// own level when omitted.
+    #[schemars(
+        description = "The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused."
+    )]
+    pub level: Option<Vec<Uuid>>,
+    /// The output port the link would carry from.
+    #[schemars(
+        description = "The output port the link would carry from: a node's UUID and its output port's name."
+    )]
+    pub source: StreamGraphActionLinkEnd,
+    /// The input port the link would carry into.
+    #[schemars(
+        description = "The input port the link would carry into: a node's UUID and its input port's name."
+    )]
+    pub target: StreamGraphActionLinkEnd,
+}
+
 /// `remove_node`'s params.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -64,6 +64,10 @@ export declare class TatolabRuntimeClient extends TatolabRuntimeClientCallsOverA
    */
   connect(params: ControlOperations["connect"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["connect"]["result"]>;
   /**
+   * Answer what `connect` would answer for one link in a loaded stream, changing nothing.
+   */
+  check_link(params: ControlOperations["check_link"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["check_link"]["result"]>;
+  /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
    */
   import_graph_generator(params: ControlOperations["import_graph_generator"]["params"], callOptions?: ControlCallOptions): Promise<ControlOperations["import_graph_generator"]["result"]>;

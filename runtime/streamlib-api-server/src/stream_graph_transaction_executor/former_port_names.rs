@@ -26,6 +26,57 @@ pub(super) fn the_current_name_of_a_port(
         .unwrap_or(name)
 }
 
+/// The current name of the port `name` names in `direction` on the node `node` names, by UUID
+/// or by the `as` of an earlier add in `node_by_label`, as `staged_graph` holds it and
+/// `stream_operations` resolves its type.
+fn the_current_name_of_a_port_of_the_node(
+    node: &str,
+    name: String,
+    direction: PortDirection,
+    staged_graph: &StreamGraphDocument,
+    node_by_label: &HashMap<String, Uuid>,
+    stream_operations: &dyn RuntimeOperations,
+) -> String {
+    the_current_name_of_a_port(
+        name,
+        direction,
+        node_by_label
+            .get(node)
+            .copied()
+            .or_else(|| Uuid::parse_str(node).ok())
+            .and_then(|node| staged_graph.node(node).ok())
+            .map(|node| node.node_type),
+        stream_operations,
+    )
+}
+
+/// The ends `source` and `target` of a link, each under the current name of its port, as
+/// [`the_request_under_the_current_port_names`] names them.
+pub(super) fn the_link_ends_under_their_current_port_names(
+    source: StreamGraphActionLinkEnd,
+    target: StreamGraphActionLinkEnd,
+    staged_graph: &StreamGraphDocument,
+    node_by_label: &HashMap<String, Uuid>,
+    stream_operations: &dyn RuntimeOperations,
+) -> (StreamGraphActionLinkEnd, StreamGraphActionLinkEnd) {
+    let current_end =
+        |end: StreamGraphActionLinkEnd, direction: PortDirection| StreamGraphActionLinkEnd {
+            port: the_current_name_of_a_port_of_the_node(
+                &end.node,
+                end.port,
+                direction,
+                staged_graph,
+                node_by_label,
+                stream_operations,
+            ),
+            node: end.node,
+        };
+    (
+        current_end(source, PortDirection::Output),
+        current_end(target, PortDirection::Input),
+    )
+}
+
 /// `request` with each input and link end it names under the current name of its port, each
 /// node, by UUID or by the `as` of an earlier add in `node_by_label`, as `staged_graph` holds it
 /// and `stream_operations` resolves its type. A name that is current, or finds no port, is left
@@ -37,23 +88,15 @@ pub(super) fn the_request_under_the_current_port_names(
     stream_operations: &dyn RuntimeOperations,
 ) -> StreamGraphAction {
     let current_name = |node: &str, name: String, direction: PortDirection| -> String {
-        the_current_name_of_a_port(
+        the_current_name_of_a_port_of_the_node(
+            node,
             name,
             direction,
-            node_by_label
-                .get(node)
-                .copied()
-                .or_else(|| Uuid::parse_str(node).ok())
-                .and_then(|node| staged_graph.node(node).ok())
-                .map(|node| node.node_type),
+            staged_graph,
+            node_by_label,
             stream_operations,
         )
     };
-    let current_end =
-        |end: StreamGraphActionLinkEnd, direction: PortDirection| StreamGraphActionLinkEnd {
-            port: current_name(&end.node, end.port, direction),
-            node: end.node,
-        };
     match request {
         StreamGraphAction::SetPinValue {
             stream,
@@ -86,23 +129,41 @@ pub(super) fn the_request_under_the_current_port_names(
             level,
             source,
             target,
-        } => StreamGraphAction::Connect {
-            source: current_end(source, PortDirection::Output),
-            target: current_end(target, PortDirection::Input),
-            stream,
-            level,
-        },
+        } => {
+            let (source, target) = the_link_ends_under_their_current_port_names(
+                source,
+                target,
+                staged_graph,
+                node_by_label,
+                stream_operations,
+            );
+            StreamGraphAction::Connect {
+                source,
+                target,
+                stream,
+                level,
+            }
+        }
         StreamGraphAction::Disconnect {
             stream,
             level,
             source,
             target,
-        } => StreamGraphAction::Disconnect {
-            source: current_end(source, PortDirection::Output),
-            target: current_end(target, PortDirection::Input),
-            stream,
-            level,
-        },
+        } => {
+            let (source, target) = the_link_ends_under_their_current_port_names(
+                source,
+                target,
+                staged_graph,
+                node_by_label,
+                stream_operations,
+            );
+            StreamGraphAction::Disconnect {
+                source,
+                target,
+                stream,
+                level,
+            }
+        }
         other => other,
     }
 }

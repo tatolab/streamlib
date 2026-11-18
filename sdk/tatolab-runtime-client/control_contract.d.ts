@@ -1552,6 +1552,124 @@ export interface OneLinkGraphEditRequest {
 }
 
 /**
+ * `check_link`'s params: the link `connect` takes, without what a kept edit carries.
+ */
+export interface CheckLinkRequest {
+  /**
+   * The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.
+   */
+  stream: string;
+  /**
+   * The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused.
+   */
+  level?: Array<string> | null;
+  /**
+   * The output port the link would carry from: a node's UUID and its output port's name.
+   */
+  source: StreamGraphActionLinkEnd;
+  /**
+   * The input port the link would carry into: a node's UUID and its input port's name.
+   */
+  target: StreamGraphActionLinkEnd;
+}
+
+/**
+ * `check_link`'s answer: whether and how `connect` would make the link, and the refusal it
+ * would answer when it would not.
+ */
+export interface LinkCheckResult {
+  /**
+   * Whether and how `connect` would make the link.
+   */
+  outcome: PinLinkOutcomeOnTheWire;
+  /**
+   * The convert node `connect` would place between the two ends; present only when
+   * `outcome` is `connects_through_convert_node`.
+   */
+  convert_node?: ConvertNodeToInsertOnTheWire | null;
+  /**
+   * The whole refusal `connect` would answer, with its code; present only when `outcome` is
+   * `refused`.
+   */
+  refusal?: ProjectActionRefusalOnTheWire | null;
+  /**
+   * What the link would do that a person may not expect; none of these blocks it.
+   */
+  warnings?: Array<PinLinkWarningOnTheWire>;
+}
+
+/**
+ * Whether and how a link connects. The set grows: an outcome a client does not know reads as
+ * `refused`.
+ */
+export type PinLinkOutcomeOnTheWire = "connects" | "connects_with_free_conversion" | "connects_through_convert_node" | "refused";
+
+/**
+ * The node of one built-in conversion a link is made through.
+ */
+export interface ConvertNodeToInsertOnTheWire {
+  /**
+   * The node type that converts.
+   */
+  node_type: string;
+  /**
+   * The input the link's output feeds.
+   */
+  input_port: string;
+  /**
+   * The type that input takes.
+   */
+  input_pin_type: PinType;
+  /**
+   * The output that feeds the link's input.
+   */
+  output_port: string;
+  /**
+   * The type that output gives.
+   */
+  output_pin_type: PinType;
+}
+
+/**
+ * What a link does that a person may not expect, tagged by its `warning`.
+ */
+export type PinLinkWarningOnTheWire = {
+  /**
+   * The output's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input's meaning.
+   */
+  input_meaning: string;
+  warning: "meanings_differ";
+} | {
+  /**
+   * The member.
+   */
+  member: string;
+  /**
+   * The output member's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input member's meaning.
+   */
+  input_meaning: string;
+  warning: "member_meanings_differ";
+} | {
+  warning: "vector_read_as_a_color";
+} | {
+  /**
+   * Each such option, as the output names it.
+   */
+  option_names: Array<string>;
+  warning: "menu_options_the_input_does_not_list";
+} | {
+  warning: "texture_output_states_no_format";
+};
+
+/**
  * `import_graph_generator`'s params.
  */
 export interface ImportGraphGeneratorRequest {
@@ -4871,6 +4989,11 @@ export interface ControlContractComponents {
   GraphTransactionInputOverriddenByALink: GraphTransactionInputOverriddenByALink;
   AddNodeRequest: AddNodeRequest;
   OneLinkGraphEditRequest: OneLinkGraphEditRequest;
+  CheckLinkRequest: CheckLinkRequest;
+  LinkCheckResult: LinkCheckResult;
+  PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
+  ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
+  PinLinkWarningOnTheWire: PinLinkWarningOnTheWire;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -5181,6 +5304,17 @@ export interface ControlOperations {
   connect: {
     params: OneLinkGraphEditRequest;
     result: GraphTransactionToolResult;
+  };
+  /**
+   * Answer what `connect` would answer for one link in a loaded stream, changing nothing.
+   *
+   * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. A link that needs a convert node is refused today, as `connect` refuses it. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
+   *
+   * Since contract version 3, experimental.
+   */
+  check_link: {
+    params: CheckLinkRequest;
+    result: LinkCheckResult;
   };
   /**
    * Run one of the project's `@graph_generator` functions in the stream's own interpreter and place what it builds in a loaded stream's graph as a fragment node, as one transaction.
@@ -5963,7 +6097,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 6;
+export declare const CONTROL_CONTRACT_REVISION: 7;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

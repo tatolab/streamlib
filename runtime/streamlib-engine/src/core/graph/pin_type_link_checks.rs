@@ -10,7 +10,7 @@ use super::port_family_link_checks::{
 };
 use super::{Graph, GraphNode, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::{
-    PinLinkEnd, PinLinkInputEnd, PinLinkRefusal, PinType, PortFamilyDeclaration,
+    PinLinkEnd, PinLinkInputEnd, PinLinkRefusal, PinLinkVerdict, PinType, PortFamilyDeclaration,
     PortFamilyLinkEndpoint, pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, Result};
@@ -37,16 +37,18 @@ fn the_typed_link_end<'graph>(
     })
 }
 
-/// What becomes of a link that a link made now is refused for, by its pin types or by its
-/// Image formats.
+/// Whose link a connect makes, which decides how leniently it is judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ALinkThePinTypesRefuse {
-    /// It is refused: a link made now.
-    IsRefused,
-    /// It is kept when its ports' families, names and codec take it, whatever its pin types and
-    /// its Image formats, each refusal of them logged as a warning: a link a saved graph already
-    /// holds, so that a saved document always opens.
-    IsKeptWhenItsFamiliesTakeIt,
+pub(crate) enum ALinkConnected {
+    /// A link made now: one whose two typed ends the verdict finds no rule connecting, or whose
+    /// Image output may write a format an input it reaches does not read, is refused, and one
+    /// an island cannot take is refused before it is made.
+    MadeNow,
+    /// A link a saved graph already holds, so the graph opens: one the verdict refuses by its
+    /// pin types alone, or whose Image formats alone are refused, is kept when its ports'
+    /// families, names and codec take it, each refusal logged as a warning, and one an island
+    /// cannot take is left to the commit that builds the stream to refuse.
+    OfASavedGraph,
 }
 
 /// The two ports of a link from `from` to `to` and their ends, when both are typed.
@@ -124,31 +126,22 @@ pub(crate) fn a_link_made_now_would_be_refused(
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
 ) -> bool {
-    the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
-        graph,
-        from,
-        to,
-        ALinkThePinTypesRefuse::IsRefused,
-    )
-    .is_err()
+    the_link_its_pin_types_or_families_take(graph, from, to, ALinkConnected::MadeNow).is_err()
 }
 
 /// Refuse a link from `from` to `to` its verdict among the conversions `graph`'s stream
-/// resolves, or its families, refuse; `a_link_the_pin_types_refuse` says whether one the
-/// verdict, or its Image formats, refuse alone is kept.
+/// resolves, or its families, refuse; `a_link_connected` says whether one the verdict, or its
+/// Image formats, refuse alone is kept. Answers the verdict of a link between two typed ends
+/// that connects, and `None` for one its families judge or take.
 pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
-) -> Result<()> {
-    let taken = the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
-        graph,
-        from,
-        to,
-        a_link_the_pin_types_refuse,
-    )?;
-    if let FamiliesTakeTheLink::ButForImageFormatsNotRead(refusal) = taken {
+    a_link_connected: ALinkConnected,
+) -> Result<Option<PinLinkVerdict>> {
+    let LinkTaken { verdict, families } =
+        the_link_its_pin_types_or_families_take(graph, from, to, a_link_connected)?;
+    if let FamiliesTakeTheLink::ButForImageFormatsNotRead(refusal) = families {
         tracing::warn!(
             from = %from,
             to = %to,
@@ -156,17 +149,24 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
              Image format an input it reaches does not read: {refusal}"
         );
     }
-    Ok(())
+    Ok(verdict)
 }
 
-/// How the families take a link from `from` to `to` that neither its verdict nor they refuse,
-/// as [`refuse_a_link_its_pin_types_or_families_refuse`] judges it.
-fn the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
+/// How a link neither its verdict nor its families refuse is taken: the verdict of its two typed
+/// ends when it connects, and how its families take it.
+struct LinkTaken {
+    verdict: Option<PinLinkVerdict>,
+    families: FamiliesTakeTheLink,
+}
+
+/// How a link from `from` to `to` that neither its verdict nor its families refuse is taken, as
+/// [`refuse_a_link_its_pin_types_or_families_refuse`] judges it.
+fn the_link_its_pin_types_or_families_take(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
-) -> Result<FamiliesTakeTheLink> {
+    a_link_connected: ALinkConnected,
+) -> Result<LinkTaken> {
     let Some(TypedLinkEnds {
         from_node,
         output_port,
@@ -180,20 +180,23 @@ fn the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
             graph,
             from,
             to,
-            a_link_the_pin_types_refuse,
-        );
+            a_link_connected,
+        )
+        .map(|families| LinkTaken {
+            verdict: None,
+            families,
+        });
     };
     let conversions = graph.node_types_this_stream_resolves().pin_conversions();
-    if let Some(refusal) =
-        pin_link_verdict(output, input, &conversions).refusal_of_the_link_made_as_it_is()
-    {
-        if a_link_the_pin_types_refuse == ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
+    let verdict = pin_link_verdict(output, input, &conversions);
+    if let Some(refusal) = verdict.refusal_of_the_link_made_as_it_is() {
+        if a_link_connected == ALinkConnected::OfASavedGraph
             && matches!(refusal, PinLinkRefusal::PinTypesDoNotConnect { .. })
-            && let Ok(taken) = refuse_a_link_between_ports_whose_families_do_not_match(
+            && let Ok(families) = refuse_a_link_between_ports_whose_families_do_not_match(
                 graph,
                 from,
                 to,
-                a_link_the_pin_types_refuse,
+                a_link_connected,
             )
         {
             tracing::warn!(
@@ -202,7 +205,10 @@ fn the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
                 "a saved link is kept, its ports' families taking it, though its pin types \
                  refuse it: {refusal}"
             );
-            return Ok(taken);
+            return Ok(LinkTaken {
+                verdict: None,
+                families,
+            });
         }
         return Err(Error::PinLinkRefused(Box::new(refusal.clone())));
     }
@@ -222,7 +228,7 @@ fn the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
     ) {
         return Err(Error::InvalidLink(refusal));
     }
-    let mut taken = FamiliesTakeTheLink::Wholly;
+    let mut families = FamiliesTakeTheLink::Wholly;
     let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
         refuse_what_a_link_carries_on_past_its_input(
@@ -230,9 +236,12 @@ fn the_families_taking_a_link_its_pin_types_or_families_do_not_refuse(
             &inputs_carried_on_to,
             from,
             to,
-            a_link_the_pin_types_refuse,
-            &mut taken,
+            a_link_connected,
+            &mut families,
         )?;
     }
-    Ok(taken)
+    Ok(LinkTaken {
+        verdict: Some(verdict),
+        families,
+    })
 }

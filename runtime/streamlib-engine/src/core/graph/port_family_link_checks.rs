@@ -5,7 +5,7 @@
 //! families: at connect, and again when a live config update changes what an
 //! output resolves from its node's config.
 
-use super::pin_type_link_checks::ALinkThePinTypesRefuse;
+use super::pin_type_link_checks::ALinkConnected;
 use super::{
     Graph, GraphEdgeWithComponents, GraphNode, InputLinkPortRef, NodeRunId, OutputLinkPortRef,
     PendingDeletionComponent,
@@ -199,14 +199,11 @@ impl FamiliesTakeTheLink {
     fn take(
         &mut self,
         refusal: PortFamilyLinkRefusal,
-        link: ALinkThePinTypesRefuse,
+        link: ALinkConnected,
         in_words: impl FnOnce(String) -> String,
     ) -> Result<()> {
         match (refusal, link) {
-            (
-                PortFamilyLinkRefusal::ImageFormatsNotRead(words),
-                ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
-            ) => {
+            (PortFamilyLinkRefusal::ImageFormatsNotRead(words), ALinkConnected::OfASavedGraph) => {
                 if *self == Self::Wholly {
                     *self = Self::ButForImageFormatsNotRead(in_words(words));
                 }
@@ -229,7 +226,7 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    link: ALinkThePinTypesRefuse,
+    link: ALinkConnected,
 ) -> Result<FamiliesTakeTheLink> {
     let mut taken = FamiliesTakeTheLink::Wholly;
     let (Some(from_node), Some(to_node)) = (
@@ -280,7 +277,7 @@ pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
     inputs_carried_on_to: &InputsCarriedOnTo<'_>,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
-    link: ALinkThePinTypesRefuse,
+    link: ALinkConnected,
     taken: &mut FamiliesTakeTheLink,
 ) -> Result<()> {
     for &(following_node, following_output_name, downstream_node, downstream_input_port) in

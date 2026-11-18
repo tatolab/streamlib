@@ -45,7 +45,7 @@ pub(crate) use exposed_config_field_input_ports::the_input_ports_of_the_exposed_
 pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
-    ALinkThePinTypesRefuse, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
+    ALinkConnected, TheEndsALinkIsJudgedBy, a_link_made_now_would_be_refused,
     refuse_a_link_its_pin_types_or_families_refuse, the_ends_a_link_is_judged_by,
 };
 pub(crate) use port_family_link_checks::{

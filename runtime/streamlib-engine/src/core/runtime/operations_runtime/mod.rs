@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
 use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
-use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
+use super::operations::{
+    BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
+};
 use super::runtime::TokioRuntimeVariant;
 use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
@@ -21,7 +23,7 @@ use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
 };
 use crate::core::graph::{
-    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
     node_named_or_refused,
 };
@@ -34,7 +36,9 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
-pub(super) use link_connected_between_two_ports::connect_impl;
+pub(super) use link_connected_between_two_ports::{
+    connect_impl, the_verdict_connect_takes_on_a_link,
+};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -573,7 +577,8 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// or Image formats alone refuse it is kept when its ports' families take it.
+    /// or Image formats alone refuse it is kept when its ports' families take it, and one an
+    /// island cannot take is left to the commit that builds the stream to refuse.
     pub(crate) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,
@@ -583,7 +588,7 @@ impl LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            ALinkConnected::OfASavedGraph,
         ))
     }
 
@@ -641,7 +646,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
     }
 
@@ -656,6 +661,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.in_this_streams_log_route(
             self.apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
         )
+    }
+
+    fn what_a_live_connect_makes_of_the_link(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink> {
+        self.what_a_connect_makes_of_the_link(link)
     }
 
     fn the_name_a_node_added_with_none_takes(
@@ -871,7 +883,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
     }
 
