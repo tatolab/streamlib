@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use super::{NodeInputMode, PinConversion, PinType};
+use super::{BundleMember, NodeInputMode, PinConversion, PinType};
 use crate::NodeClassImportPath;
 use crate::port_family::{PortFamily, node_placed_between_families};
 
@@ -176,7 +176,7 @@ impl fmt::Display for PinLinkRefusal {
                     output.pin_type, input.pin_type
                 )?;
                 match conversions_that_bridge.as_slice() {
-                    [] => match node_placed_between_the_families_of(output, input) {
+                    [] => match node_placed_between(&output.pin_type, &input.pin_type) {
                         Some(placement) => write!(formatter, "; {placement}"),
                         None => formatter.write_str("; no node type converts between them"),
                     },
@@ -195,14 +195,77 @@ impl fmt::Display for PinLinkRefusal {
     }
 }
 
-/// The node the family table names between the families of these ends' types.
-fn node_placed_between_the_families_of(
-    output: &PinLinkEndNamed,
-    input: &PinLinkEndNamed,
-) -> Option<&'static str> {
-    let output_family = PortFamily::carrying(&output.pin_type)?;
-    let input_family = PortFamily::carrying(&input.pin_type)?;
-    node_placed_between_families(output_family, input_family)
+/// A codec, with the node that encodes into it and the node that decodes out of it.
+struct CodecNodes {
+    codec: &'static str,
+    encoder: &'static str,
+    decoder: &'static str,
+}
+
+const VIDEO_CODEC_NODES: [CodecNodes; 2] = [
+    CodecNodes {
+        codec: "h264",
+        encoder: "H264Encoder",
+        decoder: "H264Decoder",
+    },
+    CodecNodes {
+        codec: "h265",
+        encoder: "H265Encoder",
+        decoder: "H265Decoder",
+    },
+];
+
+const AUDIO_CODEC_NODES: [CodecNodes; 1] = [CodecNodes {
+    codec: "opus",
+    encoder: "OpusEncoder",
+    decoder: "OpusDecoder",
+}];
+
+/// The node or nodes a person places between an output of `output` and an input of `input` to
+/// convert one into the other: an encoder or decoder only of a codec the encoded end states, or
+/// of any when it states none, and between two unencoded types the node the family table names.
+fn node_placed_between(output: &PinType, input: &PinType) -> Option<String> {
+    let codec_nodes =
+        |table: &[CodecNodes], stated: &[String], node: fn(&CodecNodes) -> &'static str| {
+            let nodes: Vec<&str> = table
+                .iter()
+                .filter(|nodes| {
+                    stated.is_empty()
+                        || stated
+                            .iter()
+                            .any(|codec| codec.eq_ignore_ascii_case(nodes.codec))
+                })
+                .map(node)
+                .collect();
+            match nodes.as_slice() {
+                [] => None,
+                [one] => Some(format!("place an {one} node between them")),
+                several => Some(format!("place one of {} between them", several.join(", "))),
+            }
+        };
+    let encoder = |nodes: &CodecNodes| nodes.encoder;
+    let decoder = |nodes: &CodecNodes| nodes.decoder;
+    match (output, input) {
+        (PinType::EncodedVideo { codecs }, PinType::Texture { .. }) => {
+            codec_nodes(&VIDEO_CODEC_NODES, codecs, decoder)
+        }
+        (PinType::Texture { .. }, PinType::EncodedVideo { codecs }) => {
+            codec_nodes(&VIDEO_CODEC_NODES, codecs, encoder)
+        }
+        (PinType::EncodedAudio { codecs }, PinType::Audio {}) => {
+            codec_nodes(&AUDIO_CODEC_NODES, codecs, decoder)
+        }
+        (PinType::Audio {}, PinType::EncodedAudio { codecs }) => {
+            codec_nodes(&AUDIO_CODEC_NODES, codecs, encoder)
+        }
+        (PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }, _)
+        | (_, PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }) => None,
+        _ => node_placed_between_families(
+            PortFamily::carrying(output)?,
+            PortFamily::carrying(input)?,
+        )
+        .map(str::to_owned),
+    }
 }
 
 impl std::error::Error for PinLinkRefusal {}
@@ -525,7 +588,7 @@ fn warn_of_member_meanings_that_differ(
 ) {
     match (output, input) {
         (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
-            for (output_member, input_member) in output.iter().zip(input) {
+            for (output_member, input_member) in members_paired_by_name(output, input) {
                 let member_name = format!("{path}{}", output_member.name);
                 if let Some((output_meaning, input_meaning)) = differing_meanings(
                     output_member.meaning.as_deref(),
@@ -559,14 +622,28 @@ fn warn_of_member_meanings_that_differ(
     }
 }
 
-/// Whether `one` and `other` are one type, their bundle members compared by name and type only.
+/// Each member of `output` beside the member of `input` of its name, in `output`'s order.
+fn members_paired_by_name<'members>(
+    output: &'members [BundleMember],
+    input: &'members [BundleMember],
+) -> impl Iterator<Item = (&'members BundleMember, &'members BundleMember)> {
+    output.iter().filter_map(|output_member| {
+        input
+            .iter()
+            .find(|input_member| input_member.name == output_member.name)
+            .map(|input_member| (output_member, input_member))
+    })
+}
+
+/// Whether `one` and `other` are one type, their bundle members matched by name and compared by
+/// type only, in any order.
 fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
     match (one, other) {
         (PinType::Bundle { members: one }, PinType::Bundle { members: other }) => {
             one.len() == other.len()
-                && one.iter().zip(other).all(|(one, other)| {
-                    one.name == other.name
-                        && the_same_but_for_member_meanings(&one.member_type, &other.member_type)
+                && members_paired_by_name(one, other).count() == one.len()
+                && members_paired_by_name(one, other).all(|(one, other)| {
+                    the_same_but_for_member_meanings(&one.member_type, &other.member_type)
                 })
         }
         (

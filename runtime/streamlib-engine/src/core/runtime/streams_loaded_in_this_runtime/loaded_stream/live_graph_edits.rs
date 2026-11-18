@@ -287,14 +287,17 @@ impl LoadedStreamInThisRuntime {
         })
     }
 
-    /// Describe every type `graph` names, and those its installed modules declare, in this
-    /// stream's interpreter; why its node code did not describe one, for a stream the runtime
-    /// recorded, which holds it as a placeholder.
+    /// Describe the types its installed modules declare, then every type `graph` names, in this
+    /// stream's interpreter, so a type an installed module declares keeps the conversion it
+    /// states when the graph names it; why its node code did not describe one, for a stream the
+    /// runtime recorded, which holds it as a placeholder.
     fn describe_every_type_a_load_names(
         &self,
         graph: &GraphSnapshot,
         lend_directory: Option<&Path>,
     ) -> Result<Option<String>> {
+        self.node_interpreter_launch_record
+            .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         let why_its_node_code_did_not_describe = match self
             .node_interpreter_launch_record
             .describe_and_register_every_type_a_load_names(
@@ -309,8 +312,6 @@ impl LoadedStreamInThisRuntime {
             }
             Err(refusal) => return Err(refusal),
         };
-        self.node_interpreter_launch_record
-            .describe_and_register_the_node_types_installed_modules_declare(lend_directory);
         Ok(why_its_node_code_did_not_describe)
     }
 
@@ -365,7 +366,7 @@ impl LoadedStreamInThisRuntime {
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
     /// resolves, each node added under its name, and each link connected by
-    /// name.
+    /// name as a saved graph's link.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -440,7 +441,7 @@ impl LoadedStreamInThisRuntime {
         };
 
         for link in &graph.links {
-            self.connect(
+            self.connect_a_link_of_a_saved_graph(
                 OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
                 InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
             )

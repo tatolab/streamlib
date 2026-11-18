@@ -19,8 +19,8 @@ use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, LegacyConfigOfANodeType, node_spec_holding_the_input_values,
 };
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeRunId,
-    PendingDeletionComponent, cast_exposed_name_to_url_safe,
+    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    NodeRunId, PendingDeletionComponent, cast_exposed_name_to_url_safe,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
@@ -48,6 +48,17 @@ pub(in crate::core::runtime) struct RunningLinkBetweenTwoNodesByUuid {
 pub(in crate::core::runtime) struct LiveLinkAsGiven {
     pub(in crate::core::runtime) link_as_given: RunningLinkBetweenTwoNodesByUuid,
     pub(in crate::core::runtime) wired_as: Vec<LinkUniqueId>,
+}
+
+/// Which links a reconcile makes as a saved graph's, keeping one its pin types alone refuse when
+/// its ports' families take it, and which it judges as `connect` judges a link made now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::core::runtime) enum LinksAReconcileMakes {
+    /// Each link, the document being a saved graph: read from disk, or as the stream drew it.
+    EachAsASavedGraphsLink,
+    /// A link the live graph held when the reconcile began as a saved graph's, and any other as
+    /// one an edit makes now.
+    ThoseTheLiveGraphHeldAsASavedGraphs,
 }
 
 /// One node the live graph holds, as a reconcile compares it to the document's.
@@ -86,10 +97,13 @@ impl LoadedStreamInThisRuntime {
     /// kept node renamed, reconfigured and repinned to the document's; each new node added;
     /// and the links made to be the document's. The document is resolved and validated whole,
     /// as a load is, before the live graph is touched. A kept node not handed the values the
-    /// document sets on it fails the reconcile once every node and link is made.
+    /// document sets on it fails the reconcile once every node and link is made. Each link it
+    /// makes as a saved graph's, as `links_it_makes` says, is kept when its pin types alone
+    /// refuse it and its ports' families take it.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         mut graph_document: Value,
+        links_it_makes: LinksAReconcileMakes,
     ) -> Result<()> {
         if let Value::Object(document) = &mut graph_document {
             let stream_asset = self.stream_location().stream_asset;
@@ -139,6 +153,11 @@ impl LoadedStreamInThisRuntime {
             .collect();
         let document_link_set: HashSet<&RunningLinkBetweenTwoNodesByUuid> =
             document_links.iter().collect();
+        let live_links_when_it_began: HashSet<RunningLinkBetweenTwoNodesByUuid> = self
+            .the_live_links_by_node_uuid()
+            .into_iter()
+            .map(|live_link| live_link.link_as_given)
+            .collect();
 
         for live_node in self.the_live_nodes() {
             let kept = document_node_by_uuid
@@ -304,6 +323,9 @@ impl LoadedStreamInThisRuntime {
             if live_links.contains(document_link) {
                 continue;
             }
+            let a_saved_graphs_link = links_it_makes
+                == LinksAReconcileMakes::EachAsASavedGraphsLink
+                || live_links_when_it_began.contains(document_link);
             connect_impl(
                 self.live_graph_change(),
                 OutputLinkPortRef::new(
@@ -314,6 +336,11 @@ impl LoadedStreamInThisRuntime {
                     node_of(&document_link.target_node)?,
                     &document_link.target_port,
                 ),
+                if a_saved_graphs_link {
+                    ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
+                } else {
+                    ALinkThePinTypesRefuse::IsRefused
+                },
             )
             .await?;
         }
@@ -564,375 +591,4 @@ pub(in crate::core::runtime) fn the_live_links_as_given_by_node_uuid_of(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::core::runtime::a_project_on_disk_for_a_test::{
-        options_loading_a_stream_of_the_test_project_at,
-        options_loading_a_stream_of_the_test_project_in,
-    };
-    use serde_json::json;
-    use serial_test::serial;
-
-    use super::*;
-    use crate::core::compiler::PendingOperation;
-    use crate::core::runtime::Runner;
-    use crate::core::test_support::{
-        MockInputOnlyNode, MockNode, MockOutputOnlyNode, ensure_test_mocks_registered,
-    };
-
-    const NODE_A: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    const NODE_B: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-
-    /// A graph document of `a_name` (node A, an output-only mock) linked from `out1` into
-    /// `in1` of `b_name` (node B, of `b_type`).
-    fn a_document_of_a_linked_into_b(
-        a_name: &str,
-        b_name: &str,
-        b_type: NodeClassImportPath,
-    ) -> Value {
-        json!({
-            "nodes": [
-                {
-                    "id": NODE_A,
-                    "name": a_name,
-                    "type": MockOutputOnlyNode::node_class_import_path().as_str(),
-                    "config": {},
-                },
-                { "id": NODE_B, "name": b_name, "type": b_type.as_str(), "config": {} },
-            ],
-            "links": [{
-                "source": { "node": a_name, "port": "out1" },
-                "target": { "node": b_name, "port": "in1" },
-            }],
-        })
-    }
-
-    /// Each live node as `(UUID, name, type)`, and each live link by node UUID, sorted.
-    fn the_live_graph_by_node_uuid(
-        stream: &LoadedStreamInThisRuntime,
-    ) -> (Vec<(String, String, String)>, Vec<String>) {
-        let mut nodes: Vec<_> = stream
-            .the_live_nodes()
-            .into_iter()
-            .map(|node| {
-                (
-                    node.node_uuid.to_string(),
-                    node.display_name,
-                    node.node_type.as_str().to_owned(),
-                )
-            })
-            .collect();
-        nodes.sort();
-        let mut links: Vec<_> = stream
-            .the_live_links_by_node_uuid()
-            .into_iter()
-            .map(
-                |LiveLinkAsGiven {
-                     link_as_given: link,
-                     ..
-                 }| {
-                    format!(
-                        "{}/{} -> {}/{}",
-                        link.source_node, link.source_port, link.target_node, link.target_port
-                    )
-                },
-            )
-            .collect();
-        links.sort();
-        (nodes, links)
-    }
-
-    fn the_graph_node_count(stream: &LoadedStreamInThisRuntime) -> usize {
-        stream
-            .compiler
-            .scope_reading(|graph| graph.traversal().v(()).iter().count())
-    }
-
-    fn reconcile(stream: &LoadedStreamInThisRuntime, graph_document: Value) -> Result<()> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a current-thread runtime")
-            .block_on(stream.reconcile_the_live_graph_to_the_graph_document(graph_document))
-    }
-
-    fn a_stream_loaded_from(
-        runner: &Runner,
-        project_directory: &tempfile::TempDir,
-        graph_document: Value,
-    ) -> Arc<LoadedStreamInThisRuntime> {
-        runner
-            .load_stream_from_graph_snapshot(
-                &GraphSnapshot::from_graph_document(graph_document).expect("the document reads"),
-                options_loading_a_stream_of_the_test_project_at(project_directory.path(), "main"),
-            )
-            .expect("the stream loads")
-    }
-
-    #[test]
-    fn a_reconcile_compares_a_link_carried_through_the_pool_as_the_link_it_was_given() {
-        let (graph, lfo, reader, lfo_into_the_reader) =
-            crate::core::compiler::compiler_ops::function_node_pool::tests::a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
-        let node_uuid_of =
-            |node_run_id: &NodeRunId| graph.traversal().v(node_run_id).first().unwrap().node_uuid;
-
-        let live_nodes = the_live_nodes_as_given_of(&graph);
-        let live_links = the_live_links_as_given_by_node_uuid_of(&graph);
-
-        assert_eq!(
-            live_nodes
-                .iter()
-                .map(|live_node| live_node.node_uuid)
-                .collect::<HashSet<_>>(),
-            HashSet::from([node_uuid_of(&lfo), node_uuid_of(&reader)]),
-            "the pool is no node a document holds"
-        );
-        assert_eq!(live_links.len(), 1);
-        let LiveLinkAsGiven {
-            link_as_given,
-            wired_as,
-        } = &live_links[0];
-        assert_eq!(
-            link_as_given,
-            &RunningLinkBetweenTwoNodesByUuid {
-                source_node: node_uuid_of(&lfo),
-                source_port: "result".to_string(),
-                target_node: node_uuid_of(&reader),
-                target_port: "in1".to_string(),
-            }
-        );
-        assert_eq!(
-            wired_as.iter().cloned().collect::<HashSet<_>>(),
-            crate::core::compiler::compiler_ops::function_node_pool::the_links_a_link_is_wired_as(
-                &graph,
-                &lfo_into_the_reader
-            )
-            .into_iter()
-            .collect::<HashSet<_>>(),
-            "a disconnect takes out both links it is wired as"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn two_kept_nodes_that_swap_names_are_renamed_and_keep_their_link() {
-        ensure_test_mocks_registered();
-        let project_directory = tempfile::tempdir().expect("a project directory");
-        let runner = Runner::new().expect("Runner::new");
-        let stream = a_stream_loaded_from(
-            &runner,
-            &project_directory,
-            a_document_of_a_linked_into_b("left", "right", MockNode::node_class_import_path()),
-        );
-
-        let swapped =
-            a_document_of_a_linked_into_b("right", "left", MockNode::node_class_import_path());
-        reconcile(&stream, swapped).expect("the swap applies");
-
-        assert_eq!(
-            the_live_graph_by_node_uuid(&stream),
-            (
-                vec![
-                    (
-                        NODE_A.to_owned(),
-                        "right".to_owned(),
-                        MockOutputOnlyNode::node_class_import_path()
-                            .as_str()
-                            .to_owned()
-                    ),
-                    (
-                        NODE_B.to_owned(),
-                        "left".to_owned(),
-                        MockNode::node_class_import_path().as_str().to_owned()
-                    ),
-                ],
-                vec![format!("{NODE_A}/out1 -> {NODE_B}/in1")],
-            )
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn a_node_whose_type_changes_on_a_stream_not_started_is_replaced_under_its_uuid() {
-        ensure_test_mocks_registered();
-        let project_directory = tempfile::tempdir().expect("a project directory");
-        let runner = Runner::new().expect("Runner::new");
-        let stream = a_stream_loaded_from(
-            &runner,
-            &project_directory,
-            a_document_of_a_linked_into_b("a", "b", MockNode::node_class_import_path()),
-        );
-        let replaced_node = stream
-            .the_live_nodes()
-            .into_iter()
-            .find(|node| node.node_uuid.to_string() == NODE_B)
-            .expect("node B is live")
-            .node_run_id;
-
-        reconcile(
-            &stream,
-            a_document_of_a_linked_into_b("a", "b", MockInputOnlyNode::node_class_import_path()),
-        )
-        .expect("the type change applies");
-
-        assert_eq!(
-            the_live_graph_by_node_uuid(&stream),
-            (
-                vec![
-                    (
-                        NODE_A.to_owned(),
-                        "a".to_owned(),
-                        MockOutputOnlyNode::node_class_import_path()
-                            .as_str()
-                            .to_owned()
-                    ),
-                    (
-                        NODE_B.to_owned(),
-                        "b".to_owned(),
-                        MockInputOnlyNode::node_class_import_path()
-                            .as_str()
-                            .to_owned()
-                    ),
-                ],
-                vec![format!("{NODE_A}/out1 -> {NODE_B}/in1")],
-            )
-        );
-        assert_eq!(
-            the_graph_node_count(&stream),
-            2,
-            "the replaced node is out of the graph"
-        );
-        assert!(
-            !stream
-                .compiler
-                .logged_pending_operations()
-                .iter()
-                .any(|operation| matches!(
-                    operation,
-                    PendingOperation::AddNode(id) | PendingOperation::RemoveNode(id, _)
-                        if *id == replaced_node
-                )),
-            "the start builds nothing of the replaced node"
-        );
-    }
-
-    /// A stand-in venv interpreter in `project_directory` that answers every describe with
-    /// what `describe_answer` holds when it runs, so a test can change the answer between
-    /// describes.
-    fn an_interpreter_answering_each_describe_from(
-        project_directory: &tempfile::TempDir,
-        describe_answer: &std::path::Path,
-    ) -> crate::core::runtime::StreamEnvironment {
-        let interpreter = project_directory.path().join("stub-python");
-        crate::core::test_support::write_an_executable_script_from_a_child_process(
-            &interpreter,
-            &format!("#!/bin/sh\ncat '{}'\n", describe_answer.display()),
-        );
-        crate::core::runtime::StreamEnvironment {
-            project_directory: project_directory.path().to_path_buf(),
-            interpreter,
-        }
-    }
-
-    fn a_describe_answer_of(described_node_types: &[(&NodeClassImportPath, &str)]) -> String {
-        json!({
-            "described_node_types": described_node_types
-                .iter()
-                .map(|(node_type, input_port)| json!({
-                    "import_path": node_type.as_str(),
-                    "short_name": "Blur",
-                    "description": "blurs",
-                    "kind": "process",
-                    "execution": {"mode": "reactive"},
-                    "scheduling_priority": null,
-                    "paced_by_real_time": false,
-                    "config_schema": {"type": "object"},
-                    "input_ports": [{"name": input_port, "description": "", "family": {"family": "records"}, "delivery_profile": "newest"}],
-                    "output_ports": [],
-                }))
-                .collect::<Vec<_>>(),
-            "refused_node_types": [],
-        })
-        .to_string()
-    }
-
-    /// A document refused after its describe leaves every node type the stream resolves as it
-    /// was: a type it re-described keeps its earlier ports, and a type it newly described is
-    /// not resolved at all.
-    #[test]
-    #[serial]
-    fn a_refused_document_leaves_the_node_types_the_stream_resolves_as_they_were() {
-        ensure_test_mocks_registered();
-        let kept_type = NodeClassImportPath::new("my_app.kept_across_a_refused_reload:Blur")
-            .expect("the test path names a class");
-        let newly_named_type = NodeClassImportPath::new("my_app.named_by_a_refused_reload:Blur")
-            .expect("the test path names a class");
-        let project_directory = tempfile::tempdir().expect("a project directory");
-        let describe_answer = project_directory.path().join("describe-answer.json");
-        std::fs::write(
-            &describe_answer,
-            a_describe_answer_of(&[(&kept_type, "video")]),
-        )
-        .expect("the first describe answer is written");
-        let stream_environment =
-            an_interpreter_answering_each_describe_from(&project_directory, &describe_answer);
-        let runner = Runner::new().expect("Runner::new");
-        runner
-            .set_node_interpreter_lend_directory("/opt/tatolab/lib/tatolab/lend".into())
-            .expect("the runner's first lend directory");
-        let stream = runner
-            .load_stream_from_graph_snapshot(
-                &GraphSnapshot::from_graph_document(json!({
-                    "nodes": [{ "id": NODE_A, "name": "kept", "type": kept_type.as_str() }],
-                }))
-                .expect("the document reads"),
-                options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
-            )
-            .expect("the stream loads");
-
-        std::fs::write(
-            &describe_answer,
-            a_describe_answer_of(&[(&kept_type, "frames"), (&newly_named_type, "audio")]),
-        )
-        .expect("the later describe answer is written");
-        let refusal = reconcile(
-            &stream,
-            json!({
-                "nodes": [
-                    { "id": NODE_A, "name": "kept", "type": kept_type.as_str() },
-                    { "id": NODE_B, "name": "added", "type": newly_named_type.as_str() },
-                    {
-                        "name": "source",
-                        "type": MockOutputOnlyNode::node_class_import_path().as_str(),
-                    },
-                ],
-                "links": [{
-                    "source": { "node": "source", "port": "out1" },
-                    "target": { "node": "added", "port": "no_such_port" },
-                }],
-            }),
-        )
-        .expect_err("a link into a port the type does not declare is refused");
-
-        let node_types = stream.node_types_this_stream_resolves();
-        let kept_input_names: Vec<String> = node_types
-            .descriptor(&kept_type)
-            .expect("the stream still resolves the kept type")
-            .inputs
-            .into_iter()
-            .map(|port| port.name)
-            .collect();
-        assert_eq!(kept_input_names, ["video"], "refused with: {refusal}");
-        assert!(
-            node_types.descriptor(&newly_named_type).is_none(),
-            "the refused document's new type stayed resolved; refused with: {refusal}"
-        );
-        assert_eq!(
-            the_live_graph_by_node_uuid(&stream).0,
-            vec![(
-                NODE_A.to_owned(),
-                "kept".to_owned(),
-                kept_type.as_str().to_owned()
-            )]
-        );
-    }
-}
+mod tests;
