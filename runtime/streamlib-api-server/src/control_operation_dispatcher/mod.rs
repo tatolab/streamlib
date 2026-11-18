@@ -46,7 +46,6 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     SetStreamClockScaleToolResult, StreamActionStepOnTheWire, StreamLocationOnTheWire,
     UpdateDependencyToolResult, WriteGraphInputToolResult, WriteStudioViewOutputToolResult,
 };
-use uuid::Uuid;
 
 use crate::asset_media_facts_reads::AssetMediaFactsReadsInThisRuntime;
 use crate::control_operations_on_loaded_streams::ViewersOneConnectionHoldsOpen;
@@ -789,19 +788,12 @@ impl ControlOperationDispatcher {
                 .iter()
                 .map(|operation| serde_json::to_value(operation).unwrap_or_default())
                 .collect();
-            let mut stream_assets_named: Vec<Uuid> = Vec::new();
+            let stream_assets_named = executor.the_stream_assets_the_operations_name(&operations);
             let (idempotency_key, applied) =
                 match the_idempotency_key_a_caller_sent(idempotency_key) {
                     Ok(idempotency_key) => {
-                        let applied = executor
-                            .each_operation_to_the_stream_asset_it_names(operations)
-                            .and_then(|operations| {
-                                stream_assets_named = operations
-                                    .iter()
-                                    .map(|operation| *operation.stream())
-                                    .collect();
-                                executor.apply(operations, mode, &author, idempotency_key.as_ref())
-                            });
+                        let applied =
+                            executor.apply(operations, mode, &author, idempotency_key.as_ref());
                         (idempotency_key, applied)
                     }
                     Err(refusal) => (None, Err(GraphTransactionRefusal::from(refusal))),

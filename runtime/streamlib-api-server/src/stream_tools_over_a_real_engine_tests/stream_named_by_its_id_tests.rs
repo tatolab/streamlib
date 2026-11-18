@@ -38,7 +38,7 @@ fn the_actions_recorded_oldest_first(
 }
 
 /// Each graph edit sent the stream id `list_streams` answers applies to that stream: a node
-/// added and linked, renamed, moved, grouped, noted, unlinked and taken out, each alone and
+/// added and linked, renamed, moved, set, grouped, noted, unlinked and taken out, each alone and
 /// inside `transact`, and every edit recorded under the stream asset's UUID.
 #[tokio::test(flavor = "multi_thread")]
 async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
@@ -59,6 +59,41 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
         .as_str()
         .expect("add_node answers the node's UUID")
         .to_owned();
+    super::input_value_set_tests::register_the_input_value_test_node_once();
+    let mixed = the_edit_applied(
+        &engine,
+        "add_node",
+        json!({ "stream": stream_id, "name": "mixer",
+                "type": super::input_value_set_tests::InputValueTestNode::node_class_import_path().as_str() }),
+    )
+    .await;
+    let mixer = mixed["added_nodes"][0]["node"].as_str().unwrap().to_owned();
+    the_edit_applied(
+        &engine,
+        "set_node_config",
+        json!({ "stream": stream_id, "node": mixer, "config": { "frame_width": 640 } }),
+    )
+    .await;
+    the_edit_applied(
+        &engine,
+        "set_pin_value",
+        json!({ "stream": stream_id, "node": mixer, "input": "gain", "value": 0.5 }),
+    )
+    .await;
+    the_edit_applied(
+        &engine,
+        "set_node_input_value",
+        json!({ "stream": stream_id, "node": mixer, "input": "gain", "value": 0.25 }),
+    )
+    .await;
+    let exposed = the_edit_applied(
+        &engine,
+        "set_exposed_config_fields",
+        json!({ "stream": stream_id, "node": monitor,
+                "exposed_config_fields": ["video"] }),
+    )
+    .await;
+    assert_eq!(exposed["operations"], json!([]), "{exposed}");
     let link = json!({ "stream": stream_id,
                        "source": { "node": SOURCE_NODE_UUID, "port": "video" },
                        "target": { "node": monitor, "port": "video" } });
@@ -138,17 +173,33 @@ async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
     assert_eq!(transacted["added_nodes"][0]["stream"], stream_id);
 
     let kept = project.the_graph_document_of("main");
-    assert_eq!(sorted_node_names_in(&kept), ["camera", "spare"], "{kept}");
+    assert_eq!(
+        sorted_node_names_in(&kept),
+        ["camera", "mixer", "spare"],
+        "{kept}"
+    );
     assert_eq!(
         links_by_node_name_in(&kept),
         ["camera/video -> spare/video"]
     );
+    assert_eq!(
+        super::input_value_set_tests::the_input_values_of(&kept, &mixer),
+        json!({ "frame_width": 640, "gain": 0.25 })
+    );
     let live = engine.the_live_graph_of(&stream_id);
-    assert_eq!(sorted_node_names_in(&live), ["camera", "spare"], "{live}");
-    for action in the_actions_recorded_oldest_first(&project, 14)
+    assert_eq!(
+        sorted_node_names_in(&live),
+        ["camera", "mixer", "spare"],
+        "{live}"
+    );
+    let recorded = the_actions_recorded_oldest_first(&project, 17);
+    assert_eq!(recorded.len(), 17, "{recorded:?}");
+    let actions: Vec<Value> = recorded
         .iter()
         .flat_map(|actions| actions.as_array().cloned().unwrap_or_default())
-    {
+        .collect();
+    assert_eq!(actions.len(), 18, "{actions:?}");
+    for action in &actions {
         assert_eq!(action["stream"], stream_asset.to_string(), "{action}");
     }
 }
@@ -235,4 +286,79 @@ async fn a_stream_id_no_stream_is_held_under_is_refused_naming_the_streams_held(
         "{refusal:?}"
     );
     assert_eq!(project.the_graph_document_of("main"), saved_before);
+}
+
+/// A transact refused for a stream id no stream is held under, beside one naming a held stream
+/// by its id, and an edit sent by the stream asset's UUID refused for a blank idempotency key,
+/// are each kept on the project's change feed with the operations as they were sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_edit_naming_its_stream_by_either_name_is_kept_on_the_change_feed() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let served = LocalApiServedOnAFreshSocket::over(engine.operations_on_the_loaded_streams());
+    let connection = rmcp_client_over_the_upgraded_stream(&served).await;
+    let transactions_resource_uri = tool_answer(
+        &tool_call_over_the_connection(
+            &connection,
+            "list_assets",
+            json!({ "project_directory": project.path() }),
+        )
+        .await,
+    )
+    .expect("the project's assets list")["transactions_resource_uri"]
+        .as_str()
+        .expect("the change feed's URI")
+        .to_owned();
+
+    let operations_by_id = json!([
+        { "operation": "rename_node", "stream": stream_id,
+          "node": SOURCE_NODE_UUID, "name": "camera" },
+        { "operation": "rename_node", "stream": "nowhere-0a1b2c",
+          "node": SOURCE_NODE_UUID, "name": "lens" },
+    ]);
+    let refused_by_id = tool_call_over_the_connection(
+        &connection,
+        "transact",
+        json!({ "operations": operations_by_id, "author": an_agent_named("alice") }),
+    )
+    .await;
+    assert_eq!(refused_by_id["isError"], true, "{refused_by_id}");
+    let refused_for_its_key = tool_call_over_the_connection(
+        &connection,
+        "rename_node",
+        json!({ "stream": stream_asset, "node": SOURCE_NODE_UUID, "name": "camera",
+                "author": an_agent_named("bob"), "idempotency_key": "" }),
+    )
+    .await;
+    assert_eq!(
+        refused_for_its_key["isError"], true,
+        "{refused_for_its_key}"
+    );
+
+    let read = connection
+        .read_resource(rmcp::model::ReadResourceRequestParams::new(
+            transactions_resource_uri,
+        ))
+        .await
+        .expect("the change feed reads");
+    let read = serde_json::to_value(read).unwrap();
+    let feed: Value = serde_json::from_str(read["contents"][0]["text"].as_str().unwrap()).unwrap();
+    let entries = feed["transactions"].as_array().expect("the feed's entries");
+    let (newest, refused_before_it) = (&entries[0], &entries[1]);
+    assert_eq!(newest["status"], "refused", "{feed}");
+    assert_eq!(newest["author_name"], "bob", "{feed}");
+    assert_eq!(
+        newest["operations"],
+        json!([{ "operation": "rename_node", "stream": stream_asset,
+                 "node": SOURCE_NODE_UUID, "name": "camera" }])
+    );
+    assert_eq!(refused_before_it["status"], "refused", "{feed}");
+    assert_eq!(refused_before_it["author_name"], "alice", "{feed}");
+    assert_eq!(refused_before_it["operations"], operations_by_id);
+    assert_eq!(
+        refused_before_it["refusal"]["refusal_code"],
+        "stream_not_found"
+    );
 }

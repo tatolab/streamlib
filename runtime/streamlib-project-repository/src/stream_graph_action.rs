@@ -93,8 +93,10 @@ impl From<Uuid> for GraphEditStream {
     }
 }
 
-impl From<String> for GraphEditStream {
-    fn from(named: String) -> Self {
+impl GraphEditStream {
+    /// The stream `named` names: its stream asset when it is in UUID form, and a stream id
+    /// otherwise.
+    pub fn parse(named: String) -> Self {
         match Uuid::parse_str(&named) {
             Ok(stream_asset) => Self::StreamAsset(stream_asset),
             Err(_) => Self::StreamId(named),
@@ -119,7 +121,7 @@ impl Serialize for GraphEditStream {
 
 impl<'de> Deserialize<'de> for GraphEditStream {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(Self::from)
+        String::deserialize(deserializer).map(Self::parse)
     }
 }
 
@@ -593,11 +595,15 @@ impl<Stream> StreamGraphAction<Stream> {
             | Self::RemoveNote { stream, .. } => stream,
         }
     }
-    /// The same action, to the stream `stream`.
-    pub fn to_the_stream<Other>(self, stream: Other) -> StreamGraphAction<Other> {
+
+    /// The same action, its stream named as `name_the_stream` names the one it names now.
+    pub fn map_stream<Other>(
+        self,
+        name_the_stream: impl FnOnce(Stream) -> Other,
+    ) -> StreamGraphAction<Other> {
         match self {
             Self::AddNode {
-                stream: _,
+                stream,
                 level,
                 node_type,
                 name,
@@ -607,7 +613,7 @@ impl<Stream> StreamGraphAction<Stream> {
                 studio,
                 label,
             } => StreamGraphAction::AddNode {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node_type,
                 name,
@@ -618,115 +624,115 @@ impl<Stream> StreamGraphAction<Stream> {
                 label,
             },
             Self::RemoveNode {
-                stream: _,
+                stream,
                 level,
                 node,
             } => StreamGraphAction::RemoveNode {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
             },
             Self::Connect {
-                stream: _,
+                stream,
                 level,
                 source,
                 target,
             } => StreamGraphAction::Connect {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 source,
                 target,
             },
             Self::Disconnect {
-                stream: _,
+                stream,
                 level,
                 source,
                 target,
             } => StreamGraphAction::Disconnect {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 source,
                 target,
             },
             Self::SetNodeConfig {
-                stream: _,
+                stream,
                 level,
                 node,
                 config,
             } => StreamGraphAction::SetNodeConfig {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 config,
             },
             Self::SetPinValue {
-                stream: _,
+                stream,
                 level,
                 node,
                 input,
                 value,
             } => StreamGraphAction::SetPinValue {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 input,
                 value,
             },
             Self::RenameNode {
-                stream: _,
+                stream,
                 level,
                 node,
                 name,
             } => StreamGraphAction::RenameNode {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 name,
             },
             Self::SetStudioFields {
-                stream: _,
+                stream,
                 level,
                 node,
                 studio,
             } => StreamGraphAction::SetStudioFields {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 studio,
             },
             Self::ImportGraphGenerator {
-                stream: _,
+                stream,
                 generator,
                 name,
                 config,
                 label,
             } => StreamGraphAction::ImportGraphGenerator {
-                stream,
+                stream: name_the_stream(stream),
                 generator,
                 name,
                 config,
                 label,
             },
             Self::SetExposedConfigFields {
-                stream: _,
+                stream,
                 level,
                 node,
                 exposed_config_fields,
             } => StreamGraphAction::SetExposedConfigFields {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 exposed_config_fields,
             },
             Self::AddGroup {
-                stream: _,
+                stream,
                 level,
                 title,
                 description,
                 colour,
                 nodes,
             } => StreamGraphAction::AddGroup {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 title,
                 description,
@@ -734,14 +740,14 @@ impl<Stream> StreamGraphAction<Stream> {
                 nodes,
             },
             Self::SetGroupFields {
-                stream: _,
+                stream,
                 level,
                 group,
                 title,
                 description,
                 colour,
             } => StreamGraphAction::SetGroupFields {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 group,
                 title,
@@ -749,82 +755,85 @@ impl<Stream> StreamGraphAction<Stream> {
                 colour,
             },
             Self::UseDependencyStream {
-                stream: _,
+                stream,
                 project,
                 dependency_stream,
                 name,
                 label,
             } => StreamGraphAction::UseDependencyStream {
-                stream,
+                stream: name_the_stream(stream),
                 project,
                 dependency_stream,
                 name,
                 label,
             },
             Self::CollapseSelectionIntoSubgraph {
-                stream: _,
+                stream,
                 level,
                 nodes,
                 name,
                 label,
             } => StreamGraphAction::CollapseSelectionIntoSubgraph {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 nodes,
                 name,
                 label,
             },
             Self::UnlockSubgraph {
-                stream: _,
+                stream,
                 level,
                 fragment,
             } => StreamGraphAction::UnlockSubgraph {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 fragment,
             },
             Self::AddNote {
-                stream: _,
+                stream,
                 text,
                 position,
                 size,
             } => StreamGraphAction::AddNote {
-                stream,
+                stream: name_the_stream(stream),
                 text,
                 position,
                 size,
             },
             Self::SetNoteFields {
-                stream: _,
+                stream,
                 note,
                 text,
                 position,
                 size,
             } => StreamGraphAction::SetNoteFields {
-                stream,
+                stream: name_the_stream(stream),
                 note,
                 text,
                 position,
                 size,
             },
-            Self::RemoveNote { stream: _, note } => StreamGraphAction::RemoveNote { stream, note },
+            Self::RemoveNote { stream, note } => StreamGraphAction::RemoveNote {
+                stream: name_the_stream(stream),
+                note,
+            },
             Self::RemoveGroup {
-                stream: _,
+                stream,
                 level,
                 group,
             } => StreamGraphAction::RemoveGroup {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 group,
             },
             Self::SetNodeInputValue {
-                stream: _,
+                stream,
                 level,
                 node,
                 input,
                 value,
             } => StreamGraphAction::SetNodeInputValue {
-                stream,
+                stream: name_the_stream(stream),
                 level,
                 node,
                 input,

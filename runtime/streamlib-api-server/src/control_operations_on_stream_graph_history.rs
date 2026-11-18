@@ -81,10 +81,7 @@ impl ControlOperationDispatcher {
             "refresh_fragments",
             refreshes
                 .into_iter()
-                .map(|refresh| {
-                    let stream_asset = *refresh.stream();
-                    refresh.to_the_stream(GraphEditStream::StreamAsset(stream_asset))
-                })
+                .map(|refresh| refresh.map_stream(GraphEditStream::StreamAsset))
                 .collect(),
             mode,
             author,

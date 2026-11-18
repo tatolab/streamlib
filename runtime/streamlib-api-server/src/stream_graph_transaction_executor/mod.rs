@@ -64,6 +64,7 @@ use former_port_names::{
 };
 use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
+use streams_each_operation_names::the_stream_each_operation_names;
 use transaction_answers::WhatAnAnswerNamesBesideItsOperations;
 
 /// The node, link and field `action` names, as its caller named them.
@@ -163,6 +164,16 @@ struct PlacedStreamACollapseSaves {
     placed_stream: Uuid,
     document: StreamGraphDocument,
     creation: ProjectOperation,
+}
+
+/// The location of each stream of `listings` that has one, by its stream id.
+fn the_location_of_each_listed_stream(
+    listings: Vec<streamlib::sdk::runtime::StreamListing>,
+) -> HashMap<String, StreamLocation> {
+    listings
+        .into_iter()
+        .filter_map(|listing| Some((listing.stream_id, listing.stream_location?)))
+        .collect()
 }
 
 /// The graph document of the stream asset `stream` as the transaction has staged it: a loaded
@@ -500,7 +511,7 @@ impl StreamGraphTransactionExecutor<'_> {
     /// the project's history already holds, it applies nothing and answers that transaction.
     pub(crate) fn apply(
         &self,
-        requests: Vec<StreamGraphAction>,
+        requests: Vec<StreamGraphAction<GraphEditStream>>,
         mode: GraphEditMode,
         author: &ProjectTransactionAuthor,
         idempotency_key: Option<&ProjectActionIdempotencyKey>,
@@ -510,8 +521,12 @@ impl StreamGraphTransactionExecutor<'_> {
                 "a transaction holds at least one operation".to_owned(),
             ));
         }
-        let stream_locations = self.the_location_of_each_loaded_stream();
-        let stream_id_of_each_request = self.the_loaded_stream_each_request_names(&requests)?;
+        let listings = self.operations_on_the_loaded_streams.list_streams();
+        let (requests, stream_id_of_each_request): (Vec<StreamGraphAction>, Vec<String>) =
+            the_stream_each_operation_names(requests, &listings)?
+                .into_iter()
+                .unzip();
+        let stream_locations = the_location_of_each_listed_stream(listings);
         let mut stream_ids_in_order: Vec<String> = Vec::new();
         for stream_id in &stream_id_of_each_request {
             if !stream_ids_in_order.contains(stream_id) {
@@ -635,11 +650,7 @@ impl StreamGraphTransactionExecutor<'_> {
 
     /// The location of each listed stream by its stream id.
     fn the_location_of_each_loaded_stream(&self) -> HashMap<String, StreamLocation> {
-        self.operations_on_the_loaded_streams
-            .list_streams()
-            .into_iter()
-            .filter_map(|listing| Some((listing.stream_id, listing.stream_location?)))
-            .collect()
+        the_location_of_each_listed_stream(self.operations_on_the_loaded_streams.list_streams())
     }
 
     /// The stream id of each of the project `project`'s loaded streams, by its stream asset.
