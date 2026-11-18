@@ -225,3 +225,51 @@ async fn a_reset_stream_input_set_while_stopped_is_refused_naming_the_stopped_pl
         );
     }
 }
+
+/// A `live` transaction setting the `cue` Input's `value` and then its former name `default`
+/// sets one input twice, and is refused `refused` at the second set before anything is applied,
+/// on the staged path a `set_studio_fields` before them takes it down: the input is the one each
+/// name finds.
+///
+/// Mental-revert: telling the sets apart by the names they give lets `default` through, and the
+/// staged path sets `value` twice, the first never published.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_transaction_setting_an_input_under_its_name_and_a_former_one_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_cue_input_a_recorder_reads("kept");
+    engine.playing(&project).await;
+    let stream_asset = project.stream_asset_of("main");
+    let set_cue = |input: &str, record: Value| {
+        json!({ "operation": "set_node_input_value", "stream": stream_asset,
+                "node": CUE_NODE_UUID, "input": input, "value": record })
+    };
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "mode": "live", "author": an_agent_named("alice"), "operations": [
+                { "operation": "set_studio_fields", "stream": stream_asset,
+                  "node": RECORDER_NODE_UUID, "studio": {} },
+                set_cue("value", json!({ "track": "drop" })),
+                set_cue("default", json!({ "track": "outro" })),
+            ] }),
+        )
+        .await
+        .expect_err("a name an input had finds the input");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::Refused,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(2), "{refusal:?}");
+    assert!(
+        refusal
+            .runtime_words
+            .contains("input `value` of `cue` is set twice"),
+        "{refusal:?}"
+    );
+    engine
+        .the_project_action_done("stop_playback", &project)
+        .await;
+}

@@ -360,3 +360,62 @@ fn a_panel_writes_array_channels_and_records_outputs_alone() {
         "a client writes Array, Channels and Records values, never Packets"
     );
 }
+
+/// A view node handed a value one of its outputs does not carry makes no message of any other
+/// output first: its refusal is that output's, and no output's value or next block moves. The
+/// live set refuses such a value before it reaches the node; this holds for any delivery that
+/// does not.
+///
+/// Mental-revert: writing each output as its message is made reaches `beat`, the first, and is
+/// refused for the node holding no output writer, before `fader` is ever looked at.
+#[test]
+fn a_view_node_handed_a_value_one_output_does_not_carry_makes_no_message_of_any() {
+    let descriptor = the_node_type_of_a_project_view(&a_view_read_from(
+        "acme-dj:board",
+        json!({
+            "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
+            "outputs": [{ "name": "beat", "family": "channels" },
+                        { "name": "cue", "family": "records" },
+                        { "name": "fader", "family": "array" }]
+        }),
+    ))
+    .expect("a node view that opens is a node type");
+    let node = GraphNode::new(
+        descriptor.node_class_import_path.clone(),
+        None,
+        "board",
+        Some(json!({})),
+        descriptor
+            .inputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+        descriptor
+            .outputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+    );
+    let mut board = ValueSourceNode::for_the_node(&node, descriptor);
+    let set_live = ["beat", "cue", "fader"].map(String::from);
+    let mut input_values = serde_json::Map::new();
+    input_values.insert(
+        "beat".into(),
+        json!({ "samples": [[0.0, 0.0, 0.0]], "sample_rate": 48000 }),
+    );
+    input_values.insert("cue".into(), json!({ "track": "drop" }));
+    input_values.insert("fader".into(), json!([[1], [2, 3]]));
+
+    let refusal = board
+        .publish_each_input_value_on_its_output(&input_values, &set_live)
+        .expect_err("a ragged list is no Array value");
+
+    assert!(
+        refusal
+            .to_string()
+            .contains("output `fader` of node `board` carries Array"),
+        "{refusal}"
+    );
+    assert!(board.current_value_of_each_output.is_empty());
+    assert!(board.next_start_sample_of_each_channels_output.is_empty());
+}
