@@ -21,6 +21,7 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
 };
+use crate::core::graph::input_values::the_read_of_an_input_a_link_feeds;
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
@@ -29,11 +30,10 @@ use crate::core::graph::{
     the_refusal_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::{
-    GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
-    PortInfoOutput, PortKindOutput,
+    GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse,
+    InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
-use crate::core::utils::compute_json_checksum;
 use crate::core::{Error, PortDirection, Result};
 use streamlib_node_schema::output_port_family_resolved_against_config;
 
@@ -135,8 +135,8 @@ pub struct GraphInterfaceNodeAsDrawn {
 
 impl GraphInterfaceNodeAsDrawn {
     /// Render this running `GraphInput` over the node `graph_response` renders for it, as an
-    /// interface node renders, keeping what it carries running; and mark each link out of it
-    /// with the port it declares.
+    /// interface node renders, keeping what it carries running and its `value` input with the
+    /// value it reads; and mark each link out of it with the port it declares.
     fn render_over_its_running_node_in(&self, graph_response: &mut GraphResponse) {
         let node_cast = cast_or_as_written(&self.node.name);
         if let Some(running_node) = graph_response
@@ -149,6 +149,8 @@ impl GraphInterfaceNodeAsDrawn {
             components.extend(rendered_as_an_interface_node.components);
             rendered_as_an_interface_node.components = components;
             rendered_as_an_interface_node.id = std::mem::take(&mut running_node.id);
+            rendered_as_an_interface_node.ports.inputs =
+                std::mem::take(&mut running_node.ports.inputs);
             *running_node = rendered_as_an_interface_node;
         }
         for link in graph_response
@@ -163,10 +165,16 @@ impl GraphInterfaceNodeAsDrawn {
         }
     }
 
-    /// The interface node as `graph` renders it, its one port of the family it declares.
+    /// The interface node as `graph` renders it, its one port of the family it declares; a
+    /// `GraphOutput`'s reads from a wire once a link feeds it.
     pub fn rendered_as_a_node(&self) -> GraphNodeOutput {
         let declared = &self.declared_port;
-        let value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        let mut value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        if declared.direction == GraphInterfacePortDirection::Output
+            && !declared.linked_ports.is_empty()
+        {
+            value_port.value_read = Some(the_read_of_an_input_a_link_feeds());
+        }
         let (inputs, outputs) = match declared.direction {
             GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),
             GraphInterfacePortDirection::Input => (Vec::new(), vec![value_port]),
@@ -176,9 +184,12 @@ impl GraphInterfaceNodeAsDrawn {
             GRAPH_INTERFACE_COMPONENT_KEY.to_string(),
             declared.as_component(),
         );
-        let config = the_config_a_graph_interface_node_renders(
-            &self.node.node_type,
-            config_of_a_node_holding_no_pin_value(&self.node.input_values),
+        let values = InputValuesRendered::of_a_node_holding_no_pin_value_whose_config_renders_as(
+            &self.node.input_values,
+            the_config_a_graph_interface_node_renders(
+                &self.node.node_type,
+                config_of_a_node_holding_no_pin_value(&self.node.input_values),
+            ),
         );
         GraphNodeOutput {
             id: self
@@ -190,13 +201,14 @@ impl GraphInterfaceNodeAsDrawn {
             kind: None,
             language: None,
             name: cast_or_as_written(&self.node.name),
-            config_checksum: compute_json_checksum(&config),
-            config: Some(config),
-            pins: serde_json::Map::new(),
+            config: Some(values.config),
+            config_checksum: values.config_checksum,
+            ports: GraphNodePortsOnTheWire { inputs, outputs },
+            input_values: values.input_values,
+            pins: values.pins,
             exposed_config_fields: self.node.exposed_config_fields.clone(),
             studio: self.node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            ports: GraphNodePortsOutput { inputs, outputs },
             components,
             fragment: None,
         }
@@ -881,16 +893,16 @@ impl GraphInterfacePort {
 
     /// A port named `port_name` of the family this port declares, as `graph` renders a port:
     /// typed as a node's port of that family is.
-    pub fn rendered_as_a_port_named(&self, port_name: &str) -> PortInfoOutput {
+    pub fn rendered_as_a_port_named(&self, port_name: &str) -> GraphNodePortOnTheWire {
         let family = self.family.map(PortFamilyDeclaration::of_family);
         let pin = family.clone().and_then(|family| {
             crate::core::graph::PortInfo::declaring_only_a_family(port_name, String::new(), family)
                 .pin
         });
-        PortInfoOutput {
+        GraphNodePortOnTheWire {
             name: port_name.to_string(),
             description: String::new(),
-            port_kind: PortKindOutput::default(),
+            port_kind: PortKindOnTheWire::default(),
             delivery_profile: None,
             borrow_quota: None,
             audio_window: None,

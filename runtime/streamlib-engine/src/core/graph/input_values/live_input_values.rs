@@ -8,8 +8,10 @@
 use std::collections::{BTreeMap, HashMap};
 
 use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    InputValueComesFromOnTheWire, InputValueReadOnTheWire,
+};
 use uuid::Uuid;
 
 use super::live_input_values_kept_in_the_project_store::LiveInputValuesKeptInTheProjectStore;
@@ -222,46 +224,6 @@ pub(crate) fn the_lifetime_of_the_input(node: &GraphNode, input: &str) -> NodeVa
         .map_or_else(NodeValueLifetime::default, |port| port.lifetime)
 }
 
-/// Where the value an input reads comes from, as `graph` renders it.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-    utoipa::ToSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum InputValueComesFrom {
-    /// A value set live, which no document holds.
-    Live,
-    /// The value the stream's graph document holds.
-    Saved,
-    /// The default the input's port declares.
-    Default,
-    /// A link feeds the input, so it reads what arrives and holds no value.
-    Wire,
-}
-
-/// The value one input reads while no link feeds it and where it comes from: `value` absent and
-/// `value_comes_from` `wire` when a link feeds it, `value` null and no `value_comes_from` when it
-/// reads nothing.
-#[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, utoipa::ToSchema,
-)]
-pub struct InputValueRead {
-    /// The value it reads; absent when a link feeds it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Object)]
-    pub value: Option<Value>,
-    /// Where the value comes from; absent when it reads nothing.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_comes_from: Option<InputValueComesFrom>,
-}
-
 /// Whether input `port` of a node running as `node_kind` takes a stored value: a setting does;
 /// else what its pin type holds and, on a node that is no function or shader node, only a
 /// Channels input; on a port that names no pin type, any input of a function node.
@@ -281,6 +243,14 @@ pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &P
     }
 }
 
+/// What an input a link feeds reads: no value of its own, and `wire` as where it comes from.
+pub(crate) fn the_read_of_an_input_a_link_feeds() -> InputValueReadOnTheWire {
+    InputValueReadOnTheWire {
+        value: None,
+        value_comes_from: Some(InputValueComesFromOnTheWire::Wire),
+    }
+}
+
 /// The value input `port` of `node` in `graph` reads, `is_linked` when a link feeds it: wire;
 /// else its live value, its saved one, which is its config field's for a config field the node
 /// exposes as an input, or its declared default; else nothing. `None` for an input that takes
@@ -290,12 +260,9 @@ pub(crate) fn the_value_an_input_reads(
     node: &GraphNode,
     port: &PortInfo,
     is_linked: bool,
-) -> Option<InputValueRead> {
+) -> Option<InputValueReadOnTheWire> {
     if is_linked {
-        return Some(InputValueRead {
-            value: None,
-            value_comes_from: Some(InputValueComesFrom::Wire),
-        });
+        return Some(the_read_of_an_input_a_link_feeds());
     }
     let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
     if !exposed_config_field && !the_input_port_takes_a_value(node.node_kind(), port) {
@@ -313,19 +280,19 @@ pub(crate) fn the_value_an_input_reads(
     let read = graph
         .live_input_values()
         .value_of(node.node_uuid, &port.name)
-        .map(|value| (value, InputValueComesFrom::Live))
-        .or_else(|| saved.map(|value| (value, InputValueComesFrom::Saved)))
+        .map(|value| (value, InputValueComesFromOnTheWire::Live))
+        .or_else(|| saved.map(|value| (value, InputValueComesFromOnTheWire::Saved)))
         .or_else(|| {
             port.pin_default
                 .clone()
-                .map(|value| (value, InputValueComesFrom::Default))
+                .map(|value| (value, InputValueComesFromOnTheWire::Default))
         });
     Some(match read {
-        Some((value, value_comes_from)) => InputValueRead {
+        Some((value, value_comes_from)) => InputValueReadOnTheWire {
             value: Some(value),
             value_comes_from: Some(value_comes_from),
         },
-        None => InputValueRead {
+        None => InputValueReadOnTheWire {
             value: Some(Value::Null),
             value_comes_from: None,
         },

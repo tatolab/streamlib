@@ -534,11 +534,12 @@ fn a_rendered_node(name: &str) -> GraphNodeOutput {
         name: name.to_string(),
         config: Some(serde_json::json!({})),
         config_checksum: 0,
-        ports: GraphNodePortsOutput {
+        ports: GraphNodePortsOnTheWire {
             inputs: Vec::new(),
             outputs: Vec::new(),
         },
         components: serde_json::Map::new(),
+        input_values: serde_json::Map::new(),
         pins: serde_json::Map::new(),
         exposed_config_fields: Vec::new(),
         studio: serde_json::Map::new(),

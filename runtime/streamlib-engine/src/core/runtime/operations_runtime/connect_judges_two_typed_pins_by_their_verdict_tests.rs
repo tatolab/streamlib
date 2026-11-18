@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::{LiveGraphChangeOnOneStream, connect_impl};
+use super::{ALinkThePinTypesRefuse, LiveGraphChangeOnOneStream, connect_impl};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
@@ -27,6 +27,7 @@ const CELSIUS_SOURCE: &str = "VerdictCheckCelsiusSource";
 const FAHRENHEIT_SINK: &str = "VerdictCheckFahrenheitSink";
 const KELVIN_SOURCE: &str = "VerdictCheckKelvinSource";
 const RANKINE_SINK: &str = "VerdictCheckRankineSink";
+const KELVIN_SINK: &str = "VerdictCheckKelvinSink";
 const CELSIUS_TO_FAHRENHEIT: &str = "VerdictCheckCelsiusToFahrenheit";
 const KELVIN_TO_RANKINE: &str = "VerdictCheckKelvinToRankine";
 const DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS: &str = "VerdictCheckDescribedOnlyFahrenheitToCelsius";
@@ -133,6 +134,11 @@ fn register_the_verdict_fixture_node_types() {
         register(a_node_type(
             class_path(RANKINE_SINK),
             vec![a_typed_port("temperature", temperature("Rankine"))],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(KELVIN_SINK),
+            vec![a_typed_port("temperature", temperature("Kelvin"))],
             Vec::new(),
         ));
         register_with_a_constructor(
@@ -254,6 +260,15 @@ fn connect_on_this_thread(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
+    connect_on_this_thread_as(compiler, from, to, ALinkThePinTypesRefuse::IsRefused)
+}
+
+fn connect_on_this_thread_as(
+    compiler: &Arc<Compiler>,
+    from: OutputLinkPortRef,
+    to: InputLinkPortRef,
+    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
+) -> Result<LinkUniqueId> {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("current-thread runtime")
@@ -269,6 +284,7 @@ fn connect_on_this_thread(
             },
             from,
             to,
+            a_link_the_pin_types_refuse,
         ))
 }
 
@@ -540,4 +556,99 @@ fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on(
             (outcome, _) => panic!("the passthrough into {sink_type}: {outcome:?}"),
         }
     }
+}
+
+/// A link a saved graph holds whose pin types alone refuse it is kept when its ports' families
+/// take it, its names, codec and formats with them; a link into a setting is refused still.
+///
+/// Mental-revert: judging a saved graph's link as one made now refuses the temperatures.
+#[test]
+fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take_it() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(KELVIN_SOURCE));
+    let sink = a_node_of(&compiler, class_path(RANKINE_SINK));
+
+    connect_on_this_thread_as(
+        &compiler,
+        OutputLinkPortRef::new(source, "temperature"),
+        InputLinkPortRef::new(sink, "temperature"),
+        ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+    )
+    .expect("a saved link both ends' families take is kept");
+    assert_eq!(the_links_in(&compiler), 1);
+
+    let level = a_node_of(&compiler, class_path(FLOAT_SOURCE));
+    let numbers = a_node_of(&compiler, class_path(NUMBER_SINK));
+    let refusal = the_verdicts_refusal(
+        connect_on_this_thread_as(
+            &compiler,
+            OutputLinkPortRef::new(level, "value"),
+            InputLinkPortRef::new(numbers, "gain"),
+            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+        )
+        .expect_err("a setting takes no wire, saved or not"),
+    );
+    assert!(
+        matches!(refusal, PinLinkRefusal::InputTakesNoWire { .. }),
+        "{refusal:?}"
+    );
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// A conversion an installed module declares is one the stream's verdict finds: a refusal it
+/// bridges names it.
+///
+/// Mental-revert: finding conversions among the natively compiled node types alone answers "no
+/// node type converts between them".
+#[test]
+fn a_link_a_conversion_an_installed_module_declares_bridges_is_refused_naming_it() {
+    use crate::core::graph::input_values::LiveInputValuesOfAStream;
+    use crate::core::nodes::{
+        HowANodeOfADescribedTypeRuns, InstalledModuleOfANodeType, NodeTypesOneStreamResolves,
+    };
+    register_the_verdict_fixture_node_types();
+    let installed_conversion =
+        NodeClassImportPath::new("verdict_check.installed:CelsiusToKelvin").unwrap();
+    let node_types = Arc::new(NodeTypesOneStreamResolves::new());
+    node_types
+        .register_a_type_an_installed_module_declares(
+            a_node_type(
+                installed_conversion.clone(),
+                vec![a_typed_port("celsius", temperature("Celsius"))],
+                vec![a_typed_port("kelvin", temperature("Kelvin"))],
+            )
+            .stating_a_conversion(),
+            HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(|_node| {
+                Err(Error::NotSupported("a fixture runs no node".to_owned()))
+            })),
+            InstalledModuleOfANodeType {
+                distribution: "verdict-check-temperatures".to_owned(),
+                distribution_version: "1.0.0".to_owned(),
+                entry_point: "temperatures".to_owned(),
+            },
+        )
+        .expect("an installed module may state a conversion");
+    let compiler = Arc::new(Compiler::new_of_a_stream(
+        node_types,
+        LiveInputValuesOfAStream::default(),
+    ));
+    let source = a_node_of(&compiler, class_path(CELSIUS_SOURCE));
+    let sink = a_node_of(&compiler, class_path(KELVIN_SINK));
+
+    let refusal = the_verdicts_refusal(
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(source, "temperature"),
+            InputLinkPortRef::new(sink, "temperature"),
+        )
+        .expect_err("an installed module's conversion is never placed"),
+    );
+
+    assert!(
+        refusal.to_string().contains(&format!(
+            "place a `{installed_conversion}` node between them"
+        )),
+        "{refusal}"
+    );
 }

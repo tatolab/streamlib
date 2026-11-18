@@ -3,9 +3,12 @@
 
 use std::fmt;
 
-use super::{NodeInputMode, PinConversion, PinType};
+use super::{BundleMember, NodeInputMode, PinConversion, PinType};
 use crate::NodeClassImportPath;
-use crate::port_family::{PortFamily, node_placed_between_families};
+use crate::port_family::{
+    CodecDirection, EncodedMedia, PortFamily, codec_nodes_placed_between,
+    node_placed_between_families,
+};
 
 /// One end of a link: the port, or one member of a bundle port, with its resolved type.
 #[derive(Debug, Clone, Copy)]
@@ -176,7 +179,7 @@ impl fmt::Display for PinLinkRefusal {
                     output.pin_type, input.pin_type
                 )?;
                 match conversions_that_bridge.as_slice() {
-                    [] => match node_placed_between_the_families_of(output, input) {
+                    [] => match node_placed_between(&output.pin_type, &input.pin_type) {
                         Some(placement) => write!(formatter, "; {placement}"),
                         None => formatter.write_str("; no node type converts between them"),
                     },
@@ -195,24 +198,38 @@ impl fmt::Display for PinLinkRefusal {
     }
 }
 
-/// The node the family table names between the families of these ends' types. Between Image
-/// or Channels and Array the table's node states the pin types it converts, so it is named only
-/// as a conversion that bridges, never by its family: an `nv12` Texture is not sent to a
-/// `TextureToTensor` that does not take it.
-fn node_placed_between_the_families_of(
-    output: &PinLinkEndNamed,
-    input: &PinLinkEndNamed,
-) -> Option<&'static str> {
+/// The node or nodes a person places between an output of `output` and an input of `input` to
+/// convert one into the other: an encoder or decoder only of a codec the encoded end states, or
+/// of any when it states none, and between two unencoded types the node the family table names.
+/// Between Image or Channels and Array the table's node states the pin types it converts, so it
+/// is named only as a conversion that bridges, never by its family: an `nv12` Texture is not
+/// sent to a `TextureToTensor` that does not take it.
+fn node_placed_between(output: &PinType, input: &PinType) -> Option<String> {
+    use CodecDirection::{Decode, Encode};
+    use EncodedMedia::{Audio, Video};
     use PortFamily::{Array, Channels, Image};
-    let output_family = PortFamily::carrying(&output.pin_type)?;
-    let input_family = PortFamily::carrying(&input.pin_type)?;
-    if matches!(
-        (output_family, input_family),
-        (Image | Channels, Array) | (Array, Image | Channels)
-    ) {
-        return None;
+    match (output, input) {
+        (PinType::EncodedVideo { codecs }, PinType::Texture { .. }) => {
+            codec_nodes_placed_between(Video, Decode, codecs)
+        }
+        (PinType::Texture { .. }, PinType::EncodedVideo { codecs }) => {
+            codec_nodes_placed_between(Video, Encode, codecs)
+        }
+        (PinType::EncodedAudio { codecs }, PinType::Audio {}) => {
+            codec_nodes_placed_between(Audio, Decode, codecs)
+        }
+        (PinType::Audio {}, PinType::EncodedAudio { codecs }) => {
+            codec_nodes_placed_between(Audio, Encode, codecs)
+        }
+        (PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }, _)
+        | (_, PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }) => None,
+        _ => match (PortFamily::carrying(output)?, PortFamily::carrying(input)?) {
+            (Image | Channels, Array) | (Array, Image | Channels) => None,
+            (output_family, input_family) => {
+                node_placed_between_families(output_family, input_family)
+            }
+        },
     }
-    node_placed_between_families(output_family, input_family)
 }
 
 impl std::error::Error for PinLinkRefusal {}
@@ -535,7 +552,9 @@ fn warn_of_member_meanings_that_differ(
 ) {
     match (output, input) {
         (PinType::Bundle { members: output }, PinType::Bundle { members: input }) => {
-            for (output_member, input_member) in output.iter().zip(input) {
+            for (output_member, input_member) in
+                members_paired_by_name(output, input).into_iter().flatten()
+            {
                 let member_name = format!("{path}{}", output_member.name);
                 if let Some((output_meaning, input_meaning)) = differing_meanings(
                     output_member.meaning.as_deref(),
@@ -569,15 +588,43 @@ fn warn_of_member_meanings_that_differ(
     }
 }
 
-/// Whether `one` and `other` are one type, their bundle members compared by name and type only.
+/// Each member of `output` beside the member of `input` of its name, in `output`'s order; `None`
+/// unless the two hold the same names, each held once by each.
+fn members_paired_by_name<'members>(
+    output: &'members [BundleMember],
+    input: &'members [BundleMember],
+) -> Option<Vec<(&'members BundleMember, &'members BundleMember)>> {
+    if output.len() != input.len() {
+        return None;
+    }
+    output
+        .iter()
+        .map(|output_member| {
+            let held_once_by = |members: &'members [BundleMember]| {
+                let mut named = members
+                    .iter()
+                    .filter(|member| member.name == output_member.name);
+                match (named.next(), named.next()) {
+                    (Some(member), None) => Some(member),
+                    _ => None,
+                }
+            };
+            held_once_by(output)?;
+            Some((output_member, held_once_by(input)?))
+        })
+        .collect()
+}
+
+/// Whether `one` and `other` are one type, their bundle members matched by name and compared by
+/// type only, in any order.
 fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
     match (one, other) {
         (PinType::Bundle { members: one }, PinType::Bundle { members: other }) => {
-            one.len() == other.len()
-                && one.iter().zip(other).all(|(one, other)| {
-                    one.name == other.name
-                        && the_same_but_for_member_meanings(&one.member_type, &other.member_type)
+            members_paired_by_name(one, other).is_some_and(|pairs| {
+                pairs.into_iter().all(|(one, other)| {
+                    the_same_but_for_member_meanings(&one.member_type, &other.member_type)
                 })
+            })
         }
         (
             PinType::ListOf { element_type: one },

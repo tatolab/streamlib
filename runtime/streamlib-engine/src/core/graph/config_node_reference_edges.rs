@@ -18,7 +18,7 @@ use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::{
     Graph, NodeRunId, cast_exposed_name_to_url_safe, names_listed_for_a_refusal,
 };
-use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
+use crate::core::json_schema::ConfigNodeReferenceEdgeOnTheWire;
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
 
@@ -39,7 +39,7 @@ pub(crate) fn config_keys_of_a_node_type_holding_a_node_reference(
 /// One reference edge `node_name`'s config holds, with the type the key it sits
 /// under requires.
 pub(crate) struct ConfigNodeReferenceEdgeOfOneNode {
-    pub(crate) edge: ConfigNodeReferenceEdgeOutput,
+    pub(crate) edge: ConfigNodeReferenceEdgeOnTheWire,
     pub(crate) referenced_node_type_import_path: Option<String>,
     pub(crate) one_referrer_per_referenced_node: bool,
 }
@@ -74,7 +74,7 @@ pub(crate) fn config_node_reference_edges_of_one_node(
             )));
         };
         edges.push(ConfigNodeReferenceEdgeOfOneNode {
-            edge: ConfigNodeReferenceEdgeOutput {
+            edge: ConfigNodeReferenceEdgeOnTheWire {
                 node: node_name.to_string(),
                 config_key,
                 referenced_node: referenced_node.to_string(),
@@ -97,7 +97,7 @@ pub(crate) fn refuse_a_second_referrer_of_a_node_that_takes_one<'edge>(
         if !reference.one_referrer_per_referenced_node {
             continue;
         }
-        let ConfigNodeReferenceEdgeOutput {
+        let ConfigNodeReferenceEdgeOnTheWire {
             node,
             config_key,
             referenced_node,
@@ -133,7 +133,7 @@ pub(crate) fn refuse_a_reference_to_a_node_of_the_wrong_type(
     if required_type == referenced_node_type.as_str() {
         return Ok(());
     }
-    let ConfigNodeReferenceEdgeOutput {
+    let ConfigNodeReferenceEdgeOnTheWire {
         node,
         config_key,
         referenced_node,

@@ -6,7 +6,8 @@
     reason = "a codegen binary: stdout is its output channel"
 )]
 
-//! Generates JSON Schema files for streamlib API responses.
+//! Generates JSON Schema files for streamlib API responses. The graph answer is described by
+//! the control contract, which states it in `contract.json`.
 //!
 //! Run with: `cargo run --bin generate_schemas`
 //!
@@ -20,9 +21,7 @@ use schemars::schema_for;
 use std::fs;
 use std::path::Path;
 
-use streamlib_engine::core::json_schema::{
-    GraphResponse, MachineWideGraphResponse, MachineWideRegistryResponse, RegistryResponse,
-};
+use streamlib_engine::core::json_schema::{MachineWideRegistryResponse, RegistryResponse};
 
 fn main() {
     let schema_dir = Path::new("dist/schemas");
@@ -34,11 +33,6 @@ fn main() {
     }
 
     for (schema_file_name, schema) in [
-        ("graph-response.schema.json", schema_for!(GraphResponse)),
-        (
-            "machine-wide-graph-response.schema.json",
-            schema_for!(MachineWideGraphResponse),
-        ),
         (
             "registry-response.schema.json",
             schema_for!(RegistryResponse),

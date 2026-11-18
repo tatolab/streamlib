@@ -10,8 +10,8 @@ use super::port_family_link_checks::{
 };
 use super::{Graph, GraphNode, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::{
-    PinConversion, PinLinkEnd, PinLinkInputEnd, PortFamilyLinkEndpoint, pin_link_verdict,
-    refusal_of_the_names_and_codec_a_link_carries,
+    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkRefusal, PinType, PortFamilyLinkEndpoint,
+    pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, Result};
 
@@ -37,40 +37,118 @@ fn the_typed_link_end<'graph>(
     })
 }
 
-/// Refuse a link from `from` to `to` its verdict among `conversions`, or its families, refuse.
-pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
+/// What becomes of a link whose two typed ends the verdict finds no rule connecting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ALinkThePinTypesRefuse {
+    /// It is refused in the verdict's words: a link made now.
+    IsRefused,
+    /// It is kept when its ports' families, names, codec and formats take it, and the verdict's
+    /// refusal is logged as a warning: a link a saved graph already holds.
+    IsKeptWhenItsFamiliesTakeIt,
+}
+
+/// The two ports of a link from `from` to `to` and their ends, when both are typed.
+struct TypedLinkEnds<'graph> {
+    from_node: &'graph GraphNode,
+    output_port: &'graph PortInfo,
+    output: PinLinkEnd<'graph>,
+    to_node: &'graph GraphNode,
+    input_port: &'graph PortInfo,
+    input: PinLinkInputEnd<'graph>,
+}
+
+/// The typed ends of a link from `from` to `to` in `graph`; `None` when either end is no node
+/// of it, or either port is untyped.
+fn the_typed_ends_of<'graph>(
+    graph: &'graph Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Option<TypedLinkEnds<'graph>> {
+    let from_node = graph.traversal().v(from.node_run_id()).first()?;
+    let to_node = graph.traversal().v(to.node_run_id()).first()?;
+    let output_port = from_node.output_port(from.port_name())?;
+    let input_port = to_node.input_port(to.port_name())?;
+    Some(TypedLinkEnds {
+        from_node,
+        output_port,
+        output: the_typed_link_end(from_node, output_port)?,
+        to_node,
+        input_port,
+        input: PinLinkInputEnd {
+            end: the_typed_link_end(to_node, input_port)?,
+            input_mode: input_port.input_mode,
+        },
+    })
+}
+
+/// Whether the verdict refuses a link from `from` to `to` by its two typed ends' pin types,
+/// among `conversions`.
+pub(crate) fn the_pin_types_refuse_the_link(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
     conversions: &[PinConversion],
+) -> bool {
+    the_typed_ends_of(graph, from, to).is_some_and(|ends| {
+        matches!(
+            pin_link_verdict(ends.output, ends.input, conversions)
+                .refusal_of_the_link_made_as_it_is(),
+            Some(PinLinkRefusal::PinTypesDoNotConnect { .. })
+        )
+    })
+}
+
+/// The pin types of a link from `from` to `to`, output then input; `None` when either end is
+/// no node of `graph`, or either port is untyped.
+pub(crate) fn the_pin_types_at_the_ends_of(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Option<(PinType, PinType)> {
+    the_typed_ends_of(graph, from, to).map(|ends| {
+        (
+            ends.output.pin_type.clone(),
+            ends.input.end.pin_type.clone(),
+        )
+    })
+}
+
+/// Refuse a link from `from` to `to` its verdict among the conversions `graph`'s stream
+/// resolves, or its families, refuse; `a_link_the_pin_types_refuse` says whether one the
+/// verdict refuses by its pin types alone is kept.
+pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
 ) -> Result<()> {
-    let (Some(from_node), Some(to_node)) = (
-        graph.traversal().v(from.node_run_id()).first(),
-        graph.traversal().v(to.node_run_id()).first(),
-    ) else {
-        return Ok(());
-    };
-    let typed_ends = from_node
-        .output_port(from.port_name())
-        .zip(to_node.input_port(to.port_name()))
-        .and_then(|(output_port, input_port)| {
-            Some((
-                output_port,
-                the_typed_link_end(from_node, output_port)?,
-                input_port,
-                the_typed_link_end(to_node, input_port)?,
-            ))
-        });
-    let Some((output_port, output, input_port, input)) = typed_ends else {
+    let Some(TypedLinkEnds {
+        from_node,
+        output_port,
+        output,
+        to_node,
+        input_port,
+        input,
+    }) = the_typed_ends_of(graph, from, to)
+    else {
         return refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to);
     };
-    let input = PinLinkInputEnd {
-        end: input,
-        input_mode: input_port.input_mode,
-    };
+    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
     if let Some(refusal) =
-        pin_link_verdict(output, input, conversions).refusal_of_the_link_made_as_it_is()
+        pin_link_verdict(output, input, &conversions).refusal_of_the_link_made_as_it_is()
     {
+        if a_link_the_pin_types_refuse == ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
+            && matches!(refusal, PinLinkRefusal::PinTypesDoNotConnect { .. })
+            && refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to).is_ok()
+        {
+            tracing::warn!(
+                from = %from,
+                to = %to,
+                "a saved link is kept, its ports' families taking it, though its pin types \
+                 refuse it: {refusal}"
+            );
+            return Ok(());
+        }
         return Err(Error::PinLinkRefused(Box::new(refusal.clone())));
     }
     if let Some(refusal) = refusal_of_the_names_and_codec_a_link_carries(
