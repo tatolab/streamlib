@@ -92,14 +92,17 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     {
         return Ok(());
     }
-    let Some(ports) = node_types.port_info(node_type) else {
+    let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
+    let config = legacy_config.config_of(node.input_values_after_the_set);
+    let Some(ports) = node_types
+        .port_info(node_type)
+        .map(|ports| ports.resolved_against_the_config(node_type, Some(&config)))
+    else {
         return Ok(());
     };
-    let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
-    let descriptor = node_types.descriptor(node_type);
-    let config_schema = descriptor
-        .as_ref()
-        .and_then(|descriptor| descriptor.config_schema.clone());
+    let config_schema = node_types
+        .descriptor(node_type)
+        .and_then(|descriptor| descriptor.config_schema);
     let the_input_port = ports
         .input_named(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
@@ -113,21 +116,11 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             port,
             value,
         )?;
-        let declared_range = descriptor
-            .as_ref()
-            .and_then(|descriptor| {
-                descriptor
-                    .inputs
-                    .iter()
-                    .find(|declared| declared.name == port.name)
-            })
-            .and_then(|declared| declared.declared_pin())
-            .and_then(|declaration| declaration.annotations.range);
-        return match (declared_range, value.as_f64()) {
-            (Some(range), Some(number)) => {
-                refuse_a_number_outside_the_range(node.name, &port.name, number, range)
-            }
-            _ => Ok(()),
+        return match port.range {
+            Some(range) => refuse_a_value_holding_a_number_outside_the_range(
+                node.name, &port.name, value, range.0,
+            ),
+            None => Ok(()),
         };
     }
     let config_fields = the_properties_of_a_config_schema(config_schema.as_ref());
@@ -149,7 +142,6 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             ),
         ));
     }
-    let config = legacy_config.config_of(node.input_values_after_the_set);
     crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
         node.name, node_type, node_types, &config,
     )
@@ -193,6 +185,9 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
             words,
         ));
     }
+    if !port.takes_a_wire() && port.pin.is_none() {
+        return refuse_a_value_a_setting_of_a_family_does_not_carry(node_name, port, value);
+    }
     if let Some(checked) = port.check_value(value) {
         checked.map_err(|not_taken| {
             InputValueRefusal::of(
@@ -225,6 +220,30 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         ));
     }
     Ok(())
+}
+
+/// Refuse `value`, set on `port`, a setting of the node named `node_name` that names no pin type
+/// and carries the family it declares, when that family's message does not take it.
+fn refuse_a_value_a_setting_of_a_family_does_not_carry(
+    node_name: &str,
+    port: &PortInfo,
+    value: &Value,
+) -> Result<(), InputValueRefusal> {
+    let family = port.family.family;
+    crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
+        .map(|_| ())
+        .map_err(|why| {
+            InputValueRefusal::of(
+                InputValueRefusalCode::InputValueNotValid,
+                format!(
+                    "the value of input `{}` of `{node_name}` is {value}, and `{}` carries {}: \
+                     {why}",
+                    port.name,
+                    port.name,
+                    family.declaration_name()
+                ),
+            )
+        })
 }
 
 /// Whether a node of `node_type` still takes a config: its config schema lists a field, or
@@ -277,19 +296,28 @@ pub fn an_exposure_of_config_fields_is_recorded_on(
     Ok(false)
 }
 
-/// Refuse `number`, set on the input `input` of the node named `node_name`, when it lies outside
-/// `range`; it is never clamped.
-fn refuse_a_number_outside_the_range(
+/// Refuse `value` set on input `input` of `node_name` when a number it holds lies outside
+/// `range`, naming the first that does; it is never clamped. A range bounds a number, or every
+/// number of an array, nested arrays included.
+fn refuse_a_value_holding_a_number_outside_the_range(
     node_name: &str,
     input: &str,
-    number: f64,
+    value: &Value,
     range: PinNumberRange,
 ) -> Result<(), InputValueRefusal> {
-    let below = range.minimum.is_some_and(|minimum| number < minimum);
-    let above = range.maximum.is_some_and(|maximum| number > maximum);
-    if !below && !above {
+    let mut numbers = Vec::new();
+    every_number_a_value_holds(value, &mut numbers);
+    let Some(number) = numbers.into_iter().find(|number| {
+        range.minimum.is_some_and(|minimum| *number < minimum)
+            || range.maximum.is_some_and(|maximum| *number > maximum)
+    }) else {
         return Ok(());
-    }
+    };
+    let what_it_is = if value.is_number() {
+        format!("is {number}")
+    } else {
+        format!("is {value}, which holds {number}")
+    };
     let takes = match (range.minimum, range.maximum) {
         (Some(minimum), Some(maximum)) => format!("a number from {minimum} to {maximum}"),
         (Some(minimum), None) => format!("a number of {minimum} or more"),
@@ -299,9 +327,23 @@ fn refuse_a_number_outside_the_range(
     Err(InputValueRefusal::of(
         InputValueRefusalCode::InputValueNotValid,
         format!(
-            "the value of input `{input}` of `{node_name}` is {number}, and `{input}` takes {takes}"
+            "the value of input `{input}` of `{node_name}` {what_it_is}, and `{input}` takes {takes}"
         ),
     ))
+}
+
+/// Push each number `value` holds onto `numbers`, in order: itself when it is one, and each
+/// number of an array, nested arrays included. An object's members are not ranged.
+fn every_number_a_value_holds(value: &Value, numbers: &mut Vec<f64>) {
+    match value {
+        Value::Number(number) => numbers.extend(number.as_f64()),
+        Value::Array(elements) => {
+            for element in elements {
+                every_number_a_value_holds(element, numbers);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) | Value::Object(_) => {}
+    }
 }
 
 fn names_in_backticks(names: &[String]) -> String {

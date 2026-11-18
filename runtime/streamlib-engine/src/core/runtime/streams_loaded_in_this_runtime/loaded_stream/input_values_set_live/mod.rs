@@ -281,13 +281,15 @@ pub(crate) fn hand_back_each(handed_back: impl IntoIterator<Item = UnlinkedInput
 }
 
 /// Whether a value set on input `input` of `set_on` is held on `graph` rather than live: a
-/// setting its type holds in its config, a config field it exposes as an input, or an input it
-/// does not have.
+/// setting its type holds in its config, a config field it exposes as an input, a setting it
+/// reads only when it is set up, or an input it does not have.
 pub(super) fn is_held_on_the_graph(graph: &Graph, set_on: &GraphNode, input: &str) -> bool {
     LegacyConfigOfANodeType::of(graph.node_types_this_stream_resolves(), &set_on.node_type)
         .is_a_config_field(input)
         || set_on.is_an_exposed_config_field_input(input)
-        || !set_on.has_input(input)
+        || set_on
+            .input_port(input)
+            .is_none_or(|port| !port.takes_a_wire() && !port.is_a_setting_read_each_run())
 }
 
 /// Refuse `value`, set live on input `input` of `set_on`, a function node run in a helper of its

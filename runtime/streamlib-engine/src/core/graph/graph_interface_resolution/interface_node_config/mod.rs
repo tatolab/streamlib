@@ -5,10 +5,10 @@
 //! keys it takes at its level.
 
 use super::{
-    GRAPH_INPUT_DEFAULT_CONFIG_KEY, GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_RANGE_CONFIG_KEY,
-    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY, GRAPH_OUTPUT_NODE_TYPE,
-    GraphInterfaceLevel, a_top_level_graph_input_of_the_family_runs,
-    the_value_lifetime_a_graph_input_config_declares,
+    GRAPH_INPUT_LIFETIME_CONFIG_KEY, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INPUT_VALUE_FORMER_NAME,
+    GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_VALUE_PORT_NAME, GRAPH_OUTPUT_NODE_TYPE, GraphInterfaceLevel,
+    a_top_level_graph_input_of_the_family_runs, the_value_lifetime_a_graph_input_config_declares,
 };
 use crate::core::descriptors::PortFamily;
 use crate::core::graph::graph_snapshot::GraphSnapshotNode;
@@ -45,9 +45,8 @@ pub(super) fn port_and_family_an_interface_nodes_config_declares(
         Some(named) => {
             let family_wire_name = named.as_str();
             Some(
-                PortFamily::ALL
-                    .into_iter()
-                    .find(|family| Some(family.wire_name()) == family_wire_name)
+                family_wire_name
+                    .and_then(PortFamily::of_wire_name)
                     .ok_or_else(|| {
                         Error::GraphError(format!(
                             "`{kind}` node `{}` declares its port of family {named}, and its \
@@ -64,7 +63,8 @@ pub(super) fn port_and_family_an_interface_nodes_config_declares(
 }
 
 /// Refuse a config key `node` does not take at `level` with `family`, and on a top-level
-/// `GraphInput` a client writes, a `default`, `range` or `lifetime` its family does not take.
+/// `GraphInput` a client writes, a `value` (saved as `default` before it was an input), `range`
+/// or `lifetime` its family does not take.
 /// A top-level `GraphInput` whose family is not resolved yet takes all three, checked once a
 /// link resolves it.
 pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
@@ -80,7 +80,8 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
         &[
             GRAPH_INTERFACE_PORT_CONFIG_KEY,
             GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-            GRAPH_INPUT_DEFAULT_CONFIG_KEY,
+            GRAPH_INTERFACE_VALUE_PORT_NAME,
+            GRAPH_INPUT_VALUE_FORMER_NAME,
             GRAPH_INPUT_RANGE_CONFIG_KEY,
             GRAPH_INPUT_LIFETIME_CONFIG_KEY,
         ]
@@ -97,7 +98,8 @@ pub(super) fn refuse_a_config_key_the_interface_node_does_not_take(
     {
         let where_it_would_be_taken = if kind == "GraphInput"
             && [
-                GRAPH_INPUT_DEFAULT_CONFIG_KEY,
+                GRAPH_INTERFACE_VALUE_PORT_NAME,
+                GRAPH_INPUT_VALUE_FORMER_NAME,
                 GRAPH_INPUT_RANGE_CONFIG_KEY,
                 GRAPH_INPUT_LIFETIME_CONFIG_KEY,
             ]
@@ -135,13 +137,17 @@ fn refuse_a_default_or_range_its_family_does_not_take(
         node.input_values.clone(),
     )))
     .map_err(|why| Error::GraphError(format!("`GraphInput` node `{}`: {why}", node.name)))?;
-    if let Some(default) = node.input_values.get(GRAPH_INPUT_DEFAULT_CONFIG_KEY)
+    if let Some(value) = node
+        .input_values
+        .get(GRAPH_INTERFACE_VALUE_PORT_NAME)
+        .or_else(|| node.input_values.get(GRAPH_INPUT_VALUE_FORMER_NAME))
         && let Err(why) =
-            crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, default, 0)
+            crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
     {
         return Err(Error::GraphError(format!(
-            "`GraphInput` node `{}` declares its `{GRAPH_INPUT_DEFAULT_CONFIG_KEY}` as \
-             {default}, and it carries {}: {why}",
+            "`GraphInput` node `{}` holds its `{GRAPH_INTERFACE_VALUE_PORT_NAME}`, its \
+             `{GRAPH_INPUT_VALUE_FORMER_NAME}` before it was an input, as {value}, and it \
+             carries {}: {why}",
             node.name,
             family.declaration_name()
         )));

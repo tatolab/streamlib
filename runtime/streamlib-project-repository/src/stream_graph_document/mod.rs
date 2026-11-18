@@ -35,6 +35,11 @@ pub use stream_graph_operation::StreamGraphOperation;
 /// The import path a graph names `GraphInput` by, in the built-in node module.
 pub const GRAPH_INPUT_NODE_TYPE: &str = "tatolab.stream:GraphInput";
 
+/// Whether `node_type` is `GraphInput`.
+pub fn is_the_graph_input_type(node_type: &streamlib_node_schema::NodeClassImportPath) -> bool {
+    node_type.as_str() == GRAPH_INPUT_NODE_TYPE
+}
+
 /// The import path a graph names `GraphOutput` by, in the built-in node module.
 pub const GRAPH_OUTPUT_NODE_TYPE: &str = "tatolab.stream:GraphOutput";
 

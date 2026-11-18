@@ -27,6 +27,7 @@ use streamlib::sdk::json_schema::{
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use streamlib_control_contract::CALL_OPERATION_TOOL_NAME;
+use streamlib_project_repository::GraphEditStream;
 use uuid::Uuid;
 
 use crate::mcp::LocalApiMcpServerHandler;
@@ -189,17 +190,17 @@ impl LocalApiMcpServerHandler {
             .stream
             .clone()
             .unwrap_or_else(|| stream_id.to_string());
-        let stream_asset = operations_on_the_loaded_streams
-            .list_streams()
-            .into_iter()
-            .find(|listing| listing.stream_id == stream_id_as_the_graph_reports_it)
-            .and_then(|listing| listing.stream_location)
-            .map(|stream_location| stream_location.stream_asset)
-            .ok_or_else(|| {
+        let listings = operations_on_the_loaded_streams.list_streams();
+        let stream_asset = crate::stream_graph_transaction_executor::StreamsTheRuntimeHolds::listed_in(&listings)
+            .the_stream_named(&GraphEditStream::StreamId(
+                stream_id_as_the_graph_reports_it.clone(),
+            ))
+            .map(|(stream_asset, _)| stream_asset)
+            .map_err(|runtime_words| {
                 McpError::invalid_params(
                     format!(
-                        "stream `{stream_id_as_the_graph_reports_it}` is not loaded, so no graph \
-                         edit can name it by its stream asset"
+                        "no graph edit can name the stream `{stream_id_as_the_graph_reports_it}` \
+                         by its stream asset: {runtime_words}"
                     ),
                     None,
                 )

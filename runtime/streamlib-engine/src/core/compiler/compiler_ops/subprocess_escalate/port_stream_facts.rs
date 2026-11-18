@@ -116,6 +116,8 @@ mod tests {
             former_names: Vec::new(),
             may_be_unset: false,
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
+            input_mode: None,
+            range: None,
         }
     }
 

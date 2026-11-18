@@ -578,6 +578,7 @@ fn generate_descriptor_from_schema(
                     pin_default: ::std::option::Option::None,
                     pin_declaration: #pin_declaration_tokens,
                     lifetime: #lifetime_tokens,
+                    input_mode: ::std::option::Option::None,
                 })
             }
         })
@@ -611,6 +612,7 @@ fn generate_descriptor_from_schema(
                     pin_default: ::std::option::Option::None,
                     pin_declaration: #pin_declaration_tokens,
                     lifetime: __streamlib_sdk::descriptors::NodeValueLifetime::Kept,
+                    input_mode: ::std::option::Option::None,
                 })
             }
         })

@@ -196,6 +196,10 @@ impl RefusalCodeAndPlace {
                 refused_field: (*direction == PortDirection::Input).then(|| port_name.clone()),
                 ..Self::coded(PortNotFound)
             },
+            Error::StreamHasNoInputNamed { input, .. } => Self {
+                refused_field: Some(input.clone()),
+                ..Self::coded(PortNotFound)
+            },
             Error::NodeInAStreamHasNoOutputPortNamed { node, .. } => Self {
                 refused_node: Some(node.clone()),
                 ..Self::coded(PortNotFound)

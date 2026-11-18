@@ -45,48 +45,19 @@ fn the_location_of_the_stream_listed_as<'listed>(
 }
 
 /// Each of `operations` to the stream asset its `stream` names, with the stream id of the
-/// stream it applies to, read from `listings`, one listing of the streams the runtime holds: a
-/// stream id keeps the stream it names, and a stream asset's UUID takes the stream running it,
-/// a loaded one over one only recorded. A name that matches no stream is refused with
-/// `stream_not_found` at its operation, naming the streams the runtime holds.
+/// stream it applies to, read from `listings`, one listing of the streams the runtime holds, as
+/// [`StreamsTheRuntimeHolds::the_stream_named`] reads it. A name that matches no stream is
+/// refused with `stream_not_found` at its operation, naming the streams the runtime holds.
 pub(super) fn the_stream_each_operation_names(
     operations: Vec<StreamGraphAction<GraphEditStream>>,
     listings: &[StreamListing],
 ) -> Result<Vec<(StreamGraphAction, String)>, GraphTransactionRefusal> {
-    let mut listings_loaded_last: Vec<&StreamListing> = listings.iter().collect();
-    listings_loaded_last.sort_by_key(|listing| listing.node_count.is_some());
-    let stream_id_of_each_stream_asset: HashMap<Uuid, &str> = listings_loaded_last
-        .into_iter()
-        .filter_map(|listing| {
-            Some((
-                listing.stream_location.as_ref()?.stream_asset,
-                listing.stream_id.as_str(),
-            ))
-        })
-        .collect();
+    let streams = StreamsTheRuntimeHolds::listed_in(listings);
     operations
         .into_iter()
         .enumerate()
-        .map(|(operation_index, operation)| {
-            let named = match operation.stream() {
-                GraphEditStream::StreamId(stream_id) => {
-                    the_location_of_the_stream_listed_as(listings, stream_id)
-                        .map(|stream_location| (stream_location.stream_asset, stream_id.clone()))
-                        .ok_or_else(|| {
-                            the_words_of_a_stream_id_no_stream_is_held_under(stream_id, listings)
-                        })
-                }
-                GraphEditStream::StreamAsset(stream_asset) => stream_id_of_each_stream_asset
-                    .get(stream_asset)
-                    .map(|stream_id| (*stream_asset, (*stream_id).to_owned()))
-                    .ok_or_else(|| {
-                        the_words_of_a_stream_asset_no_stream_runs(
-                            *stream_asset,
-                            &stream_id_of_each_stream_asset,
-                        )
-                    }),
-            };
-            match named {
+        .map(
+            |(operation_index, operation)| match streams.the_stream_named(operation.stream()) {
                 Ok((stream_asset, stream_id)) => {
                     Ok((operation.map_stream(|_| stream_asset), stream_id))
                 }
@@ -98,9 +69,65 @@ pub(super) fn the_stream_each_operation_names(
                         runtime_words,
                     ),
                 )),
-            }
-        })
+            },
+        )
         .collect()
+}
+
+/// The streams one listing of the runtime's streams holds, by stream id and by stream asset.
+pub(crate) struct StreamsTheRuntimeHolds<'listed> {
+    listings: &'listed [StreamListing],
+    stream_id_of_each_stream_asset: HashMap<Uuid, &'listed str>,
+}
+
+impl<'listed> StreamsTheRuntimeHolds<'listed> {
+    /// The streams `listings` lists; a stream asset two listings run is run by the loaded one
+    /// over one only recorded.
+    pub(crate) fn listed_in(listings: &'listed [StreamListing]) -> Self {
+        let mut listings_loaded_last: Vec<&StreamListing> = listings.iter().collect();
+        listings_loaded_last.sort_by_key(|listing| listing.node_count.is_some());
+        let stream_id_of_each_stream_asset = listings_loaded_last
+            .into_iter()
+            .filter_map(|listing| {
+                Some((
+                    listing.stream_location.as_ref()?.stream_asset,
+                    listing.stream_id.as_str(),
+                ))
+            })
+            .collect();
+        Self {
+            listings,
+            stream_id_of_each_stream_asset,
+        }
+    }
+
+    /// The stream asset `stream` names and the stream id of the stream it applies to: a stream
+    /// id keeps the stream it names, and a stream asset's UUID takes the stream running it. The
+    /// words of why, naming the streams the runtime holds, when it matches none.
+    pub(crate) fn the_stream_named(
+        &self,
+        stream: &GraphEditStream,
+    ) -> Result<(Uuid, String), String> {
+        match stream {
+            GraphEditStream::StreamId(stream_id) => {
+                the_location_of_the_stream_listed_as(self.listings, stream_id)
+                    .map(|stream_location| (stream_location.stream_asset, stream_id.clone()))
+                    .ok_or_else(|| {
+                        the_words_of_a_stream_id_no_stream_is_held_under(stream_id, self.listings)
+                    })
+            }
+            GraphEditStream::StreamAsset(stream_asset) => self
+                .stream_id_of_each_stream_asset
+                .get(stream_asset)
+                .map(|stream_id| (*stream_asset, (*stream_id).to_owned()))
+                .ok_or_else(|| {
+                    the_words_of_a_stream_asset_no_stream_runs(
+                        *stream_asset,
+                        &self.stream_id_of_each_stream_asset,
+                    )
+                }),
+        }
+    }
 }
 
 /// Why the stream id `stream_id` names no stream, naming each stream `listings` lists with a

@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pin_type::{PinDeclaration, PinFlow};
+use crate::pin_type::{NodeInputMode, PinDeclaration, PinFlow};
 use crate::{
     AudioWindowContract, NodeClassImportPath, NodeClassShortName, NodeKind, NodeScheduling,
     NodeValueLifetime, PortFamilyDeclaration,
@@ -61,6 +61,10 @@ pub struct PortDescriptor {
     /// runtime, or reset at Stop; kept when it declares none, and on every output port.
     #[serde(default, skip_serializing_if = "NodeValueLifetime::is_kept")]
     pub lifetime: NodeValueLifetime,
+    /// Whether this *input* takes a wire, a stored value, or both; `None` when it declares none,
+    /// as an input port that takes a wire does, and on every output port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_mode: Option<NodeInputMode>,
 }
 
 fn deserialize_a_pin_default_that_may_be_null<'de, D>(
@@ -90,6 +94,7 @@ impl PortDescriptor {
             pin_default: None,
             pin_declaration: None,
             lifetime: NodeValueLifetime::Kept,
+            input_mode: None,
         }
     }
 
@@ -107,6 +112,13 @@ impl PortDescriptor {
     pub fn flows_as_a_value(&self) -> bool {
         self.declared_pin()
             .is_some_and(|pin| pin.flow == PinFlow::Value)
+    }
+
+    /// Builder-style override for whether this input takes a wire, a stored value, or both.
+    /// Meaningful only on an input port.
+    pub fn with_input_mode(mut self, input_mode: NodeInputMode) -> Self {
+        self.input_mode = Some(input_mode);
+        self
     }
 
     /// Builder-style override for the pin type and flow the port's author states.

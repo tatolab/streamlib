@@ -47,21 +47,6 @@ pub(crate) struct LoadedStreamARuntimeContextBelongsTo {
     pub(crate) project_stores: Arc<super::ProjectStoresOpenInThisRuntime>,
 }
 
-impl LoadedStreamARuntimeContextBelongsTo {
-    /// The keys the node `node_uuid` keeps in this stream's project's store.
-    pub(crate) fn the_store_of_the_node(
-        &self,
-        node_uuid: uuid::Uuid,
-    ) -> crate::core::error::Result<super::StoreScopedToThisNode> {
-        StoreOfOneNodeOpenedOnFirstUse {
-            project_stores: Arc::clone(&self.project_stores),
-            project_directory: Arc::clone(&self.project_directory),
-            node_uuid: Some(node_uuid),
-        }
-        .open()
-    }
-}
-
 /// One node's keys of its stream's project store, opened each time they are used.
 #[derive(Clone, Debug)]
 pub(crate) struct StoreOfOneNodeOpenedOnFirstUse {

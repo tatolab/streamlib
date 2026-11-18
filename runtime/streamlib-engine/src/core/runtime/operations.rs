@@ -163,17 +163,14 @@ pub trait RuntimeOperations: Send + Sync {
         value: serde_json::Value,
     ) -> BoxFuture<'_, Result<()>>;
 
-    /// Hand `value` to the stream's top-level `GraphInput` declaring the Input `input_name`,
-    /// which publishes it on its `value` output to every reader, answering the Input's family.
-    /// Live data: nothing is recorded in the graph or history and the last write wins; a `kept`
-    /// Input keeps it in the project's store, and a `reset` one returns to its default at Stop.
-    /// While the project is stopped, a `kept` Input keeps the value for its next Play and a
-    /// `reset` one is refused.
-    fn write_a_value_to_a_top_level_graph_input(
+    /// The top-level `GraphInput` declaring the stream's input `input_name`, whose `value` input
+    /// a set naming no node sets, and why its node does not run while the stream's playback is
+    /// not stopped. Refused for a name no top-level `GraphInput` declares, naming the stream's
+    /// inputs.
+    fn the_top_level_graph_input_declaring(
         &self,
         input_name: String,
-        value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<crate::core::descriptors::PortFamily>>;
+    ) -> BoxFuture<'_, Result<crate::core::runtime::TopLevelGraphInputDeclaringAStreamInput>>;
 
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)

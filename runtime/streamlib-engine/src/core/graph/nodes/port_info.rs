@@ -52,7 +52,39 @@ pub struct PortInfo {
     /// declaration's on [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_be_unset: bool,
+    /// Whether this input takes a wire, a stored value, or both; `None` for an input port that
+    /// takes a wire, and on every output port. Mirrors the field on
+    /// [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_mode: Option<crate::core::descriptors::NodeInputMode>,
+    /// The lowest and highest number this input takes, as its pin declares them; `None` when it
+    /// declares no range. Not rendered here: the pin declaration a client reads carries it.
+    #[serde(skip)]
+    pub range: Option<InputNumberRange>,
 }
+
+/// The lowest and highest number an input takes, compared bound by bound bit for bit, so a port
+/// compares equal to itself.
+#[derive(Debug, Clone, Copy)]
+pub struct InputNumberRange(pub crate::core::descriptors::PinNumberRange);
+
+impl InputNumberRange {
+    /// Each bound's bits, the form two ranges are compared in.
+    fn bounds_as_bits(&self) -> (Option<u64>, Option<u64>) {
+        (
+            self.0.minimum.map(f64::to_bits),
+            self.0.maximum.map(f64::to_bits),
+        )
+    }
+}
+
+impl PartialEq for InputNumberRange {
+    fn eq(&self, other: &Self) -> bool {
+        self.bounds_as_bits() == other.bounds_as_bits()
+    }
+}
+
+impl Eq for InputNumberRange {}
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
     fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
@@ -72,13 +104,31 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             may_be_unset: declared_pin
                 .as_ref()
                 .is_some_and(|declared| declared.may_be_unset),
+            range: declared_pin
+                .as_ref()
+                .and_then(|declared| declared.annotations.range)
+                .map(InputNumberRange),
             pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
+            input_mode: port.input_mode,
         }
     }
 }
 
 impl PortInfo {
+    /// Whether a link may end at this input: every input but a setting.
+    pub fn takes_a_wire(&self) -> bool {
+        self.input_mode
+            .is_none_or(crate::core::descriptors::NodeInputMode::takes_a_wire)
+    }
+
+    /// Whether this input is a setting a node reads each run, whose value is set live apart
+    /// from the graph.
+    pub fn is_a_setting_read_each_run(&self) -> bool {
+        self.input_mode
+            .is_some_and(crate::core::descriptors::NodeInputMode::is_a_setting_read_each_run)
+    }
+
     /// The value `value` taken as this input's stored value, or what it takes instead, by the
     /// pin it declares; `None` for a port that names no pin type.
     pub fn check_value(

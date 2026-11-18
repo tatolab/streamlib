@@ -109,7 +109,11 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     }
 
     /// Run `tool_name` on `project` and wait until it is done.
-    async fn the_project_action_done(&self, tool_name: &str, project: &ProjectWithGraphDocuments) {
+    pub(super) async fn the_project_action_done(
+        &self,
+        tool_name: &str,
+        project: &ProjectWithGraphDocuments,
+    ) {
         let finished = the_project_action_once_finished(
             tool_name,
             &self.operations_on_the_loaded_streams(),

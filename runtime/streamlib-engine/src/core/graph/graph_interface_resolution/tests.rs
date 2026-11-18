@@ -450,7 +450,7 @@ fn a_link_into_an_input_or_out_of_an_output_is_refused_naming_the_node() {
         }));
     let refusal = refusal_of(into_an_input);
     assert!(
-        refusal.contains("enters `GraphInput` node `overlay`"),
+        refusal.contains("enters input `value` of `overlay`, a setting, which takes no wire"),
         "got {refusal}"
     );
 
@@ -552,4 +552,70 @@ fn a_node_whose_name_casts_like_an_interface_nodes_is_refused_as_a_name_taken() 
         Err(Error::NodeNameTaken { cast, .. }) => assert_eq!(cast, "video"),
         other => panic!("expected NodeNameTaken, got {other:?}"),
     }
+}
+
+/// A `GraphInput`'s `value` input takes the family and range each config names, and the ones
+/// its type declares once a later config names none.
+///
+/// Mental-revert: resolving a new config against the ports the last config resolved keeps the
+/// `array` family and the range it named.
+#[test]
+fn a_graph_inputs_value_takes_its_declared_family_back_once_a_config_names_none() {
+    let descriptor = crate::core::nodes::the_node_type_of_a_top_level_graph_input()
+        .expect("the GraphInput type builds");
+    let mut node = crate::core::graph::GraphNode::new(
+        descriptor.node_class_import_path.clone(),
+        None,
+        "fader",
+        Some(serde_json::json!({ "port": "fader", "family": "array", "range": [0, 1] })),
+        descriptor
+            .inputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+        descriptor
+            .outputs
+            .iter()
+            .map(crate::core::graph::PortInfo::from)
+            .collect(),
+    );
+    let value_input = |node: &crate::core::graph::GraphNode| {
+        node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)
+            .expect("a GraphInput has a `value` input")
+            .clone()
+    };
+    assert_eq!(value_input(&node).family.family, PortFamily::Array);
+    assert!(value_input(&node).range.is_some());
+
+    node.set_config(serde_json::json!({ "port": "fader" }));
+    assert_eq!(value_input(&node).family.family, PortFamily::Records);
+    assert_eq!(value_input(&node).range, None);
+
+    node.set_config(serde_json::json!({ "port": "fader", "family": "channels" }));
+    assert_eq!(value_input(&node).family.family, PortFamily::Channels);
+}
+
+/// A `GraphInput` renders its saved `value` under `default`, and a config written before its
+/// value was an input, holding `default` and no `value`, renders that `default`.
+///
+/// Mental-revert: rendering only `value` drops the `default` a legacy config holds, which its
+/// validation took as the saved value.
+#[test]
+fn a_graph_input_renders_its_saved_value_else_its_legacy_default_as_its_default() {
+    let graph_input = NodeClassImportPath::new(GRAPH_INPUT_NODE_TYPE.to_string()).unwrap();
+    assert_eq!(
+        the_config_a_graph_interface_node_renders(
+            &graph_input,
+            serde_json::json!({ "port": "cue", "default": { "track": "intro" } }),
+        ),
+        serde_json::json!({ "port": "cue", "default": { "track": "intro" } })
+    );
+    assert_eq!(
+        the_config_a_graph_interface_node_renders(
+            &graph_input,
+            serde_json::json!({ "port": "cue", "value": { "track": "drop" },
+                                "default": { "track": "intro" } }),
+        ),
+        serde_json::json!({ "port": "cue", "default": { "track": "drop" } })
+    );
 }
