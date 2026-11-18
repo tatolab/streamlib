@@ -14,9 +14,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::ProjectActionRef
 
 use crate::agent_surface::{AGENT_DISCOVERY_TOOLS, AgentDiscoveryToolDeclaration};
 use crate::control_notification::{CONTROL_NOTIFICATIONS, ControlNotificationDeclaration};
-use crate::control_operation::{
-    ControlOperation, ControlOperationDeclaration, ControlOperationStability,
-};
+use crate::control_operation::{ControlOperationDeclaration, ControlOperationStability};
 use crate::control_operation_results::ControlContractVersionMismatch;
 use crate::control_operations::{
     CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS,

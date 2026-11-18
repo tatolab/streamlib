@@ -382,10 +382,10 @@ impl ControlOperationDispatcher {
                 contract_version,
                 contract_revision,
             }) => self
-                .discover(ContractAClientNames {
-                    version: contract_version,
-                    revision: contract_revision,
-                })
+                .discover(ContractAClientNames::named(
+                    contract_version,
+                    contract_revision,
+                ))
                 .map(ControlOperationAnswer::Discover),
             ControlOperationCall::SubscribeProjectChanges(SubscribeProjectChangesRequest {
                 projects,

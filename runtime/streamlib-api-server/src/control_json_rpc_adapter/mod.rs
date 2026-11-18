@@ -33,9 +33,7 @@ use streamlib_project_repository::{
     ProjectChangeFeedAnnouncement, ProjectChangeOnTheFeed, ProjectRepositoriesOpenInThisRuntime,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
-    CONTROL_CLIENT_NAME_HEADER_NAME, CONTROL_CONTRACT_REVISION_HEADER_NAME,
-    CONTROL_CONTRACT_VERSION_HEADER_NAME, NodeTypeOfOneProjectSource,
-    ProjectActionRefusalOnTheWire, SuggestedOperationCall,
+    NodeTypeOfOneProjectSource, ProjectActionRefusalOnTheWire, SuggestedOperationCall,
 };
 use streamlib_runtime_client_contract::project_log_records::{
     ProjectLogRecordsPage, project_log_records_after,
@@ -46,8 +44,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::control_operation_dispatcher::{
-    ContractAClientNames, ControlOperationAnswer, ControlOperationDispatcher,
-    ControlOperationRefusal, ControlRequestOrigin,
+    ControlOperationAnswer, ControlOperationDispatcher, ControlOperationRefusal,
+    ControlRequestOrigin,
 };
 use crate::control_subscriptions_of_one_connection::{
     ControlSubscriptionsOfOneConnection, HeardOfAFollowedStream, ProjectLogNextPush,
@@ -63,6 +61,10 @@ use crate::stream_graph_drops_raises_and_link_states::{
     StreamGraphDropsRaisesAndLinkStatesLastSampled,
     the_drops_raises_and_link_states_of_a_stream_graph,
 };
+
+mod what_a_control_request_names;
+
+use what_a_control_request_names::{the_client_name_a_request_sent, the_contract_a_request_names};
 
 const JSON_RPC_VERSION: &str = "2.0";
 const JSON_RPC_PARSE_ERROR_CODE: i64 = -32700;
@@ -159,13 +161,12 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
     websocket_upgrade: WebSocketUpgrade,
     request_headers: HeaderMap,
 ) -> Response {
-    match the_contract_a_request_names(&request_headers) {
+    let client_contract = match the_contract_a_request_names(&request_headers) {
+        Ok(client_contract) => client_contract,
         Err(why) => return (StatusCode::BAD_REQUEST, why).into_response(),
-        Ok(client_contract) => {
-            if let Err(mismatch) = dispatcher.refuse_a_client_of_another_contract(client_contract) {
-                return (StatusCode::CONFLICT, axum::Json(mismatch)).into_response();
-            }
-        }
+    };
+    if let Err(mismatch) = dispatcher.refuse_a_client_of_another_contract(client_contract) {
+        return (StatusCode::CONFLICT, axum::Json(mismatch)).into_response();
     }
     let (stream_changes_to_the_connection, stream_changes_heard) =
         mpsc::channel(CONTROL_WEBSOCKET_STREAM_CHANGES_HEARD_CAPACITY);
@@ -186,46 +187,6 @@ async fn answer_the_control_json_rpc_websocket_upgrade(
             local_api_stopping_token,
         )
     })
-}
-
-fn the_client_name_a_request_sent(request_headers: &HeaderMap) -> Option<String> {
-    request_headers
-        .get(CONTROL_CLIENT_NAME_HEADER_NAME)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
-fn the_contract_a_request_names(
-    request_headers: &HeaderMap,
-) -> Result<ContractAClientNames, String> {
-    Ok(ContractAClientNames {
-        version: the_whole_number_a_header_names(
-            request_headers,
-            CONTROL_CONTRACT_VERSION_HEADER_NAME,
-            "a contract version",
-        )?,
-        revision: the_whole_number_a_header_names(
-            request_headers,
-            CONTROL_CONTRACT_REVISION_HEADER_NAME,
-            "a contract revision",
-        )?,
-    })
-}
-
-fn the_whole_number_a_header_names(
-    request_headers: &HeaderMap,
-    header_name: &str,
-    what_it_names: &str,
-) -> Result<Option<u32>, String> {
-    let Some(value) = request_headers.get(header_name) else {
-        return Ok(None);
-    };
-    value
-        .to_str()
-        .ok()
-        .and_then(|value| value.trim().parse::<u32>().ok())
-        .map(Some)
-        .ok_or_else(|| format!("`{header_name}` must be {what_it_names}, a whole number"))
 }
 
 /// Serve one WebSocket: answer each request as it completes, send each change of a subscribed
@@ -1002,3 +963,6 @@ fn a_json_rpc_error(request_id: Value, code: i64, message: String, data: Option<
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod contract_mismatch_tests;
