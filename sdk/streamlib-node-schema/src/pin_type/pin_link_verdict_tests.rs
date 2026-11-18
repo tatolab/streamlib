@@ -51,16 +51,24 @@ fn an_output(pin_type: &PinType) -> PinLinkEnd<'_> {
         member_name: None,
         pin_type,
         meaning: None,
+    }
+}
+
+fn an_input(pin_type: &PinType) -> PinLinkInputEnd<'_> {
+    PinLinkInputEnd {
+        end: PinLinkEnd {
+            node_name: "sink",
+            port_name: "in",
+            ..an_output(pin_type)
+        },
         input_mode: None,
     }
 }
 
-fn an_input(pin_type: &PinType) -> PinLinkEnd<'_> {
-    PinLinkEnd {
-        node_name: "sink",
-        port_name: "in",
-        ..an_output(pin_type)
-    }
+fn an_input_meaning<'end>(pin_type: &'end PinType, meaning: &'end str) -> PinLinkInputEnd<'end> {
+    let mut input = an_input(pin_type);
+    input.end.meaning = Some(meaning);
+    input
 }
 
 /// The verdict of a link from an output of `output` to an input of `input`, with no
@@ -120,6 +128,7 @@ fn the_same_type_connects_as_it_is_whatever_it_is() {
         list,
         bundle,
         named("module:Detections"),
+        texture(&[]),
     ] {
         assert_eq!(
             the_verdict_between(&pin_type, &pin_type),
@@ -278,10 +287,7 @@ fn different_meanings_warn_and_never_block() {
             meaning: Some("frequency"),
             ..an_output(&float())
         },
-        PinLinkEnd {
-            meaning: Some("gain"),
-            ..an_input(&float())
-        },
+        an_input_meaning(&float(), "gain"),
         &[],
     );
     assert_eq!(
@@ -300,7 +306,7 @@ fn different_meanings_warn_and_never_block() {
 fn a_link_into_a_setting_is_refused_whatever_the_types() {
     let verdict = pin_link_verdict(
         an_output(&float()),
-        PinLinkEnd {
+        PinLinkInputEnd {
             input_mode: Some(NodeInputMode::SettingOnly {
                 read: SettingReadTime::AtSetup,
             }),
@@ -311,13 +317,7 @@ fn a_link_into_a_setting_is_refused_whatever_the_types() {
     let PinLinkOutcome::Refused(refusal) = verdict.outcome else {
         panic!("a setting takes no wire: {verdict:?}");
     };
-    assert_eq!(
-        refusal,
-        PinLinkRefusal::InputTakesNoWire {
-            node_name: "sink".to_owned(),
-            input_name: "in".to_owned(),
-        }
-    );
+    assert_eq!(refusal, PinLinkRefusal::input_takes_no_wire("sink", "in"));
     assert!(
         refusal
             .to_string()
@@ -358,6 +358,59 @@ fn a_refusal_names_both_ends_and_both_types() {
     assert!(
         words.contains("no node type converts between them"),
         "{words}"
+    );
+}
+
+/// Until the built-ins state their conversions, a refusal between two families one node
+/// converts between names the node the family check names.
+#[test]
+fn a_refusal_no_stated_conversion_bridges_names_the_node_between_the_families() {
+    let PinLinkOutcome::Refused(refusal) =
+        the_outcome_between(&PinType::Audio {}, &PinType::String {})
+    else {
+        panic!("Audio does not connect to a String");
+    };
+    let words = refusal.to_string();
+    assert!(
+        words.contains("place a ChannelsToRecords node between them"),
+        "{words}"
+    );
+}
+
+/// A link through a convert node warns of what either side of the node warns of, and of
+/// meanings that differ.
+#[test]
+fn a_link_through_a_convert_node_warns_of_what_each_side_warns_of() {
+    let color_to_texture = a_conversion(
+        NodeClassImportPath::of_built_in_node("ColorToTexture"),
+        PinType::Color {},
+        texture(&[]),
+    );
+    let verdict = pin_link_verdict(
+        PinLinkEnd {
+            meaning: Some("tint"),
+            ..an_output(&vector(VectorComponentCount::Four))
+        },
+        an_input_meaning(&texture(&[TexturePixelFormat::Rgba8Unorm]), "mask"),
+        std::slice::from_ref(&color_to_texture),
+    );
+    assert!(
+        matches!(
+            verdict.outcome,
+            PinLinkOutcome::ConnectsThroughConvertNode(_)
+        ),
+        "{verdict:?}"
+    );
+    assert_eq!(
+        verdict.warnings,
+        vec![
+            PinLinkWarning::VectorReadAsAColor,
+            PinLinkWarning::TextureOutputStatesNoFormat,
+            PinLinkWarning::MeaningsDiffer {
+                output_meaning: "tint".to_owned(),
+                input_meaning: "mask".to_owned(),
+            },
+        ]
     );
 }
 
@@ -517,4 +570,48 @@ fn a_type_reads_with_what_narrows_it() {
         .to_string(),
         "Asset (image)"
     );
+}
+
+/// Bundle members are compared by name and type; a member meaning that differs only warns.
+#[test]
+fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
+    let bundle = |meaning: &str| PinType::Bundle {
+        members: vec![BundleMember {
+            name: "pitch".to_owned(),
+            member_type: float(),
+            meaning: Some(meaning.to_owned()),
+            default_value: None,
+        }],
+    };
+    assert_eq!(
+        the_verdict_between(&bundle("frequency"), &bundle("note")),
+        PinLinkVerdict {
+            outcome: PinLinkOutcome::Connects,
+            warnings: vec![PinLinkWarning::MemberMeaningsDiffer {
+                member_name: "pitch".to_owned(),
+                output_meaning: "frequency".to_owned(),
+                input_meaning: "note".to_owned(),
+            }],
+        }
+    );
+    let list_of = |element_type| PinType::ListOf {
+        element_type: Box::new(element_type),
+    };
+    assert_eq!(
+        the_outcome_between(&list_of(bundle("frequency")), &list_of(bundle("note"))),
+        PinLinkOutcome::Connects
+    );
+    let renamed = PinType::Bundle {
+        members: vec![BundleMember {
+            name: "gain".to_owned(),
+            member_type: float(),
+            meaning: None,
+            default_value: None,
+        }],
+    };
+    assert!(matches!(
+        the_outcome_between(&bundle("frequency"), &renamed),
+        PinLinkOutcome::Refused(_)
+    ));
+    assert_eq!(bundle("frequency").to_string(), "Bundle (pitch: Float)");
 }

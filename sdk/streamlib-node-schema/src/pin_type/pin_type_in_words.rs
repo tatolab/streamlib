@@ -5,8 +5,7 @@ use std::fmt;
 
 use super::{PinType, VectorComponentCount, built_in_pin_type};
 
-/// The type as a person reads it in a refusal or a warning: its label, then what narrows it,
-/// as `Vector of 3`, `Texture (rgba8_unorm)` or `List of Float`.
+/// The type as a refusal names it: its label, then what narrows it, as `Vector of 3`.
 impl fmt::Display for PinType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = built_in_pin_type(self.built_in_name()).label;
@@ -44,9 +43,11 @@ impl fmt::Display for PinType {
             }
             Self::ListOf { element_type } => write!(formatter, "{label} of {element_type}"),
             Self::Bundle { members } => {
-                let member_names: Vec<_> =
-                    members.iter().map(|member| member.name.as_str()).collect();
-                write!(formatter, "{label} ({})", member_names.join(", "))
+                let members: Vec<_> = members
+                    .iter()
+                    .map(|member| format!("{}: {}", member.name, member.member_type))
+                    .collect();
+                write!(formatter, "{label} ({})", members.join(", "))
             }
             Self::Named { named_pin_type } => {
                 write!(formatter, "{label} `{}`", named_pin_type.as_str())

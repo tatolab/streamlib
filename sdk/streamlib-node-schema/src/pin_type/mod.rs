@@ -20,14 +20,14 @@ pub use built_in_pin_types::{
     BuiltInPinTypeName, PinAnnotationName, PinTypeDescription, built_in_pin_type,
     built_in_pin_types,
 };
-pub use pin_conversion::PinConversion;
+pub use pin_conversion::{PinConversion, PinConversionRefusal};
 pub use pin_declaration::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PinDeclaration, PinFlow, PinNumberRange,
     PinProjectAssetAnnotation, ResolvedPin, SettingReadTime,
 };
 pub use pin_link_verdict::{
-    ConvertNodeToInsert, FreePinConversion, PinLinkEnd, PinLinkEndNamed, PinLinkOutcome,
-    PinLinkRefusal, PinLinkVerdict, PinLinkWarning, pin_link_verdict,
+    ConvertNodeToInsert, FreePinConversion, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd,
+    PinLinkOutcome, PinLinkRefusal, PinLinkVerdict, PinLinkWarning, pin_link_verdict,
 };
 pub use pin_type_variants::{
     BundleMember, FloatSize, IntegerSize, NamedPinTypeImportPath, PinType, ProjectAssetMedia,

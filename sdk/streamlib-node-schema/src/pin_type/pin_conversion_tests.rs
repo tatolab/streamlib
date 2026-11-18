@@ -107,7 +107,8 @@ fn a_conversion_of_any_other_shape_is_refused_naming_the_node_type() {
         let refusal = descriptor
             .stating_a_conversion()
             .pin_conversion()
-            .expect_err("a conversion of another shape");
+            .expect_err("a conversion of another shape")
+            .to_string();
         assert!(
             refusal.contains("`tatolab.stream:TensorToTexture` states that it is a conversion"),
             "{refusal}"
@@ -128,5 +129,28 @@ fn only_a_built_in_conversion_may_be_inserted() {
     assert!(conversion(NodeClassImportPath::of_built_in_node("TensorToTexture")).may_be_inserted());
     assert!(
         !conversion(NodeClassImportPath::new("tatolab_codecs:Encoder").unwrap()).may_be_inserted()
+    );
+}
+
+#[test]
+fn a_conversion_whose_wired_pin_takes_no_wire_is_refused() {
+    let node_reference = PortDescriptor::new(
+        "node",
+        "node",
+        true,
+        PortFamilyDeclaration::of_family(PortFamily::Records),
+    )
+    .with_pin_declaration(PinDeclaration::exactly(PinType::NodeReference {
+        referenced_node_type: None,
+        one_referrer_per_referenced_node: false,
+    }));
+    let refusal = a_node_type(vec![a_typed_port("tensor", tensor())], vec![node_reference])
+        .stating_a_conversion()
+        .pin_conversion()
+        .expect_err("a node reference takes no wire")
+        .to_string();
+    assert!(
+        refusal.contains("its output `node` is a Node reference, which takes no wire"),
+        "{refusal}"
     );
 }

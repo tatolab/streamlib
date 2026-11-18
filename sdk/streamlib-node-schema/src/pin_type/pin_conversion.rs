@@ -5,9 +5,7 @@ use super::PinType;
 use crate::NodeClassImportPath;
 use crate::descriptors::{NodeDescriptor, PortDescriptor};
 
-/// A node type that states it converts one pin type to another, as its own pins say: what its
-/// one wired input takes and what its one output gives. The link verdict tests each side of it
-/// with its own rules, so no table of conversions exists apart from the node types.
+/// A node type's statement that it converts its one wired input's type into its output's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinConversion {
     /// The node type that converts.
@@ -23,29 +21,24 @@ pub struct PinConversion {
 }
 
 impl PinConversion {
-    /// Whether `connect` may place a node of it between two ends by itself: only a built-in
-    /// conversion is placed; any other is named for a person or a client to place.
+    /// Whether the verdict may answer a convert node of it, a built-in's; `connect` refuses it yet.
     pub fn may_be_inserted(&self) -> bool {
         self.node_type.names_a_built_in_node()
     }
 }
 
 impl NodeDescriptor {
-    /// The conversion this node type states, `None` when it states none. Refuses, naming the
-    /// node type, a conversion of any shape but exactly one input that takes a wire, exactly one
-    /// output, and any number of setting inputs, and one whose wired input or output does not
-    /// state exactly one pin type.
-    pub fn pin_conversion(&self) -> Result<Option<PinConversion>, String> {
+    /// The conversion this node type states, refused on any shape but the one a conversion has.
+    pub fn pin_conversion(&self) -> Result<Option<PinConversion>, PinConversionRefusal> {
         if !self.conversion {
             return Ok(None);
         }
         let node_type = &self.node_class_import_path;
         let refused = |why: String| {
-            Err(format!(
-                "`{node_type}` states that it is a conversion, and {why}; a conversion has \
-                 exactly one input that takes a wire, exactly one output and any number of \
-                 setting inputs, each wired pin stating one pin type"
-            ))
+            Err(PinConversionRefusal {
+                node_type: node_type.clone(),
+                why,
+            })
         };
         let wired_inputs: Vec<&PortDescriptor> = self
             .inputs
@@ -76,6 +69,17 @@ impl NodeDescriptor {
                 output.name
             ));
         };
+        for (direction, port, pin_type) in [
+            ("input", *wired_input, &input_pin_type),
+            ("output", output, &output_pin_type),
+        ] {
+            if !pin_type.takes_a_wire() {
+                return refused(format!(
+                    "its {direction} `{}` is a {pin_type}, which takes no wire",
+                    port.name
+                ));
+            }
+        }
         Ok(Some(PinConversion {
             node_type: node_type.clone(),
             input_port_name: wired_input.name.clone(),
@@ -85,3 +89,26 @@ impl NodeDescriptor {
         }))
     }
 }
+
+/// Why a node type's statement that it is a conversion is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinConversionRefusal {
+    /// The node type.
+    pub node_type: NodeClassImportPath,
+    /// What its shape has that a conversion's does not.
+    pub why: String,
+}
+
+impl std::fmt::Display for PinConversionRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "`{}` states that it is a conversion, and {}; a conversion has exactly one input \
+             that takes a wire, exactly one output and any number of setting inputs, each wired \
+             pin stating one pin type",
+            self.node_type, self.why
+        )
+    }
+}
+
+impl std::error::Error for PinConversionRefusal {}

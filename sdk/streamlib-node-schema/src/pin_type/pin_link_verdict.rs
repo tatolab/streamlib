@@ -5,9 +5,9 @@ use std::fmt;
 
 use super::{NodeInputMode, PinConversion, PinType};
 use crate::NodeClassImportPath;
+use crate::port_family::{PortFamily, node_placed_between_families};
 
-/// One end of a link judged by [`pin_link_verdict`]: the port, or one member of a bundle port,
-/// with its resolved type.
+/// One end of a link: the port, or one member of a bundle port, with its resolved type.
 #[derive(Debug, Clone, Copy)]
 pub struct PinLinkEnd<'end> {
     /// The node's name.
@@ -20,18 +20,23 @@ pub struct PinLinkEnd<'end> {
     pub pin_type: &'end PinType,
     /// What its value stands for, as its pin states it.
     pub meaning: Option<&'end str>,
-    /// Whether an input takes a wire, a stored value, or both; `None` on an output, and on an
-    /// input that takes a wire.
+}
+
+/// The input end of a link, with whether the input takes a wire.
+#[derive(Debug, Clone, Copy)]
+pub struct PinLinkInputEnd<'end> {
+    /// The end.
+    pub end: PinLinkEnd<'end>,
+    /// Whether the input takes a wire, a stored value, or both; `None` for one that takes a wire.
     pub input_mode: Option<NodeInputMode>,
 }
 
-/// What [`pin_link_verdict`] answers of a link: its outcome, and what a person should know of
-/// it, none of which blocks it.
+/// What [`pin_link_verdict`] answers of a link: its outcome, and warnings that never block it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinLinkVerdict {
     /// Whether and how the link connects.
     pub outcome: PinLinkOutcome,
-    /// What the link does that a person may not expect; never a reason to refuse it.
+    /// What the link does that a person may not expect.
     pub warnings: Vec<PinLinkWarning>,
 }
 
@@ -40,7 +45,7 @@ pub struct PinLinkVerdict {
 pub enum PinLinkOutcome {
     /// The input takes what the output carries as it is.
     Connects,
-    /// The input reads what the output carries as its own type, at no cost.
+    /// The input takes what the output carries as its own type, at no cost.
     ConnectsWithFreeConversion(FreePinConversion),
     /// The two ends connect through a node of one built-in conversion placed between them.
     ConnectsThroughConvertNode(ConvertNodeToInsert),
@@ -48,38 +53,33 @@ pub enum PinLinkOutcome {
     Refused(PinLinkRefusal),
 }
 
-/// How an input reads what an output of another type carries. Each one holds for two types
-/// whose messages are packed alike, so the reader takes its own type from the writer's message.
+/// Two differing types the verdict lets connect, each variant stating what the input reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FreePinConversion {
-    /// Boolean, Integer and Float among themselves, or one of them in another size. A Float
-    /// read as an Integer rounds half away from zero.
+    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away.
     BetweenNumbers,
-    /// A Vector read as one of another size: components are dropped, or padded with 0.
+    /// A Vector into one of another size, its components to be dropped or padded with 0.
     BetweenVectors,
-    /// A Vector read as a Color: x, y, z and w as red, green, blue and alpha, a missing alpha
-    /// padded with 1.
+    /// A Vector into a Color, x, y, z and w to be red, green, blue and alpha, alpha padded with 1.
     VectorIntoColor,
-    /// One number read as every component of a Vector.
+    /// One number into a Vector, to be every component.
     NumberSpreadOverVector,
-    /// One number read as red, green and blue, with an alpha of 1.
+    /// One number into a Color, to be red, green and blue, with an alpha of 1.
     NumberSpreadOverColor,
-    /// A Menu's option name read as a String.
+    /// A Menu into a String, its option name to be the text.
     MenuOptionNameAsString,
 }
 
-/// The convert node a link needs between its two ends, and the refusal a link made with no such
-/// node gets.
+/// The convert node a link needs, and the refusal of the link made without it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConvertNodeToInsert {
     /// The built-in conversion that bridges the two ends.
     pub conversion: PinConversion,
-    /// The refusal of the link made straight from one end to the other, naming every
-    /// conversion that bridges them.
+    /// The refusal of the link made straight from one end to the other.
     pub refusal_without_it: PinLinkRefusal,
 }
 
-/// Why a link is refused. Its words are the sentence a client shows, naming both ends.
+/// Why a link is refused; its words are the sentence a client shows, naming both ends.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PinLinkRefusal {
     /// The input is a setting, which takes a stored value and never a wire.
@@ -95,10 +95,19 @@ pub enum PinLinkRefusal {
         output: PinLinkEndNamed,
         /// The input end.
         input: PinLinkEndNamed,
-        /// Each node type stating a conversion that bridges the two ends, to place between
-        /// them.
+        /// Each node type stating a conversion that bridges the two ends.
         conversions_that_bridge: Vec<NodeClassImportPath>,
     },
+}
+
+impl PinLinkRefusal {
+    /// The refusal of a link into input `input_name` of node `node_name`, a setting.
+    pub fn input_takes_no_wire(node_name: &str, input_name: &str) -> Self {
+        Self::InputTakesNoWire {
+            node_name: node_name.to_owned(),
+            input_name: input_name.to_owned(),
+        }
+    }
 }
 
 /// One end of a link as a refusal names it.
@@ -135,6 +144,15 @@ impl fmt::Display for PinLinkEndNamed {
     }
 }
 
+/// Each of `names` in backticks, joined by commas.
+fn in_backticks<Name: fmt::Display>(names: impl IntoIterator<Item = Name>) -> String {
+    names
+        .into_iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl fmt::Display for PinLinkRefusal {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -158,26 +176,33 @@ impl fmt::Display for PinLinkRefusal {
                     output.pin_type, input.pin_type
                 )?;
                 match conversions_that_bridge.as_slice() {
-                    [] => formatter.write_str("; no node type converts between them"),
+                    [] => match node_placed_between_the_families_of(output, input) {
+                        Some(placement) => write!(formatter, "; {placement}"),
+                        None => formatter.write_str("; no node type converts between them"),
+                    },
                     [conversion] => write!(
                         formatter,
                         ". To fix: place a `{conversion}` node between them"
                     ),
-                    conversions => {
-                        let named: Vec<_> = conversions
-                            .iter()
-                            .map(|conversion| format!("`{conversion}`"))
-                            .collect();
-                        write!(
-                            formatter,
-                            ". To fix: place one of {} between them",
-                            named.join(", ")
-                        )
-                    }
+                    conversions => write!(
+                        formatter,
+                        ". To fix: place one of {} between them",
+                        in_backticks(conversions)
+                    ),
                 }
             }
         }
     }
+}
+
+/// The node the family check names between these ends' types, until TAT-371 marks the built-ins.
+fn node_placed_between_the_families_of(
+    output: &PinLinkEndNamed,
+    input: &PinLinkEndNamed,
+) -> Option<&'static str> {
+    let output_family = PortFamily::carrying(&output.pin_type)?;
+    let input_family = PortFamily::carrying(&input.pin_type)?;
+    node_placed_between_families(output_family, input_family)
 }
 
 impl std::error::Error for PinLinkRefusal {}
@@ -192,6 +217,15 @@ pub enum PinLinkWarning {
         /// The input's meaning.
         input_meaning: String,
     },
+    /// A member of two bundles states a different meaning at each end.
+    MemberMeaningsDiffer {
+        /// The member.
+        member_name: String,
+        /// The output member's meaning.
+        output_meaning: String,
+        /// The input member's meaning.
+        input_meaning: String,
+    },
     /// A Vector is read as a Color, its components as colour channels.
     VectorReadAsAColor,
     /// The output may send Menu options the input does not list.
@@ -199,7 +233,7 @@ pub enum PinLinkWarning {
         /// Each such option, as the output names it.
         option_names: Vec<String>,
     },
-    /// The output states no pixel format, so it may send one the input cannot take.
+    /// The output states no pixel format, and the input takes only some.
     TextureOutputStatesNoFormat,
 }
 
@@ -213,17 +247,22 @@ impl fmt::Display for PinLinkWarning {
                 formatter,
                 "the output carries `{output_meaning}` and the input takes `{input_meaning}`"
             ),
+            Self::MemberMeaningsDiffer {
+                member_name,
+                output_meaning,
+                input_meaning,
+            } => write!(
+                formatter,
+                "member `{member_name}` of the output carries `{output_meaning}` and of the \
+                 input takes `{input_meaning}`"
+            ),
             Self::VectorReadAsAColor => formatter.write_str(
                 "a Vector is read as a Color: x, y, z and w become red, green, blue and alpha",
             ),
             Self::MenuOptionsTheInputDoesNotList { option_names } => write!(
                 formatter,
                 "the output may send {}, which the input does not list",
-                option_names
-                    .iter()
-                    .map(|option_name| format!("`{option_name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                in_backticks(option_names)
             ),
             Self::TextureOutputStatesNoFormat => formatter.write_str(
                 "the output states no pixel format, so it may send one the input cannot take",
@@ -233,9 +272,7 @@ impl fmt::Display for PinLinkWarning {
 }
 
 impl PinLinkVerdict {
-    /// The refusal a link made straight from one end to the other gets: none when it connects
-    /// or converts for free; the refusal itself, or the one a link that needs a convert node
-    /// gets without it.
+    /// The refusal a link made straight from one end to the other gets; `None` when it connects.
     pub fn refusal_of_the_link_made_as_it_is(&self) -> Option<&PinLinkRefusal> {
         match &self.outcome {
             PinLinkOutcome::Connects | PinLinkOutcome::ConnectsWithFreeConversion(_) => None,
@@ -247,17 +284,10 @@ impl PinLinkVerdict {
     }
 }
 
-/// How a link from `output` to `input`, two typed ends, connects, by their types alone and the
-/// `conversions` node types state; this is the one rule a link between typed pins is judged by.
-///
-/// A link into a setting is refused. Two ends a direct rule joins connect, or connect with a
-/// free conversion. Otherwise the link goes through a convert node when exactly one built-in
-/// conversion bridges them, the output connecting to its input and its output to the input,
-/// each by a direct rule; else it is refused, naming every conversion that bridges them.
-/// With no conversions passed it answers the direct rules alone.
+/// How a link from `output` to `input` connects, by their types and the stated `conversions`.
 pub fn pin_link_verdict(
     output: PinLinkEnd<'_>,
-    input: PinLinkEnd<'_>,
+    input: PinLinkInputEnd<'_>,
     conversions: &[PinConversion],
 ) -> PinLinkVerdict {
     if input
@@ -265,13 +295,14 @@ pub fn pin_link_verdict(
         .is_some_and(|input_mode| !input_mode.takes_a_wire())
     {
         return PinLinkVerdict {
-            outcome: PinLinkOutcome::Refused(PinLinkRefusal::InputTakesNoWire {
-                node_name: input.node_name.to_owned(),
-                input_name: input.port_name.to_owned(),
-            }),
+            outcome: PinLinkOutcome::Refused(PinLinkRefusal::input_takes_no_wire(
+                input.end.node_name,
+                input.end.port_name,
+            )),
             warnings: Vec::new(),
         };
     }
+    let input = input.end;
     let meanings_differ = match (output.meaning, input.meaning) {
         (Some(output_meaning), Some(input_meaning)) if output_meaning != input_meaning => {
             Some(PinLinkWarning::MeaningsDiffer {
@@ -294,11 +325,14 @@ pub fn pin_link_verdict(
             warnings,
         };
     }
-    let bridging: Vec<&PinConversion> = conversions
+    let bridging: Vec<BridgingConversion<'_>> = conversions
         .iter()
-        .filter(|conversion| {
-            direct_link_between(output.pin_type, &conversion.input_pin_type).is_some()
-                && direct_link_between(&conversion.output_pin_type, input.pin_type).is_some()
+        .filter_map(|conversion| {
+            Some(BridgingConversion {
+                conversion,
+                into_it: direct_link_between(output.pin_type, &conversion.input_pin_type)?,
+                out_of_it: direct_link_between(&conversion.output_pin_type, input.pin_type)?,
+            })
         })
         .collect();
     let refusal = PinLinkRefusal::PinTypesDoNotConnect {
@@ -306,26 +340,37 @@ pub fn pin_link_verdict(
         input: input.into(),
         conversions_that_bridge: bridging
             .iter()
-            .map(|conversion| conversion.node_type.clone())
+            .map(|bridging| bridging.conversion.node_type.clone())
             .collect(),
     };
-    let insertable: Vec<&PinConversion> = bridging
+    let mut insertable = bridging
         .into_iter()
-        .filter(|conversion| conversion.may_be_inserted())
-        .collect();
-    match insertable.as_slice() {
-        [conversion] => PinLinkVerdict {
-            outcome: PinLinkOutcome::ConnectsThroughConvertNode(ConvertNodeToInsert {
-                conversion: (*conversion).clone(),
-                refusal_without_it: refusal,
-            }),
-            warnings: meanings_differ.into_iter().collect(),
-        },
+        .filter(|bridging| bridging.conversion.may_be_inserted());
+    match (insertable.next(), insertable.next()) {
+        (Some(only_one), None) => {
+            let mut warnings = only_one.into_it.warnings;
+            warnings.extend(only_one.out_of_it.warnings);
+            warnings.extend(meanings_differ);
+            PinLinkVerdict {
+                outcome: PinLinkOutcome::ConnectsThroughConvertNode(ConvertNodeToInsert {
+                    conversion: only_one.conversion.clone(),
+                    refusal_without_it: refusal,
+                }),
+                warnings,
+            }
+        }
         _ => PinLinkVerdict {
             outcome: PinLinkOutcome::Refused(refusal),
             warnings: Vec::new(),
         },
     }
+}
+
+/// A conversion that bridges two ends, with the direct link into it and out of it.
+struct BridgingConversion<'conversion> {
+    conversion: &'conversion PinConversion,
+    into_it: DirectPinLink,
+    out_of_it: DirectPinLink,
 }
 
 /// A link a direct rule makes: as it is, or through a free conversion, with what it warns of.
@@ -357,8 +402,7 @@ impl DirectPinLink {
     }
 }
 
-/// How an output of `output` connects to an input of `input` with nothing between them; `None`
-/// when no direct rule joins them.
+/// How an output of `output` connects to an input of `input` with nothing between them.
 fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLink> {
     use FreePinConversion::{
         BetweenNumbers, BetweenVectors, MenuOptionNameAsString, NumberSpreadOverColor,
@@ -376,7 +420,7 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
                 pixel_formats: input_formats,
             },
         ) => {
-            if output_formats.is_empty() {
+            if output_formats.is_empty() && !input_formats.is_empty() {
                 Some(DirectPinLink::warning(
                     PinLinkWarning::TextureOutputStatesNoFormat,
                 ))
@@ -431,7 +475,35 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
                 ))
             }
         }
-        _ if output == input => Some(DirectPinLink::as_it_is()),
+        (
+            PinType::Bundle {
+                members: output_members,
+            },
+            PinType::Bundle {
+                members: input_members,
+            },
+        ) if the_same_but_for_member_meanings(output, input) => Some(DirectPinLink {
+            free_conversion: None,
+            warnings: output_members
+                .iter()
+                .zip(input_members)
+                .filter_map(|(output_member, input_member)| {
+                    match (&output_member.meaning, &input_member.meaning) {
+                        (Some(output_meaning), Some(input_meaning))
+                            if output_meaning != input_meaning =>
+                        {
+                            Some(PinLinkWarning::MemberMeaningsDiffer {
+                                member_name: output_member.name.clone(),
+                                output_meaning: output_meaning.clone(),
+                                input_meaning: input_meaning.clone(),
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect(),
+        }),
+        _ if the_same_but_for_member_meanings(output, input) => Some(DirectPinLink::as_it_is()),
         (output_number, input_number)
             if output_number.is_a_number() && input_number.is_a_number() =>
         {
@@ -457,35 +529,36 @@ fn direct_link_between(output: &PinType, input: &PinType) -> Option<DirectPinLin
     }
 }
 
+/// Whether `one` and `other` are one type, their bundle members compared by name and type only.
+fn the_same_but_for_member_meanings(one: &PinType, other: &PinType) -> bool {
+    match (one, other) {
+        (PinType::Bundle { members: one }, PinType::Bundle { members: other }) => {
+            one.len() == other.len()
+                && one.iter().zip(other).all(|(one, other)| {
+                    one.name == other.name
+                        && the_same_but_for_member_meanings(&one.member_type, &other.member_type)
+                })
+        }
+        (
+            PinType::ListOf { element_type: one },
+            PinType::ListOf {
+                element_type: other,
+            },
+        ) => the_same_but_for_member_meanings(one, other),
+        _ => one == other,
+    }
+}
+
 /// Whether every one `output` states is one `input` takes, or `input` takes any by stating none.
 fn every_one_is_taken<T: PartialEq>(output: &[T], input: &[T]) -> bool {
     input.is_empty() || output.iter().all(|stated| input.contains(stated))
 }
 
-/// A link that holds when the input takes any, or the output states some and each is one the
-/// input takes; an output stating none may send what the input does not take.
+/// A direct link when the input takes any, or the output states some and each is one it takes.
 fn states_only_what_the_input_takes<T: PartialEq>(
     output: &[T],
     input: &[T],
 ) -> Option<DirectPinLink> {
     (input.is_empty() || (!output.is_empty() && every_one_is_taken(output, input)))
         .then(DirectPinLink::as_it_is)
-}
-
-impl PinType {
-    /// Whether a port of this type may be the end of a link: every type but a setting-only one.
-    pub fn takes_a_wire(&self) -> bool {
-        !matches!(
-            self,
-            Self::NodeReference { .. } | Self::PinTypeChoice { .. }
-        )
-    }
-
-    /// Whether this is a Boolean, an Integer or a Float, each a message of one number.
-    fn is_a_number(&self) -> bool {
-        matches!(
-            self,
-            Self::Boolean {} | Self::Integer { .. } | Self::Float { .. }
-        )
-    }
 }

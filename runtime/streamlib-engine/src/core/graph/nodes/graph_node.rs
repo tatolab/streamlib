@@ -298,9 +298,6 @@ impl GraphNodeWithComponents for GraphNode {
 /// The refusal of a link into input `input` of node `node`, a setting, which takes no wire.
 pub(crate) fn the_refusal_of_a_link_into_a_setting(input: &str, node: &str) -> crate::core::Error {
     crate::core::Error::PinLinkRefused(Box::new(
-        crate::core::descriptors::PinLinkRefusal::InputTakesNoWire {
-            node_name: node.to_owned(),
-            input_name: input.to_owned(),
-        },
+        crate::core::descriptors::PinLinkRefusal::input_takes_no_wire(node, input),
     ))
 }

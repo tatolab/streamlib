@@ -27,7 +27,7 @@ use crate::core::graph::{
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
-use crate::core::nodes::{NodeSpec, NodeState};
+use crate::core::nodes::{NODE_REGISTRY, NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::ChannelName;
@@ -466,7 +466,12 @@ fn apply_a_link(
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
             refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-            refuse_a_link_its_pin_types_or_families_refuse(graph, &from, &to)?;
+            refuse_a_link_its_pin_types_or_families_refuse(
+                graph,
+                &from,
+                &to,
+                &NODE_REGISTRY.pin_conversions(),
+            )?;
 
             let channel =
                 crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())

@@ -29,6 +29,9 @@ const KELVIN_SOURCE: &str = "VerdictCheckKelvinSource";
 const RANKINE_SINK: &str = "VerdictCheckRankineSink";
 const CELSIUS_TO_FAHRENHEIT: &str = "VerdictCheckCelsiusToFahrenheit";
 const KELVIN_TO_RANKINE: &str = "VerdictCheckKelvinToRankine";
+const DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS: &str = "VerdictCheckDescribedOnlyFahrenheitToCelsius";
+const ENCODER_CODEC_FROM_CONFIG: &str = "VerdictCheckEncoderCodecFromConfig";
+const H264_SINK: &str = "VerdictCheckH264Sink";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -55,6 +58,17 @@ fn register(descriptor: NodeDescriptor) {
     NODE_REGISTRY
         .register_descriptor_only(descriptor)
         .expect("register the fixture descriptor");
+}
+
+/// Register `descriptor` with a constructor, as a conversion is offered only by a node type
+/// whose nodes can be created.
+fn register_with_a_constructor(descriptor: NodeDescriptor) {
+    NODE_REGISTRY
+        .register_with_a_constructor_for_a_test(
+            descriptor,
+            Box::new(|_node| Err(Error::NotSupported("a fixture runs no node".to_owned()))),
+        )
+        .expect("register the fixture node type");
 }
 
 fn a_node_type(
@@ -117,7 +131,7 @@ fn register_the_verdict_fixture_node_types() {
             vec![a_typed_port("temperature", temperature("Rankine"))],
             Vec::new(),
         ));
-        register(
+        register_with_a_constructor(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(CELSIUS_TO_FAHRENHEIT),
                 vec![a_typed_port("celsius", temperature("Celsius"))],
@@ -125,7 +139,7 @@ fn register_the_verdict_fixture_node_types() {
             )
             .stating_a_conversion(),
         );
-        register(
+        register_with_a_constructor(
             a_node_type(
                 class_path(KELVIN_TO_RANKINE),
                 vec![a_typed_port("kelvin", temperature("Kelvin"))],
@@ -133,14 +147,53 @@ fn register_the_verdict_fixture_node_types() {
             )
             .stating_a_conversion(),
         );
+        let encoded_video = || PinType::EncodedVideo { codecs: Vec::new() };
+        register(a_node_type(
+            class_path(ENCODER_CODEC_FROM_CONFIG),
+            Vec::new(),
+            vec![PortDescriptor {
+                family: PortFamilyDeclaration {
+                    codec_from_config_key: Some("codec".to_owned()),
+                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                },
+                ..a_typed_port("packets", encoded_video())
+            }],
+        ));
+        register(a_node_type(
+            class_path(H264_SINK),
+            vec![PortDescriptor {
+                family: PortFamilyDeclaration {
+                    requires_codec: vec!["h264".to_owned()],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Packets)
+                },
+                ..a_typed_port("packets", encoded_video())
+            }],
+            Vec::new(),
+        ));
+        register(
+            a_node_type(
+                NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
+                vec![a_typed_port("fahrenheit", temperature("Fahrenheit"))],
+                vec![a_typed_port("celsius", temperature("Celsius"))],
+            )
+            .stating_a_conversion(),
+        );
     });
 }
 
 fn a_node_of(compiler: &Compiler, node_type: NodeClassImportPath) -> NodeRunId {
+    a_node_configured(compiler, node_type, Value::Null)
+}
+
+fn a_node_configured(
+    compiler: &Compiler,
+    node_type: NodeClassImportPath,
+    config: Value,
+) -> NodeRunId {
     compiler.scope(|graph, _tx| {
         graph
             .traversal_mut()
-            .add_v(NodeSpec::new(node_type, Value::Null))
+            .add_v(NodeSpec::new(node_type, config))
             .expect("the node is named")
             .first()
             .expect("the node is created")
@@ -346,7 +399,63 @@ fn a_conversion_of_another_shape_is_refused_at_registration() {
         "{refusal}"
     );
     assert!(
-        !NODE_REGISTRY.is_registered(&class_path("VerdictCheckConversionWithTwoOutputs")),
+        NODE_REGISTRY
+            .descriptor(&class_path("VerdictCheckConversionWithTwoOutputs"))
+            .is_none(),
         "the refused node type is not registered"
     );
+}
+
+/// A node type registered with no constructor is never offered as a conversion: no node of it
+/// could be placed.
+#[test]
+fn a_conversion_no_node_of_which_can_be_created_is_never_offered() {
+    register_the_verdict_fixture_node_types();
+    let offered: Vec<NodeClassImportPath> = NODE_REGISTRY
+        .pin_conversions()
+        .iter()
+        .map(|conversion| conversion.node_type.clone())
+        .collect();
+    assert!(
+        offered.contains(&NodeClassImportPath::of_built_in_node(
+            CELSIUS_TO_FAHRENHEIT
+        )),
+        "{offered:?}"
+    );
+    assert!(
+        !offered.contains(&NodeClassImportPath::of_built_in_node(
+            DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS
+        )),
+        "{offered:?}"
+    );
+}
+
+/// An output whose codec its node's config names is judged by that codec, typed or not: into an
+/// input requiring h264, an h264 encoder connects and an h265 one is refused.
+///
+/// Mental-revert: judging the two typed ends by the verdict alone connects both.
+#[test]
+fn a_typed_output_whose_config_names_its_codec_is_judged_by_that_codec() {
+    register_the_verdict_fixture_node_types();
+    for (codec, connects) in [("h264", true), ("h265", false)] {
+        let compiler = Arc::new(Compiler::new());
+        let source = a_node_configured(
+            &compiler,
+            class_path(ENCODER_CODEC_FROM_CONFIG),
+            serde_json::json!({ "codec": codec }),
+        );
+        let sink = a_node_of(&compiler, class_path(H264_SINK));
+        let connected = connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(source, "packets"),
+            InputLinkPortRef::new(sink, "packets"),
+        );
+        match (connected, connects) {
+            (Ok(_), true) => {}
+            (Err(Error::InvalidLink(words)), false) => {
+                assert!(words.contains("requires a codec in"), "{words}");
+            }
+            (outcome, _) => panic!("an {codec} encoder into an h264 input: {outcome:?}"),
+        }
+    }
 }

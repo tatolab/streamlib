@@ -212,10 +212,11 @@ fn flatten_one_level(
                     )
                 },
             )
-            .map_err(|refusal| {
-                Error::GraphError(format!(
+            .map_err(|refusal| match refusal {
+                Error::PinLinkRefused(_) => refusal,
+                refusal => Error::GraphError(format!(
                     "fragment `{fragment_path_of_names}` does not flatten: {refusal}"
-                ))
+                )),
             })?;
         nodes_of_the_fragments_held.extend(interface.graph_the_runtime_runs.nodes);
         links_of_the_fragments_held.extend(interface.graph_the_runtime_runs.links);

@@ -96,4 +96,10 @@ async fn a_link_into_a_setting_is_refused_as_taking_no_wire() {
         Some("value"),
         "{refusal:?}"
     );
+    assert_eq!(
+        refusal.refused_node.as_deref(),
+        Some(VOLUME_GRAPH_INPUT_NODE_UUID),
+        "the node as the caller named it: {refusal:?}"
+    );
+    assert!(refusal.runtime_words.contains("`volume`"), "{refusal:?}");
 }

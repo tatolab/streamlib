@@ -74,6 +74,22 @@ impl PinType {
             Self::PinTypeChoice { .. } => BuiltInPinTypeName::PinTypeChoice,
         }
     }
+
+    /// Whether a link may end at a pin of this type; the rows of the two that never may say so.
+    pub fn takes_a_wire(&self) -> bool {
+        !matches!(
+            self,
+            Self::NodeReference { .. } | Self::PinTypeChoice { .. }
+        )
+    }
+
+    /// Whether this is a Boolean, an Integer or a Float, each a message of one number.
+    pub(crate) fn is_a_number(&self) -> bool {
+        matches!(
+            self,
+            Self::Boolean {} | Self::Integer { .. } | Self::Float { .. }
+        )
+    }
 }
 
 /// An annotation a pin of a type may state, by its key in [`super::PinAnnotations`].
