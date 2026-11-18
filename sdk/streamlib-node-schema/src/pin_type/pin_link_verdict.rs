@@ -201,9 +201,13 @@ impl fmt::Display for PinLinkRefusal {
 /// The node or nodes a person places between an output of `output` and an input of `input` to
 /// convert one into the other: an encoder or decoder only of a codec the encoded end states, or
 /// of any when it states none, and between two unencoded types the node the family table names.
+/// Between Image or Channels and Array the table's node states the pin types it converts, so it
+/// is named only as a conversion that bridges, never by its family: an `nv12` Texture is not
+/// sent to a `TextureToTensor` that does not take it.
 fn node_placed_between(output: &PinType, input: &PinType) -> Option<String> {
     use CodecDirection::{Decode, Encode};
     use EncodedMedia::{Audio, Video};
+    use PortFamily::{Array, Channels, Image};
     match (output, input) {
         (PinType::EncodedVideo { codecs }, PinType::Texture { .. }) => {
             codec_nodes_placed_between(Video, Decode, codecs)
@@ -219,10 +223,12 @@ fn node_placed_between(output: &PinType, input: &PinType) -> Option<String> {
         }
         (PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }, _)
         | (_, PinType::EncodedVideo { .. } | PinType::EncodedAudio { .. }) => None,
-        _ => node_placed_between_families(
-            PortFamily::carrying(output)?,
-            PortFamily::carrying(input)?,
-        ),
+        _ => match (PortFamily::carrying(output)?, PortFamily::carrying(input)?) {
+            (Image | Channels, Array) | (Array, Image | Channels) => None,
+            (output_family, input_family) => {
+                node_placed_between_families(output_family, input_family)
+            }
+        },
     }
 }
 

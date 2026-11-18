@@ -592,10 +592,10 @@ pub(crate) fn node_placed_between_families(from: PortFamily, to: PortFamily) -> 
     let codec_nodes = |media, direction| codec_nodes_placed_between(media, direction, &[]);
     let one_node = |words: &str| Some(words.to_owned());
     match (from, to) {
-        (Image, Array) => one_node("place an ImageToArray node between them"),
-        (Array, Image) => one_node("place an ArrayToImage node between them"),
-        (Channels, Array) => one_node("place a ChannelsToArray node between them"),
-        (Array, Channels) => one_node("place an ArrayToChannels node between them"),
+        (Image, Array) => one_node("place a TextureToTensor node between them"),
+        (Array, Image) => one_node("place a TensorToTexture node between them"),
+        (Channels, Array) => one_node("place an AudioToTensor node between them"),
+        (Array, Channels) => one_node("place a TensorToAudio node between them"),
         (Channels, Records) => one_node("place a ChannelsToRecords node between them"),
         (Records, Channels) => one_node("place a RecordsToChannels node between them"),
         (Image, Packets) => codec_nodes(EncodedMedia::Video, CodecDirection::Encode),

@@ -139,7 +139,7 @@ fn the_fold_reaches_every_level_of_a_fragment() {
 
 #[test]
 fn each_renamed_node_type_takes_its_new_type_and_keeps_everything_else() {
-    assert_eq!(RENAMED_NODE_TYPES.len(), 30);
+    assert_eq!(RENAMED_NODE_TYPES.len(), 34);
     for (from, to) in RENAMED_NODE_TYPES {
         let document = json!({
             "nodes": [{
@@ -161,6 +161,75 @@ fn each_renamed_node_type_takes_its_new_type_and_keeps_everything_else() {
             Some(expected),
             "{from}"
         );
+    }
+}
+
+#[test]
+fn each_built_in_conversion_takes_the_name_of_the_pin_types_it_converts_between() {
+    for (old_type, new_type, input_port, output_port, config) in [
+        (
+            "tatolab.stream:ImageToArray",
+            "tatolab.stream:TextureToTensor",
+            "image",
+            "array",
+            json!({}),
+        ),
+        (
+            "tatolab.stream:ArrayToImage",
+            "tatolab.stream:TensorToTexture",
+            "array",
+            "image",
+            json!({"attribute": "image", "format": "bgra8_unorm"}),
+        ),
+        (
+            "tatolab.stream:ChannelsToArray",
+            "tatolab.stream:AudioToTensor",
+            "channels",
+            "array",
+            json!({}),
+        ),
+        (
+            "tatolab.stream:ArrayToChannels",
+            "tatolab.stream:TensorToAudio",
+            "array",
+            "channels",
+            json!({"channel_names": ["left", "right"], "sample_rate": 44100}),
+        ),
+    ] {
+        let document = json!({
+            "nodes": [{
+                "id": "00000000-0000-0000-0000-000000000001",
+                "name": "convert",
+                "type": old_type,
+                "config": config,
+                "studio": {"position": {"x": 10.0, "y": 20.0}}
+            }],
+            "links": [
+                {
+                    "source": {"node": "00000000-0000-0000-0000-000000000002", "port": "out"},
+                    "target": {"node": "00000000-0000-0000-0000-000000000001", "port": input_port}
+                },
+                {
+                    "source": {"node": "00000000-0000-0000-0000-000000000001", "port": output_port},
+                    "target": {"node": "00000000-0000-0000-0000-000000000003", "port": "in"}
+                }
+            ]
+        });
+        let mut expected = document.clone();
+        expected["nodes"][0] = json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "name": "convert",
+            "type": new_type,
+            "studio": {"position": {"x": 10.0, "y": 20.0}}
+        });
+        if config.as_object().is_some_and(|config| !config.is_empty()) {
+            expected["nodes"][0]["input_values"] = config;
+        }
+
+        let upgraded = upgraded_stream_document(&document).expect("an upgrade");
+
+        assert_eq!(upgraded, expected, "{old_type}");
+        assert_eq!(upgraded_stream_document(&upgraded), None, "{old_type}");
     }
 }
 

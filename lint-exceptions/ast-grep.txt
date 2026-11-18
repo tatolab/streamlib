@@ -259,14 +259,6 @@
 1 no-inline-test-module runtime/streamlib-media-builtins/src/audio_block.rs
 1 no-inline-test-module runtime/streamlib-media-builtins/src/h273_color_vui_translation.rs
 1 no-inline-test-module runtime/streamlib-media-builtins/src/lib.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/array_to_channels.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/array_to_image.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/channels_to_array.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/channels_to_records.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/conversion_node_config_defaults.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/conversion_node_config_refusals.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/image_to_array.rs
-1 no-inline-test-module runtime/streamlib-media-builtins/src/port_family_conversion/records_to_channels.rs
 1 no-inline-test-module runtime/streamlib-media-builtins/src/video_frame.rs
 1 no-inline-test-module runtime/streamlib-owned-device-video-codec-nodes/src/encoded_video_group_entry_gate.rs
 1 no-inline-test-module runtime/streamlib-owned-device-video-codec-nodes/src/encoded_video_publication.rs

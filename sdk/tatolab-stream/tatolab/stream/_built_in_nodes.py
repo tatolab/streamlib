@@ -14,111 +14,26 @@ from typing import ClassVar, Literal, TypedDict
 from ._built_in_node import BuiltInNode
 
 __all__ = [
-    "ArrayToChannels",
-    "ArrayToChannelsConfig",
-    "ArrayToImage",
-    "ArrayToImageConfig",
-    "ChannelsToArray",
-    "ChannelsToArrayConfig",
+    "AudioToTensor",
+    "AudioToTensorConfig",
     "ChannelsToRecords",
     "ChannelsToRecordsConfig",
-    "ImageToArray",
-    "ImageToArrayConfig",
     "RecordsToChannels",
     "RecordsToChannelsConfig",
+    "TensorToAudio",
+    "TensorToAudioConfig",
+    "TensorToTexture",
+    "TensorToTextureConfig",
+    "TextureToTensor",
+    "TextureToTensorConfig",
 ]
 
 
-class ArrayToChannelsConfig(TypedDict, total=False):
-    """`ArrayToChannels`'s config: the keys `stream_builder.add` takes."""
-
-    attribute: str
-    """The attribute of each Array frame read as the block's samples.
-
-    Default: `"samples"`.
-    """
-
-    channel_names: list[str]
-    """The names of the channels `channels` carries, one per row of the attribute.
-
-    Default: `["value"]`.
-    """
-
-    sample_rate: int
-    """The sample rate `channels` states, in samples per second per channel.
-
-    Default: `48000`.
-    """
+class AudioToTensorConfig(TypedDict, total=False):
+    """`AudioToTensor`'s config: the keys `stream_builder.add` takes."""
 
 
-class ArrayToChannels(BuiltInNode[ArrayToChannelsConfig]):
-    """Converts one attribute of each Array frame on `array`, `attribute` (`samples` by
-    default), into one Channels block on `channels`. The attribute is a CPU `[channels,
-    samples]` tensor of `float32` or `float64`, one row per name in `channel_names`, and
-    its samples are copied once into the block. The blocks are stamped at `sample_rate`,
-    their start samples counted from the first block. A frame without the attribute, or
-    whose attribute is GPU-resident, of another dtype or of another shape, is refused
-    and writes nothing.
-
-    Inputs:
-        `array` (ordered): The Array frames whose `attribute` is converted.
-
-    Outputs:
-        `channels`: One Channels block per frame, one channel per name in
-            `channel_names`.
-
-    Config: `ArrayToChannelsConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:ArrayToChannels"
-
-
-class ArrayToImageConfig(TypedDict, total=False):
-    """`ArrayToImage`'s config: the keys `stream_builder.add` takes."""
-
-    attribute: str
-    """The attribute of each Array frame read as the image.
-
-    Default: `"image"`.
-    """
-
-    format: str
-    """The texture format each Image frame states, by its wire name.
-
-    Default: `"rgba8_unorm"`.
-    """
-
-
-class ArrayToImage(BuiltInNode[ArrayToImageConfig]):
-    """Converts one attribute of each Array frame on `array`, `attribute` (`image` by
-    default), into one Image frame on `image` stating `format` (`rgba8_unorm` by
-    default; also `rgba8_unorm_srgb`, `bgra8_unorm`, `bgra8_unorm_srgb`, `rgba16_float`
-    and `rgba32_float`). The attribute is an `[h, w, 4]` tensor of the format's element
-    type, its channels in the format's order: `uint8` for the 8-bit formats, `float16`
-    for `rgba16_float` and `float32` for `rgba32_float`. A GPU attribute's pool slot
-    becomes the Image frame's slot and nothing is copied, so the slot holds what
-    `format` states, as an attribute `ImageToArray` wrote does. A CPU attribute is
-    copied once into a pixel buffer from this node's own output pool. A frame without
-    the attribute, or whose attribute is of another dtype or another shape, is refused
-    and writes nothing. Each Image frame states no colour.
-
-    Inputs:
-        `array` (newest): The Array frames whose `attribute` is converted.
-
-    Outputs:
-        `image`: One Image frame per Array frame.
-
-    Config: `ArrayToImageConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:ArrayToImage"
-
-
-class ChannelsToArrayConfig(TypedDict, total=False):
-    """`ChannelsToArray`'s config: the keys `stream_builder.add` takes."""
-
-
-class ChannelsToArray(BuiltInNode[ChannelsToArrayConfig]):
+class AudioToTensor(BuiltInNode[AudioToTensorConfig]):
     """Converts each Channels block on `channels` into one Array frame on `array`, whose
     one CPU attribute `samples` holds the block's samples as a `[channels, samples]`
     tensor of the block's sample type, `float32` or `float64`. The samples are copied
@@ -131,10 +46,10 @@ class ChannelsToArray(BuiltInNode[ChannelsToArrayConfig]):
     Outputs:
         `array`: One Array frame per block, its samples as the `samples` attribute.
 
-    Config: `ChannelsToArrayConfig`.
+    Config: `AudioToTensorConfig`.
     """
 
-    type: ClassVar[str] = "tatolab.stream:ChannelsToArray"
+    type: ClassVar[str] = "tatolab.stream:AudioToTensor"
 
 
 class ChannelsToRecordsConfig(TypedDict, total=False):
@@ -165,36 +80,6 @@ class ChannelsToRecords(BuiltInNode[ChannelsToRecordsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:ChannelsToRecords"
-
-
-class ImageToArrayConfig(TypedDict, total=False):
-    """`ImageToArray`'s config: the keys `stream_builder.add` takes."""
-
-
-class ImageToArray(BuiltInNode[ImageToArrayConfig]):
-    """Converts each Image frame on `image` into one Array frame on `array`, whose one
-    GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, 4]`
-    tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for `rgba16_float` and
-    `float32` for `rgba32_float`, its channels in the frame's own order. This node
-    copies nothing. A reader whose device maps the slot linearly reads the tensor in
-    place, at the slot's own address; one that cannot reads it through one GPU copy into
-    a linear staging buffer, as a read of the Image frame itself does. The tensor's rows
-    are the slot's rows, so a padded row pitch is a stride, never a copy. An `nv12`
-    frame has two planes and no one-tensor layout, and is refused and writes nothing. A
-    reader claims the slot when it reads the Array frame, so a producer that has
-    recycled the slot by then makes the read a counted loss, never another frame's
-    pixels.
-
-    Inputs:
-        `image` (newest): The Image frames to borrow as tensors.
-
-    Outputs:
-        `array`: One Array frame per Image frame, its slot as the `image` attribute.
-
-    Config: `ImageToArrayConfig`.
-    """
-
-    type: ClassVar[str] = "tatolab.stream:ImageToArray"
 
 
 class RecordsToChannelsConfig(TypedDict, total=False):
@@ -234,3 +119,118 @@ class RecordsToChannels(BuiltInNode[RecordsToChannelsConfig]):
     """
 
     type: ClassVar[str] = "tatolab.stream:RecordsToChannels"
+
+
+class TensorToAudioConfig(TypedDict, total=False):
+    """`TensorToAudio`'s config: the keys `stream_builder.add` takes."""
+
+    attribute: str
+    """The attribute of each Array frame read as the block's samples.
+
+    Default: `"samples"`.
+    """
+
+    channel_names: list[str]
+    """The names of the channels `channels` carries, one per row of the attribute.
+
+    Default: `["value"]`.
+    """
+
+    sample_rate: int
+    """The sample rate `channels` states, in samples per second per channel.
+
+    Default: `48000`.
+    """
+
+
+class TensorToAudio(BuiltInNode[TensorToAudioConfig]):
+    """Converts one attribute of each Array frame on `array`, `attribute` (`samples` by
+    default), into one Channels block on `channels`. The attribute is a CPU `[channels,
+    samples]` tensor of `float32` or `float64`, one row per name in `channel_names`, and
+    its samples are copied once into the block. The blocks are stamped at `sample_rate`,
+    their start samples counted from the first block. A frame without the attribute, or
+    whose attribute is GPU-resident, of another dtype or of another shape, is refused
+    and writes nothing.
+
+    Inputs:
+        `array` (ordered): The Array frames whose `attribute` is converted.
+
+    Outputs:
+        `channels`: One Channels block per frame, one channel per name in
+            `channel_names`.
+
+    Config: `TensorToAudioConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:TensorToAudio"
+
+
+class TensorToTextureConfig(TypedDict, total=False):
+    """`TensorToTexture`'s config: the keys `stream_builder.add` takes."""
+
+    attribute: str
+    """The attribute of each Array frame read as the image.
+
+    Default: `"image"`.
+    """
+
+    format: str
+    """The texture format each Image frame states, by its wire name.
+
+    Default: `"rgba8_unorm"`.
+    """
+
+
+class TensorToTexture(BuiltInNode[TensorToTextureConfig]):
+    """Converts one attribute of each Array frame on `array`, `attribute` (`image` by
+    default), into one Image frame on `image` stating `format` (`rgba8_unorm` by
+    default; also `rgba8_unorm_srgb`, `bgra8_unorm`, `bgra8_unorm_srgb`, `rgba16_float`
+    and `rgba32_float`). The attribute is an `[h, w, 4]` tensor of the format's element
+    type, its channels in the format's order: `uint8` for the 8-bit formats, `float16`
+    for `rgba16_float` and `float32` for `rgba32_float`. A GPU attribute's pool slot
+    becomes the Image frame's slot and nothing is copied, so the slot holds what
+    `format` states, as an attribute `TextureToTensor` wrote does. A CPU attribute is
+    copied once into a pixel buffer from this node's own output pool. A frame without
+    the attribute, or whose attribute is of another dtype or another shape, is refused
+    and writes nothing. Each Image frame states no colour.
+
+    Inputs:
+        `array` (newest): The Array frames whose `attribute` is converted.
+
+    Outputs:
+        `image`: One Image frame per Array frame.
+
+    Config: `TensorToTextureConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:TensorToTexture"
+
+
+class TextureToTensorConfig(TypedDict, total=False):
+    """`TextureToTensor`'s config: the keys `stream_builder.add` takes."""
+
+
+class TextureToTensor(BuiltInNode[TextureToTensorConfig]):
+    """Converts each Image frame on `image` into one Array frame on `array`, whose one
+    GPU attribute `image` is the frame's own pool slot borrowed as an `[h, w, 4]`
+    tensor: `uint8` for an `rgba8` or `bgra8` frame, `float16` for `rgba16_float` and
+    `float32` for `rgba32_float`, its channels in the frame's own order. This node
+    copies nothing. A reader whose device maps the slot linearly reads the tensor in
+    place, at the slot's own address; one that cannot reads it through one GPU copy into
+    a linear staging buffer, as a read of the Image frame itself does. The tensor's rows
+    are the slot's rows, so a padded row pitch is a stride, never a copy. An `nv12`
+    frame has two planes and no one-tensor layout, so `image` does not take one, and one
+    that arrives is refused and writes nothing. A reader claims the slot when it reads
+    the Array frame, so a producer that has recycled the slot by then makes the read a
+    counted loss, never another frame's pixels.
+
+    Inputs:
+        `image` (newest): The Image frames to borrow as tensors.
+
+    Outputs:
+        `array`: One Array frame per Image frame, its slot as the `image` attribute.
+
+    Config: `TextureToTensorConfig`.
+    """
+
+    type: ClassVar[str] = "tatolab.stream:TextureToTensor"

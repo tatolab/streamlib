@@ -6,8 +6,8 @@ use crate::core::descriptors::{NodeClassImportPath, NodeClassShortName, NodeDesc
 
 fn descriptor_carrying(config_schema: Option<serde_json::Value>) -> NodeDescriptor {
     let descriptor = NodeDescriptor::new(
-        NodeClassShortName::new("ChannelsToArray").unwrap(),
-        NodeClassImportPath::new("streamlib_media_builtins::port_family_conversion").unwrap(),
+        NodeClassShortName::new("AudioToTensor").unwrap(),
+        NodeClassImportPath::new("streamlib_media_builtins::pin_type_conversion").unwrap(),
         "a probe",
     );
     match config_schema {
