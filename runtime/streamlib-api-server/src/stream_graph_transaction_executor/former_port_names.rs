@@ -11,6 +11,21 @@ use streamlib::sdk::graph::GraphNodePorts;
 
 use super::*;
 
+/// The current name of the port `name` names in `direction` on a node of `node_type`, as
+/// `stream_operations` resolves the type: the port's own name, also when `name` is one it had;
+/// `name` as it is when it is current, finds no port, or no type is known.
+pub(super) fn the_current_name_of_a_port(
+    name: String,
+    direction: PortDirection,
+    node_type: Option<String>,
+    stream_operations: &dyn RuntimeOperations,
+) -> String {
+    node_type
+        .and_then(|node_type| stream_operations.the_ports_a_node_type_declares(&node_type))
+        .and_then(|ports| ports.current_name(direction, &name).map(str::to_string))
+        .unwrap_or(name)
+}
+
 /// `request` with each input and link end it names under the current name of its port, each
 /// node, by UUID or by the `as` of an earlier add in `node_by_label`, as `staged_graph` holds it
 /// and `stream_operations` resolves its type. A name that is current, or finds no port, is left
@@ -22,14 +37,17 @@ pub(super) fn the_request_under_the_current_port_names(
     stream_operations: &dyn RuntimeOperations,
 ) -> StreamGraphAction {
     let current_name = |node: &str, name: String, direction: PortDirection| -> String {
-        node_by_label
-            .get(node)
-            .copied()
-            .or_else(|| Uuid::parse_str(node).ok())
-            .and_then(|node| staged_graph.node(node).ok())
-            .and_then(|node| stream_operations.the_ports_a_node_type_declares(&node.node_type))
-            .and_then(|ports| ports.current_name(direction, &name).map(str::to_string))
-            .unwrap_or(name)
+        the_current_name_of_a_port(
+            name,
+            direction,
+            node_by_label
+                .get(node)
+                .copied()
+                .or_else(|| Uuid::parse_str(node).ok())
+                .and_then(|node| staged_graph.node(node).ok())
+                .map(|node| node.node_type),
+            stream_operations,
+        )
     };
     let current_end =
         |end: StreamGraphActionLinkEnd, direction: PortDirection| StreamGraphActionLinkEnd {

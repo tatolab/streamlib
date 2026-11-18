@@ -23,6 +23,16 @@ pub const VIEW_CONTRACT_READ_MAJOR: u64 = 1;
 /// The highest minor of [`VIEW_CONTRACT_READ_MAJOR`] this runtime reads.
 pub const VIEW_CONTRACT_READ_MINOR: u64 = 0;
 
+/// The families of the outputs a panel writes: each value of one is set on the view node's input
+/// of the output's name, and published on the output.
+pub const FAMILIES_A_PANEL_WRITES: [PortFamily; 3] =
+    [PortFamily::Array, PortFamily::Channels, PortFamily::Records];
+
+/// Whether a panel writes an output of `family`.
+pub fn a_panel_writes(family: PortFamily) -> bool {
+    FAMILIES_A_PANEL_WRITES.contains(&family)
+}
+
 /// What `tatolab_view.json` declares, defaults filled in.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -228,32 +238,33 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             }
         }
     }
-    let names_an_output_may_not_take: BTreeSet<&str> = manifest
+    let input_names: BTreeSet<&str> = manifest
         .inputs
         .iter()
         .map(|input| input.name.as_str())
-        .chain(
-            manifest
-                .settings
-                .as_ref()
-                .and_then(|settings| settings.get("properties"))
-                .and_then(Value::as_object)
-                .into_iter()
-                .flat_map(|properties| properties.keys().map(String::as_str)),
-        )
+        .collect();
+    let setting_names: BTreeSet<&str> = manifest
+        .settings
+        .as_ref()
+        .and_then(|settings| settings.get("properties"))
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|properties| properties.keys().map(String::as_str))
         .collect();
     for (index, output) in manifest.outputs.iter().enumerate() {
-        if names_an_output_may_not_take.contains(output.name.as_str()) {
-            issue(
-                format!("outputs[{index}].name"),
-                &format!(
-                    "`{}` names an input or a setting too, and the value of an output is set on \
-                     the view node's input of the output's name, so an output is named after no \
-                     input or setting",
-                    output.name
-                ),
-            );
-        }
+        let name = output.name.as_str();
+        let why = if input_names.contains(name) {
+            format!("`{name}` names an input too, and a port is named once")
+        } else if a_panel_writes(output.family) && setting_names.contains(name) {
+            format!(
+                "`{name}` names a setting too, and the value of an output a panel writes is set \
+                 on the view node's input of the output's name, so such an output is named \
+                 after no setting"
+            )
+        } else {
+            continue;
+        };
+        issue(format!("outputs[{index}].name"), &why);
     }
     for (index, extension) in manifest.accepts.files.iter().enumerate() {
         if !is_a_file_extension(extension) {

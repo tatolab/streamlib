@@ -16,7 +16,8 @@ use streamlib_ipc_types::{
     DataChannelPayloadDescriptor, array_frame_payload_of_cpu_attributes,
 };
 use streamlib_project_repository::{
-    ProjectViewFolderRead, TatolabViewDeclaredPort, TatolabViewPlacement,
+    FAMILIES_A_PANEL_WRITES, ProjectViewFolderRead, TatolabViewDeclaredPort, TatolabViewPlacement,
+    a_panel_writes,
 };
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -104,16 +105,6 @@ pub(crate) fn the_node_type_of_a_project_view(
         })
         .collect();
     Ok(descriptor)
-}
-
-/// The families of the outputs a panel writes: each value of one is set on the view node's input
-/// of the output's name, and published on the output.
-const FAMILIES_A_PANEL_WRITES: [PortFamily; 3] =
-    [PortFamily::Array, PortFamily::Channels, PortFamily::Records];
-
-/// Whether a panel writes an output of `family`.
-pub(crate) fn a_panel_writes(family: PortFamily) -> bool {
-    FAMILIES_A_PANEL_WRITES.contains(&family)
 }
 
 /// Why a panel never writes an output of `family`, one it does not write.
@@ -321,6 +312,17 @@ pub(crate) struct ValueSourceNode {
     input_mailboxes: Option<InputMailboxes>,
 }
 
+/// One message a [`ValueSourceNode`] is about to publish: on output `port`, the value `value` as
+/// `payload`, and, for a Channels block, the sample the next block of `port` starts at once it
+/// is written.
+struct MessageToPublish<'value> {
+    port: &'value str,
+    value: &'value JsonValue,
+    payload_descriptor: DataChannelPayloadDescriptor,
+    payload: Vec<u8>,
+    channels_start_sample_after: Option<u64>,
+}
+
 impl ValueSourceNode {
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
         let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
@@ -361,12 +363,13 @@ impl ValueSourceNode {
         }
     }
 
-    /// Publish `value` on output `port`, stamped with stream time now, as its family carries it.
-    fn publish_a_value_written_onto_an_output(
-        &mut self,
-        port: &str,
-        value: &JsonValue,
-    ) -> Result<()> {
+    /// The message `value`, written onto output `port`, is sent as, refused in the words of the
+    /// output's family when it carries no such value.
+    fn the_message_to_publish<'value>(
+        &self,
+        port: &'value str,
+        value: &'value JsonValue,
+    ) -> Result<MessageToPublish<'value>> {
         let Some(&family) = self.family_of_each_output.get(port) else {
             return Err(Error::PortError(format!(
                 "node `{}` has no output `{port}`; its outputs are {}",
@@ -389,42 +392,33 @@ impl ValueSourceNode {
                         &why,
                     )
                 })?;
-        let output_writer = self.output_writer.as_ref().ok_or_else(|| {
-            Error::Runtime(format!(
-                "node `{}` holds no output writer yet",
-                self.node_name
-            ))
-        })?;
-        output_writer.write_bytes_described_by(
-            port,
-            &payload,
-            output_writer.stream_time_now_ns(),
-            MessageGroupBoundary::StartsGroup,
-            payload_descriptor,
-        )?;
-        if family == PortFamily::Channels {
+        let channels_start_sample_after = (family == PortFamily::Channels).then(|| {
             let body = ChannelsBlockDescriptorBody::from_descriptor_body(&payload_descriptor.body);
-            self.next_start_sample_of_each_channels_output.insert(
-                port.to_string(),
-                next_start_sample + u64::from(body.samples_per_channel),
-            );
-        }
-        self.current_value_of_each_output
-            .insert(port.to_string(), value.clone());
-        Ok(())
+            next_start_sample + u64::from(body.samples_per_channel)
+        });
+        Ok(MessageToPublish {
+            port,
+            value,
+            payload_descriptor,
+            payload,
+            channels_start_sample_after,
+        })
     }
 
     /// Publish the value each input of `input_values` names reads on its output of the same
     /// name: every value of an input of `set_live`, which a client has just set, each set being
     /// one message, and the value of any other input where it differs from what its output
-    /// carries; an output whose input reads nothing now keeps what it carries. Answers the values
-    /// of the inputs no output is named after.
+    /// carries; an output whose input reads nothing now keeps what it carries. Every message is
+    /// made before any is written, so a value one output does not carry publishes none and
+    /// advances no Channels output's start sample. Answers the values of the inputs no output is
+    /// named after.
     fn publish_each_input_value_on_its_output(
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
         set_live: &[String],
     ) -> Result<serde_json::Map<String, JsonValue>> {
         let mut read_by_an_input_alone = serde_json::Map::new();
+        let mut messages = Vec::new();
         for (input, value) in input_values {
             if !self.family_of_each_output.contains_key(input) {
                 read_by_an_input_alone.insert(input.clone(), value.clone());
@@ -433,8 +427,32 @@ impl ValueSourceNode {
             if set_live.contains(input)
                 || self.current_value_of_each_output.get(input) != Some(value)
             {
-                self.publish_a_value_written_onto_an_output(input, value)?;
+                messages.push(self.the_message_to_publish(input, value)?);
             }
+        }
+        if messages.is_empty() {
+            return Ok(read_by_an_input_alone);
+        }
+        let output_writer = self.output_writer.as_ref().ok_or_else(|| {
+            Error::Runtime(format!(
+                "node `{}` holds no output writer yet",
+                self.node_name
+            ))
+        })?;
+        for message in messages {
+            output_writer.write_bytes_described_by(
+                message.port,
+                &message.payload,
+                output_writer.stream_time_now_ns(),
+                MessageGroupBoundary::StartsGroup,
+                message.payload_descriptor,
+            )?;
+            if let Some(start_sample) = message.channels_start_sample_after {
+                self.next_start_sample_of_each_channels_output
+                    .insert(message.port.to_owned(), start_sample);
+            }
+            self.current_value_of_each_output
+                .insert(message.port.to_owned(), message.value.clone());
         }
         Ok(read_by_an_input_alone)
     }

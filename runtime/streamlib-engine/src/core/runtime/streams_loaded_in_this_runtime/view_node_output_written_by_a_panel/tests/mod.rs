@@ -54,6 +54,17 @@ fn the_pulse_manifest() -> Value {
     })
 }
 
+const BOARD_VIEW_TYPE: &str = "acme-dj:board";
+
+fn the_board_manifest() -> Value {
+    json!({
+        "contract": "1.0", "title": "Board", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "family": "channels" },
+                    { "name": "cue", "family": "records" },
+                    { "name": "fader", "family": "array" }]
+    })
+}
+
 const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
 
 fn the_level_manifest() -> Value {
@@ -100,6 +111,7 @@ impl AStreamOfAProjectBringingViews {
         a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
         a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
         a_view_folder_in(project_directory.path(), "pulse", &the_pulse_manifest());
+        a_view_folder_in(project_directory.path(), "board", &the_board_manifest());
         a_view_folder_in(
             project_directory.path(),
             "broken",
@@ -182,18 +194,28 @@ impl AStreamOfAProjectBringingViews {
     /// `write_studio_view_output` makes it in the engine: the view node is read, then its input
     /// of the output's name set live, as a `live` transaction of that one set hands it over.
     fn write(&self, node_uuid: &str, port: &str, value: Value) -> Result<()> {
-        let node =
-            self.async_runtime
-                .block_on(self.stream.the_running_view_node_a_panel_writes(
-                    node_uuid.to_string(),
-                    port.to_string(),
-                    value.clone(),
-                ))?;
-        match self.stream.set_input_values_live(&[InputValueToSetLive {
-            node,
-            input: port.to_string(),
-            value: Some(value),
-        }]) {
+        self.write_each(node_uuid, &[(port, value)])
+    }
+
+    /// Each of `writes`, a value onto an output of the view node `node_uuid`, set live as one
+    /// `live` transaction of those sets hands them over, the view node read for each first.
+    fn write_each(&self, node_uuid: &str, writes: &[(&str, Value)]) -> Result<()> {
+        let mut sets = Vec::new();
+        for (port, value) in writes {
+            let node =
+                self.async_runtime
+                    .block_on(self.stream.the_running_view_node_a_panel_writes(
+                        node_uuid.to_string(),
+                        port.to_string(),
+                        value.clone(),
+                    ))?;
+            sets.push(InputValueToSetLive {
+                node,
+                input: port.to_string(),
+                value: Some(value.clone()),
+            });
+        }
+        match self.stream.set_input_values_live(&sets) {
             Ok(InputValuesSetLive::ApartFromTheGraph(_)) => Ok(()),
             Ok(InputValuesSetLive::OnTheGraph) => {
                 panic!("a view node's input of an output's name is set live, apart from the graph")
@@ -201,9 +223,10 @@ impl AStreamOfAProjectBringingViews {
             Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt { refusal, .. }) => {
                 Err(Error::Configuration(refusal.words))
             }
-            Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
-                runtime_words, ..
-            }) => Err(Error::Configuration(runtime_words)),
+            Err(
+                LiveInputValueSetRefusal::TheInputIsResetWhileStopped { runtime_words, .. }
+                | LiveInputValueSetRefusal::TheInputIsSetTwice { runtime_words, .. },
+            ) => Err(Error::Configuration(runtime_words)),
             Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => Err(not_handed_over),
         }
     }

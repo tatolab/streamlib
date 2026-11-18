@@ -60,8 +60,8 @@ pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
 use former_port_names::{
-    move_each_former_port_name, the_placed_streams_with_each_former_port_name_moved,
-    the_request_under_the_current_port_names,
+    move_each_former_port_name, the_current_name_of_a_port,
+    the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
@@ -533,6 +533,12 @@ impl StreamGraphTransactionExecutor<'_> {
             if !stream_ids_in_order.contains(stream_id) {
                 stream_ids_in_order.push(stream_id.clone());
             }
+        }
+        if mode == GraphEditMode::Live {
+            self.refuse_an_input_set_twice_in_a_live_transaction(
+                &requests,
+                &stream_id_of_each_request,
+            )?;
         }
         if mode == GraphEditMode::Live
             && let Some(applied) = self.apply_input_values_set_live_apart_from_the_graph(

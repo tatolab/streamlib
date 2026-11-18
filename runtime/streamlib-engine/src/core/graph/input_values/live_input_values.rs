@@ -384,8 +384,29 @@ pub enum LiveInputValueSetRefusal {
         /// Why, in the runtime's words, naming the node and the input.
         runtime_words: String,
     },
+    /// The value at `set_index` is on an input an earlier value of the same set is on, of the
+    /// same node: it would replace the earlier value before the node is handed either, so one set
+    /// names each input once.
+    TheInputIsSetTwice {
+        /// The index of the second value on the input among those asked.
+        set_index: usize,
+        /// Why, in the runtime's words, naming the node and the input.
+        runtime_words: String,
+    },
     /// A helper or island reading one of the values was not handed it.
     NotHandedOver(crate::core::Error),
+}
+
+/// Why a live set naming input `input` of the node named `node_name` more than once is refused:
+/// the last value would replace each earlier one before the node is handed any, so the earlier
+/// writes would never be published.
+pub fn the_words_of_an_input_set_twice_live(input: &str, node_name: &str) -> String {
+    format!(
+        "input `{input}` of `{node_name}` is set twice in one live transaction, and the second \
+         value would replace the first before the node is handed either, so the first would \
+         never be published. To fix: set each input once, or make each write a transaction of \
+         its own"
+    )
 }
 
 /// One value set live apart from the graph: the input, the live value it held before, the
