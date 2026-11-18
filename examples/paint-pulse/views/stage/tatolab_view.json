@@ -1,7 +1,7 @@
 {
   "contract": "1.0",
   "title": "Paint Pulse stage",
-  "description": "The painted ball, live. Drag to orbit, scroll to zoom, click or press space to burst, double-click to reset.",
+  "description": "The painted ball, live, with its controls. Drag to orbit, scroll to zoom, click or press space to burst; the sliders change the music, ball, paint and colour live.",
   "entry": "index.html",
   "placement": "node",
   "inputs": [

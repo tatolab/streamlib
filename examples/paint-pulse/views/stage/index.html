@@ -8,6 +8,7 @@
 </head>
 <body>
 <main class="stage">
+  <section class="stage-view">
   <canvas class="stage-picture" tabindex="0" aria-label="The painted ball. Drag to orbit, scroll to zoom, click or press space to burst."></canvas>
   <p class="stage-notice" role="status"></p>
   <div class="stage-controls">
@@ -15,6 +16,12 @@
     <button type="button" class="stage-reset">Reset view</button>
     <span class="stage-hint">Drag to orbit · scroll to zoom · space to burst</span>
   </div>
+  </section>
+  <aside class="stage-panel" aria-label="Controls">
+    <h2 class="stage-panel-title">Controls</h2>
+    <p class="stage-panel-status" role="status">Finding the stream…</p>
+    <div class="stage-panel-controls"></div>
+  </aside>
 </main>
 <script type="module" src="stage.js"></script>
 </body>
