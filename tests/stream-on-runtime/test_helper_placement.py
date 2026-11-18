@@ -376,7 +376,7 @@ def test_a_gate_hands_a_python_classs_messages_on_unread_while_open_and_nothing_
         local_api.call_tool(
             "set_pin_value",
             {
-                "stream": local_api.stream_asset_of(stream_id),
+                "stream": stream_id,
                 "node": gate["id"],
                 "input": "open",
                 "value": is_open,
@@ -437,7 +437,7 @@ def test_a_crash_moves_a_gate_reading_a_python_class_out_of_its_reader_and_the_r
     def set_crash_live(crash: bool) -> None:
         local_api.call_tool(
             "set_pin_value",
-            {"stream": local_api.stream_asset_of(stream_id), "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
+            {"stream": stream_id, "node": gate["id"], "input": "crash", "value": crash, "mode": "live"},
         )
 
     set_crash_live(True)
@@ -564,7 +564,7 @@ def test_remap_added_and_removed_live_between_lfo_and_a_python_class_changes_wha
 
     def edit_live(tool: str, arguments: dict) -> dict:
         return local_api.call_tool(
-            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+            tool, {**arguments, "stream": stream_id, "mode": "live"}
         )
 
     def the_link_into_the_sink() -> str:

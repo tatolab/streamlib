@@ -378,7 +378,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         &input_values_after_the_set(&set_on.input_values, input, to.as_ref()),
                         input,
                         to.as_ref(),
-                        "/value",
+                        Some("/value"),
                     )?;
                 }
                 to.as_ref().and_then(|_| {

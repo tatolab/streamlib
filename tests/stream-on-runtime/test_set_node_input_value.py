@@ -48,7 +48,7 @@ def test_a_python_class_reads_each_input_value_set_live_then_saved(
         return local_api.call_tool(
             "set_node_input_value",
             {
-                "stream": local_api.stream_asset_of(stream_id),
+                "stream": stream_id,
                 "node": sink["id"],
                 "input": "brightness",
                 "value": value,
@@ -94,7 +94,7 @@ def test_a_setting_a_python_class_holds_in_its_config_is_set_live_and_a_bad_one_
 
     def the_set_of_the_level(value: object) -> dict:
         return {
-            "stream": local_api.stream_asset_of(stream_id),
+            "stream": stream_id,
             "node": configured_node["id"],
             "input": "level",
             "value": value,

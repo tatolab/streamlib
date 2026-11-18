@@ -129,7 +129,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         &input_values_after_the_set(&set_on.input_values, input, value),
                         input,
                         value,
-                        "/value",
+                        Some("/value"),
                     )
                     .map_err(refused)?;
                     vec![(input.clone(), value.cloned())]
@@ -406,14 +406,15 @@ fn the_node_type_of(node: &StreamGraphDocumentNode) -> Result<NodeClassImportPat
 
 /// Refuse `value`, set on input `input` of `set_on` with `None` taking it off, when the input
 /// does not take it, as the stream `stream_operations` runs resolves the node's type; the value
-/// is at `refused_params_pointer` in the action's params.
+/// is at `refused_params_pointer` in the action's params, and in none when the runtime made the
+/// set itself, as an undo or redo does.
 pub(super) fn refuse_a_value_the_input_does_not_take(
     stream_operations: &dyn RuntimeOperations,
     set_on: &StreamGraphDocumentNode,
     input_values_after_the_set: &Map<String, Value>,
     input: &str,
     value: Option<&Value>,
-    refused_params_pointer: &str,
+    refused_params_pointer: Option<&str>,
 ) -> Result<(), GraphRequestRefusal> {
     stream_operations
         .refuse_an_input_value_its_input_does_not_take(
@@ -424,7 +425,10 @@ pub(super) fn refuse_a_value_the_input_does_not_take(
             value,
         )
         .map_err(|refusal| {
-            GraphRequestRefusal::of_an_input_value(refusal, refused_params_pointer.to_owned())
+            GraphRequestRefusal::of_an_input_value(
+                refusal,
+                refused_params_pointer.map(str::to_owned),
+            )
         })
 }
 
@@ -492,10 +496,10 @@ fn the_input_value_sets_a_config_stands_for(
             &input_values_after_the_sets,
             input,
             value.as_ref(),
-            &format!(
+            Some(&format!(
                 "/config/{}",
                 streamlib_control_contract::the_json_pointer_token_of(input)
-            ),
+            )),
         )
         .map_err(|refusal| refusal.of_the_field(input))?;
     }

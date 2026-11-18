@@ -803,3 +803,49 @@ async fn a_value_held_live_alone_is_kept_by_a_refused_transaction_and_replaced_b
     let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
     assert_eq!(mixer["config"], json!({}), "{mixer}");
 }
+
+/// An undo that would set again a value the input does not take is refused with
+/// `input_value_not_valid` in words naming the input, pointing into no params, since the undo's
+/// own params name no value; nothing is undone.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_undo_setting_a_value_the_input_does_not_take_points_into_no_params() {
+    register_the_input_value_test_node_once();
+    register_the_stream_tools_test_sink_once();
+    let project = ProjectWithGraphDocuments::holding(json!({
+        "stream": "main",
+        "nodes": [
+            { "id": MIXER_NODE_UUID, "name": "mixer",
+              "type": InputValueTestNode::node_class_import_path().as_str(), "config": {},
+              "input_values": { "gain": "loud" } },
+        ],
+        "links": [],
+    }));
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    engine
+        .the_answer_or_the_refusal_of(
+            "set_node_input_value",
+            json!({ "stream": project.stream_asset_of("main"), "node": MIXER_NODE_UUID,
+                    "input": "gain", "value": 0.5, "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect("a value the input takes replaces the one it does not");
+    let saved_before_the_undo = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "undo",
+            json!({ "project_directory": project.path(), "author": an_agent_named("alice") }),
+        )
+        .await
+        .expect_err("the undo would set a value the input does not take");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::InputValueNotValid,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_params_pointer, None, "{refusal:?}");
+    assert!(refusal.runtime_words.contains("gain"), "{refusal:?}");
+    assert_eq!(project.the_graph_document_of("main"), saved_before_the_undo);
+}

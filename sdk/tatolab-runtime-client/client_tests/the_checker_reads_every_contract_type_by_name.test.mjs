@@ -47,8 +47,8 @@ test("a required field that is absent, a wrong type and a malformed UUID each na
     [["invalid_type", ["version"]], ["missing", ["up_for_ms"]]],
   );
   assert.deepEqual(
-    controlContractIssues("AddNodeRequest", { stream: "not-a-uuid", type: "t" }, "sent").map((issue) => [issue.code, issue.path]),
-    [["invalid_format", ["stream"]]],
+    controlContractIssues("AddNodeRequest", { stream: "main-0a1b2c", level: ["not-a-uuid"], type: "t" }, "sent").map((issue) => [issue.code, issue.path]),
+    [["invalid_format", ["level", 0]]],
   );
 });
 
