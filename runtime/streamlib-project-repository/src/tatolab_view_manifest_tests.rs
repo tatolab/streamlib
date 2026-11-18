@@ -188,3 +188,21 @@ fn a_settings_declaration_whose_setting_gives_no_default_does_not_open() {
         "`settings.properties.gain.default`: every setting gives its `default`."
     );
 }
+
+#[test]
+fn an_output_named_after_one_of_its_inputs_is_refused_by_name() {
+    let mut manifest = a_node_view_manifest();
+    manifest["outputs"] = json!([
+        { "name": "fader", "family": "array" },
+        { "name": "waveform", "family": "channels" }
+    ]);
+
+    let refusal = read_tatolab_view_manifest(&manifest)
+        .expect_err("an output and an input would be one name on one node");
+
+    assert!(
+        refusal.starts_with("`outputs[1].name`: `waveform` names an input too"),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("outputs[0]"), "{refusal}");
+}

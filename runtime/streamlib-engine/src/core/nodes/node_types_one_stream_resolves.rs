@@ -18,7 +18,9 @@ use crate::core::graph::{
     GraphNodeWithComponents, PortInfo,
 };
 use crate::core::nodes::node_instance_factory::the_node_type_as_registered;
-use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
+use crate::core::nodes::project_view_node::{
+    ValueSourceNode, the_node_type_of_a_project_view, with_the_input_of_each_output_a_panel_writes,
+};
 use crate::core::nodes::{
     DynamicNodeConstructorFn, NODE_REGISTRY, NodeInstance, the_node_type_of_a_top_level_graph_input,
 };
@@ -186,7 +188,7 @@ impl NodeTypesOneStreamResolves {
                 continue;
             }
             let descriptor = match the_node_type_as_registered(descriptor) {
-                Ok(descriptor) => descriptor,
+                Ok(descriptor) => with_the_input_of_each_output_a_panel_writes(descriptor),
                 Err(refusal) => {
                     why_no_node_takes_each_view.insert(
                         node_type,

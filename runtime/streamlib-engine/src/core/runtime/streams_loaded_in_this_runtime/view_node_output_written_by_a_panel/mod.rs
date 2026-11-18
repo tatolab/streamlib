@@ -1,31 +1,27 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A value a panel writes onto an output of a view node, handed to the node, which publishes it
-//! on that port. Live data only, so the graph and its document never change for it.
-
-use std::sync::Arc;
-
-use parking_lot::Mutex;
+//! The view node a panel writes onto an output of: the node whose input of that output's name a
+//! live `set_node_input_value` sets, which the node publishes on the output. Live data only, so
+//! the graph and its document never change for it.
 
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
-use crate::core::graph::{Graph, GraphNodeWithComponents, NodeInstanceComponent};
-use crate::core::nodes::{NodeInstance, NodeTypesOneStreamResolves, ValueSourceNode};
+use crate::core::graph::{Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent};
+use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::node_of_a_stream_not_running::the_refusal_of_a_reach_for_a_node_not_running;
 
 impl LoadedStreamInThisRuntime {
-    /// Hand `value` to the view node whose UUID, as the stream's graph lists it under `id`, is
-    /// `node_id`, which publishes it on its output `port_name`. Refused for a stream whose project
-    /// is stopped, and a node that is not of a view type, that does not run, or whose port does
-    /// not take the value. The stream's graph
-    /// lock is held across a compile, so the write waits off the async workers.
-    pub(crate) async fn hand_a_value_written_by_a_panel_to_a_view_node(
+    /// The UUID of the running view node whose UUID, as the stream's graph lists it under `id`,
+    /// is `node_id`, and one of whose outputs is `port_name`: the node a panel's write onto that
+    /// output sets the same-named input of. Refused for a stream whose project is stopped, and a
+    /// node that is not of a view type, that does not run, or that has no such output. The
+    /// stream's graph lock is held across a compile, so the read waits off the async workers.
+    pub(crate) async fn read_the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
-        value: serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<uuid::Uuid> {
         let why_a_node_that_has_not_failed_does_not_run =
             self.why_a_node_of_this_stream_that_has_not_failed_does_not_run();
         if why_a_node_that_has_not_failed_does_not_run
@@ -41,48 +37,41 @@ impl LoadedStreamInThisRuntime {
                 ),
             });
         }
-        let node_types = Arc::clone(self.node_types_this_stream_resolves());
         let stream_id = self.stream_id().to_string();
-        let compiler = Arc::clone(&self.compiler);
+        let compiler = std::sync::Arc::clone(&self.compiler);
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
-                let (node_name, node_instance) = compiler.scope(|graph, _tx| {
+                compiler.scope_reading(|graph| {
+                    let node_types = graph.node_types_this_stream_resolves();
                     the_running_view_node_of_the_id(
                         graph,
-                        &node_types,
+                        node_types,
                         &stream_id,
                         &node_id,
                         &port_name,
                         why_a_node_that_has_not_failed_does_not_run,
                     )
-                })?;
-                let mut node_instance = node_instance.lock();
-                let value_source = node_instance
-                    .as_any_mut()
-                    .downcast_mut::<ValueSourceNode>()
-                    .ok_or_else(|| {
-                        Error::Runtime(format!("node `{node_name}` runs no value source"))
-                    })?;
-                value_source.publish_a_value_written_onto_an_output(&port_name, &value)
+                    .map(|node| node.node_uuid)
+                })
             }),
         )
         .await
         .map_err(|join_failure| {
             Error::Runtime(format!(
-                "a write onto a node's output failed to join: {join_failure}"
+                "the read of the view node a panel writes failed to join: {join_failure}"
             ))
         })?
     }
 }
 
-fn the_running_view_node_of_the_id(
-    graph: &Graph,
+fn the_running_view_node_of_the_id<'graph>(
+    graph: &'graph Graph,
     node_types: &NodeTypesOneStreamResolves,
     stream_id: &str,
     node_id: &str,
     port_name: &str,
     why_a_node_that_has_not_failed_does_not_run: WhyANodeOfAStreamIsNotRunning,
-) -> Result<(String, Arc<Mutex<NodeInstance>>)> {
+) -> Result<&'graph GraphNode> {
     let Some(node) = graph
         .traversal()
         .v(())
@@ -100,21 +89,36 @@ fn the_running_view_node_of_the_id(
             node.display_name, node.node_type
         )));
     }
-    let node_instance = node
-        .get::<NodeInstanceComponent>()
-        .map(|instance| Arc::clone(&instance.0))
-        .ok_or_else(|| {
-            the_refusal_of_a_reach_for_a_node_not_running(
-                node,
-                why_a_node_that_has_not_failed_does_not_run,
-                format!(
-                    "view node `{node_id}` ({}) of the stream `{stream_id}` is not running, so \
-                     its output `{port_name}` publishes nothing yet",
-                    node.display_name
-                ),
-            )
-        })?;
-    Ok((node.display_name.clone(), node_instance))
+    if node.get::<NodeInstanceComponent>().is_none() {
+        return Err(the_refusal_of_a_reach_for_a_node_not_running(
+            node,
+            why_a_node_that_has_not_failed_does_not_run,
+            format!(
+                "view node `{node_id}` ({}) of the stream `{stream_id}` is not running, so its \
+                 output `{port_name}` publishes nothing yet",
+                node.display_name
+            ),
+        ));
+    }
+    if !node.has_output(port_name) {
+        let mut outputs: Vec<String> = node
+            .ports
+            .outputs
+            .iter()
+            .map(|port| format!("`{}`", port.name))
+            .collect();
+        outputs.sort();
+        return Err(Error::PortError(format!(
+            "node `{}` has no output `{port_name}`; its outputs are {}",
+            node.display_name,
+            if outputs.is_empty() {
+                "none".to_string()
+            } else {
+                outputs.join(", ")
+            }
+        )));
+    }
+    Ok(node)
 }
 
 #[cfg(test)]

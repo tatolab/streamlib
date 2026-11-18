@@ -105,6 +105,10 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
         "a link into a view node's input is wired as a channel, which takes a delivery profile"
     );
     assert_eq!(
+        descriptor.inputs[0].input_mode, None,
+        "a declared input takes a wire"
+    );
+    assert_eq!(
         ports(&descriptor.outputs),
         [(
             "crossfader".to_string(),
@@ -112,6 +116,43 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
             vec![PortFamily::Array],
             false
         )]
+    );
+}
+
+#[test]
+fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_each_run() {
+    let descriptor = with_the_input_of_each_output_a_panel_writes(
+        the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", the_deck_manifest()))
+            .expect("a node view that opens is a node type"),
+    );
+    let [_waveform, setting] = descriptor.inputs.as_slice() else {
+        panic!("the deck takes its declared input and one input of its output's name");
+    };
+
+    assert_eq!(
+        (setting.name.as_str(), setting.description.as_str()),
+        ("crossfader", "Left to right.")
+    );
+    assert_eq!(
+        setting.family.families_an_input_takes(),
+        vec![PortFamily::Array]
+    );
+    assert_eq!(
+        setting.input_mode,
+        Some(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun
+        }),
+        "the input takes no wire and is read each run"
+    );
+    assert!(!setting.input_mode.unwrap().takes_a_wire());
+    assert_eq!(
+        setting.lifetime,
+        NodeValueLifetime::Reset,
+        "what a panel writes is live data, which no Stop keeps"
+    );
+    assert!(
+        descriptor.outputs[0].flows_as_a_value(),
+        "the output keeps its last message for a reader that connects later"
     );
 }
 

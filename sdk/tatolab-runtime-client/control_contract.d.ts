@@ -5463,9 +5463,9 @@ export interface ControlOperations {
     result: ListProjectViewsToolResult;
   };
   /**
-   * Write a value a Tato Studio view produced onto its node's output port.
+   * Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.
    *
-   * Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; and a value its port's family does not take. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.
+   * Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each output a panel writes has an input of its name on the view node, a setting read each run that takes no wire, whose value the node publishes on the output; this call sets that input. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop. `graph` renders the value as the input's live value. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; and a value its port's family does not take. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.
    *
    * Since contract version 1, stable.
    */
@@ -5640,7 +5640,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 1;
+export declare const CONTROL_CONTRACT_REVISION: 2;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

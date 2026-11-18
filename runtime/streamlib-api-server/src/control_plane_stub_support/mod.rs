@@ -23,12 +23,12 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
                 )))
             })
         }
-        fn write_a_value_onto_an_output_of_a_view_node(
+        fn the_running_view_node_a_panel_writes(
             &self,
             node_id: String,
             port_name: String,
-            _value: ::serde_json::Value,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<::uuid::Uuid>>
+        {
             Box::pin(async move {
                 Err(::streamlib::sdk::error::Error::Link(format!(
                     "the stub stream runs no view node `{node_id}`, so its output `{port_name}` \

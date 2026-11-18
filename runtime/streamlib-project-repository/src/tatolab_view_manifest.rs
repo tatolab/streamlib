@@ -228,6 +228,22 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             }
         }
     }
+    for (index, output) in manifest.outputs.iter().enumerate() {
+        if manifest
+            .inputs
+            .iter()
+            .any(|input| input.name == output.name)
+        {
+            issue(
+                format!("outputs[{index}].name"),
+                &format!(
+                    "`{}` names an input too, and the value of an output is set on the view \
+                     node's input of the output's name, so an output is named after no input",
+                    output.name
+                ),
+            );
+        }
+    }
     for (index, extension) in manifest.accepts.files.iter().enumerate() {
         if !is_a_file_extension(extension) {
             issue(

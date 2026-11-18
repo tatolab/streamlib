@@ -25,7 +25,12 @@ fn the_node_catalog_reports_a_view_type_with_its_manifests_description_and_ports
             .iter()
             .map(|port| (port.name.as_str(), port.description.as_str()))
             .collect::<Vec<_>>(),
-        [("cue_in", "Cues to show.")]
+        [
+            ("cue_in", "Cues to show."),
+            ("cue", "The cue played."),
+            ("fader", "")
+        ],
+        "each output a panel writes has an input of its name, whose value it publishes"
     );
     assert_eq!(
         deck.outputs
@@ -231,4 +236,42 @@ fn a_panel_reads_a_view_nodes_input_through_a_viewer_of_the_port_linked_into_it(
         .expect("the camera writes");
     let message = the_next_message_read(&mut reader);
     assert_eq!(message.payload, record);
+}
+
+#[test]
+#[serial]
+fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let camera_id = stream
+        .add_a_node(
+            MockOutputOnlyNode::node_class_import_path().as_str(),
+            "camera",
+        )
+        .unwrap();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+
+    stream
+        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
+        .expect("the view node takes the record");
+    let live_value = stream.stream.compiler.scope(|graph, _tx| {
+        graph
+            .live_input_values()
+            .value_of(deck_uuid.parse().unwrap(), "cue")
+    });
+    assert_eq!(
+        live_value,
+        Some(json!({ "track": "intro" })),
+        "the value is the live value of the input `cue`"
+    );
+
+    let refusal = stream
+        .stream
+        .connect(
+            OutputLinkPortRef::new(camera_id, "out1"),
+            InputLinkPortRef::new(deck_id, "cue"),
+        )
+        .expect_err("the input of an output's name is a setting, which takes no wire")
+        .to_string();
+    assert!(refusal.contains("takes no wire"), "{refusal}");
 }

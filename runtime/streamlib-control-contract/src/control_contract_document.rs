@@ -289,7 +289,12 @@ mod tests {
                 .get("x-replaced-by")
                 .cloned()
         };
-        for replaced in ["set_node_config", "set_pin_value", "write_graph_input"] {
+        for replaced in [
+            "set_node_config",
+            "set_pin_value",
+            "write_graph_input",
+            "write_studio_view_output",
+        ] {
             assert_eq!(
                 replaced_by_of(replaced),
                 Some(serde_json::json!("set_node_input_value")),

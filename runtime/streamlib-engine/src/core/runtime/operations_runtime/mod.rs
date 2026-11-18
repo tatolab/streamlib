@@ -906,14 +906,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         })
     }
 
-    fn write_a_value_onto_an_output_of_a_view_node(
+    fn the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
-        value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<()>> {
+    ) -> BoxFuture<'_, Result<uuid::Uuid>> {
         self.in_this_streams_log_route(
-            self.hand_a_value_written_by_a_panel_to_a_view_node(node_id, port_name, value),
+            self.read_the_running_view_node_a_panel_writes(node_id, port_name),
         )
     }
 

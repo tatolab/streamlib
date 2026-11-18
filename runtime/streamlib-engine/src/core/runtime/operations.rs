@@ -153,15 +153,16 @@ pub trait RuntimeOperations: Send + Sync {
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
-    /// Hand `value` to the view node whose UUID, as `graph` lists it under `id`, is `node_id`,
-    /// which publishes it on its output `port_name` as that port's family carries it. Live data:
-    /// nothing is recorded, and the last value written is what a reader keeps.
-    fn write_a_value_onto_an_output_of_a_view_node(
+    /// The UUID of the running view node whose UUID, as `graph` lists it under `id`, is
+    /// `node_id`, and one of whose outputs is `port_name`: the node a panel's write onto that
+    /// output sets the input of the same name of, live, which it publishes on the output.
+    /// Refused while the stream is stopped, and for a node not of a view type, not running, or
+    /// with no such output.
+    fn the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
-        value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<()>>;
+    ) -> BoxFuture<'_, Result<uuid::Uuid>>;
 
     /// The top-level `GraphInput` declaring the stream's input `input_name`, whose `value` input
     /// a set naming no node sets, and why its node does not run while the stream's playback is
