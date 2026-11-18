@@ -169,7 +169,7 @@ fn a_codec_outside_the_required_set_is_refused() {
 }
 
 #[test]
-fn image_formats_that_do_not_overlap_are_refused() {
+fn an_image_output_writing_only_formats_the_input_does_not_read_is_refused() {
     let output = PortFamilyDeclaration {
         formats: vec!["rgba16_float".into()],
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
@@ -194,6 +194,46 @@ fn image_formats_that_do_not_overlap_are_refused() {
             endpoint("render", "video", &output),
             None,
             endpoint("compositor", "video", &input_reading_both),
+        ),
+        None
+    );
+}
+
+#[test]
+fn an_image_output_writing_a_format_the_input_does_not_read_is_refused_though_others_overlap() {
+    let output = PortFamilyDeclaration {
+        formats: vec!["rgba8_unorm".into(), "nv12".into()],
+        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+    };
+    let input = PortFamilyDeclaration {
+        formats: vec!["rgba8_unorm".into()],
+        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+    };
+    let refusal = refusal_of_a_link_between_port_families(
+        endpoint("camera", "video", &output),
+        None,
+        endpoint("compositor", "video", &input),
+    )
+    .expect("the camera may write nv12, which the compositor does not read");
+    assert!(
+        refusal.contains("may write \"nv12\", which compositor.video does not read"),
+        "{refusal}"
+    );
+    let input_reading_any = PortFamilyDeclaration::of_family(PortFamily::Image);
+    assert_eq!(
+        refusal_of_a_link_between_port_families(
+            endpoint("camera", "video", &output),
+            None,
+            endpoint("compositor", "video", &input_reading_any),
+        ),
+        None
+    );
+    let output_stating_none = PortFamilyDeclaration::of_family(PortFamily::Image);
+    assert_eq!(
+        refusal_of_a_link_between_port_families(
+            endpoint("camera", "video", &output_stating_none),
+            None,
+            endpoint("compositor", "video", &input),
         ),
         None
     );

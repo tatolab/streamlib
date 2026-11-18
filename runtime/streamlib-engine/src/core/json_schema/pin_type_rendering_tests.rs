@@ -184,3 +184,43 @@ fn a_graph_interface_port_of_the_image_family_is_a_texture_and_of_another_family
     let unknown = rendered(None);
     assert!(unknown.get("pin_type").is_none(), "{unknown}");
 }
+
+/// Mock node whose Texture ports state pixel formats, one by its pin type and one by its family.
+#[crate::node(
+    execution = reactive,
+    input("frames", family = Image, formats = ["rgba8_unorm", "bgra8_unorm"]),
+    output("picture", pin_type = Texture, formats = ["rgba8_unorm"]),
+)]
+struct MockNodeStatingTextureFormats;
+
+impl crate::core::ReactiveNode for MockNodeStatingTextureFormats::Node {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn graph_and_the_catalog_serve_the_formats_a_texture_pin_states() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| NODE_REGISTRY.register::<MockNodeStatingTextureFormats::Node>());
+    let frames = json!({"type": "texture", "pixel_formats": ["rgba8_unorm", "bgra8_unorm"]});
+    let picture = json!({"type": "texture", "pixel_formats": ["rgba8_unorm"]});
+
+    let catalog_ports =
+        catalog_ports_of_type(MockNodeStatingTextureFormats::node_class_import_path());
+    assert_eq!(
+        catalog_ports[0]["pin_type"],
+        json!({"kind": "is", "pin_type": frames})
+    );
+    assert_eq!(
+        catalog_ports[1]["pin_type"],
+        json!({"kind": "is", "pin_type": picture})
+    );
+
+    let node = rendered_node_of_type(MockNodeStatingTextureFormats::node_class_import_path());
+    assert_eq!(node["ports"]["inputs"][0]["pin_type"], frames);
+    assert_eq!(node["ports"]["outputs"][0]["pin_type"], picture);
+}

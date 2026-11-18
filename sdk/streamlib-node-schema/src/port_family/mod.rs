@@ -4,7 +4,6 @@
 //! The five port families a port declares, the keys each takes, and the
 //! checks `connect` makes between an output and an input of one family.
 
-use std::collections::BTreeSet;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -619,8 +618,9 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> String {
 ///
 /// The output's family, resolved against its node's config, must be one the
 /// input takes; then the input's `requires=` is checked against the output's
-/// resolved names, `requires_codec=` against its resolved codec, and the two
-/// `formats=` sets, which must overlap.
+/// resolved names, `requires_codec=` against its resolved codec, and each
+/// format the output's `formats=` states against the input's, which must read it
+/// when it states any.
 pub fn refusal_of_a_link_between_port_families(
     output: PortFamilyLinkEndpoint<'_>,
     output_node_config: Option<&serde_json::Value>,
@@ -660,20 +660,23 @@ pub fn refusal_of_a_link_between_port_families(
     ) {
         return Some(refusal);
     }
-    if output_family == PortFamily::Image
-        && !output_declaration.formats.is_empty()
-        && !input_declaration.formats.is_empty()
-    {
-        let output_formats: BTreeSet<&String> = output_declaration.formats.iter().collect();
-        let formats_overlap = input_declaration
+    if output_family == PortFamily::Image && !input_declaration.formats.is_empty() {
+        let formats_the_input_does_not_read: Vec<&String> = output_declaration
             .formats
             .iter()
-            .any(|format| output_formats.contains(format));
-        if !formats_overlap {
+            .filter(|format| !input_declaration.formats.contains(format))
+            .collect();
+        if !formats_the_input_does_not_read.is_empty() {
             return Some(format!(
                 "cannot link {output} to {input}: {output} writes formats {:?}, and {input} \
-                 reads only {:?}",
-                output_declaration.formats, input_declaration.formats
+                 reads only {:?}; {output} may write {}, which {input} does not read",
+                output_declaration.formats,
+                input_declaration.formats,
+                formats_the_input_does_not_read
+                    .iter()
+                    .map(|format| format!("{format:?}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }

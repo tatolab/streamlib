@@ -14,7 +14,7 @@ use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
     OutputPortDeclaredNames, PinDeclaration, PinLinkRefusal, PinType, PortDescriptor, PortFamily,
-    PortFamilyDeclaration, SettingReadTime,
+    PortFamilyDeclaration, SettingReadTime, TexturePixelFormat,
 };
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
@@ -37,6 +37,10 @@ const NAMED_RECORDS_SOURCE: &str = "VerdictCheckNamedRecordsSource";
 const RECORDS_PASSTHROUGH: &str = "VerdictCheckRecordsPassthrough";
 const RECORDS_NEEDING_X: &str = "VerdictCheckRecordsNeedingX";
 const RECORDS_NEEDING_Z: &str = "VerdictCheckRecordsNeedingZ";
+const RGBA_OR_NV12_TEXTURE_SOURCE: &str = "VerdictCheckRgbaOrNv12TextureSource";
+const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
+const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
+const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -57,6 +61,26 @@ fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
     let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
     PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
         .with_pin_declaration(PinDeclaration::exactly(pin_type))
+}
+
+/// A Texture port stating `pixel_formats`, by its pin type and by its family as a declaration of
+/// an Image port states both.
+fn a_texture_port(name: &str, pixel_formats: &[TexturePixelFormat]) -> PortDescriptor {
+    PortDescriptor {
+        family: PortFamilyDeclaration {
+            formats: pixel_formats
+                .iter()
+                .map(|format| format.wire_name().to_owned())
+                .collect(),
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        },
+        ..a_typed_port(
+            name,
+            PinType::Texture {
+                pixel_formats: pixel_formats.to_vec(),
+            },
+        )
+    }
 }
 
 fn register(descriptor: NodeDescriptor) {
@@ -223,6 +247,33 @@ fn register_the_verdict_fixture_node_types() {
                 Vec::new(),
             ));
         }
+        use TexturePixelFormat::{Nv12, Rgba8Unorm};
+        register(a_node_type(
+            class_path(RGBA_OR_NV12_TEXTURE_SOURCE),
+            Vec::new(),
+            vec![a_texture_port("video", &[Rgba8Unorm, Nv12])],
+        ));
+        register(a_node_type(
+            class_path(TEXTURE_PASSTHROUGH),
+            vec![a_texture_port("in", &[])],
+            vec![PortDescriptor {
+                family: PortFamilyDeclaration {
+                    family_follows_input_port: Some("in".to_owned()),
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+                ..a_texture_port("out", &[])
+            }],
+        ));
+        register(a_node_type(
+            class_path(RGBA_TEXTURE_SINK),
+            vec![a_texture_port("video", &[Rgba8Unorm])],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(ANY_TEXTURE_SINK),
+            vec![a_texture_port("video", &[])],
+            Vec::new(),
+        ));
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
@@ -554,6 +605,88 @@ fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on(
                 assert!(words.contains("\"z\""), "{words}");
             }
             (outcome, _) => panic!("the passthrough into {sink_type}: {outcome:?}"),
+        }
+    }
+}
+
+/// A Texture output stating a format the input does not take is refused naming the formats,
+/// though another it states is one the input takes; an input stating none takes it.
+///
+/// Mental-revert: testing the formats for an overlap in the verdict connects the
+/// rgba8_unorm-only sink.
+#[test]
+fn a_texture_output_is_refused_by_an_input_that_does_not_take_every_format_it_states() {
+    register_the_verdict_fixture_node_types();
+    let compiler = Arc::new(Compiler::new());
+    let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+    let rgba_sink = a_node_of(&compiler, class_path(RGBA_TEXTURE_SINK));
+    let any_sink = a_node_of(&compiler, class_path(ANY_TEXTURE_SINK));
+
+    let refusal = the_verdicts_refusal(
+        connect_on_this_thread(
+            &compiler,
+            OutputLinkPortRef::new(source.clone(), "video"),
+            InputLinkPortRef::new(rgba_sink, "video"),
+        )
+        .expect_err("the source may send nv12, which the sink does not take"),
+    );
+    let words = refusal.to_string();
+    assert!(
+        words.contains("(Texture (rgba8_unorm, nv12))")
+            && words.contains("(Texture (rgba8_unorm))"),
+        "{words}"
+    );
+    connect_on_this_thread(
+        &compiler,
+        OutputLinkPortRef::new(source, "video"),
+        InputLinkPortRef::new(any_sink, "video"),
+    )
+    .expect("an input stating no format takes any");
+    assert_eq!(the_links_in(&compiler), 1);
+}
+
+/// An output whose family follows an input sends the formats of what arrives there: an
+/// rgba8_unorm or nv12 picture handed on reaches an input stating none, and not one taking
+/// rgba8_unorm alone, either way round the two links are made.
+///
+/// Mental-revert: judging the formats by their overlap connects the rgba8_unorm-only sink.
+#[test]
+fn an_output_following_an_input_is_judged_by_the_formats_it_hands_on() {
+    register_the_verdict_fixture_node_types();
+    for (sink_type, connects) in [(ANY_TEXTURE_SINK, true), (RGBA_TEXTURE_SINK, false)] {
+        for passthrough_feeds_first in [false, true] {
+            let compiler = Arc::new(Compiler::new());
+            let source = a_node_of(&compiler, class_path(RGBA_OR_NV12_TEXTURE_SOURCE));
+            let passthrough = a_node_of(&compiler, class_path(TEXTURE_PASSTHROUGH));
+            let sink = a_node_of(&compiler, class_path(sink_type));
+            let into_the_passthrough = (
+                OutputLinkPortRef::new(source, "video"),
+                InputLinkPortRef::new(passthrough.clone(), "in"),
+            );
+            let out_of_the_passthrough = (
+                OutputLinkPortRef::new(passthrough, "out"),
+                InputLinkPortRef::new(sink, "video"),
+            );
+            let (first, second) = if passthrough_feeds_first {
+                (out_of_the_passthrough, into_the_passthrough)
+            } else {
+                (into_the_passthrough, out_of_the_passthrough)
+            };
+            connect_on_this_thread(&compiler, first.0, first.1)
+                .expect("the first link has nothing to judge the formats against");
+            match (
+                connect_on_this_thread(&compiler, second.0, second.1),
+                connects,
+            ) {
+                (Ok(_), true) => {}
+                (Err(Error::InvalidLink(words)), false) => {
+                    assert!(words.contains("may write \"nv12\", which"), "{words}");
+                }
+                (outcome, _) => panic!(
+                    "the handed-on picture into {sink_type}, passthrough feeding first: \
+                     {passthrough_feeds_first}: {outcome:?}"
+                ),
+            }
         }
     }
 }

@@ -262,7 +262,7 @@ fn a_link_into_an_input_an_output_follows_is_checked_against_what_that_output_fe
 }
 
 #[test]
-fn image_formats_that_do_not_overlap_are_refused_at_connect() {
+fn an_image_output_writing_only_formats_the_input_does_not_read_is_refused_at_connect() {
     register_the_family_fixture_classes();
     let compiler = Arc::new(Compiler::new());
     let render = a_node_of(&compiler, IMAGE_PRODUCER, Value::Null);
