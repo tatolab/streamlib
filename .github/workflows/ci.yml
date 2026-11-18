@@ -188,7 +188,7 @@ jobs:
 
       # The earlier file is read through the API: this checkout holds no credentials and no
       # history to fetch it with.
-      - name: A breaking change to the control contract bumps its version
+      - name: A change to the control contract raises its revision, or its version when it breaks a client
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         env:
           GH_TOKEN: ${{ github.token }}
