@@ -134,7 +134,8 @@ fn a_contract_at_version_one() -> Value {
 fn an_addition_to(earlier: &Value, change: impl FnOnce(&mut Value)) -> Value {
     let mut later = earlier.clone();
     change(&mut later);
-    later["info"]["x-contract-revision"] = json!(the_contract_revision_of(earlier) + 1);
+    later["info"]["x-contract-revision"] =
+        json!(the_counter_of(earlier, "x-contract-revision") + 1);
     later
 }
 
@@ -375,19 +376,125 @@ fn an_alternative_added_to_a_closed_union_in_an_answer_is_refused_by_its_tag_alo
 }
 
 #[test]
-fn an_untagged_alternative_added_to_an_answer_is_refused() {
+fn an_untagged_alternative_inserted_first_in_an_answer_is_refused_naming_it_alone() {
     let earlier = a_contract_at_version_one();
     let later = an_addition_to(&earlier, |later| {
         the_schemas_of(later)["ListedStream"]["properties"]["frame_rate"]["anyOf"]
             .as_array_mut()
             .unwrap()
-            .insert(1, json!({ "type": "string" }));
+            .insert(0, json!({ "type": "string" }));
     });
 
-    the_refusal_names(
-        &earlier,
-        &later,
-        "frame_rate.anyOf may now be 3 untagged alternatives where it was 2",
+    let refusal = the_refusal_of_a_contract_change(&earlier, &later).unwrap();
+
+    assert!(
+        refusal.contains("frame_rate.anyOf may now be the alternative of type \"string\""),
+        "{refusal}"
+    );
+    assert_eq!(
+        refusal
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        1,
+        "{refusal}"
+    );
+}
+
+#[test]
+fn an_untagged_alternative_removed_first_from_an_answer_passes() {
+    let earlier = a_contract_at_version_one();
+    let later = an_addition_to(&earlier, |later| {
+        the_schemas_of(later)["ListedStream"]["properties"]["frame_rate"]["anyOf"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+    });
+
+    assert_eq!(the_refusal_of_a_contract_change(&earlier, &later), None);
+}
+
+#[test]
+fn an_untagged_alternative_inserted_first_in_what_a_client_sends_passes() {
+    let earlier = an_addition_to(&a_contract_at_version_one(), |earlier| {
+        the_schemas_of(earlier)["ListStreamsRequest"]["properties"]["limit"] =
+            json!({ "anyOf": [{ "type": "string" }] });
+    });
+    let later = an_addition_to(&earlier, |later| {
+        the_schemas_of(later)["ListStreamsRequest"]["properties"]["limit"]["anyOf"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({ "type": "integer" }));
+    });
+
+    assert_eq!(the_refusal_of_a_contract_change(&earlier, &later), None);
+}
+
+#[test]
+fn an_untagged_alternative_removed_first_from_what_a_client_sends_is_refused() {
+    let earlier = an_addition_to(&a_contract_at_version_one(), |earlier| {
+        the_schemas_of(earlier)["ListStreamsRequest"]["properties"]["limit"] =
+            json!({ "anyOf": [{ "type": "integer" }, { "type": "string" }] });
+    });
+    let later = an_addition_to(&earlier, |later| {
+        the_schemas_of(later)["ListStreamsRequest"]["properties"]["limit"]["anyOf"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+    });
+
+    let refusal = the_refusal_of_a_contract_change(&earlier, &later).unwrap();
+
+    assert!(
+        refusal.contains("params.limit.anyOf no longer takes the alternative of type \"integer\""),
+        "{refusal}"
+    );
+    assert_eq!(
+        refusal
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        1,
+        "{refusal}"
+    );
+}
+
+#[test]
+fn an_untagged_alternative_whose_type_only_it_states_is_compared_with_its_counterpart() {
+    let rate = json!({
+        "type": "object",
+        "properties": { "numerator": { "type": "integer" }, "denominator": { "type": "integer" } },
+        "required": ["numerator", "denominator"],
+    });
+    let earlier = an_addition_to(&a_contract_at_version_one(), |earlier| {
+        the_schemas_of(earlier)["ListedStream"]["properties"]["frame_rate"]["anyOf"] =
+            json!([rate, { "type": "null" }]);
+    });
+    let later = an_addition_to(&earlier, |later| {
+        let rates = the_schemas_of(later)["ListedStream"]["properties"]["frame_rate"]["anyOf"]
+            .as_array_mut()
+            .unwrap();
+        rates[0]["required"] = json!(["numerator"]);
+        rates.insert(0, json!({ "type": "string" }));
+    });
+
+    let refusal = the_refusal_of_a_contract_change(&earlier, &later).unwrap();
+
+    assert!(
+        refusal.contains("frame_rate.anyOf[1] no longer always carries the field \"denominator\""),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("frame_rate.anyOf may now be the alternative of type \"string\""),
+        "{refusal}"
+    );
+    assert_eq!(
+        refusal
+            .lines()
+            .filter(|line| line.starts_with("- "))
+            .count(),
+        2,
+        "{refusal}"
     );
 }
 
@@ -642,5 +749,24 @@ fn the_committed_contract_file_breaks_no_client_of_itself() {
     assert_eq!(
         the_refusal_of_a_contract_change(&committed, &committed),
         None
+    );
+}
+
+#[test]
+fn a_set_marked_to_grow_in_the_same_change_that_grows_it_is_refused() {
+    let earlier = a_contract_at_version_one();
+    let later = an_addition_to(&earlier, |later| {
+        let state = &mut the_schemas_of(later)["ListedStreamState"];
+        state["x-may-grow"] = json!(true);
+        state["oneOf"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "type": "string", "const": "sleeping" }));
+    });
+
+    the_refusal_names(
+        &earlier,
+        &later,
+        "state.oneOf may now be the value \"sleeping\", and the set is not marked `x-may-grow`",
     );
 }

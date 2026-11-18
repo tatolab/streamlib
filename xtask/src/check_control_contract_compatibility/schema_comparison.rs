@@ -4,12 +4,15 @@
 //! The comparison of one schema in the earlier contract file with the schema in the same place
 //! of the later one, from the side of the wire its values travel from.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+use super::the_list_under;
+
 /// Marks a set, a `oneOf`, an `anyOf` or an `enum`, that may gain a member in what a client
-/// reads.
+/// reads. A client takes its open alternative from the file it was built against, so the mark
+/// counts only where the earlier file states it.
 const SET_THAT_MAY_GROW_MARK: &str = "x-may-grow";
 
 /// Which side of the wire a schema's values travel from.
@@ -50,7 +53,7 @@ impl<'contracts> ContractComparison<'contracts> {
         }
     }
 
-    /// Record one breaking difference, written as a `- ` line.
+    /// Record one breaking difference.
     pub(super) fn refuse(&mut self, breaking_difference: String) {
         self.breaking_differences.push(breaking_difference);
     }
@@ -83,7 +86,7 @@ impl<'contracts> ContractComparison<'contracts> {
         else {
             return;
         };
-        let later_may_grow = later_object.get(SET_THAT_MAY_GROW_MARK) == Some(&Value::Bool(true));
+        let may_grow = earlier_object.get(SET_THAT_MAY_GROW_MARK) == Some(&Value::Bool(true));
 
         let earlier_types = the_values_listed_under(earlier_object.get("type"));
         let later_types = the_values_listed_under(later_object.get("type"));
@@ -93,7 +96,7 @@ impl<'contracts> ContractComparison<'contracts> {
                 SchemaDirection::ReadByAClient => (&later_types, &earlier_types, "may now be"),
             };
             for outside in must_hold.difference(held_in) {
-                self.refuse(format!("- {path} {what_changed} the type {outside}"));
+                self.refuse(format!("{path} {what_changed} the type {outside}"));
             }
         }
         let earlier_values = the_values_listed_under(earlier_object.get("enum"));
@@ -107,7 +110,7 @@ impl<'contracts> ContractComparison<'contracts> {
                     path,
                     &format!("the value {added}"),
                     direction,
-                    later_may_grow,
+                    may_grow,
                 );
             }
         }
@@ -116,7 +119,7 @@ impl<'contracts> ContractComparison<'contracts> {
             && earlier_const != later_const
         {
             self.refuse(format!(
-                "- {path} changed from the value {earlier_const} to {later_const}"
+                "{path} changed from the value {earlier_const} to {later_const}"
             ));
         }
 
@@ -125,13 +128,13 @@ impl<'contracts> ContractComparison<'contracts> {
         match direction {
             SchemaDirection::SentByAClient => {
                 for now_required in later_required.difference(&earlier_required) {
-                    self.refuse(format!("- {path} now requires the field {now_required}"));
+                    self.refuse(format!("{path} now requires the field {now_required}"));
                 }
             }
             SchemaDirection::ReadByAClient => {
                 for no_longer_required in earlier_required.difference(&later_required) {
                     self.refuse(format!(
-                        "- {path} no longer always carries the field {no_longer_required}"
+                        "{path} no longer always carries the field {no_longer_required}"
                     ));
                 }
             }
@@ -151,7 +154,7 @@ impl<'contracts> ContractComparison<'contracts> {
                     later_field_schema,
                     direction,
                 ),
-                None => self.refuse(format!("- {path} lost the field \"{field}\"")),
+                None => self.refuse(format!("{path} lost the field \"{field}\"")),
             }
         }
 
@@ -169,36 +172,36 @@ impl<'contracts> ContractComparison<'contracts> {
         }
         for alternatives in ["oneOf", "anyOf"] {
             if let (Some(earlier_alternatives), Some(later_alternatives)) = (
-                earlier_object.get(alternatives).and_then(Value::as_array),
-                later_object.get(alternatives).and_then(Value::as_array),
+                earlier_object.get(alternatives),
+                later_object.get(alternatives),
             ) {
                 self.compare_alternatives(
                     &format!("{path}.{alternatives}"),
-                    earlier_alternatives,
-                    later_alternatives,
+                    the_list_under(earlier_alternatives),
+                    the_list_under(later_alternatives),
                     direction,
-                    later_may_grow,
+                    may_grow,
                 );
             }
         }
     }
 
     /// Alternatives that carry a tag are matched by it, wherever each sits; the rest are matched
-    /// in order among themselves.
+    /// by shape first, then by a `type` only one of them states, then in order.
     fn compare_alternatives(
         &mut self,
         path: &str,
         earlier_alternatives: &'contracts [Value],
         later_alternatives: &'contracts [Value],
         direction: SchemaDirection,
-        later_may_grow: bool,
+        may_grow: bool,
     ) {
         let earlier = the_alternatives_by_tag(self.earlier_contract, earlier_alternatives);
         let later = the_alternatives_by_tag(self.later_contract, later_alternatives);
 
         for (tag, earlier_alternative) in &earlier.tagged {
-            match later.tagged.iter().find(|(later_tag, _)| later_tag == tag) {
-                Some((_, later_alternative)) => self.compare_schemas(
+            match later.tagged.get(tag) {
+                Some(later_alternative) => self.compare_schemas(
                     &format!("{path}[{tag}]"),
                     earlier_alternative,
                     later_alternative,
@@ -207,68 +210,69 @@ impl<'contracts> ContractComparison<'contracts> {
                 None => self.refuse_a_removed_member(path, tag, direction),
             }
         }
-        for (tag, _) in later.tagged.iter().filter(|(tag, _)| {
-            !earlier
-                .tagged
-                .iter()
-                .any(|(earlier_tag, _)| earlier_tag == tag)
-        }) {
-            self.refuse_an_added_member(path, tag, direction, later_may_grow);
+        for tag in later
+            .tagged
+            .keys()
+            .filter(|tag| !earlier.tagged.contains_key(*tag))
+        {
+            self.refuse_an_added_member(path, tag, direction, may_grow);
         }
 
-        let (earlier_count, later_count) = (earlier.untagged.len(), later.untagged.len());
-        match direction {
-            SchemaDirection::SentByAClient if later_count < earlier_count => self.refuse(format!(
-                "- {path} takes {later_count} untagged alternatives where it took {earlier_count}"
-            )),
-            SchemaDirection::ReadByAClient if later_count > earlier_count && !later_may_grow => {
-                self.refuse(format!(
-                    "- {path} may now be {later_count} untagged alternatives where it was \
-                     {earlier_count}, and the set is not marked `{SET_THAT_MAY_GROW_MARK}`"
-                ))
-            }
-            _ => {}
-        }
-        for (index, (earlier_alternative, later_alternative)) in
-            earlier.untagged.iter().zip(&later.untagged).enumerate()
-        {
+        let untagged = UntaggedPairing::of(
+            self.earlier_contract,
+            &earlier.untagged,
+            self.later_contract,
+            &later.untagged,
+        );
+        for (earlier_index, later_index) in untagged.pairs {
             self.compare_schemas(
-                &format!("{path}[{index}]"),
-                earlier_alternative,
-                later_alternative,
+                &format!("{path}[{later_index}]"),
+                earlier.untagged[earlier_index],
+                later.untagged[later_index],
                 direction,
             );
+        }
+        // An untagged alternative names no member a client branches on, so only what a client
+        // sends feels one leave.
+        if direction == SchemaDirection::SentByAClient {
+            for earlier_index in untagged.earlier_left_over {
+                let words = the_words_for(earlier.untagged[earlier_index], earlier_index);
+                self.refuse_a_removed_member(path, &words, direction);
+            }
+        }
+        for later_index in untagged.later_left_over {
+            let words = the_words_for(later.untagged[later_index], later_index);
+            self.refuse_an_added_member(path, &words, direction, may_grow);
         }
     }
 
     fn refuse_a_removed_member(&mut self, path: &str, member: &str, direction: SchemaDirection) {
         self.refuse(match direction {
-            SchemaDirection::SentByAClient => format!("- {path} no longer takes {member}"),
-            SchemaDirection::ReadByAClient => format!("- {path} can no longer be {member}"),
+            SchemaDirection::SentByAClient => format!("{path} no longer takes {member}"),
+            SchemaDirection::ReadByAClient => format!("{path} can no longer be {member}"),
         });
     }
 
     /// A member added to what a client sends is an addition; to what it reads, a break unless
-    /// the set is marked to grow.
+    /// the earlier file marked the set to grow.
     fn refuse_an_added_member(
         &mut self,
         path: &str,
         member: &str,
         direction: SchemaDirection,
-        later_may_grow: bool,
+        may_grow: bool,
     ) {
-        if direction == SchemaDirection::ReadByAClient && !later_may_grow {
+        if direction == SchemaDirection::ReadByAClient && !may_grow {
             self.refuse(format!(
-                "- {path} may now be {member}, and the set is not marked \
-                 `{SET_THAT_MAY_GROW_MARK}`"
+                "{path} may now be {member}, and the set is not marked `{SET_THAT_MAY_GROW_MARK}`"
             ));
         }
     }
 }
 
 struct AlternativesByTag<'contracts> {
-    /// Each alternative a tag names, with the tag in words.
-    tagged: Vec<(String, &'contracts Value)>,
+    /// Each alternative a tag names, by the tag in words.
+    tagged: BTreeMap<String, &'contracts Value>,
     /// The others, in order.
     untagged: Vec<&'contracts Value>,
 }
@@ -280,18 +284,103 @@ fn the_alternatives_by_tag<'contracts>(
     alternatives: &'contracts [Value],
 ) -> AlternativesByTag<'contracts> {
     let mut by_tag = AlternativesByTag {
-        tagged: Vec::new(),
+        tagged: BTreeMap::new(),
         untagged: Vec::new(),
     };
     for alternative in alternatives {
         match the_tag_of(the_schema_a_reference_names(contract, alternative)) {
-            Some(tag) if !by_tag.tagged.iter().any(|(listed, _)| *listed == tag) => {
-                by_tag.tagged.push((tag, alternative));
+            Some(tag) if !by_tag.tagged.contains_key(&tag) => {
+                by_tag.tagged.insert(tag, alternative);
             }
             _ => by_tag.untagged.push(alternative),
         }
     }
     by_tag
+}
+
+/// Which earlier untagged alternative each later one stands for, by index into each list.
+struct UntaggedPairing {
+    pairs: Vec<(usize, usize)>,
+    earlier_left_over: Vec<usize>,
+    later_left_over: Vec<usize>,
+}
+
+impl UntaggedPairing {
+    fn of(
+        earlier_contract: &Value,
+        earlier: &[&Value],
+        later_contract: &Value,
+        later: &[&Value],
+    ) -> Self {
+        let mut pairing = Self {
+            pairs: Vec::new(),
+            earlier_left_over: (0..earlier.len()).collect(),
+            later_left_over: (0..later.len()).collect(),
+        };
+        pairing.pair_where(|earlier_index, later_index, _| {
+            earlier[earlier_index] == later[later_index]
+        });
+        let the_types_of = |contract: &Value, alternatives: &[&Value]| -> Vec<Option<String>> {
+            alternatives
+                .iter()
+                .map(|alternative| {
+                    the_schema_a_reference_names(contract, alternative)
+                        .get("type")
+                        .map(Value::to_string)
+                })
+                .collect()
+        };
+        let earlier_types = the_types_of(earlier_contract, earlier);
+        let later_types = the_types_of(later_contract, later);
+        let how_many_left_over_state = |left_over: &[usize], types: &[Option<String>], stated| {
+            left_over
+                .iter()
+                .filter(|index| types[**index].as_ref() == Some(stated))
+                .count()
+        };
+        pairing.pair_where(|earlier_index, later_index, pairing| {
+            let Some(stated) = earlier_types[earlier_index].as_ref() else {
+                return false;
+            };
+            later_types[later_index].as_ref() == Some(stated)
+                && how_many_left_over_state(&pairing.earlier_left_over, &earlier_types, stated) == 1
+                && how_many_left_over_state(&pairing.later_left_over, &later_types, stated) == 1
+        });
+        pairing.pair_where(|_, _, _| true);
+        pairing
+    }
+
+    /// Pair each left-over earlier alternative, in order, with the first left-over later one
+    /// `matches` accepts.
+    fn pair_where(&mut self, matches: impl Fn(usize, usize, &Self) -> bool) {
+        let mut earlier_position = 0;
+        while earlier_position < self.earlier_left_over.len() {
+            let earlier_index = self.earlier_left_over[earlier_position];
+            match self
+                .later_left_over
+                .iter()
+                .position(|later_index| matches(earlier_index, *later_index, self))
+            {
+                Some(later_position) => {
+                    let later_index = self.later_left_over.remove(later_position);
+                    self.earlier_left_over.remove(earlier_position);
+                    self.pairs.push((earlier_index, later_index));
+                }
+                None => earlier_position += 1,
+            }
+        }
+    }
+}
+
+/// An untagged alternative in words: the component it names, the type it states, or its place.
+fn the_words_for(alternative: &Value, index: usize) -> String {
+    if let Some(reference) = alternative["$ref"].as_str() {
+        return format!("the alternative {reference}");
+    }
+    match alternative.get("type") {
+        Some(stated) => format!("the alternative of type {stated}"),
+        None => format!("the alternative [{index}]"),
+    }
 }
 
 /// What tells `alternative` apart from the others of its set, in words: its `const`, the
@@ -302,11 +391,8 @@ fn the_tag_of(alternative: &Value) -> Option<String> {
         return Some(format!("the value {value}"));
     }
     let properties = alternative.get("properties").and_then(Value::as_object)?;
-    let required: Vec<&str> = alternative
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+    let required: Vec<&str> = the_list_under(&alternative["required"])
+        .iter()
         .filter_map(Value::as_str)
         .collect();
     if let Some((field, value)) = required.iter().find_map(|field| {
