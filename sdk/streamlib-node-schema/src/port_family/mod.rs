@@ -531,13 +531,14 @@ pub(crate) enum CodecDirection {
 
 /// The words placing the encoder or decoder, as `direction` says, of each codec of `media`
 /// that `stated` lists, or of each when it lists none; `None` when no codec node fits. One
-/// decoder takes one codec, so packets stating several are told to state one first.
+/// decoder takes one codec, so packets stating several are told to state one a decoder takes
+/// first.
 pub(crate) fn codec_nodes_placed_between(
     media: EncodedMedia,
     direction: CodecDirection,
     stated: &[String],
 ) -> Option<String> {
-    let nodes: Vec<&str> = CODEC_NODES
+    let fitting: Vec<&CodecNodes> = CODEC_NODES
         .iter()
         .filter(|nodes| nodes.media == media)
         .filter(|nodes| {
@@ -546,20 +547,41 @@ pub(crate) fn codec_nodes_placed_between(
                     .iter()
                     .any(|codec| codec.eq_ignore_ascii_case(nodes.codec))
         })
-        .map(|nodes| match direction {
-            CodecDirection::Encode => nodes.encoder,
-            CodecDirection::Decode => nodes.decoder,
-        })
         .collect();
-    match nodes.as_slice() {
+    let node_of = |nodes: &CodecNodes| match direction {
+        CodecDirection::Encode => nodes.encoder,
+        CodecDirection::Decode => nodes.decoder,
+    };
+    let one_decoder_takes_every_codec_stated =
+        direction == CodecDirection::Encode || stated.len() <= 1;
+    match fitting.as_slice() {
         [] => None,
-        _ if direction == CodecDirection::Decode && stated.len() > 1 => Some(format!(
+        [one] if one_decoder_takes_every_codec_stated => {
+            Some(format!("place an {} node between them", node_of(one)))
+        }
+        several if one_decoder_takes_every_codec_stated => Some(format!(
+            "place one of {} between them",
+            several
+                .iter()
+                .map(|nodes| node_of(nodes))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        [one] => Some(format!(
+            "no one decoder takes every codec the output states; narrow the output to {}, then \
+             place an {} node between them",
+            one.codec,
+            node_of(one)
+        )),
+        several => Some(format!(
             "no one decoder takes every codec the output states; narrow the output to one of \
              {}, then place its decoder between them",
-            stated.join(", ")
+            several
+                .iter()
+                .map(|nodes| nodes.codec)
+                .collect::<Vec<_>>()
+                .join(", ")
         )),
-        [one] => Some(format!("place an {one} node between them")),
-        several => Some(format!("place one of {} between them", several.join(", "))),
     }
 }
 

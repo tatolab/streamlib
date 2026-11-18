@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::core::compiler::compiler_ops::function_node_pool::{
     is_the_function_node_pool_type, the_links_carried_through_the_function_node_pool_of,
 };
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, PinType};
 use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotNode, GraphSnapshotWithGraphOnlyNodesResolved,
 };
@@ -21,7 +21,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 use crate::core::graph::{
     ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     NodeRunId, PendingDeletionComponent, cast_exposed_name_to_url_safe,
-    the_pin_types_refuse_the_link,
+    the_pin_types_at_the_ends_of, the_pin_types_refuse_the_link,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
@@ -58,23 +58,29 @@ pub(in crate::core::runtime) enum LinksAReconcileMakes {
     /// Each link, the document being a saved graph: read from disk, or as the stream drew it.
     EachAsASavedGraphsLink,
     /// A link the live graph held when the reconcile began though its pin types refused it, a
-    /// saved graph's link the reconcile remakes, as a saved graph's; any other as one an edit
-    /// makes now.
+    /// saved graph's link the reconcile remakes, as a saved graph's while its two ends' pin types
+    /// are the ones it had then; any other as one an edit makes now.
     ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
 }
 
 impl LinksAReconcileMakes {
-    /// How a reconcile making `link` judges it, `kept_though_their_pin_types_refused_them`
-    /// being the links the live graph held so when it began.
+    /// How a reconcile making `link`, whose two ends' pin types are now `pin_types_now`, judges
+    /// it, `kept_though_their_pin_types_refused_them` holding the pin types of each link the live
+    /// graph held so when it began.
     fn for_a_link(
         self,
         link: &RunningLinkBetweenTwoNodesByUuid,
-        kept_though_their_pin_types_refused_them: &HashSet<RunningLinkBetweenTwoNodesByUuid>,
+        pin_types_now: Option<&(PinType, PinType)>,
+        kept_though_their_pin_types_refused_them: &HashMap<
+            RunningLinkBetweenTwoNodesByUuid,
+            (PinType, PinType),
+        >,
     ) -> ALinkThePinTypesRefuse {
         match self {
             Self::EachAsASavedGraphsLink => ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
             Self::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem
-                if kept_though_their_pin_types_refused_them.contains(link) =>
+                if pin_types_now.is_some()
+                    && kept_though_their_pin_types_refused_them.get(link) == pin_types_now =>
             {
                 ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
             }
@@ -178,7 +184,7 @@ impl LoadedStreamInThisRuntime {
         let document_link_set: HashSet<&RunningLinkBetweenTwoNodesByUuid> =
             document_links.iter().collect();
         let kept_though_their_pin_types_refused_them = match links_it_makes {
-            LinksAReconcileMakes::EachAsASavedGraphsLink => HashSet::new(),
+            LinksAReconcileMakes::EachAsASavedGraphsLink => HashMap::new(),
             LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem => {
                 self.the_live_links_their_pin_types_refuse()
             }
@@ -344,17 +350,27 @@ impl LoadedStreamInThisRuntime {
             if live_links.contains(document_link) {
                 continue;
             }
+            let from = OutputLinkPortRef::new(
+                node_of(&document_link.source_node)?,
+                &document_link.source_port,
+            );
+            let to = InputLinkPortRef::new(
+                node_of(&document_link.target_node)?,
+                &document_link.target_port,
+            );
+            let pin_types_now = self
+                .compiler
+                .scope_reading(|graph| the_pin_types_at_the_ends_of(graph, &from, &to));
+            let a_link_the_pin_types_refuse = links_it_makes.for_a_link(
+                document_link,
+                pin_types_now.as_ref(),
+                &kept_though_their_pin_types_refused_them,
+            );
             connect_impl(
                 self.live_graph_change(),
-                OutputLinkPortRef::new(
-                    node_of(&document_link.source_node)?,
-                    &document_link.source_port,
-                ),
-                InputLinkPortRef::new(
-                    node_of(&document_link.target_node)?,
-                    &document_link.target_port,
-                ),
-                links_it_makes.for_a_link(document_link, &kept_though_their_pin_types_refused_them),
+                from,
+                to,
+                a_link_the_pin_types_refuse,
             )
             .await?;
         }
@@ -493,10 +509,13 @@ impl LoadedStreamInThisRuntime {
             .collect()
     }
 
-    /// Each link the live graph holds as it was given whose two typed ends' pin types the
-    /// verdict refuses, by node UUID: a saved graph's link kept as its families take it.
-    fn the_live_links_their_pin_types_refuse(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+    /// Each link the live graph holds whose two ends' pin types the verdict refuses, among the
+    /// conversions this stream resolves, beside those pin types.
+    fn the_live_links_their_pin_types_refuse(
+        &self,
+    ) -> HashMap<RunningLinkBetweenTwoNodesByUuid, (PinType, PinType)> {
         let live_links = self.the_live_links_as_given();
+        let conversions = self.node_types_this_stream_resolves().pin_conversions();
         self.compiler.scope_reading(|graph| {
             let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = graph
                 .traversal()
@@ -506,18 +525,24 @@ impl LoadedStreamInThisRuntime {
                 .collect();
             live_links
                 .into_iter()
-                .filter(|link| {
-                    let (Some(source), Some(target)) = (
-                        node_run_id_of_each_node_uuid.get(&link.source_node),
-                        node_run_id_of_each_node_uuid.get(&link.target_node),
-                    ) else {
-                        return false;
-                    };
-                    the_pin_types_refuse_the_link(
-                        graph,
-                        &OutputLinkPortRef::new(source.clone(), &link.source_port),
-                        &InputLinkPortRef::new(target.clone(), &link.target_port),
-                    )
+                .filter_map(|link| {
+                    let from = OutputLinkPortRef::new(
+                        node_run_id_of_each_node_uuid
+                            .get(&link.source_node)?
+                            .clone(),
+                        &link.source_port,
+                    );
+                    let to = InputLinkPortRef::new(
+                        node_run_id_of_each_node_uuid
+                            .get(&link.target_node)?
+                            .clone(),
+                        &link.target_port,
+                    );
+                    if !the_pin_types_refuse_the_link(graph, &from, &to, &conversions) {
+                        return None;
+                    }
+                    let pin_types = the_pin_types_at_the_ends_of(graph, &from, &to)?;
+                    Some((link, pin_types))
                 })
                 .collect()
         })

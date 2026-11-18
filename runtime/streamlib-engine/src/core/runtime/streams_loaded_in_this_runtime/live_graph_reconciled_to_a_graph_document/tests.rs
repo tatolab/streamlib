@@ -108,15 +108,17 @@ const PICTURE_SINK_OF_ONE_FORMAT: &str = "SavedLinkCheckPictureSinkOfOneFormat";
 const ANOTHER_PICTURE_SINK_OF_ONE_FORMAT: &str = "SavedLinkCheckAnotherPictureSinkOfOneFormat";
 const PICTURE_SOURCE_OF_ONE_FORMAT: &str = "SavedLinkCheckPictureSourceOfOneFormat";
 const PICTURE_SINK_OF_ANOTHER_FORMAT: &str = "SavedLinkCheckPictureSinkOfAnotherFormat";
+const PICTURE_SINK_OF_THE_SECOND_FORMAT: &str = "SavedLinkCheckPictureSinkOfTheSecondFormat";
 const LEVEL_SOURCE: &str = "SavedLinkCheckLevelSource";
 
 fn a_saved_link_fixture_type(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
 }
 
-/// Register a picture source stating two pixel formats and one stating one of them, two
-/// picture sinks taking that one and one taking another, and a Float source whose output
-/// carries the name of the sinks' input, each with a constructor no test reaches.
+/// Register a picture source stating two pixel formats and one stating the first of them, two
+/// picture sinks taking the first, one taking the second and one taking neither, and a Float
+/// source whose output carries the name of the sinks' input, each with a constructor no test
+/// reaches.
 fn register_the_saved_link_fixture_node_types() {
     use crate::core::descriptors::{
         NodeClassShortName, NodeDescriptor, PinDeclaration, PinType, PortDescriptor, PortFamily,
@@ -158,6 +160,8 @@ fn register_the_saved_link_fixture_node_types() {
                 .with_output(picture(texture(&[TexturePixelFormat::Bgra8Unorm]))),
             node_type(PICTURE_SINK_OF_ANOTHER_FORMAT)
                 .with_input(picture(texture(&[TexturePixelFormat::Nv12]))),
+            node_type(PICTURE_SINK_OF_THE_SECOND_FORMAT)
+                .with_input(picture(texture(&[TexturePixelFormat::Rgba8Unorm]))),
             node_type(LEVEL_SOURCE).with_output(picture(PinType::Float { exact_size: None })),
         ] {
             NODE_REGISTRY
@@ -365,6 +369,52 @@ fn an_edit_replacing_a_sink_with_one_the_pin_types_refuse_is_refused() {
     )
     .expect_err("the link into a sink taking another format is judged as connect judges it");
     assert!(matches!(refusal, Error::PinLinkRefused(_)), "{refusal:?}");
+}
+
+/// A saved link its pin types refuse, kept by a load, is refused when an edit remakes it into a
+/// sink whose pin types differ from the one it replaces, though they refuse it as well and the
+/// families still take it: the verdict's question is a new one.
+///
+/// Mental-revert: keeping each link the live graph held so when an edit remakes it, whatever
+/// its ends' pin types now, keeps this one.
+#[test]
+#[serial]
+fn an_edit_remaking_a_kept_saved_link_into_a_sink_of_other_pin_types_is_refused() {
+    ensure_test_mocks_registered();
+    register_the_saved_link_fixture_node_types();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let stream = a_stream_loaded_from(
+        &runner,
+        &project_directory,
+        a_document_of_a_picture_link(
+            PICTURE_SOURCE_OF_TWO_FORMATS,
+            PICTURE_SINK_OF_ONE_FORMAT,
+            true,
+        ),
+    );
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1.len(), 1);
+
+    let into_the_second_format = a_document_of_a_picture_link(
+        PICTURE_SOURCE_OF_TWO_FORMATS,
+        PICTURE_SINK_OF_THE_SECOND_FORMAT,
+        true,
+    );
+    let refusal = reconcile_making(
+        &stream,
+        into_the_second_format.clone(),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+    )
+    .expect_err("the link into a sink of other pin types is judged as connect judges it");
+    assert!(matches!(refusal, Error::PinLinkRefused(_)), "{refusal:?}");
+
+    reconcile_making(
+        &stream,
+        into_the_second_format,
+        LinksAReconcileMakes::EachAsASavedGraphsLink,
+    )
+    .expect("the families take the link a saved document holds");
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1.len(), 1);
 }
 
 #[test]

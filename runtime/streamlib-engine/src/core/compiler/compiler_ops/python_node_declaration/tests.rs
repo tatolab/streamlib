@@ -810,3 +810,19 @@ fn a_described_picture_input_stating_no_delivery_reads_by_its_pin_and_an_untyped
          states `delivery=`, one of \"newest\", \"ordered\""
     );
 }
+
+#[test]
+fn a_stated_conversion_reaches_the_descriptor_and_one_that_is_no_bool_is_refused() {
+    let mut described_node_type = described_node_type_with_input_ports(serde_json::json!([]));
+    assert!(!read(&described_node_type).unwrap().descriptor.conversion);
+
+    described_node_type["conversion"] = serde_json::json!(true);
+    assert!(read(&described_node_type).unwrap().descriptor.conversion);
+
+    described_node_type["conversion"] = serde_json::json!("yes");
+    let refusal = refusal_of(&described_node_type);
+    assert!(
+        refusal.contains("conversion must be a bool, got"),
+        "got {refusal}"
+    );
+}

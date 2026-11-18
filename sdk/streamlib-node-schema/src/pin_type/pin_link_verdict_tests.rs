@@ -759,6 +759,18 @@ fn a_refusal_names_an_encoder_or_decoder_only_of_a_codec_the_encoded_end_states(
              h264, h265, then place its decoder between them",
         ),
         (
+            encoded_video(&["h264", "vp9"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to h264, \
+             then place an H264Decoder node between them",
+        ),
+        (
+            encoded_video(&["vp9", "h265", "h264"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to one of \
+             h264, h265, then place its decoder between them",
+        ),
+        (
             any_texture.clone(),
             encoded_video(&["h264", "h265"]),
             "; place one of H264Encoder, H265Encoder between them",
