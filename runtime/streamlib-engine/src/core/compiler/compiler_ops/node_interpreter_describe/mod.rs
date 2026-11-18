@@ -29,7 +29,7 @@ use crate::core::child_process_lifetime::{
     detach_child_from_the_terminal_and_bind_its_lifetime_to_ours,
     give_the_child_no_descriptor_beyond_stdio,
 };
-use crate::core::descriptors::NodeClassImportPath;
+use crate::core::descriptors::{NodeClassImportPath, NodeDescriptor};
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::nodes::{
@@ -197,6 +197,7 @@ pub(crate) fn describe_and_register_node_types_in_a_node_interpreter(
         register_the_described_node_type(
             node_types_of_the_stream,
             declaration,
+            None,
             stream_environment,
             lend_directory,
             the_stream_the_describe_belongs_to,
@@ -205,13 +206,31 @@ pub(crate) fn describe_and_register_node_types_in_a_node_interpreter(
     Ok(())
 }
 
+/// Register `declaration` into `node_types_of_the_stream`: as a type `installed_module`
+/// declares, which may state a conversion, or, with none, as a type a graph or a live add named.
 fn register_the_described_node_type(
     node_types_of_the_stream: &NodeTypesOneStreamResolves,
     declaration: PythonNodeDeclaration,
+    installed_module: Option<InstalledModuleOfANodeType>,
     stream_environment: &StreamEnvironment,
     lend_directory: &Path,
     the_stream_its_helpers_belong_to: &LoadedStreamAHelperProcessBelongsTo,
 ) -> Result<()> {
+    let register = |descriptor: NodeDescriptor, how_its_nodes_run: HowANodeOfADescribedTypeRuns| {
+        match installed_module {
+            Some(installed_module) => node_types_of_the_stream
+                .register_a_type_an_installed_module_declares(
+                    descriptor,
+                    how_its_nodes_run,
+                    installed_module,
+                ),
+            None => node_types_of_the_stream
+                .register_a_type_described_in_this_streams_node_interpreter(
+                    descriptor,
+                    how_its_nodes_run,
+                ),
+        }
+    };
     let PythonNodeDeclaration {
         descriptor,
         how_a_python_node_of_the_type_runs,
@@ -231,13 +250,12 @@ fn register_the_described_node_type(
         }
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(program) => {
-            return node_types_of_the_stream
-                    .register_a_type_described_in_this_streams_node_interpreter(
-                        descriptor,
-                        HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
-                            shader_node_program: program.clone(),
-                            evaluator_of_the_island_it_hosts: Box::new(move |node| {
-                                Ok(Box::new(
+            return register(
+                descriptor,
+                HowANodeOfADescribedTypeRuns::OnTheNativeShaderEvaluatorOfItsIsland {
+                    shader_node_program: program.clone(),
+                    evaluator_of_the_island_it_hosts: Box::new(move |node| {
+                        Ok(Box::new(
                                     super::shader_node_native_evaluator::ShaderNodeNativeEvaluator::for_the_node(
                                         node,
                                         descriptor_for_constructor.clone(),
@@ -245,9 +263,9 @@ fn register_the_described_node_type(
                                     ),
                                 )
                                     as Box<dyn DynGeneratedNode + Send>)
-                            }),
-                        },
-                    );
+                    }),
+                },
+            );
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         HowAPythonNodeOfTheTypeRuns::OnItsNativeShaderEvaluator(_) => {
@@ -263,30 +281,26 @@ fn register_the_described_node_type(
                 &lend_directory,
                 &the_stream_its_helpers_belong_to,
             )?;
-            return node_types_of_the_stream
-                .register_a_type_described_in_this_streams_node_interpreter(
-                    descriptor,
-                    HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
-                        node_once_promoted_to_its_own_process: Box::new(move |node| {
-                            Ok(
-                                Box::new(
-                                    spawn_host_for_a_function_node_promoted_to_its_own_process(
-                                        &node_class_import_path,
-                                        &descriptor_for_constructor,
-                                        node,
-                                        &stream_environment,
-                                        &lend_directory,
-                                        the_stream_its_helpers_belong_to.clone(),
-                                    )?,
-                                )
-                                    as Box<dyn DynGeneratedNode + Send>,
-                            )
-                        }),
-                    },
-                );
+            return register(
+                descriptor,
+                HowANodeOfADescribedTypeRuns::InsideTheReadOfEachNodeItFeeds {
+                    node_once_promoted_to_its_own_process: Box::new(move |node| {
+                        Ok(
+                            Box::new(spawn_host_for_a_function_node_promoted_to_its_own_process(
+                                &node_class_import_path,
+                                &descriptor_for_constructor,
+                                node,
+                                &stream_environment,
+                                &lend_directory,
+                                the_stream_its_helpers_belong_to.clone(),
+                            )?) as Box<dyn DynGeneratedNode + Send>,
+                        )
+                    }),
+                },
+            );
         }
     };
-    node_types_of_the_stream.register_a_type_described_in_this_streams_node_interpreter(
+    register(
         descriptor,
         HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(Box::new(move |node| {
             Ok(Box::new(spawn_host_for_graph_node(
@@ -653,24 +667,28 @@ pub(crate) fn register_the_node_types_installed_modules_declare(
             );
             continue;
         }
-        if !node_types_of_the_stream.was_described_in_this_streams_node_interpreter(&node_type) {
-            if let Err(refusal) = register_the_described_node_type(
-                node_types_of_the_stream,
-                declaration,
-                stream_environment,
-                lend_directory,
-                the_stream_its_helpers_belong_to,
-            ) {
-                tracing::warn!(
-                    node_class_import_path = node_type.as_str(),
-                    distribution = installed_module.distribution.as_str(),
-                    "an installed module's node type was refused: {refusal}"
-                );
-                continue;
-            }
-            registered.push(node_type.clone());
+        if node_types_of_the_stream.was_described_in_this_streams_node_interpreter(&node_type) {
+            node_types_of_the_stream
+                .record_the_installed_module_declaring(node_type, installed_module);
+            continue;
         }
-        node_types_of_the_stream.record_the_installed_module_declaring(node_type, installed_module);
+        let distribution = installed_module.distribution.clone();
+        if let Err(refusal) = register_the_described_node_type(
+            node_types_of_the_stream,
+            declaration,
+            Some(installed_module),
+            stream_environment,
+            lend_directory,
+            the_stream_its_helpers_belong_to,
+        ) {
+            tracing::warn!(
+                node_class_import_path = node_type.as_str(),
+                distribution = distribution.as_str(),
+                "an installed module's node type was refused: {refusal}"
+            );
+            continue;
+        }
+        registered.push(node_type);
     }
     registered
 }

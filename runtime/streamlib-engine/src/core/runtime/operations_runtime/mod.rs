@@ -14,6 +14,7 @@ use super::operations::{
     BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
 };
 use super::runtime::TokioRuntimeVariant;
+use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
@@ -22,8 +23,9 @@ use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
 };
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
-    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
+    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
+    node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -574,16 +576,32 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
+    /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
+    /// alone refuse it is kept when its ports' families take it.
+    pub(crate) fn connect_a_link_of_a_saved_graph(
+        &self,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId> {
+        self.block_on_the_engines_tokio_runtime(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+        ))
+    }
+
     /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
     /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
     pub(super) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
         self: &Arc<Self>,
         graph_document: serde_json::Value,
+        links_it_makes: LinksAReconcileMakes,
     ) -> Result<()> {
         let stream = Arc::clone(self);
         self.block_on_the_engines_tokio_runtime(async move {
             stream
-                .reconcile_the_live_graph_to_the_graph_document(graph_document)
+                .reconcile_the_live_graph_to_the_graph_document(graph_document, links_it_makes)
                 .await
         })
     }
@@ -623,7 +641,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        self.in_this_streams_log_route(connect_impl(self.live_graph_change(), from, to))
+        self.in_this_streams_log_route(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsRefused,
+        ))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -855,7 +878,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(self.live_graph_change(), from, to))
+        self.block_on_the_engines_tokio_runtime(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsRefused,
+        ))
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

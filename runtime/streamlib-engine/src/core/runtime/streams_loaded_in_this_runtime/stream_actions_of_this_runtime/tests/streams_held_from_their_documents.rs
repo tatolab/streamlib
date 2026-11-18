@@ -321,8 +321,11 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
     for link in renamed_sink["links"].as_array_mut().unwrap() {
         link["target"]["node"] = serde_json::json!("drain");
     }
-    held.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(renamed_sink)
-        .expect("an edit keeps the link already set aside");
+    held.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+        renamed_sink,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+    )
+    .expect("an edit keeps the link already set aside");
     assert!(
         held.why_its_graph_as_held_keeps_this_stream_from_playing()
             .is_some()
@@ -337,13 +340,17 @@ fn an_edit_of_a_stream_holding_a_link_set_aside_keeps_it_and_refuses_a_new_link_
             "target": {"node": "sink", "port": "another_missing_input"},
         }));
     let refusal = held
-        .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(a_second_refused_link)
+        .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+            a_second_refused_link,
+            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        )
         .expect_err("a new link its validation refuses is refused")
         .to_string();
     assert!(refusal.contains("another_missing_input"), "{refusal}");
 
     held.reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
         the_graph_of_a_source_linked_into_a_sink("camera", false),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
     )
     .expect("taking the refused link out is an edit");
     assert_eq!(

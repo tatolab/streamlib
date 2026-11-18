@@ -723,3 +723,83 @@ fn an_installed_module_that_cannot_be_described_leaves_the_load_standing() {
         );
     }
 }
+
+/// A conversion an installed module declares, Texture to Texture, as its describe states it.
+fn a_described_conversion(node_type: &NodeClassImportPath) -> serde_json::Value {
+    let picture = |name: &str| {
+        serde_json::json!({
+            "name": name, "description": "", "family": {"family": "image"},
+            "delivery_profile": "newest",
+        })
+    };
+    serde_json::json!({
+        "import_path": node_type.as_str(),
+        "short_name": "Sharpen",
+        "description": "sharpens",
+        "kind": "process",
+        "execution": {"mode": "reactive"},
+        "scheduling_priority": null,
+        "paced_by_real_time": false,
+        "config_schema": {"type": "object"},
+        "input_ports": [picture("video")],
+        "output_ports": [picture("out")],
+        "conversion": true,
+    })
+}
+
+/// A conversion an installed module's describe states is registered and offered to the
+/// stream's verdict when the loaded graph names the type, which the load describes again.
+///
+/// Mental-revert: registering the installed module's type as a project's refuses it as one
+/// stating a conversion, and so does describing the graph's types before the installed
+/// modules'; either way the load is refused.
+#[test]
+#[serial]
+fn a_conversion_an_installed_module_declares_is_offered_when_a_loaded_graph_names_it() {
+    let installed_type = import_path("tatolab_sharpen.nodes:Sharpen");
+    let document = serde_json::json!({
+        "described_node_types": [a_described_conversion(&installed_type)],
+        "refused_node_types": [],
+        "installed_modules": [an_installed_module_declaring(&installed_type, "tatolab-sharpen")],
+    });
+    let (_project_directory, stream_environment) =
+        a_project_whose_interpreter_describes_every_describe_as(document);
+    let runner = Runner::new().unwrap();
+    runner
+        .set_node_interpreter_lend_directory(LEND_DIRECTORY_FOR_TEST.into())
+        .expect("the runner's first lend directory");
+
+    let stream = runner
+        .load_stream_from_graph_snapshot(
+            &a_graph_of(&[&installed_type]),
+            options_loading_a_stream_of_the_test_project_in(stream_environment, "main"),
+        )
+        .expect("a graph naming an installed module's conversion loads");
+
+    assert!(
+        stream
+            .node_types_this_stream_resolves()
+            .pin_conversions()
+            .iter()
+            .any(|conversion| conversion.node_type == installed_type),
+        "the installed module's conversion is offered"
+    );
+}
+
+/// A project directory holding a stand-in interpreter that answers every describe, of the
+/// installed modules or of the types a graph names, with `describe_document`.
+fn a_project_whose_interpreter_describes_every_describe_as(
+    describe_document: serde_json::Value,
+) -> (tempfile::TempDir, StreamEnvironment) {
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let interpreter = project_directory.path().join("stub-python");
+    crate::core::test_support::write_an_executable_script_from_a_child_process(
+        &interpreter,
+        &format!("#!/bin/sh\ncat <<'DESCRIBED'\n{describe_document}\nDESCRIBED\n"),
+    );
+    let stream_environment = StreamEnvironment {
+        project_directory: project_directory.path().to_path_buf(),
+        interpreter,
+    };
+    (project_directory, stream_environment)
+}

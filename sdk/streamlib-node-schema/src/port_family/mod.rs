@@ -485,33 +485,133 @@ pub fn output_port_codec_resolved_against_config(
     }
 }
 
+/// What the packets of a codec encode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EncodedMedia {
+    Video,
+    Audio,
+}
+
+/// A codec, what its packets encode, and the nodes that encode into it and decode out of it.
+pub(crate) struct CodecNodes {
+    pub(crate) codec: &'static str,
+    pub(crate) media: EncodedMedia,
+    pub(crate) encoder: &'static str,
+    pub(crate) decoder: &'static str,
+}
+
+/// Each codec a node of the runtime's encodes into and decodes out of.
+pub(crate) const CODEC_NODES: [CodecNodes; 3] = [
+    CodecNodes {
+        codec: "h264",
+        media: EncodedMedia::Video,
+        encoder: "H264Encoder",
+        decoder: "H264Decoder",
+    },
+    CodecNodes {
+        codec: "h265",
+        media: EncodedMedia::Video,
+        encoder: "H265Encoder",
+        decoder: "H265Decoder",
+    },
+    CodecNodes {
+        codec: "opus",
+        media: EncodedMedia::Audio,
+        encoder: "OpusEncoder",
+        decoder: "OpusDecoder",
+    },
+];
+
+/// Whether a person converts toward the packets of a codec, or away from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CodecDirection {
+    Encode,
+    Decode,
+}
+
+/// The words placing the encoder or decoder, as `direction` says, of each codec of `media`
+/// that `stated` lists, or of each when it lists none; `None` when no codec node fits. One
+/// decoder takes one codec, so packets stating several are told to state one a decoder takes
+/// first.
+pub(crate) fn codec_nodes_placed_between(
+    media: EncodedMedia,
+    direction: CodecDirection,
+    stated: &[String],
+) -> Option<String> {
+    let fitting: Vec<&CodecNodes> = CODEC_NODES
+        .iter()
+        .filter(|nodes| nodes.media == media)
+        .filter(|nodes| {
+            stated.is_empty()
+                || stated
+                    .iter()
+                    .any(|codec| codec.eq_ignore_ascii_case(nodes.codec))
+        })
+        .collect();
+    let node_of = |nodes: &CodecNodes| match direction {
+        CodecDirection::Encode => nodes.encoder,
+        CodecDirection::Decode => nodes.decoder,
+    };
+    let one_decoder_takes_every_codec_stated =
+        direction == CodecDirection::Encode || stated.len() <= 1;
+    match fitting.as_slice() {
+        [] => None,
+        [one] if one_decoder_takes_every_codec_stated => {
+            Some(format!("place an {} node between them", node_of(one)))
+        }
+        several if one_decoder_takes_every_codec_stated => Some(format!(
+            "place one of {} between them",
+            several
+                .iter()
+                .map(|nodes| node_of(nodes))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        [one] => Some(format!(
+            "no one decoder takes every codec the output states; narrow the output to {}, then \
+             place an {} node between them",
+            one.codec,
+            node_of(one)
+        )),
+        several => Some(format!(
+            "no one decoder takes every codec the output states; narrow the output to one of \
+             {}, then place its decoder between them",
+            several
+                .iter()
+                .map(|nodes| nodes.codec)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
 /// The node a person places between an output of family `from` and an input of family `to`
 /// to convert one to the other; `None` when no one node does.
-pub(crate) fn node_placed_between_families(
-    from: PortFamily,
-    to: PortFamily,
-) -> Option<&'static str> {
+pub(crate) fn node_placed_between_families(from: PortFamily, to: PortFamily) -> Option<String> {
     use PortFamily::*;
-    Some(match (from, to) {
-        (Image, Array) => "place an ImageToArray node between them",
-        (Array, Image) => "place an ArrayToImage node between them",
-        (Channels, Array) => "place a ChannelsToArray node between them",
-        (Array, Channels) => "place an ArrayToChannels node between them",
-        (Channels, Records) => "place a ChannelsToRecords node between them",
-        (Records, Channels) => "place a RecordsToChannels node between them",
-        (Image, Packets) => "place a video encoder (H264Encoder, H265Encoder) between them",
-        (Packets, Image) => "place a video decoder (H264Decoder, H265Decoder) between them",
-        (Channels, Packets) => "place an OpusEncoder between them",
-        (Packets, Channels) => "place an OpusDecoder between them",
-        _ => return None,
-    })
+    let codec_nodes = |media, direction| codec_nodes_placed_between(media, direction, &[]);
+    let one_node = |words: &str| Some(words.to_owned());
+    match (from, to) {
+        (Image, Array) => one_node("place an ImageToArray node between them"),
+        (Array, Image) => one_node("place an ArrayToImage node between them"),
+        (Channels, Array) => one_node("place a ChannelsToArray node between them"),
+        (Array, Channels) => one_node("place an ArrayToChannels node between them"),
+        (Channels, Records) => one_node("place a ChannelsToRecords node between them"),
+        (Records, Channels) => one_node("place a RecordsToChannels node between them"),
+        (Image, Packets) => codec_nodes(EncodedMedia::Video, CodecDirection::Encode),
+        (Packets, Image) => codec_nodes(EncodedMedia::Video, CodecDirection::Decode),
+        (Channels, Packets) => codec_nodes(EncodedMedia::Audio, CodecDirection::Encode),
+        (Packets, Channels) => codec_nodes(EncodedMedia::Audio, CodecDirection::Decode),
+        _ => None,
+    }
 }
 
 /// The node a person places between `from` and `to` to convert one family to
 /// the other.
-fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str {
-    node_placed_between_families(from, to)
-        .unwrap_or("no one node converts between them; chain the conversion nodes that do")
+fn conversion_between_families(from: PortFamily, to: PortFamily) -> String {
+    node_placed_between_families(from, to).unwrap_or_else(|| {
+        "no one node converts between them; chain the conversion nodes that do".to_owned()
+    })
 }
 
 /// Why `connect` refuses a link from `output` to `input`, or `None` when it

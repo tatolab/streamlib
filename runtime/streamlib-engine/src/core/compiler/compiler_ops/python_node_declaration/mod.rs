@@ -34,6 +34,7 @@ const DESCRIBED_OUTPUT_PORTS_KEY: &str = "output_ports";
 const DESCRIBED_STATE_FIELDS_KEY: &str = "state_fields";
 const DESCRIBED_SHADER_SOURCE_KEY: &str = "shader_source";
 const DESCRIBED_SHADER_SIGNATURE_KEY: &str = "shader_signature";
+const DESCRIBED_CONVERSION_KEY: &str = "conversion";
 
 /// Everything the engine needs to register one Python node type and run its
 /// nodes.
@@ -124,6 +125,7 @@ impl PythonNodeDeclaration {
         descriptor.inputs = read_port_descriptors(described_node_type, PortDirection::Input)?;
         descriptor.outputs = read_port_descriptors(described_node_type, PortDirection::Output)?;
         declare_each_typed_port(&mut descriptor, typed_ports)?;
+        descriptor.conversion = read_whether_it_states_a_conversion(described_node_type)?;
         for output in &descriptor.outputs {
             if let Some(followed_input_port) = output.family.family_follows_input_port.as_deref()
                 && !descriptor
@@ -143,6 +145,21 @@ impl PythonNodeDeclaration {
             descriptor,
             how_a_python_node_of_the_type_runs,
         })
+    }
+}
+
+/// Whether a described node type states that it converts its one wired input's type into its
+/// output's; refused when the statement is not a bool, and false when it makes none.
+fn read_whether_it_states_a_conversion(
+    described_node_type: &serde_json::Value,
+) -> std::result::Result<bool, String> {
+    match described_node_type.get(DESCRIBED_CONVERSION_KEY) {
+        None | Some(serde_json::Value::Null) => Ok(false),
+        Some(serde_json::Value::Bool(states_a_conversion)) => Ok(*states_a_conversion),
+        Some(other) => Err(format!(
+            "{DESCRIBED_CONVERSION_KEY} must be a bool, got {}",
+            json_kind_name(other)
+        )),
     }
 }
 

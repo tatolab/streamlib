@@ -13,8 +13,9 @@ use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
 use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::PinLinkVerdict;
-use crate::core::graph::{Graph, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse};
-use crate::core::nodes::NODE_REGISTRY;
+use crate::core::graph::{
+    ALinkThePinTypesRefuse, Graph, LinkUniqueId, refuse_a_link_its_pin_types_or_families_refuse,
+};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::ChannelName;
@@ -24,7 +25,8 @@ use crate::iceoryx2::ChannelName;
 /// Connect judges two typed ports by their pin link verdict, and any other two
 /// by their families, names, codec and formats, and refuses a link that does
 /// not connect as it is, or that feeds a function node island into a node in
-/// the app process, by name before any channel exists.
+/// the app process, by name before any channel exists; one the verdict alone
+/// refuses is kept as `a_link_the_pin_types_refuse` says.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -34,6 +36,7 @@ pub(in crate::core::runtime) async fn connect_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
+    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
 ) -> Result<LinkUniqueId> {
     let LiveGraphChangeOnOneStream {
         compiler,
@@ -47,7 +50,12 @@ pub(in crate::core::runtime) async fn connect_impl(
         to: to.clone(),
     });
 
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
+    let link_id = apply_a_link(
+        &compiler,
+        from.clone(),
+        to.clone(),
+        a_link_the_pin_types_refuse,
+    )?;
 
     commit_live_graph_change(&compiler, live).await?;
 
@@ -74,13 +82,15 @@ fn the_ends_connect_links(
 }
 
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
-/// an end the graph cannot take, a link its pin types or families refuse, one feeding a function
-/// node island into the app process, or one whose channel cannot be named. Answers the verdict
-/// of two typed ends, `None` for ends their families judge, and the channel the link carries on.
+/// an end the graph cannot take, a link its pin types or families refuse (one the verdict alone
+/// refuses kept as `a_link_the_pin_types_refuse` says), one feeding a function node island into
+/// the app process, or one whose channel cannot be named. Answers the verdict of two typed ends
+/// that connect, `None` for ends their families judge, and the channel the link carries on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
+    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
 ) -> Result<(Option<PinLinkVerdict>, ChannelName)> {
     refuse_a_source_this_graph_cannot_take(graph, from)?;
     refuse_a_destination_this_graph_cannot_take(graph, to)?;
@@ -88,7 +98,7 @@ fn refuse_a_link_connect_refuses(
         graph,
         from,
         to,
-        &NODE_REGISTRY.pin_conversions(),
+        a_link_the_pin_types_refuse,
     )?;
     refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
     let channel =
@@ -97,9 +107,10 @@ fn refuse_a_link_connect_refuses(
     Ok((verdict, channel))
 }
 
-/// The verdict connect takes on a link from `from` to `to` in the graph `compiler` holds,
-/// judged as [`connect_impl`] judges it and made nowhere: the verdict of two typed ends that
-/// connect, `None` for ends their families judge, refused as connect refuses the link.
+/// The verdict a connect made now takes on a link from `from` to `to` in the graph `compiler`
+/// holds, judged as [`connect_impl`] judges it under [`ALinkThePinTypesRefuse::IsRefused`] and
+/// made nowhere: the verdict of two typed ends that connect, `None` for ends their families
+/// judge, refused as connect refuses the link.
 pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
@@ -107,7 +118,8 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
 ) -> Result<Option<PinLinkVerdict>> {
     let (from, to) = the_ends_connect_links(compiler, from, to)?;
     compiler.scope(|graph, _tx| {
-        refuse_a_link_connect_refuses(graph, &from, &to).map(|(verdict, _)| verdict)
+        refuse_a_link_connect_refuses(graph, &from, &to, ALinkThePinTypesRefuse::IsRefused)
+            .map(|(verdict, _)| verdict)
     })
 }
 
@@ -116,10 +128,12 @@ fn apply_a_link(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
+    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
 ) -> Result<LinkUniqueId> {
     let (link_id, channel) =
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-            let (_, channel) = refuse_a_link_connect_refuses(graph, &from, &to)?;
+            let (_, channel) =
+                refuse_a_link_connect_refuses(graph, &from, &to, a_link_the_pin_types_refuse)?;
 
             let link_id = graph
                 .traversal_mut()
