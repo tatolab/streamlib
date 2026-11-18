@@ -169,7 +169,6 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/machine_global_unique_name.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/output_port_stream_facts.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/__generated_private/generated_node_impl.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/node_types_one_stream_resolves.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/out_of_process_link_wire_reply.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/nodes/node_spec.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/pubsub/events.rs
@@ -198,7 +197,6 @@
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/projects_and_their_venv/project_node_code_a_load_describes.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/projects_and_their_venv/project_venv_sync_progress.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/streams_loaded_in_this_runtime/function_node_states_carried_across_loads.rs
-1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/streams_loaded_in_this_runtime/live_graph_reconciled_to_a_graph_document.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/streams_loaded_in_this_runtime/local_node_type_registration.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/streams_loaded_in_this_runtime/project_stream_action_queue.rs
 1 no-inline-test-module runtime/streamlib-engine/src/core/runtime/streams_loaded_in_this_runtime/stream_location_and_id.rs

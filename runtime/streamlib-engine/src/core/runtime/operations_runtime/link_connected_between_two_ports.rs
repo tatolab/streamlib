@@ -81,12 +81,10 @@ fn apply_a_link(
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
             refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-            let conversions = graph.node_types_this_stream_resolves().pin_conversions();
             refuse_a_link_its_pin_types_or_families_refuse(
                 graph,
                 &from,
                 &to,
-                &conversions,
                 a_link_the_pin_types_refuse,
             )?;
 

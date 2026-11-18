@@ -559,7 +559,7 @@ fn a_typed_output_whose_family_follows_an_input_is_judged_by_what_it_carries_on(
 }
 
 /// A link a saved graph holds whose pin types alone refuse it is kept when its ports' families
-/// take it, as they judged it before the verdict did; a link into a setting is refused still.
+/// take it, its names, codec and formats with them; a link into a setting is refused still.
 ///
 /// Mental-revert: judging a saved graph's link as one made now refuses the temperatures.
 #[test]

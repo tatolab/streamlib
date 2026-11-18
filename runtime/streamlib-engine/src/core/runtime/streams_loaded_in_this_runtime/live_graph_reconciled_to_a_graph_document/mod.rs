@@ -21,6 +21,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 use crate::core::graph::{
     ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     NodeRunId, PendingDeletionComponent, cast_exposed_name_to_url_safe,
+    the_pin_types_refuse_the_link,
 };
 use crate::core::logging::carrying_this_threads_project_log_route_entry;
 use crate::core::pubsub::RuntimeEvent;
@@ -56,9 +57,32 @@ pub(in crate::core::runtime) struct LiveLinkAsGiven {
 pub(in crate::core::runtime) enum LinksAReconcileMakes {
     /// Each link, the document being a saved graph: read from disk, or as the stream drew it.
     EachAsASavedGraphsLink,
-    /// A link the live graph held when the reconcile began as a saved graph's, and any other as
-    /// one an edit makes now.
-    ThoseTheLiveGraphHeldAsASavedGraphs,
+    /// A link the live graph held when the reconcile began though its pin types refused it, a
+    /// saved graph's link the reconcile remakes, as a saved graph's; any other as one an edit
+    /// makes now.
+    ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+}
+
+impl LinksAReconcileMakes {
+    /// How a reconcile making `link` judges it, `kept_though_their_pin_types_refused_them`
+    /// being the links the live graph held so when it began.
+    fn for_a_link(
+        self,
+        link: &RunningLinkBetweenTwoNodesByUuid,
+        kept_though_their_pin_types_refused_them: &HashSet<RunningLinkBetweenTwoNodesByUuid>,
+    ) -> ALinkThePinTypesRefuse {
+        match self {
+            Self::EachAsASavedGraphsLink => ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            Self::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem
+                if kept_though_their_pin_types_refused_them.contains(link) =>
+            {
+                ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
+            }
+            Self::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem => {
+                ALinkThePinTypesRefuse::IsRefused
+            }
+        }
+    }
 }
 
 /// One node the live graph holds, as a reconcile compares it to the document's.
@@ -153,11 +177,12 @@ impl LoadedStreamInThisRuntime {
             .collect();
         let document_link_set: HashSet<&RunningLinkBetweenTwoNodesByUuid> =
             document_links.iter().collect();
-        let live_links_when_it_began: HashSet<RunningLinkBetweenTwoNodesByUuid> = self
-            .the_live_links_by_node_uuid()
-            .into_iter()
-            .map(|live_link| live_link.link_as_given)
-            .collect();
+        let kept_though_their_pin_types_refused_them = match links_it_makes {
+            LinksAReconcileMakes::EachAsASavedGraphsLink => HashSet::new(),
+            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem => {
+                self.the_live_links_their_pin_types_refuse()
+            }
+        };
 
         for live_node in self.the_live_nodes() {
             let kept = document_node_by_uuid
@@ -306,11 +331,7 @@ impl LoadedStreamInThisRuntime {
             .into_iter()
             .map(|live_node| (live_node.node_uuid, live_node.node_run_id))
             .collect();
-        let live_links: HashSet<RunningLinkBetweenTwoNodesByUuid> = self
-            .the_live_links_by_node_uuid()
-            .into_iter()
-            .map(|live_link| live_link.link_as_given)
-            .collect();
+        let live_links = self.the_live_links_as_given();
         let node_of = |node_uuid: &Uuid| {
             node_run_id_of_each_node_uuid
                 .get(node_uuid)
@@ -323,9 +344,6 @@ impl LoadedStreamInThisRuntime {
             if live_links.contains(document_link) {
                 continue;
             }
-            let a_saved_graphs_link = links_it_makes
-                == LinksAReconcileMakes::EachAsASavedGraphsLink
-                || live_links_when_it_began.contains(document_link);
             connect_impl(
                 self.live_graph_change(),
                 OutputLinkPortRef::new(
@@ -336,11 +354,7 @@ impl LoadedStreamInThisRuntime {
                     node_of(&document_link.target_node)?,
                     &document_link.target_port,
                 ),
-                if a_saved_graphs_link {
-                    ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt
-                } else {
-                    ALinkThePinTypesRefuse::IsRefused
-                },
+                links_it_makes.for_a_link(document_link, &kept_though_their_pin_types_refused_them),
             )
             .await?;
         }
@@ -469,6 +483,44 @@ impl LoadedStreamInThisRuntime {
                 })
             })
             .collect()
+    }
+
+    /// Each link the live graph holds as it was given, by node UUID.
+    fn the_live_links_as_given(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+        self.the_live_links_by_node_uuid()
+            .into_iter()
+            .map(|live_link| live_link.link_as_given)
+            .collect()
+    }
+
+    /// Each link the live graph holds as it was given whose two typed ends' pin types the
+    /// verdict refuses, by node UUID: a saved graph's link kept as its families take it.
+    fn the_live_links_their_pin_types_refuse(&self) -> HashSet<RunningLinkBetweenTwoNodesByUuid> {
+        let live_links = self.the_live_links_as_given();
+        self.compiler.scope_reading(|graph| {
+            let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = graph
+                .traversal()
+                .v(())
+                .iter()
+                .map(|node| (node.node_uuid, node.id.clone()))
+                .collect();
+            live_links
+                .into_iter()
+                .filter(|link| {
+                    let (Some(source), Some(target)) = (
+                        node_run_id_of_each_node_uuid.get(&link.source_node),
+                        node_run_id_of_each_node_uuid.get(&link.target_node),
+                    ) else {
+                        return false;
+                    };
+                    the_pin_types_refuse_the_link(
+                        graph,
+                        &OutputLinkPortRef::new(source.clone(), &link.source_port),
+                        &InputLinkPortRef::new(target.clone(), &link.target_port),
+                    )
+                })
+                .collect()
+        })
     }
 
     /// Each link the live graph holds as it was given, by node UUID, beside the links it is

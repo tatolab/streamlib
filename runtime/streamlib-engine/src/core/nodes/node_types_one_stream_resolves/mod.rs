@@ -18,7 +18,7 @@ use crate::core::graph::{
     GraphNodeWithComponents, PortInfo,
 };
 use crate::core::nodes::node_instance_factory::{
-    NodeTypeAsRegistered, the_node_type_as_registered,
+    NodeTypeAsRegistered, in_node_type_order, the_node_type_as_registered,
 };
 use crate::core::nodes::project_view_node::{ValueSourceNode, the_node_type_of_a_project_view};
 use crate::core::nodes::{
@@ -815,17 +815,20 @@ impl NodeTypesOneStreamResolves {
     }
 
     /// The conversion each node type this stream resolves states, the native types' and the
-    /// installed modules', sorted by node type.
-    pub(crate) fn pin_conversions(&self) -> Vec<PinConversion> {
-        let mut conversions = NODE_REGISTRY.pin_conversions().to_vec();
-        conversions.extend(
-            self.described_in_this_streams_node_interpreter
-                .read()
-                .values()
-                .filter_map(|described| described.conversion.clone()),
-        );
-        conversions.sort_by(|one, other| one.node_type.cmp(&other.node_type));
-        conversions
+    /// installed modules', sorted by node type: the native list itself when no installed
+    /// module's type states one.
+    pub(crate) fn pin_conversions(&self) -> Arc<[PinConversion]> {
+        let native = NODE_REGISTRY.pin_conversions();
+        let described: Vec<PinConversion> = self
+            .described_in_this_streams_node_interpreter
+            .read()
+            .values()
+            .filter_map(|described| described.conversion.clone())
+            .collect();
+        if described.is_empty() {
+            return native;
+        }
+        in_node_type_order(native.iter().cloned().chain(described).collect())
     }
 
     pub fn node_catalog(&self) -> Vec<NodeDescriptor> {

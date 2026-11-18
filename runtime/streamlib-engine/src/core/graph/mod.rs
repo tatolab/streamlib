@@ -46,6 +46,7 @@ pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
 pub(crate) use pin_type_link_checks::{
     ALinkThePinTypesRefuse, refuse_a_link_its_pin_types_or_families_refuse,
+    the_pin_types_refuse_the_link,
 };
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,

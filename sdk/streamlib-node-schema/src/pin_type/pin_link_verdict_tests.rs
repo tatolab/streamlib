@@ -677,6 +677,41 @@ fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
     ));
 }
 
+/// A bundle naming one member twice is not the bundle naming each of its members once, in
+/// either direction, though every name of one is a name of the other.
+#[test]
+fn a_bundle_naming_a_member_twice_does_not_connect_to_one_naming_it_once() {
+    let bundle_of = |names: &[&str]| PinType::Bundle {
+        members: names
+            .iter()
+            .map(|name| BundleMember {
+                name: (*name).to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            })
+            .collect(),
+    };
+    for (output, input) in [
+        (
+            bundle_of(&["pitch", "pitch"]),
+            bundle_of(&["pitch", "gain"]),
+        ),
+        (
+            bundle_of(&["pitch", "gain"]),
+            bundle_of(&["pitch", "pitch"]),
+        ),
+    ] {
+        assert!(
+            matches!(
+                the_outcome_between(&output, &input),
+                PinLinkOutcome::Refused(_)
+            ),
+            "{output} into {input}"
+        );
+    }
+}
+
 /// The words a refusal of a link from `output` into `input`, which no conversion bridges, says.
 fn the_refusal_words_between(output: &PinType, input: &PinType) -> String {
     let PinLinkOutcome::Refused(refusal) = the_outcome_between(output, input) else {
@@ -716,6 +751,17 @@ fn a_refusal_names_an_encoder_or_decoder_only_of_a_codec_the_encoded_end_states(
             encoded_video(&["vp9"]),
             any_texture.clone(),
             "; no node type converts between them",
+        ),
+        (
+            encoded_video(&["h264", "h265"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to one of \
+             h264, h265, then place its decoder between them",
+        ),
+        (
+            any_texture.clone(),
+            encoded_video(&["h264", "h265"]),
+            "; place one of H264Encoder, H265Encoder between them",
         ),
         (
             any_texture.clone(),

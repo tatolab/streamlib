@@ -93,8 +93,8 @@ fn an_installed_module() -> InstalledModuleOfANodeType {
 fn the_conversions_of(node_types: &NodeTypesOneStreamResolves) -> Vec<NodeClassImportPath> {
     node_types
         .pin_conversions()
-        .into_iter()
-        .map(|conversion| conversion.node_type)
+        .iter()
+        .map(|conversion| conversion.node_type.clone())
         .collect()
 }
 
