@@ -6,7 +6,6 @@
 //! announces it, with no graph write lock, no graph render, no compile and no document staged.
 
 use streamlib::sdk::error::PortDirection;
-use streamlib::sdk::graph::GraphNodePorts;
 use streamlib::sdk::graph::input_values::{
     InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
     the_words_of_an_input_set_twice_live,
@@ -27,9 +26,13 @@ impl StreamGraphTransactionExecutor<'_> {
     /// `stream_id_of_each_request`, when two of its value sets name one input of one node, at
     /// the second, whatever else it holds and whichever path applies it: the second value would
     /// replace the first before the node is handed either, so the first would never be
-    /// published. A node is the one its UUID or an earlier `add_node`'s `as` names at its level;
-    /// an input, the one its name or a name it had finds, on a node of the stream's own level or
-    /// one the transaction adds, and the one its name finds on any other.
+    /// published.
+    ///
+    /// A node is the one its UUID, or an earlier `add_node`'s `as`, names at its level. An input
+    /// is the one its name, or a name it had, finds: on a node of the stream's own level as the
+    /// stream runs it, and on a node an earlier `add_node` adds as its type declares. On any other
+    /// level an input is the one its name finds: a live transaction makes no edit inside a placed
+    /// stream, which is made on the graph documents, so a set there is refused as it is applied.
     pub(super) fn refuse_an_input_set_twice_in_a_live_transaction(
         &self,
         requests: &[StreamGraphAction],
@@ -38,106 +41,80 @@ impl StreamGraphTransactionExecutor<'_> {
         let sets = the_value_set_of_each_request(requests, stream_id_of_each_request);
         let mut input_names_of_each_node: HashMap<&NodeAValueSetNames, HashSet<&str>> =
             HashMap::new();
-        for (_, node, input) in &sets {
+        for set in &sets {
             input_names_of_each_node
-                .entry(node)
+                .entry(&set.node)
                 .or_default()
-                .insert(input.as_str());
+                .insert(set.input.as_str());
         }
-        let mut ports_of_each_node: HashMap<&NodeAValueSetNames, Option<GraphNodePorts>> =
-            HashMap::new();
         let mut document_of_each_stream: HashMap<String, Option<StreamGraphDocument>> =
             HashMap::new();
         let mut inputs_set: HashSet<(&NodeAValueSetNames, String)> = HashSet::new();
-        for (request_index, node, input) in &sets {
-            let current_input = if input_names_of_each_node[node].len() > 1 {
-                ports_of_each_node
-                    .entry(node)
-                    .or_insert_with(|| {
-                        self.the_ports_of_the_node_a_value_set_names(
-                            node,
-                            requests,
+        for set in &sets {
+            let may_hold_a_former_name = input_names_of_each_node
+                .get(&set.node)
+                .is_some_and(|input_names| input_names.len() > 1);
+            let current_input = if may_hold_a_former_name {
+                let node_type = self
+                    .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
+                    .map(|node| node.node_type)
+                    .or_else(|| {
+                        the_type_an_earlier_add_gives(
+                            &set.node,
+                            requests.get(..set.index).unwrap_or_default(),
                             stream_id_of_each_request,
-                            &mut document_of_each_stream,
                         )
-                    })
-                    .as_ref()
-                    .and_then(|ports| ports.current_name(PortDirection::Input, input))
-                    .unwrap_or(input)
-                    .to_owned()
+                    });
+                match self
+                    .operations_on_the_loaded_streams
+                    .runtime_operations_of_the_stream_a_call_names(&set.node.stream_id)
+                {
+                    Ok(stream_operations) => the_current_name_of_a_port(
+                        set.input.clone(),
+                        PortDirection::Input,
+                        node_type,
+                        stream_operations.as_ref(),
+                    ),
+                    Err(_) => set.input.clone(),
+                }
             } else {
-                input.clone()
+                set.input.clone()
             };
-            if inputs_set.contains(&(node, current_input.clone())) {
-                let (stream_id, level, named) = node;
-                let node_name = Uuid::parse_str(named)
-                    .ok()
-                    .filter(|_| level.is_empty())
-                    .and_then(|node_uuid| {
-                        document_of_each_stream
-                            .entry(stream_id.clone())
-                            .or_insert_with(|| self.the_document_a_stream_runs(stream_id))
-                            .as_ref()?
-                            .node(node_uuid)
-                            .ok()
-                    })
-                    .map_or_else(|| named.clone(), |node| node.name);
+            if !inputs_set.insert((&set.node, current_input.clone())) {
+                let node_name = self
+                    .the_node_a_stream_runs(&set.node, &mut document_of_each_stream)
+                    .map_or_else(|| set.node.node.clone(), |node| node.name);
                 return Err(GraphTransactionRefusal::of_the_operation(
-                    *request_index,
-                    what_a_graph_action_names(&requests[*request_index]),
+                    set.index,
+                    what_a_graph_action_names(set.request),
                     GraphRequestRefusal::from(the_words_of_an_input_set_twice_live(
                         &current_input,
                         &node_name,
                     )),
                 ));
             }
-            inputs_set.insert((node, current_input));
         }
         Ok(())
     }
 
-    /// The ports of `node`, a node a value set of `requests` names: on the stream's own level
-    /// by UUID, as the stream runs it, and by an earlier `add_node`'s `as`, as its type
-    /// declares; `None` for a node on another level or one neither finds.
-    fn the_ports_of_the_node_a_value_set_names(
+    /// The node `node` names by UUID on its stream's own level, as the stream runs it, its
+    /// stream's document read once into `document_of_each_stream`; `None` on any other level,
+    /// for a node named by `as`, and for one the stream does not run.
+    fn the_node_a_stream_runs(
         &self,
-        (stream_id, level, named): &NodeAValueSetNames,
-        requests: &[StreamGraphAction],
-        stream_id_of_each_request: &[String],
+        node: &NodeAValueSetNames,
         document_of_each_stream: &mut HashMap<String, Option<StreamGraphDocument>>,
-    ) -> Option<GraphNodePorts> {
-        let node_type = match Uuid::parse_str(named) {
-            Ok(node_uuid) if level.is_empty() => {
-                document_of_each_stream
-                    .entry(stream_id.clone())
-                    .or_insert_with(|| self.the_document_a_stream_runs(stream_id))
-                    .as_ref()?
-                    .node(node_uuid)
-                    .ok()?
-                    .node_type
-            }
-            Ok(_) => return None,
-            Err(_) => requests.iter().zip(stream_id_of_each_request).find_map(
-                |(request, request_stream_id)| match request {
-                    StreamGraphAction::AddNode {
-                        level: added_level,
-                        node_type,
-                        label: Some(label),
-                        ..
-                    } if request_stream_id == stream_id
-                        && added_level == level
-                        && label == named =>
-                    {
-                        Some(node_type.clone())
-                    }
-                    _ => None,
-                },
-            )?,
-        };
-        self.operations_on_the_loaded_streams
-            .runtime_operations_of_the_stream_a_call_names(stream_id)
-            .ok()?
-            .the_ports_a_node_type_declares(&node_type)
+    ) -> Option<StreamGraphDocumentNode> {
+        if !node.level.is_empty() {
+            return None;
+        }
+        let node_uuid = Uuid::parse_str(&node.node).ok()?;
+        document_of_each_stream
+            .entry(node.stream_id.clone())
+            .or_insert_with(|| self.the_document_a_stream_runs(&node.stream_id))
+            .as_ref()?
+            .node(node_uuid)
+            .ok()
     }
 
     /// The graph the loaded stream `stream_id` runs, as a document; `None` when it cannot be
@@ -316,35 +293,75 @@ fn the_input_values_a_transaction_sets_live(
     })
 }
 
-/// A node, by the stream id, level and UUID or `as` a value set gives it.
-type NodeAValueSetNames = (String, Vec<Uuid>, String);
+/// A node, as a value set of a transaction names it: on the loaded stream `stream_id`, at
+/// `level`, by `node`, its UUID as the runtime writes one or an `as`.
+#[derive(PartialEq, Eq, Hash)]
+struct NodeAValueSetNames {
+    stream_id: String,
+    level: Vec<Uuid>,
+    node: String,
+}
 
-/// Each value set of `requests` — a `set_node_input_value` or a `set_pin_value` — in order: its
-/// index, the node it names, a UUID as the runtime writes one, and the input as it names it.
-fn the_value_set_of_each_request(
-    requests: &[StreamGraphAction],
+/// One value set of a transaction: its index among the transaction's actions, the action, the
+/// node it names and its input as it names it.
+struct ValueSetOfATransaction<'request> {
+    index: usize,
+    request: &'request StreamGraphAction,
+    node: NodeAValueSetNames,
+    input: String,
+}
+
+/// Each value set of `requests` — a `set_node_input_value` or a `set_pin_value` — in order.
+fn the_value_set_of_each_request<'request>(
+    requests: &'request [StreamGraphAction],
     stream_id_of_each_request: &[String],
-) -> Vec<(usize, NodeAValueSetNames, String)> {
+) -> Vec<ValueSetOfATransaction<'request>> {
     requests
         .iter()
         .zip(stream_id_of_each_request)
         .enumerate()
-        .filter_map(|(request_index, (request, stream_id))| match request {
+        .filter_map(|(index, (request, stream_id))| match request {
             StreamGraphAction::SetNodeInputValue {
                 level, node, input, ..
             }
             | StreamGraphAction::SetPinValue {
                 level, node, input, ..
-            } => {
-                let node = Uuid::parse_str(node)
-                    .map_or_else(|_| node.clone(), |node_uuid| node_uuid.to_string());
-                Some((
-                    request_index,
-                    (stream_id.clone(), level.clone(), node),
-                    input.clone(),
-                ))
-            }
+            } => Some(ValueSetOfATransaction {
+                index,
+                request,
+                node: NodeAValueSetNames {
+                    stream_id: stream_id.clone(),
+                    level: level.clone(),
+                    node: Uuid::parse_str(node)
+                        .map_or_else(|_| node.clone(), |node_uuid| node_uuid.to_string()),
+                },
+                input: input.clone(),
+            }),
             _ => None,
         })
         .collect()
+}
+
+/// The type an `add_node` among `earlier_requests`, each on the loaded stream of
+/// `stream_id_of_each_request` at its index, gives the node `node` names by its `as`, on its
+/// stream and level; `None` when none does.
+fn the_type_an_earlier_add_gives(
+    node: &NodeAValueSetNames,
+    earlier_requests: &[StreamGraphAction],
+    stream_id_of_each_request: &[String],
+) -> Option<String> {
+    earlier_requests
+        .iter()
+        .zip(stream_id_of_each_request)
+        .find_map(|(request, stream_id)| match request {
+            StreamGraphAction::AddNode {
+                level,
+                node_type,
+                label: Some(label),
+                ..
+            } if *stream_id == node.stream_id && *level == node.level && *label == node.node => {
+                Some(node_type.clone())
+            }
+            _ => None,
+        })
 }

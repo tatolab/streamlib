@@ -60,8 +60,8 @@ pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
 use former_port_names::{
-    move_each_former_port_name, the_placed_streams_with_each_former_port_name_moved,
-    the_request_under_the_current_port_names,
+    move_each_former_port_name, the_current_name_of_a_port,
+    the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
 use request_to_graph_operation::graph_operation_for_the_request;
