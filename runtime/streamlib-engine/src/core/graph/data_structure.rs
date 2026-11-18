@@ -124,6 +124,13 @@ impl Graph {
         &self.live_input_values
     }
 
+    /// Each `GraphInput` of this graph, each at its stream's top level.
+    pub fn every_graph_input(&self) -> impl Iterator<Item = &GraphNode> {
+        self.digraph
+            .node_weights()
+            .filter(|node| node.is_a_graph_input())
+    }
+
     /// The node whose UUID is `node_uuid`.
     pub fn node_by_uuid(&self, node_uuid: uuid::Uuid) -> Option<&GraphNode> {
         self.digraph

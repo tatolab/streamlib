@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::core::descriptors::{
-    NodeValueLifetime, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
+    NodeValueLifetime, PinNumberRange, PortFamily, PortFamilyDeclaration, PortFamilyLinkEndpoint,
     refusal_of_a_link_between_port_families,
 };
 use crate::core::graph::graph_snapshot::{
@@ -24,7 +24,9 @@ use crate::core::graph::graph_snapshot::{
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
-use crate::core::graph::{GraphNode, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    GraphNodePorts, cast_exposed_name_to_url_safe, the_words_of_a_link_into_a_setting,
+};
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
     PortInfoOutput, PortKindOutput,
@@ -199,21 +201,8 @@ impl GraphInterfaceNodeAsDrawn {
     }
 }
 
-/// Refuse a link into the input `port` of `to_node` when it is a `GraphInput`, whose `value` is
-/// set as a value and never fed by a wire.
-pub(crate) fn refuse_a_link_into_a_graph_input(to_node: &GraphNode, port: &str) -> Result<()> {
-    if to_node.node_type.as_str() != GRAPH_INPUT_NODE_TYPE {
-        return Ok(());
-    }
-    Err(Error::InvalidLink(format!(
-        "a link enters `GraphInput` node `{}`, whose `{port}` takes no wire: a `GraphInput` is \
-         where a port enters the graph, and its value is set with `set_node_input_value`",
-        to_node.display_name
-    )))
-}
-
 /// The config an interface node of `node_type` holding `config` renders: a `GraphInput`'s saved
-/// `value` under `default`, the key a published Tato Studio reads it by.
+/// `value` under `default`, as [`render_the_saved_value_of_a_graph_input_as_its_default`] puts it.
 pub(crate) fn the_config_a_graph_interface_node_renders(
     node_type: &str,
     mut config: serde_json::Value,
@@ -221,12 +210,79 @@ pub(crate) fn the_config_a_graph_interface_node_renders(
     if node_type != GRAPH_INPUT_NODE_TYPE {
         return config;
     }
-    if let Some(config) = config.as_object_mut()
-        && let Some(value) = config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME)
-    {
-        config.insert(GRAPH_INPUT_VALUE_FORMER_NAME.to_string(), value);
+    if let Some(config) = config.as_object_mut() {
+        let saved_value = config.remove(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        render_the_saved_value_of_a_graph_input_as_its_default(config, saved_value);
     }
     config
+}
+
+/// Render `saved_value`, the saved value of a `GraphInput`'s `value` input, in its rendered
+/// `config` under `default`, the key a published Tato Studio reads it by; a `GraphInput` saving
+/// none renders no `default`.
+pub(crate) fn render_the_saved_value_of_a_graph_input_as_its_default(
+    config: &mut serde_json::Map<String, serde_json::Value>,
+    saved_value: Option<serde_json::Value>,
+) {
+    match saved_value {
+        Some(saved_value) => {
+            config.insert(GRAPH_INPUT_VALUE_FORMER_NAME.to_string(), saved_value);
+        }
+        None => {
+            config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
+        }
+    }
+}
+
+/// The family a `GraphInput`'s `config` names; `None` when it names none, or a name no family
+/// has.
+pub(crate) fn the_family_a_graph_input_config_names(
+    config: Option<&serde_json::Value>,
+) -> Option<PortFamily> {
+    config?
+        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)?
+        .as_str()
+        .and_then(PortFamily::of_wire_name)
+}
+
+/// The range a `GraphInput`'s `config` declares a number of its `value` takes, as
+/// `[lowest, highest]`; `None` when it declares none.
+fn the_range_a_graph_input_config_declares(
+    config: Option<&serde_json::Value>,
+) -> Option<PinNumberRange> {
+    match config?
+        .get(GRAPH_INPUT_RANGE_CONFIG_KEY)?
+        .as_array()?
+        .as_slice()
+    {
+        [lowest, highest] => Some(PinNumberRange {
+            minimum: lowest.as_f64(),
+            maximum: highest.as_f64(),
+        }),
+        _ => None,
+    }
+}
+
+/// Resolve the `value` input among `ports`, of a `GraphInput` whose config is `config`, against
+/// what that config declares of it: the family it carries, the range a number takes and the
+/// lifetime of a value set live. A config naming no family, or no valid one, leaves the family
+/// it declares.
+pub(crate) fn resolve_the_value_input_a_graph_input_config_declares(
+    ports: &mut GraphNodePorts,
+    config: Option<&serde_json::Value>,
+) {
+    let Some(value) = ports
+        .inputs
+        .iter_mut()
+        .find(|port| port.name == GRAPH_INTERFACE_VALUE_PORT_NAME)
+    else {
+        return;
+    };
+    if let Some(family) = the_family_a_graph_input_config_names(config) {
+        value.family.family = family;
+    }
+    value.range = the_range_a_graph_input_config_declares(config);
+    value.lifetime = the_value_lifetime_a_graph_input_config_declares(config).unwrap_or_default();
 }
 
 /// One link with an end on an interface node, as drawn.
@@ -339,10 +395,17 @@ impl GraphSnapshot {
                 )));
             }
             if target_direction == Some(&GraphInterfacePortDirection::Input) {
-                return Err(Error::GraphError(format!(
-                    "a link enters `GraphInput` node `{}`, which has no input: a \
-                     `GraphInput` is where a port enters the graph",
-                    link.target.node
+                // A link into a top-level `GraphInput` that runs meets, at its connect, the one
+                // rule every link into a setting meets.
+                if source_direction.is_none()
+                    && running_graph_input_casts.contains(&cast_of(&link.target.node)?)
+                {
+                    runtime_links.push(link.clone());
+                    continue;
+                }
+                return Err(Error::InvalidLink(the_words_of_a_link_into_a_setting(
+                    &link.target.port,
+                    &link.target.node,
                 )));
             }
             if source_direction.is_some() && target_direction.is_some() {

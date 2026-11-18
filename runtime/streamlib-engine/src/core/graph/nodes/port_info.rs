@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Metadata about a port (input or output).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PortInfo {
     pub name: String,
     /// Human-readable description declared alongside the port. Mirrors the
@@ -52,7 +52,19 @@ pub struct PortInfo {
     /// declaration's on [`crate::core::descriptors::PortDescriptor`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub may_be_unset: bool,
+    /// Whether this input takes a wire, a stored value, or both; `None` for an input port that
+    /// takes a wire, and on every output port. Mirrors the field on
+    /// [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_mode: Option<crate::core::descriptors::NodeInputMode>,
+    /// The lowest and highest number this input takes, as its pin declares them; `None` when it
+    /// declares no range.
+    #[serde(skip)]
+    pub range: Option<crate::core::descriptors::PinNumberRange>,
 }
+
+// A range's bounds are never NaN, so a port compares equal to itself.
+impl Eq for PortInfo {}
 
 impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
     fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
@@ -72,13 +84,36 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
             may_be_unset: declared_pin
                 .as_ref()
                 .is_some_and(|declared| declared.may_be_unset),
+            range: declared_pin
+                .as_ref()
+                .and_then(|declared| declared.annotations.range),
             pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
+            input_mode: port.input_mode,
         }
     }
 }
 
 impl PortInfo {
+    /// Whether a link may end at this input: every input but a setting.
+    pub fn takes_a_wire(&self) -> bool {
+        !matches!(
+            self.input_mode,
+            Some(crate::core::descriptors::NodeInputMode::SettingOnly { .. })
+        )
+    }
+
+    /// Whether this input is a setting a node reads each run, whose value is set live apart
+    /// from the graph.
+    pub fn is_a_setting_read_each_run(&self) -> bool {
+        matches!(
+            self.input_mode,
+            Some(crate::core::descriptors::NodeInputMode::SettingOnly {
+                read: crate::core::descriptors::SettingReadTime::EachRun
+            })
+        )
+    }
+
     /// The value `value` taken as this input's stored value, or what it takes instead, by the
     /// pin it declares; `None` for a port that names no pin type.
     pub fn check_value(

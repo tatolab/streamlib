@@ -183,6 +183,21 @@ pub enum Error {
         runtime_words: String,
     },
 
+    /// A stream has no input of the name given: none of its top-level `GraphInput`s declares it.
+    #[error(
+        "the stream `{stream}` has no input `{input}`; its inputs are {inputs_the_stream_has}, \
+         each the port a top-level `GraphInput` of family array, channels or records declares. \
+         To fix: name one of them. To set an input of a node, name the node"
+    )]
+    StreamHasNoInputNamed {
+        /// The stream.
+        stream: String,
+        /// The input's name as it was given.
+        input: String,
+        /// The stream's inputs, each in backticks and comma-joined, or `none`.
+        inputs_the_stream_has: String,
+    },
+
     #[error("Node '{node_run_id}' has no {direction} port named '{port_name}'")]
     NodePortNotFound {
         node_run_id: String,

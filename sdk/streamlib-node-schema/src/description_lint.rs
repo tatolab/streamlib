@@ -204,6 +204,7 @@ mod tests {
             pin_default: None,
             pin_declaration: None,
             lifetime: NodeValueLifetime::Kept,
+            input_mode: None,
         }
     }
 

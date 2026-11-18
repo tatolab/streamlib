@@ -25,7 +25,6 @@ use crate::core::test_support::{
 use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
 use crate::iceoryx2::{MessageGroupBoundary, OutputWriterInner};
 
-mod graph_input_tests;
 mod view_node_tests;
 
 const ARRIVES_WITHIN: Duration = Duration::from_secs(5);

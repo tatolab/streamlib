@@ -8,12 +8,8 @@
 
 use serde_json::{Map, Value};
 
-use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange, PortFamily};
+use crate::core::descriptors::{NodeClassImportPath, NodeKind, PinNumberRange};
 use crate::core::graph::PortInfo;
-use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_RANGE_CONFIG_KEY, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
-    GRAPH_INTERFACE_VALUE_PORT_NAME,
-};
 use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, the_properties_of_a_config_schema,
 };
@@ -96,25 +92,17 @@ pub fn refuse_an_input_value_its_input_does_not_take(
     {
         return Ok(());
     }
-    let Some(ports) = node_types.port_info(node_type) else {
+    let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
+    let config = legacy_config.config_of(node.input_values_after_the_set);
+    let Some(ports) = node_types
+        .port_info(node_type)
+        .map(|ports| ports.resolved_against_the_config(node_type, Some(&config)))
+    else {
         return Ok(());
     };
-    if let Some(port) = ports.input_named(input)
-        && is_the_value_input_of_a_graph_input(node_type, port)
-    {
-        return value.map_or(Ok(()), |value| {
-            refuse_a_value_a_graph_input_does_not_carry(
-                node.name,
-                node.input_values_after_the_set,
-                value,
-            )
-        });
-    }
-    let legacy_config = LegacyConfigOfANodeType::of(node_types, node_type);
-    let descriptor = node_types.descriptor(node_type);
-    let config_schema = descriptor
-        .as_ref()
-        .and_then(|descriptor| descriptor.config_schema.clone());
+    let config_schema = node_types
+        .descriptor(node_type)
+        .and_then(|descriptor| descriptor.config_schema);
     let the_input_port = ports
         .input_named(input)
         .filter(|_| !legacy_config.is_a_config_field(input));
@@ -128,17 +116,7 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             port,
             value,
         )?;
-        let declared_range = descriptor
-            .as_ref()
-            .and_then(|descriptor| {
-                descriptor
-                    .inputs
-                    .iter()
-                    .find(|declared| declared.name == port.name)
-            })
-            .and_then(|declared| declared.declared_pin())
-            .and_then(|declaration| declaration.annotations.range);
-        return match (declared_range, value.as_f64()) {
+        return match (port.range, value.as_f64()) {
             (Some(range), Some(number)) => {
                 refuse_a_number_outside_the_range(node.name, &port.name, number, range)
             }
@@ -164,7 +142,6 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             ),
         ));
     }
-    let config = legacy_config.config_of(node.input_values_after_the_set);
     crate::core::graph::refuse_a_config_its_node_types_config_schema_refuses(
         node.name, node_type, node_types, &config,
     )
@@ -178,70 +155,6 @@ pub fn refuse_an_input_value_its_input_does_not_take(
             ),
         )
     })
-}
-
-/// Whether `port` of a node of `node_type` is the `value` input of a top-level `GraphInput`,
-/// which takes no wire and holds a value of the family its config names, published on its
-/// output of the same name.
-pub(crate) fn is_the_value_input_of_a_graph_input(
-    node_type: &NodeClassImportPath,
-    port: &PortInfo,
-) -> bool {
-    node_type.as_str() == GRAPH_INPUT_NODE_TYPE && port.name == GRAPH_INTERFACE_VALUE_PORT_NAME
-}
-
-/// Refuse `value`, set on the `value` input of the top-level `GraphInput` named `node_name`
-/// whose config is `config`, when the family it carries does not take it, or a number lies
-/// outside the `range` it declares.
-pub(crate) fn refuse_a_value_a_graph_input_does_not_carry(
-    node_name: &str,
-    config: &Map<String, Value>,
-    value: &Value,
-) -> Result<(), InputValueRefusal> {
-    let input = GRAPH_INTERFACE_VALUE_PORT_NAME;
-    let family = config
-        .get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY)
-        .and_then(Value::as_str)
-        .and_then(|wire_name| {
-            PortFamily::ALL
-                .into_iter()
-                .find(|family| family.wire_name() == wire_name)
-        })
-        .ok_or_else(|| {
-            InputValueRefusal::of(
-                InputValueRefusalCode::InputTakesNoValue,
-                format!(
-                    "input `{input}` of `{node_name}` carries no family yet, so it takes no \
-                     value. To fix: name its `{GRAPH_INTERFACE_FAMILY_CONFIG_KEY}`"
-                ),
-            )
-        })?;
-    crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0).map_err(
-        |why| {
-            InputValueRefusal::of(
-                InputValueRefusalCode::InputValueNotValid,
-                format!(
-                    "the value of input `{input}` of `{node_name}` is {value}, and `{node_name}` \
-                     carries {}: {why}",
-                    family.declaration_name()
-                ),
-            )
-        },
-    )?;
-    let range = config
-        .get(GRAPH_INPUT_RANGE_CONFIG_KEY)
-        .and_then(Value::as_array)
-        .filter(|bounds| bounds.len() == 2)
-        .map(|bounds| PinNumberRange {
-            minimum: bounds[0].as_f64(),
-            maximum: bounds[1].as_f64(),
-        });
-    match (range, value.as_f64()) {
-        (Some(range), Some(number)) => {
-            refuse_a_number_outside_the_range(node_name, input, number, range)
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Refuse `value` set on `port`, an input port of the node named `node_name` that runs as
@@ -271,6 +184,9 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
             InputValueRefusalCode::InputTakesNoValue,
             words,
         ));
+    }
+    if !port.takes_a_wire() && port.pin.is_none() {
+        return refuse_a_value_a_setting_of_a_family_does_not_carry(node_name, port, value);
     }
     if let Some(checked) = port.check_value(value) {
         checked.map_err(|not_taken| {
@@ -304,6 +220,30 @@ pub(crate) fn refuse_a_value_the_input_port_does_not_take(
         ));
     }
     Ok(())
+}
+
+/// Refuse `value`, set on `port`, a setting of the node named `node_name` that names no pin type
+/// and carries the family it declares, when that family's message does not take it.
+fn refuse_a_value_a_setting_of_a_family_does_not_carry(
+    node_name: &str,
+    port: &PortInfo,
+    value: &Value,
+) -> Result<(), InputValueRefusal> {
+    let family = port.family.family;
+    crate::core::nodes::the_message_a_value_written_onto_an_output_is(family, value, 0)
+        .map(|_| ())
+        .map_err(|why| {
+            InputValueRefusal::of(
+                InputValueRefusalCode::InputValueNotValid,
+                format!(
+                    "the value of input `{}` of `{node_name}` is {value}, and `{}` carries {}: \
+                     {why}",
+                    port.name,
+                    port.name,
+                    family.declaration_name()
+                ),
+            )
+        })
 }
 
 /// Whether a node of `node_type` still takes a config: its config schema lists a field, or

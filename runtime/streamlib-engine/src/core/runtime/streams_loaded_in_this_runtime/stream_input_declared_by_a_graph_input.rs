@@ -9,7 +9,7 @@ use uuid::Uuid;
 use crate::core::descriptors::PortFamily;
 use crate::core::error::{Error, Result, WhyANodeOfAStreamIsNotRunning};
 use crate::core::graph::graph_interface_resolution::{
-    GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_FAMILY_CONFIG_KEY, GRAPH_INTERFACE_PORT_CONFIG_KEY,
+    GRAPH_INTERFACE_PORT_CONFIG_KEY, the_family_a_graph_input_config_names,
 };
 use crate::core::graph::{
     Graph, GraphNode, GraphNodeWithComponents, NodeInstanceComponent, cast_exposed_name_to_url_safe,
@@ -33,7 +33,7 @@ impl LoadedStreamInThisRuntime {
     /// The top-level `GraphInput` of this stream declaring the input `input_name`, compared as
     /// every exposed name is cast. Refused for a name none declares, naming the stream's inputs.
     /// The stream's graph lock is held across a compile, so the read waits off the async workers.
-    pub(crate) async fn the_top_level_graph_input_declaring(
+    pub(crate) async fn read_the_top_level_graph_input_declaring(
         &self,
         input_name: String,
     ) -> Result<TopLevelGraphInputDeclaringAStreamInput> {
@@ -44,7 +44,7 @@ impl LoadedStreamInThisRuntime {
         tokio::task::spawn_blocking(
             crate::core::logging::carrying_this_threads_project_log_route_entry(move || {
                 compiler.scope_reading(|graph| {
-                    let node = the_top_level_graph_input_declaring(graph, &stream_id, &input_name)?;
+                    let node = the_graph_input_declaring_the_input(graph, &stream_id, &input_name)?;
                     let refusal_while_its_node_does_not_run =
                         (why_a_node_that_has_not_failed_does_not_run
                             != WhyANodeOfAStreamIsNotRunning::PlaybackStopped
@@ -78,18 +78,13 @@ impl LoadedStreamInThisRuntime {
 }
 
 /// The top-level `GraphInput` of the stream `stream_id` declaring the input `input_name`.
-fn the_top_level_graph_input_declaring<'graph>(
+fn the_graph_input_declaring_the_input<'graph>(
     graph: &'graph Graph,
     stream_id: &str,
     input_name: &str,
 ) -> Result<&'graph GraphNode> {
     let input_cast = cast_exposed_name_to_url_safe(input_name)?;
-    let graph_inputs: Vec<&GraphNode> = graph
-        .traversal()
-        .v(())
-        .iter()
-        .filter(|node| node.node_type.as_str() == GRAPH_INPUT_NODE_TYPE)
-        .collect();
+    let graph_inputs: Vec<&GraphNode> = graph.every_graph_input().collect();
     let declared_port_of = |node: &GraphNode| -> Option<String> {
         node.config
             .as_ref()?
@@ -110,33 +105,23 @@ fn the_top_level_graph_input_declaring<'graph>(
         .map(|port| format!("`{port}`"))
         .collect();
     declared.sort();
-    Err(Error::NodeNotFound(format!(
-        "the stream `{stream_id}` has no input `{input_name}`; its inputs are {}, each the port a \
-         top-level `GraphInput` of family array, channels or records declares. To fix: name one \
-         of them. To set an input of a node, name the node",
-        if declared.is_empty() {
+    Err(Error::StreamHasNoInputNamed {
+        stream: stream_id.to_string(),
+        input: input_name.to_string(),
+        inputs_the_stream_has: if declared.is_empty() {
             "none".to_string()
         } else {
             declared.join(", ")
-        }
-    )))
+        },
+    })
 }
 
 /// The family the top-level `GraphInput` `node` carries, as its config names it.
 fn the_family_a_graph_input_carries(node: &GraphNode) -> Result<PortFamily> {
-    node.config
-        .as_ref()
-        .and_then(|config| config.get(GRAPH_INTERFACE_FAMILY_CONFIG_KEY))
-        .and_then(serde_json::Value::as_str)
-        .and_then(|wire_name| {
-            PortFamily::ALL
-                .into_iter()
-                .find(|family| family.wire_name() == wire_name)
-        })
-        .ok_or_else(|| {
-            Error::Configuration(format!(
-                "`GraphInput` node `{}` names no family",
-                node.display_name
-            ))
-        })
+    the_family_a_graph_input_config_names(node.config.as_ref()).ok_or_else(|| {
+        Error::Configuration(format!(
+            "`GraphInput` node `{}` names no family",
+            node.display_name
+        ))
+    })
 }

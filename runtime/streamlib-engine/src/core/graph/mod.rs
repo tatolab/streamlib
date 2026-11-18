@@ -82,6 +82,7 @@ pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
+pub(crate) use nodes::the_words_of_a_link_into_a_setting;
 pub use nodes::{
     GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, NodeRunId, PortInfo,
 };

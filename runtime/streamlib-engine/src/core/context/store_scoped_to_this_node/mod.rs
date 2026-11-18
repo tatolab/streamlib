@@ -37,19 +37,23 @@ pub(crate) fn the_node_a_key_leads_with(key: &str) -> Option<(Uuid, &str)> {
     Some((node.parse().ok()?, rest))
 }
 
-/// Take the value `node` keeps under its own `key` out of the `node_store` table of
-/// `project_store`: read, then removed.
-pub(crate) fn take_out_the_value_the_node_keeps_under(
+/// The value `node` keeps under its own `key` in the `node_store` table of `project_store`.
+pub(crate) fn the_value_the_node_keeps_under(
     project_store: &ProjectStore,
     node: Uuid,
     key: &str,
 ) -> std::result::Result<Option<JsonValue>, ProjectStoreRefusal> {
-    let key = key_of_the_node(node, key);
-    let kept = project_store.read(NODE_STORE_TABLE, &key)?;
-    if kept.is_some() {
-        project_store.remove(NODE_STORE_TABLE, &key);
-    }
-    Ok(kept)
+    project_store.read(NODE_STORE_TABLE, &key_of_the_node(node, key))
+}
+
+/// Forget the value `node` keeps under its own `key` in the `node_store` table of
+/// `project_store`.
+pub(crate) fn forget_the_value_the_node_keeps_under(
+    project_store: &ProjectStore,
+    node: Uuid,
+    key: &str,
+) {
+    project_store.remove(NODE_STORE_TABLE, &key_of_the_node(node, key));
 }
 
 /// Remove every key of `table`, each of which [`key_of_the_node`] names, whose node

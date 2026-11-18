@@ -450,7 +450,7 @@ fn a_link_into_an_input_or_out_of_an_output_is_refused_naming_the_node() {
         }));
     let refusal = refusal_of(into_an_input);
     assert!(
-        refusal.contains("enters `GraphInput` node `overlay`"),
+        refusal.contains("enters input `value` of `overlay`, a setting, which takes no wire"),
         "got {refusal}"
     );
 

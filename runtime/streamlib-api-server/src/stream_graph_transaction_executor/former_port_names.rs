@@ -57,10 +57,7 @@ pub(super) fn the_request_under_the_current_port_names(
             input,
             value,
         } => StreamGraphAction::SetNodeInputValue {
-            input: match &node {
-                Some(node) => current_name(node, input, PortDirection::Input),
-                None => input,
-            },
+            input: current_name(&node, input, PortDirection::Input),
             stream,
             level,
             node,

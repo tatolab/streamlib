@@ -13,7 +13,6 @@ use serde_json::Value as JsonValue;
 
 use super::function_node_island::runs_inside_the_read_of_each_node_it_feeds;
 use crate::core::graph::input_values::{
-    is_the_value_input_of_a_graph_input, refuse_a_value_a_graph_input_does_not_carry,
     refuse_a_value_the_input_port_does_not_take, the_pin_values_with_the_live_ones_over_them,
 };
 
@@ -109,14 +108,6 @@ pub(crate) fn refuse_a_pin_value_a_process_node_cannot_read(
     let Some(port) = node.input_port(input) else {
         return Ok(());
     };
-    if is_the_value_input_of_a_graph_input(&node.node_type, port) {
-        let config = match &node.config {
-            Some(JsonValue::Object(config)) => config.clone(),
-            _ => serde_json::Map::new(),
-        };
-        return refuse_a_value_a_graph_input_does_not_carry(&node.display_name, &config, pin_value)
-            .map_err(|refusal| Error::Configuration(refusal.words));
-    }
     refuse_a_value_the_input_port_does_not_take(
         &node.display_name,
         node.node_kind(),

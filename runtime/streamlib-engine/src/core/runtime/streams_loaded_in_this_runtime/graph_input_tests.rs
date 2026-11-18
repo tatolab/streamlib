@@ -1,20 +1,43 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! A stream's graph inputs: the `value` input of each top-level `GraphInput`, set live or saved
-//! like any input, published on its `value` output at Play and on each change, and kept or reset
-//! across a Stop, a Play and a restart as its `lifetime` says.
+//! A stream's graph inputs: the `value` input of each top-level `GraphInput`, a setting read
+//! each run, set live or saved like any input, published on its `value` output at Play and on
+//! each change, and kept or reset across a Stop, a Play and a restart as its `lifetime` says.
 
-use streamlib_project_repository::{ProjectStore, ProjectStoreTableName, StreamGraphOperation};
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+use serial_test::serial;
+use streamlib_ipc_types::{
+    DataChannelPayloadDescriptorKind, MessageReadFromAReservedSlot, OutputPortViewerReader,
+};
+use streamlib_project_repository::{
+    PROJECT_FILE_NAME, ProjectStore, ProjectStoreTableName, StreamGraphOperation,
+    TatolabProjectFile,
+};
 use uuid::Uuid;
 
-use super::*;
 use crate::core::context::{LIVE_INPUT_VALUES_TABLE, key_of_the_node};
+use crate::core::descriptors::PortFamily;
+use crate::core::error::Error;
 use crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE;
 use crate::core::graph::graph_snapshot::GraphSnapshot;
 use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
 };
+use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
+use crate::core::runtime::{
+    LoadedStreamInThisRuntime, OutputPortViewerHeldOpen, Runner, RuntimeOperations,
+};
+use crate::core::test_support::{
+    MockOutputOnlyNode, a_temporary_directory_at_owner_only_mode, ensure_test_mocks_registered,
+};
+use crate::core::{InputLinkPortRef, NodeRunId, OutputLinkPortRef};
+
+const ARRIVES_WITHIN: Duration = Duration::from_secs(5);
 
 /// The input of a `GraphInput` its value is set on, and the output it is published on.
 const VALUE: &str = "value";
@@ -79,7 +102,7 @@ fn a_reader_of_the_value_of(
     stream: &LoadedStreamInThisRuntime,
     async_runtime: &tokio::runtime::Runtime,
     node: Uuid,
-) -> OutputPortViewerHeldOpenAndRead {
+) -> (OutputPortViewerHeldOpen, OutputPortViewerReader) {
     let viewer = async_runtime
         .block_on(stream.open_a_viewer_of_an_output_port(node.to_string(), VALUE.to_string(), None))
         .expect("a running GraphInput's value opens a viewer");
@@ -93,6 +116,17 @@ fn a_reader_of_the_value_of(
     )
     .expect("the reader subscribes to the port's channel");
     (viewer, reader)
+}
+
+fn the_next_message_read(reader: &mut OutputPortViewerReader) -> MessageReadFromAReservedSlot {
+    let gave_up_at = Instant::now() + ARRIVES_WITHIN;
+    loop {
+        if let Some(message) = reader.read_the_latest_message().expect("the reader reads") {
+            return message;
+        }
+        assert!(Instant::now() < gave_up_at, "no message reached the reader");
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn the_value_read(reader: &mut OutputPortViewerReader) -> Value {
@@ -399,7 +433,7 @@ fn a_stream_input_is_found_by_the_port_its_graph_input_declares() {
         )],
     );
     let found_before_the_play = async_runtime
-        .block_on(stream.the_top_level_graph_input_declaring("cue".to_string()))
+        .block_on(stream.read_the_top_level_graph_input_declaring("cue".to_string()))
         .expect("the input is found");
     assert_eq!(found_before_the_play.node, cue);
     assert_eq!(found_before_the_play.family, PortFamily::Records);
@@ -411,20 +445,26 @@ fn a_stream_input_is_found_by_the_port_its_graph_input_declares() {
     play(&stream);
     assert!(
         async_runtime
-            .block_on(stream.the_top_level_graph_input_declaring("cue".to_string()))
+            .block_on(stream.read_the_top_level_graph_input_declaring("cue".to_string()))
             .expect("the input is found")
             .refusal_while_its_node_does_not_run
             .is_none()
     );
 
-    let refusal = async_runtime
-        .block_on(stream.the_top_level_graph_input_declaring("fader".to_string()))
+    match async_runtime
+        .block_on(stream.read_the_top_level_graph_input_declaring("fader".to_string()))
         .expect_err("an input no GraphInput declares is refused")
-        .to_string();
-    assert!(
-        refusal.contains("`fader`") && refusal.contains("`Cue`"),
-        "{refusal}"
-    );
+    {
+        Error::StreamHasNoInputNamed {
+            input,
+            inputs_the_stream_has,
+            ..
+        } => {
+            assert_eq!(input, "fader");
+            assert_eq!(inputs_the_stream_has, "`Cue`");
+        }
+        other => panic!("the refusal names the stream's inputs: {other}"),
+    }
     stream.stop().expect("the stream ends");
 }
 
@@ -699,4 +739,177 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
         "the catalog renders each type's `config_schema`: {catalog}"
     );
     stream.stop().expect("the stream ends");
+}
+
+/// A value the project's store keeps live for a `GraphInput` whose family no longer takes it is
+/// dropped as the stream loads: the input reads its saved value, a reader is handed that, and
+/// the store keeps nothing for it.
+///
+/// Mental-revert: holding every kept value without asking the input whether it takes it leaves
+/// the string live on an array input.
+#[test]
+#[serial]
+fn a_kept_value_a_graph_inputs_family_no_longer_takes_is_dropped_at_load() {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let fader = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    let project_store = the_project_store_of(&stream, project_directory.path());
+    project_store
+        .write(
+            LIVE_INPUT_VALUES_TABLE,
+            &key_of_the_node(fader, VALUE),
+            &json!("not a number"),
+        )
+        .unwrap();
+
+    load_the_graph_inputs(
+        &stream,
+        vec![a_graph_input_in_a_document(
+            fader,
+            "fader",
+            json!({ "port": "fader", "family": "array", "default": 0.25 }),
+        )],
+    );
+
+    assert_eq!(the_live_value_of(&stream, fader), None);
+    assert_eq!(
+        the_value_the_project_store_keeps_live(&project_store, fader),
+        None
+    );
+    play(&stream);
+    let (_viewer, mut reader) = a_reader_of_the_value_of(&stream, &async_runtime, fader);
+    let message = the_next_message_read(&mut reader);
+    assert_eq!(
+        message.payload_descriptor.known_kind().ok(),
+        Some(DataChannelPayloadDescriptorKind::ArrayFrame)
+    );
+    stream.stop().expect("the stream ends");
+}
+
+/// A value set live on a `kept` `GraphInput` while its stream is stopped renders as the value it
+/// reads, and reaches a reader at the next Play.
+///
+/// Mental-revert: refusing a live set while stopped, as a `reset` input is refused, leaves the
+/// input at its `default` at the Play.
+#[test]
+#[serial]
+fn a_value_set_live_on_a_stopped_kept_graph_input_renders_and_reaches_the_next_play() {
+    let project_directory = a_project_on_disk();
+    let async_runtime = an_async_runtime();
+    let lights = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    load_the_graph_inputs(
+        &stream,
+        vec![a_graph_input_in_a_document(
+            lights,
+            "lights",
+            json!({ "port": "lights", "family": "records", "default": { "level": 0.0 } }),
+        )],
+    );
+    play(&stream);
+    stream
+        .stop_playback_keeping_the_graph()
+        .expect("the stream stops");
+    let written = json!({ "level": 0.6 });
+
+    set_live(&stream, lights, written.clone()).expect("a kept input takes a value while stopped");
+
+    let rendered = the_rendered_node(&stream, lights);
+    assert_eq!(
+        rendered["components"]["graph_interface"]["current_value"], written,
+        "{rendered}"
+    );
+    play(&stream);
+    assert_eq!(
+        the_value_a_new_reader_is_handed(&stream, &async_runtime, lights),
+        written
+    );
+    stream.stop().expect("the stream ends");
+}
+
+/// The run id of the node `node` of `stream`.
+fn the_run_id_of(stream: &LoadedStreamInThisRuntime, node: Uuid) -> NodeRunId {
+    stream.compiler.scope_reading(|graph| {
+        graph
+            .node_by_uuid(node)
+            .expect("the graph holds it")
+            .id
+            .clone()
+    })
+}
+
+/// A link into the `value` of a `GraphInput`, a setting, is refused naming it, and the graph
+/// holds no link.
+///
+/// Mental-revert: without the rule refusing a link into a setting, the link is made.
+#[test]
+#[serial]
+fn a_link_into_the_value_of_a_graph_input_is_refused() {
+    let project_directory = a_project_on_disk();
+    let cue = Uuid::new_v4();
+    let echo = Uuid::new_v4();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    load_the_graph_inputs(
+        &stream,
+        vec![
+            a_graph_input_in_a_document(cue, "cue", json!({ "port": "cue", "family": "records" })),
+            a_graph_input_in_a_document(
+                echo,
+                "echo",
+                json!({ "port": "echo", "family": "records" }),
+            ),
+        ],
+    );
+
+    let refusal = stream
+        .connect(
+            OutputLinkPortRef::new(the_run_id_of(&stream, cue), VALUE),
+            InputLinkPortRef::new(the_run_id_of(&stream, echo), VALUE),
+        )
+        .expect_err("a link into a setting is refused")
+        .to_string();
+
+    assert!(
+        refusal.contains("input `value` of `echo`, a setting, which takes no wire"),
+        "{refusal}"
+    );
+    assert_eq!(stream.to_json().unwrap()["links"], json!([]));
+}
+
+/// A stream document holding a link into the `value` of a top-level `GraphInput` is refused as
+/// it loads, naming the setting.
+///
+/// Mental-revert: without the rule refusing a link into a setting, the document loads with the
+/// link.
+#[test]
+#[serial]
+fn a_document_linking_into_the_value_of_a_graph_input_is_refused_at_load() {
+    let project_directory = a_project_on_disk();
+    let (_runner, stream) = a_runner_holding_the_stream_of_the_project_at(project_directory.path());
+    let document = json!({
+        "nodes": [
+            { "name": "cues", "type": MockOutputOnlyNode::node_class_import_path().as_str() },
+            a_graph_input_in_a_document(
+                Uuid::new_v4(), "echo", json!({ "port": "echo", "family": "records" }),
+            ),
+        ],
+        "links": [{
+            "source": { "node": "cues", "port": "out1" },
+            "target": { "node": "echo", "port": VALUE },
+        }],
+    });
+
+    let refusal = stream
+        .load_graph_snapshot_into_this_stream(
+            &GraphSnapshot::from_graph_document(document).unwrap(),
+            None,
+        )
+        .expect_err("a document linking into a setting is refused")
+        .to_string();
+
+    assert!(
+        refusal.contains("input `value` of `echo`, a setting, which takes no wire"),
+        "{refusal}"
+    );
 }

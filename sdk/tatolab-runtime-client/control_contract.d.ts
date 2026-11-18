@@ -887,7 +887,7 @@ export type StreamGraphAction = ({
    */
   group: string;
   operation: "remove_group";
-} | ({
+} | {
   /**
    * The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.
    */
@@ -897,9 +897,9 @@ export type StreamGraphAction = ({
    */
   level?: Array<string>;
   /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, and the set is made on that node's `value`, refused naming the stream's inputs when none declares it.
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds.
    */
-  node?: string | null;
+  node: string;
   /**
    * The input's name, as `graph` lists it under the node's `ports.inputs`, or a setting the node holds among its `input_values`.
    */
@@ -909,7 +909,7 @@ export type StreamGraphAction = ({
    */
   value?: unknown;
   operation: "set_node_input_value";
-});
+};
 
 /**
  * One end of a link a graph action names: a node and one of its ports.
@@ -1352,7 +1352,7 @@ export interface SetNodeInputValueRequest {
    */
   level?: Array<string> | null;
   /**
-   * The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, and the set is made on that node's `value`, refused naming the stream's inputs when none declares it.
+   * The node, by the UUID `graph` lists as its `id` and `add_node` answers. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, at the stream's top level, and the set is made on that node's `value`; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A `transact` operation names its node.
    */
   node?: string | null;
   /**

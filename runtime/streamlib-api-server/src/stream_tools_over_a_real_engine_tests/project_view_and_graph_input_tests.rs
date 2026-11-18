@@ -289,15 +289,22 @@ async fn a_top_level_graph_input_loads_linked_to_its_readers_and_a_write_records
     let refusal = tool_answer(&refused_result)
         .expect_err("an Input whose node does not run reaches no reader");
     assert!(refusal.contains("not running"), "{refusal}");
-    let refusal = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "write_graph_input",
-            json!({ "stream": stream_id, "input": "fader", "value": 1 }),
-        )
-        .await,
+    let refused_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "write_graph_input",
+        json!({ "stream": stream_id, "input": "fader", "value": 1 }),
     )
-    .expect_err("an Input no GraphInput declares is refused");
+    .await;
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["refusal_code"], "port_not_found",
+        "{refused_result}"
+    );
+    assert_eq!(
+        refused_result["structuredContent"]["refusal"]["refused_field"], "fader",
+        "{refused_result}"
+    );
+    let refusal =
+        tool_answer(&refused_result).expect_err("an Input no GraphInput declares is refused");
     assert!(
         refusal.contains("`fader`") && refusal.contains("`cue`"),
         "the refusal names the Inputs the stream has: {refusal}"
@@ -383,7 +390,25 @@ async fn a_set_naming_no_node_saves_the_value_of_the_graph_input_declaring_the_i
         )
         .await
         .expect_err("a set naming no node below the top level is refused");
-    assert!(refusal.runtime_words.contains("`level`"), "{refusal:?}");
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::Refused,
+        "{refusal:?}"
+    );
+    assert_eq!(
+        refusal.refused_params_pointer.as_deref(),
+        Some("/level"),
+        "{refusal:?}"
+    );
+    assert!(
+        refusal.runtime_words.contains(
+            "a `set_node_input_value` naming no node sets an input of the stream, which a \
+             top-level `GraphInput` declares, so its `level` is the top level; the input `cue` \
+             was named at a level below it. To fix: leave `level` out, or name the node whose \
+             input it is"
+        ),
+        "{refusal:?}"
+    );
     assert_eq!(project.the_graph_document_of("main"), document_before);
 }
 

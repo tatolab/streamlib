@@ -134,7 +134,7 @@ pub trait GeneratedNode: Send + 'static {
 /// Land each of `input_values` in `input_mailboxes`, a node's input mailboxes when it has them,
 /// which answer a read of an input with its value while no link feeds it: how a node takes the
 /// values its unlinked inputs read unless its type takes them itself.
-pub(super) fn land_the_unlinked_input_values_in_the_input_mailboxes(
+pub(crate) fn land_the_unlinked_input_values_in_the_input_mailboxes(
     input_mailboxes: Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>,
     input_values: &serde_json::Map<String, JsonValue>,
 ) -> Result<()> {

@@ -93,11 +93,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     );
                     continue;
                 }
-                StreamGraphAction::SetNodeInputValue {
-                    level,
-                    node: Some(node),
-                    ..
-                }
+                StreamGraphAction::SetNodeInputValue { level, node, .. }
                 | StreamGraphAction::SetPinValue { level, node, .. }
                 | StreamGraphAction::SetNodeConfig { level, node, .. } => (level, node),
                 _ => continue,
@@ -285,7 +281,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let set = StreamGraphAction::SetNodeInputValue {
                 stream,
                 level: level.to_vec(),
-                node: Some(node.to_owned()),
+                node: node.to_owned(),
                 input: input.clone(),
                 value,
             };

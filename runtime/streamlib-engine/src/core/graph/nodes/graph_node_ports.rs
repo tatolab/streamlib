@@ -30,6 +30,25 @@ impl InputHoldingAValueUnderANameItHad {
 }
 
 impl GraphNodePorts {
+    /// These ports, of a node of `node_type` whose config is `config`, with what that config
+    /// declares of them resolved: a `GraphInput`'s `value` input takes the family, the range and
+    /// the lifetime its config names. The ports of every other node type are as it declares
+    /// them.
+    pub fn resolved_against_the_config(
+        mut self,
+        node_type: &crate::core::descriptors::NodeClassImportPath,
+        config: Option<&serde_json::Value>,
+    ) -> Self {
+        if node_type.as_str()
+            == crate::core::graph::graph_interface_resolution::GRAPH_INPUT_NODE_TYPE
+        {
+            crate::core::graph::graph_interface_resolution::resolve_the_value_input_a_graph_input_config_declares(
+                &mut self, config,
+            );
+        }
+        self
+    }
+
     /// The ports of `direction`.
     pub fn on(&self, direction: PortDirection) -> &[PortInfo] {
         match direction {

@@ -570,8 +570,9 @@ pub struct PortDescriptorOutput {
     #[serde(flatten)]
     pub pin: Option<PortDeclaredPinOutput>,
     /// Whether the input takes a wire, a stored value, or both, tagged by
-    /// `mode`: `{"mode": "setting_only", "read": "at_setup"}` on a setting.
-    /// Absent on an input port, and on an output.
+    /// `mode`: `{"mode": "setting_only", "read": "at_setup"}` on a setting, and
+    /// the mode an input port declares. Absent on an input port that declares
+    /// none, and on an output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Option<serde_json::Value>")]
     #[schema(value_type = Option<Object>)]
@@ -964,7 +965,7 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
                 pin_type: declared.pin_type,
                 flow: declared.flow,
             }),
-            input_mode: None,
+            input_mode: port.input_mode,
             default_value: None,
             annotations: PinAnnotations::default(),
         }

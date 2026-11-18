@@ -189,12 +189,11 @@ impl LocalApiMcpServerHandler {
             .stream
             .clone()
             .unwrap_or_else(|| stream_id.to_string());
-        let stream_asset = operations_on_the_loaded_streams
-            .list_streams()
-            .into_iter()
-            .find(|listing| listing.stream_id == stream_id_as_the_graph_reports_it)
-            .and_then(|listing| listing.stream_location)
-            .map(|stream_location| stream_location.stream_asset)
+        let stream_asset =
+            crate::control_operations_on_project_views::the_stream_asset_a_loaded_stream_runs(
+                operations_on_the_loaded_streams.as_ref(),
+                &stream_id_as_the_graph_reports_it,
+            )
             .ok_or_else(|| {
                 McpError::invalid_params(
                     format!(

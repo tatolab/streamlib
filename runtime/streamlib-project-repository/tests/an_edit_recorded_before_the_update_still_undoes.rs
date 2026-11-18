@@ -200,7 +200,7 @@ fn each_recorded_edit_is_listed_as_the_input_value_sets_it_stands_for() {
             StreamGraphAction::SetNodeInputValue {
                 stream: stream(),
                 level: Vec::new(),
-                node: Some(MIXER.to_owned()),
+                node: MIXER.to_owned(),
                 input: "gain".to_owned(),
                 value: Some(json!(0.9)),
             }

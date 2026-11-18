@@ -45,9 +45,8 @@ pub(super) fn port_and_family_an_interface_nodes_config_declares(
         Some(named) => {
             let family_wire_name = named.as_str();
             Some(
-                PortFamily::ALL
-                    .into_iter()
-                    .find(|family| Some(family.wire_name()) == family_wire_name)
+                family_wire_name
+                    .and_then(PortFamily::of_wire_name)
                     .ok_or_else(|| {
                         Error::GraphError(format!(
                             "`{kind}` node `{}` declares its port of family {named}, and its \

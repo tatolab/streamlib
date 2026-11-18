@@ -55,6 +55,14 @@ impl PortFamily {
         }
     }
 
+    /// The family a graph, a config or the wire spells `wire_name`; `None` for a name no
+    /// family has.
+    pub fn of_wire_name(wire_name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|family| family.wire_name() == wire_name)
+    }
+
     /// What a port of this family carries: CommonMark, served as written.
     pub fn description(self) -> &'static str {
         match self {
@@ -404,9 +412,7 @@ pub fn output_port_family_resolved_against_config(
     };
     match node_config.and_then(|config| config.get(config_key)) {
         None | Some(serde_json::Value::Null) => Ok(declaration.family),
-        Some(serde_json::Value::String(wire_name)) => PortFamily::ALL
-            .into_iter()
-            .find(|family| family.wire_name() == wire_name)
+        Some(serde_json::Value::String(wire_name)) => PortFamily::of_wire_name(wire_name)
             .ok_or_else(|| {
                 format!(
                     "config key {config_key:?} names family {wire_name:?}, and a family is one \

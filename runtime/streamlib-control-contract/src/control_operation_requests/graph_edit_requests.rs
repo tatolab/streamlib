@@ -18,10 +18,12 @@ use streamlib_project_repository::{
     IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION, NODE_INPUT_ARGUMENT_DESCRIPTION,
     NODE_INPUT_VALUE_ARGUMENT_DESCRIPTION, NODE_STUDIO_FIELDS_ARGUMENT_DESCRIPTION,
     NOTE_ARGUMENT_DESCRIPTION, NOTE_POSITION_ARGUMENT_DESCRIPTION, NOTE_SIZE_ARGUMENT_DESCRIPTION,
-    NOTE_TEXT_ARGUMENT_DESCRIPTION, SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION,
-    StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
+    NOTE_TEXT_ARGUMENT_DESCRIPTION, StreamGraphAction, StreamGraphActionLinkEnd, StudioCanvasPair,
 };
 use uuid::Uuid;
+
+/// How `set_node_input_value`'s `node` is described to its caller.
+const SET_NODE_INPUT_VALUE_NODE_ARGUMENT_DESCRIPTION: &str = "The node, by the UUID `graph` lists as its `id` and `add_node` answers. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, at the stream's top level, and the set is made on that node's `value`; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A `transact` operation names its node.";
 
 use super::{
     AUTHOR_ARGUMENT_DESCRIPTION, GRAPH_EDIT_MODE_ARGUMENT_DESCRIPTION, GraphEditMode,

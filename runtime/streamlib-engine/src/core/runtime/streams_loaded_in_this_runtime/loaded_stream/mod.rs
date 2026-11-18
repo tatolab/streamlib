@@ -629,14 +629,9 @@ struct ValueOfAGraphInputRendered {
 fn the_value_of_each_graph_input(
     graph: &crate::core::graph::Graph,
 ) -> HashMap<String, ValueOfAGraphInputRendered> {
-    use crate::core::graph::graph_interface_resolution::{
-        GRAPH_INPUT_NODE_TYPE, GRAPH_INTERFACE_VALUE_PORT_NAME,
-    };
+    use crate::core::graph::graph_interface_resolution::GRAPH_INTERFACE_VALUE_PORT_NAME;
     graph
-        .traversal()
-        .v(())
-        .iter()
-        .filter(|node| node.node_type.as_str() == GRAPH_INPUT_NODE_TYPE)
+        .every_graph_input()
         .filter_map(|node| {
             let port = node.input_port(GRAPH_INTERFACE_VALUE_PORT_NAME)?;
             let current_value = crate::core::graph::input_values::the_value_an_input_reads(
@@ -663,7 +658,7 @@ fn render_the_value_of_each_graph_input_into(
     mut value_of_each_graph_input: HashMap<String, ValueOfAGraphInputRendered>,
 ) {
     use crate::core::graph::graph_interface_resolution::{
-        GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_COMPONENT_KEY,
+        GRAPH_INTERFACE_COMPONENT_KEY, render_the_saved_value_of_a_graph_input_as_its_default,
     };
     for node in nodes {
         let Some(rendered) = value_of_each_graph_input.remove(&node.id) else {
@@ -679,14 +674,7 @@ fn render_the_value_of_each_graph_input_into(
             );
         }
         if let Some(serde_json::Value::Object(config)) = &mut node.config {
-            match rendered.saved_value {
-                Some(saved_value) => {
-                    config.insert(GRAPH_INPUT_VALUE_FORMER_NAME.to_string(), saved_value);
-                }
-                None => {
-                    config.remove(GRAPH_INPUT_VALUE_FORMER_NAME);
-                }
-            }
+            render_the_saved_value_of_a_graph_input_as_its_default(config, rendered.saved_value);
             node.config_checksum = crate::core::utils::compute_json_checksum(
                 node.config.as_ref().unwrap_or(&serde_json::Value::Null),
             );

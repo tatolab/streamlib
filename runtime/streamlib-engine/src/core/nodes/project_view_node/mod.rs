@@ -20,8 +20,9 @@ use streamlib_project_repository::{
 
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
-    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeValueLifetime,
+    DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
     PinAnnotations, PinDeclaration, PinFlow, PortDescriptor, PortFamily, PortFamilyDeclaration,
+    SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
@@ -30,6 +31,7 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
+use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
 use crate::core::nodes::DynGeneratedNode;
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
@@ -104,26 +106,28 @@ fn the_config_schema_of_a_view_node(settings: Option<&JsonValue>) -> JsonValue {
 }
 
 fn the_port_a_view_declares(port: &TatolabViewDeclaredPort) -> PortDescriptor {
-    PortDescriptor {
-        name: port.name.clone(),
-        description: port.description.clone().unwrap_or_default(),
-        required: false,
-        delivery_profile: None,
-        borrow_quota: None,
-        audio_window: None,
-        family: PortFamilyDeclaration::of_family(port.family),
-        pin_default: None,
-        pin_declaration: None,
-        lifetime: NodeValueLifetime::Kept,
-    }
+    PortDescriptor::new(
+        port.name.clone(),
+        port.description.clone().unwrap_or_default(),
+        false,
+        PortFamilyDeclaration::of_family(port.family),
+    )
 }
 
-/// The descriptor of the node type every top-level `GraphInput` runs as: a `value` input, which
-/// takes no wire and holds what a client sets, read each time it changes, and a `value` output
-/// carrying it, both of the family its config names. The input had the name `default`.
+/// The descriptor of the node type every top-level `GraphInput` runs as: a `value` input, a
+/// setting read each run that holds what a client sets, and a `value` output carrying it as a
+/// value, which keeps its last message for a reader that connects later; both of the family its
+/// config names.
 pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescriptor> {
     let mut value_family = PortFamilyDeclaration::of_family(PortFamily::Records);
     value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
+    let carried_as_a_value = |former_names: Vec<String>| PinDeclaration {
+        pin_type: DeclaredPinType::Any,
+        flow: PinFlow::Value,
+        annotations: PinAnnotations::default(),
+        former_names,
+        may_be_unset: false,
+    };
     let mut descriptor = NodeDescriptor::new(
         NodeClassShortName::new("GraphInput".to_string())
             .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
@@ -132,45 +136,46 @@ pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescripto
         "One Input of a stream: every port `value` is linked to reads what a client sets."
             .to_string(),
     );
-    descriptor.inputs = vec![PortDescriptor {
-        name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
-        description: "What a client sets on the Input, of the declared family; it takes no wire."
-            .to_string(),
-        required: false,
-        delivery_profile: None,
-        borrow_quota: None,
-        audio_window: None,
-        family: value_family.clone(),
-        pin_default: None,
-        pin_declaration: Some(PinDeclaration {
-            pin_type: DeclaredPinType::Any,
-            flow: PinFlow::Value,
-            annotations: PinAnnotations::default(),
-            former_names: vec![GRAPH_INPUT_VALUE_FORMER_NAME.to_string()],
-            may_be_unset: false,
+    descriptor.inputs = vec![
+        PortDescriptor::new(
+            GRAPH_INTERFACE_VALUE_PORT_NAME,
+            "What a client sets on the Input, of the declared family; it takes no wire.",
+            false,
+            value_family.clone(),
+        )
+        .with_pin_declaration(carried_as_a_value(vec![
+            GRAPH_INPUT_VALUE_FORMER_NAME.to_string(),
+        ]))
+        .with_input_mode(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun,
         }),
-        lifetime: NodeValueLifetime::Kept,
-    }];
-    descriptor.outputs = vec![PortDescriptor {
-        name: GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
-        description: "What a client sets on the Input, of the declared family.".to_string(),
-        required: false,
-        delivery_profile: None,
-        borrow_quota: None,
-        audio_window: None,
-        family: value_family,
-        pin_default: None,
-        pin_declaration: None,
-        lifetime: NodeValueLifetime::Kept,
-    }];
+    ];
+    descriptor.outputs = vec![
+        PortDescriptor::new(
+            GRAPH_INTERFACE_VALUE_PORT_NAME,
+            "What a client sets on the Input, of the declared family.",
+            false,
+            value_family,
+        )
+        .with_pin_declaration(carried_as_a_value(Vec::new())),
+    ];
     Ok(descriptor)
 }
 
-/// The node that is the source of the values a client sets: a stream's top-level `GraphInput`
-/// and a view node. It publishes the value each of its inputs reads on its output of the same
-/// name, once as it is handed its values when it starts and again each time one changes, and a
-/// value a panel writes onto a view node's output. It runs on no schedule, and each output keeps
-/// its last message, which a reader that connects later is sent.
+/// The family declaration of a `GraphInput`'s `value` output in `descriptor`.
+fn the_value_family_declared(descriptor: &NodeDescriptor) -> Result<PortFamilyDeclaration> {
+    match descriptor.outputs.as_slice() {
+        [value] => Ok(value.family.clone()),
+        _ => Err(Error::Configuration(
+            "a `GraphInput` declares one output, `value`".to_string(),
+        )),
+    }
+}
+
+/// The node that is the source of the values a client sets: a stream's top-level `GraphInput`,
+/// which publishes the value its `value` input reads on its `value` output, once as it is handed
+/// its values when it starts and again each time it changes, and a view node, onto whose outputs
+/// a panel writes and which sends a reader that connects later the value each output carries.
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
@@ -180,22 +185,26 @@ pub(crate) struct ValueSourceNode {
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
+    publishes_each_input_on_its_output: bool,
 }
 
 impl ValueSourceNode {
     pub(crate) fn for_a_top_level_graph_input(node: &GraphNode) -> Result<Self> {
-        let config = node.config.clone().unwrap_or_default();
         let mut descriptor = the_node_type_of_a_top_level_graph_input()?;
         let family = streamlib_node_schema::output_port_family_resolved_against_config(
-            &descriptor.outputs[0].family,
-            Some(&config),
+            &the_value_family_declared(&descriptor)?,
+            node.config.as_ref(),
         )
         .map_err(|why| {
             Error::Configuration(format!("`GraphInput` node `{}`: {why}", node.display_name))
         })?;
-        descriptor.inputs[0].family = PortFamilyDeclaration::of_family(family);
-        descriptor.outputs[0].family = PortFamilyDeclaration::of_family(family);
-        Ok(Self::for_the_node(node, descriptor))
+        for port in descriptor.inputs.iter_mut().chain(&mut descriptor.outputs) {
+            port.family = PortFamilyDeclaration::of_family(family);
+        }
+        Ok(Self {
+            publishes_each_input_on_its_output: true,
+            ..Self::for_the_node(node, descriptor)
+        })
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
@@ -219,6 +228,7 @@ impl ValueSourceNode {
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
             input_mailboxes: None,
+            publishes_each_input_on_its_output: false,
         }
     }
 
@@ -292,6 +302,27 @@ impl ValueSourceNode {
             }
         }
         Ok(read_by_an_input_alone)
+    }
+
+    /// Publish the value each output carries again where a reader now connected missed it.
+    fn hand_each_current_value_to_a_reader_it_has_not_reached(&mut self) -> Result<()> {
+        let Some(output_writer_inner) = self
+            .output_writer
+            .as_ref()
+            .and_then(OutputWriter::inner_arc)
+        else {
+            return Ok(());
+        };
+        let outputs_a_reader_missed: Vec<(String, JsonValue)> = self
+            .current_value_of_each_output
+            .iter()
+            .filter(|(port, _)| output_writer_inner.has_a_reader_the_last_write_missed(port))
+            .map(|(port, value)| (port.clone(), value.clone()))
+            .collect();
+        for (port, value) in outputs_a_reader_missed {
+            self.publish_a_value_written_onto_an_output(&port, &value)?;
+        }
+        Ok(())
     }
 
     fn take_every_waiting_input_message(&self) -> Result<()> {
@@ -527,7 +558,11 @@ impl DynGeneratedNode for ValueSourceNode {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.take_every_waiting_input_message()
+        self.take_every_waiting_input_message()?;
+        if self.publishes_each_input_on_its_output {
+            return Ok(());
+        }
+        self.hand_each_current_value_to_a_reader_it_has_not_reached()
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -569,13 +604,8 @@ impl DynGeneratedNode for ValueSourceNode {
         output_writer: Option<OutputWriter>,
         input_mailboxes: Option<InputMailboxes>,
     ) -> Result<()> {
-        if let Some(output_writer) = output_writer {
-            if let Some(output_writer_inner) = output_writer.inner_arc() {
-                output_writer_inner.keep_the_last_message_of_output_ports(
-                    self.family_of_each_output.keys().cloned(),
-                );
-            }
-            self.output_writer = Some(output_writer);
+        if output_writer.is_some() {
+            self.output_writer = output_writer;
         }
         if input_mailboxes.is_some() {
             self.input_mailboxes = input_mailboxes;
@@ -604,11 +634,17 @@ impl DynGeneratedNode for ValueSourceNode {
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
-        let read_by_an_input_alone = self.publish_each_input_value_on_its_output(input_values)?;
-        if let Some(input_mailboxes) = self.iceoryx2_input_mailboxes_inner() {
-            input_mailboxes.read_each_unlinked_input_as_its_value(&read_by_an_input_alone);
+        if !self.publishes_each_input_on_its_output {
+            return land_the_unlinked_input_values_in_the_input_mailboxes(
+                self.iceoryx2_input_mailboxes_inner(),
+                input_values,
+            );
         }
-        Ok(())
+        let read_by_an_input_alone = self.publish_each_input_value_on_its_output(input_values)?;
+        land_the_unlinked_input_values_in_the_input_mailboxes(
+            self.iceoryx2_input_mailboxes_inner(),
+            &read_by_an_input_alone,
+        )
     }
 
     fn to_runtime_json(&self) -> JsonValue {

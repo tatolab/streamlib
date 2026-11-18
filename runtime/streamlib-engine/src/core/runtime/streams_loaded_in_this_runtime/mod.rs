@@ -23,3 +23,6 @@ pub(super) mod stream_input_declared_by_a_graph_input;
 pub(super) mod stream_location_and_id;
 pub(super) mod stream_step_coordinator;
 pub(super) mod view_node_output_written_by_a_panel;
+
+#[cfg(test)]
+mod graph_input_tests;

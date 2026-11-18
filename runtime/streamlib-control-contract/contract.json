@@ -6536,11 +6536,8 @@
                 "description": "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project."
               },
               "node": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, and the set is made on that node's `value`, refused naming the stream's inputs when none declares it."
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds."
               },
               "input": {
                 "type": "string",
@@ -6557,6 +6554,7 @@
             "required": [
               "operation",
               "stream",
+              "node",
               "input"
             ],
             "description": "Set the value one of a node's inputs holds while no link feeds it, or take it off so the\ninput reads its declared default."
@@ -7317,7 +7315,7 @@
               "string",
               "null"
             ],
-            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers; in `transact`, also the `as` of a node an earlier `add_node` of the same transaction adds. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, and the set is made on that node's `value`, refused naming the stream's inputs when none declares it."
+            "description": "The node, by the UUID `graph` lists as its `id` and `add_node` answers. Omit it to set one of the stream's own inputs: `input` then names the port a top-level `GraphInput` declares, at the stream's top level, and the set is made on that node's `value`; a name no `GraphInput` declares is refused with `port_not_found`, naming the stream's inputs. A `transact` operation names its node."
           },
           "input": {
             "type": "string",
