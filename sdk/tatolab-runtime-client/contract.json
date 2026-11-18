@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 7
+    "x-contract-revision": 8
   },
   "methods": [
     {
@@ -752,6 +752,67 @@
         "name": "check_link_result",
         "schema": {
           "$ref": "#/components/schemas/LinkCheckResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
+      "name": "check_link_candidates",
+      "summary": "Answer what `check_link` would answer for each link between one placed port and many candidate ports, changing nothing.",
+      "description": "Answer, in one call, what `check_link` would answer for each link between one placed port of a loaded stream and many candidate ports of the other direction, changing nothing. `from` is the placed port: `{\"output\": {\"node\": …, \"port\": …}}`, each candidate then an input, or `{\"input\": …}`, each candidate then an output. `among` is `\"placed_ports\"`, every such port of every node at the level; `\"node_type_ports\"`, every such port of every node type the stream resolves, to learn which node type can take an output before placing one; or `{\"ends\": [...]}`, these ends alone, each `{\"kind\": \"placed_port\", \"node\", \"port\"}` or `{\"kind\": \"node_type_port\", \"node_type\", \"port\"}`. Each entry of `candidates` holds its `end` and its `check`, which is exactly what `check_link` answers for that link. A node type's port is judged as the port of a node an `add_node` with no input values would place: one of several types by the one that connects best, any type, or a type found from a link or a setting, as the placed port's type, the last with the warning `type_found_only_once_placed`. A candidate `connect` would refuse is left out unless `include_refused` is true. A candidate `check_link` would not check yet, one reaching a fragment node or closing a loop of function nodes, is listed under `not_checked` with why; a non-empty `level` is refused, as `check_link` refuses it.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/CheckLinkCandidatesRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "check_link_candidates_result",
+        "schema": {
+          "$ref": "#/components/schemas/LinkCandidatesCheckResult"
         }
       },
       "errors": [
@@ -9017,9 +9078,236 @@
               "warning"
             ],
             "description": "The output states no pixel format, so it may send one the input cannot take."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "type_found_only_once_placed"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "The candidate, a node type's port, finds its type from a link into its node or from a\nsetting, so it is judged as taking the other end's type; a node of the type, once placed\nand given them, may still refuse the link."
           }
         ],
         "description": "What a link does that a person may not expect, tagged by its `warning`."
+      },
+      "CheckLinkCandidatesRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the links would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused."
+          },
+          "from": {
+            "$ref": "#/components/schemas/LinkCandidatesFrom",
+            "description": "The placed end each candidate is judged against."
+          },
+          "among": {
+            "$ref": "#/components/schemas/LinkCandidatesAmong",
+            "description": "The candidate ends."
+          },
+          "include_refused": {
+            "type": "boolean",
+            "description": "Whether a candidate `connect` would refuse is listed too, with the refusal it would answer; false or omitted lists only the candidates that connect.",
+            "default": false
+          }
+        },
+        "required": [
+          "stream",
+          "from",
+          "among"
+        ],
+        "description": "`check_link_candidates`'s params: one placed end and the ends of the other direction it is\njudged against."
+      },
+      "LinkCandidatesFrom": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "output": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd"
+              }
+            },
+            "required": [
+              "output"
+            ],
+            "additionalProperties": false,
+            "description": "An output, each candidate being an input it would carry into."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "input": {
+                "$ref": "#/components/schemas/StreamGraphActionLinkEnd"
+              }
+            },
+            "required": [
+              "input"
+            ],
+            "additionalProperties": false,
+            "description": "An input, each candidate being an output it would carry from."
+          }
+        ],
+        "description": "The placed end `check_link_candidates` judges each candidate against, by its direction."
+      },
+      "LinkCandidatesAmong": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "placed_ports",
+            "description": "Every port of the other direction of every node at the level."
+          },
+          {
+            "type": "string",
+            "const": "node_type_ports",
+            "description": "Every port of the other direction of every node type the stream resolves."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "ends": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LinkCandidateEnd"
+                }
+              }
+            },
+            "required": [
+              "ends"
+            ],
+            "additionalProperties": false,
+            "description": "These ends alone."
+          }
+        ],
+        "description": "The candidate ends `check_link_candidates` judges, each of the direction other than its\nplaced end's."
+      },
+      "LinkCandidateEnd": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "node": {
+                "type": "string",
+                "description": "The node, by the UUID `graph` lists as its `id`."
+              },
+              "port": {
+                "type": "string",
+                "description": "The port's name, as `graph` lists it under the node's `ports`."
+              },
+              "kind": {
+                "type": "string",
+                "const": "placed_port"
+              }
+            },
+            "required": [
+              "kind",
+              "node",
+              "port"
+            ],
+            "description": "A port of a node the stream's graph holds."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "node_type": {
+                "type": "string",
+                "description": "The node type, by the import path `add_node` takes as its `type`."
+              },
+              "port": {
+                "type": "string",
+                "description": "The port's name, as the node type declares it."
+              },
+              "kind": {
+                "type": "string",
+                "const": "node_type_port"
+              }
+            },
+            "required": [
+              "kind",
+              "node_type",
+              "port"
+            ],
+            "description": "A port of a node type no node of the graph has yet, judged as a node of the type an\n`add_node` with no input values would place."
+          }
+        ],
+        "description": "One end `check_link_candidates` judges its placed end against, of the other direction."
+      },
+      "LinkCandidatesCheckResult": {
+        "type": "object",
+        "properties": {
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkCandidateChecked"
+            },
+            "description": "Each candidate checked; one `connect` would refuse is listed only when the request set\n`include_refused`."
+          },
+          "not_checked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkCandidateNotChecked"
+            },
+            "description": "Each candidate whose link is not checked yet, as `check_link` would not check it."
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "description": "`check_link_candidates`'s answer: for each candidate end, in the order judged, what\n`check_link` would answer for its link with the placed end."
+      },
+      "LinkCandidateChecked": {
+        "type": "object",
+        "properties": {
+          "end": {
+            "$ref": "#/components/schemas/LinkCandidateEnd",
+            "description": "The candidate end."
+          },
+          "check": {
+            "$ref": "#/components/schemas/LinkCheckResult",
+            "description": "What `check_link` would answer for the link."
+          }
+        },
+        "required": [
+          "end",
+          "check"
+        ],
+        "description": "One candidate end and what `check_link` would answer for the link between it and the placed\nend."
+      },
+      "LinkCandidateNotChecked": {
+        "type": "object",
+        "properties": {
+          "end": {
+            "$ref": "#/components/schemas/LinkCandidateEnd",
+            "description": "The candidate end."
+          },
+          "why": {
+            "type": "string",
+            "description": "Why the link is not checked yet, in the runtime's words."
+          }
+        },
+        "required": [
+          "end",
+          "why"
+        ],
+        "description": "One candidate end whose link `check_link` would not check yet, and why."
       },
       "ImportGraphGeneratorRequest": {
         "type": "object",

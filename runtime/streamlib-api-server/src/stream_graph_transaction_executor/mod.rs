@@ -65,6 +65,7 @@ use former_port_names::{
     the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;
+pub(crate) use request_to_graph_operation::the_node_a_connects_end_names;
 use request_to_graph_operation::{
     graph_operation_for_the_request, refuse_a_link_the_graph_already_holds,
     the_operation_a_connect_asks,

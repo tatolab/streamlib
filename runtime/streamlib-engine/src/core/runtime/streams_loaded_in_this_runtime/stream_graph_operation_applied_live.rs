@@ -4,7 +4,8 @@
 use std::collections::HashSet;
 use streamlib_project_repository::{
     GRAPH_INTERFACE_FAMILY_CONFIG_KEY, STREAM_FRAGMENT_NODE_TYPE, StreamGraphDocument,
-    StreamGraphDocumentLink, StreamGraphOperation, is_a_graph_interface_node_type,
+    StreamGraphDocumentLink, StreamGraphDocumentLinkEnd, StreamGraphOperation,
+    is_a_graph_interface_node_type,
 };
 
 use uuid::Uuid;
@@ -22,10 +23,11 @@ use crate::core::runtime::LoadedStreamInThisRuntime;
 use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::operations::{RuntimeOperations, WhatALiveConnectMakesOfALink};
 use crate::core::runtime::operations_runtime::{
-    ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
-    the_verdict_connect_takes_on_a_link,
+    ALinkEndTheGraphHolds, ConfigReferencesOfTheAddedNode,
+    describe_the_type_an_add_names_when_it_must, the_verdict_connect_takes_on_a_link,
+    the_verdict_connect_takes_on_a_link_with_a_node_types_port,
 };
-use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 
 impl LoadedStreamInThisRuntime {
     /// Apply `graph_operation` to the live graph, each port it names under its current name,
@@ -489,6 +491,56 @@ impl LoadedStreamInThisRuntime {
         let (from, to) = self.the_ends_of_the_link(link)?;
         the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+    }
+
+    /// What a connect of a link between `held`, an end of the live graph by its node's UUID and
+    /// of `held_direction`, and port `port` of `node_type` would make of it, were a node of the
+    /// type placed: the type described first, as a live add describes the type it names, then
+    /// judged as [`Self::what_a_connect_makes_of_the_link`] judges a link and made nowhere. An
+    /// end at a node the graph as drawn holds and no node runs as is judged only as the live
+    /// graph is reconciled, as that link's is.
+    pub(crate) async fn what_a_connect_makes_of_a_link_with_a_node_types_port(
+        &self,
+        held: &StreamGraphDocumentLinkEnd,
+        held_direction: PortDirection,
+        node_type: &str,
+        port: &str,
+    ) -> Result<WhatALiveConnectMakesOfALink> {
+        let node_type = NodeClassImportPath::new(node_type)
+            .map_err(|refusal| Error::GraphError(format!("node type `{node_type}`: {refusal}")))?;
+        describe_the_type_an_add_names_when_it_must(
+            &self.node_interpreter_launch_record,
+            &node_type,
+            self.lend_directory(),
+            ConfigReferencesOfTheAddedNode::CheckedAgainstTheGraphItJoins,
+        )
+        .await?;
+        let node_run_id = match self.the_node_of_the_node(held.node) {
+            Ok(node_run_id) => node_run_id,
+            Err(refusal) => {
+                let drawn =
+                    StreamGraphDocument::from_value(self.to_json()?).map_err(Error::GraphError)?;
+                if drawn.nodes().iter().any(|node| node.id == held.node) {
+                    return Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade);
+                }
+                return Err(refusal);
+            }
+        };
+        let held = match held_direction {
+            PortDirection::Output => {
+                ALinkEndTheGraphHolds::Output(OutputLinkPortRef::new(node_run_id, &held.port))
+            }
+            PortDirection::Input => {
+                ALinkEndTheGraphHolds::Input(InputLinkPortRef::new(node_run_id, &held.port))
+            }
+        };
+        the_verdict_connect_takes_on_a_link_with_a_node_types_port(
+            &self.compiler,
+            &held,
+            &node_type,
+            port,
+        )
+        .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
     }
 
     /// The output and the input `link` names, each node by its UUID.

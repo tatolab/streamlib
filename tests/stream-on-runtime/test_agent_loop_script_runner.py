@@ -192,6 +192,22 @@ class ContractBackedAgentSession:
                     "runtime_words": "a Texture output does not connect to a Float input",
                 },
             })
+        if operation == "check_link_candidates":
+            assert arguments["stream"] == self.stream_id, arguments
+            self.the_node_of_the_id(arguments["from"]["output"]["node"])
+            candidates = [
+                {"end": end, "check": {"outcome": "connects"}}
+                if end["port"] in self.picture_inputs
+                else {"end": end, "check": {"outcome": "refused", "refusal": {
+                    "refusal_code": "link_pin_types_do_not_connect", "action": "connect",
+                    "runtime_words": "a Texture output does not connect to a Float input",
+                }}}
+                for end in arguments["among"]["ends"]
+            ]
+            return self.checked_against_the_result_schema(operation, {"candidates": [
+                candidate for candidate in candidates
+                if arguments.get("include_refused") or candidate["check"]["outcome"] != "refused"
+            ]})
         if operation == "graph":
             assert arguments.get("stream") == self.stream_id, arguments
             return {"stream": self.stream_id, "nodes": self.nodes, "links": self.links}
@@ -292,15 +308,17 @@ def test_build_a_graph_calls_each_listed_tool_by_name_after_describing_it() -> N
     called = [name for name, _ in session.tool_calls]
     assert called[:2] == ["list_operation_groups", "describe_operations"]
     assert session.tool_calls[1][1] == {
-        "operations": ["list_streams", "transact", "check_link", "graph", "undo"]
+        "operations": ["list_streams", "transact", "check_link_candidates", "check_link", "graph",
+                       "undo"]
     }
     assert called[2:] == [
-        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME,
-        "transact", "graph", "undo", "undo", "graph",
+        "list_streams", "transact", CALL_OPERATION_TOOL_NAME, "transact",
+        CALL_OPERATION_TOOL_NAME, CALL_OPERATION_TOOL_NAME, "transact", "graph",
+        "undo", "undo", "undo", "graph",
     ]
     checked = [arguments["operation"] for name, arguments in session.tool_calls
                if name == CALL_OPERATION_TOOL_NAME]
-    assert checked == ["check_link", "check_link"]
+    assert checked == ["check_link_candidates", "check_link", "check_link"]
 
 
 def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation() -> None:
@@ -421,9 +439,9 @@ def test_an_expectation_of_no_known_kind_is_malformed() -> None:
         agent_loop_script_from(document)
 
 
-def test_a_check_that_refuses_the_link_the_script_makes_fails_the_run() -> None:
+def test_a_check_that_refuses_the_node_type_the_script_places_fails_the_run() -> None:
     session = ContractBackedAgentSession(the_committed_control_contract())
     session.picture_inputs = set()
 
-    with pytest.raises(AgentLoopScriptRunFailed, match="link_checked_into_the_sink.*`/outcome`"):
+    with pytest.raises(AgentLoopScriptRunFailed, match="node_types_the_source_feeds.*`/candidates`"):
         played(agent_loop_script_from(build_a_graph_document()), session)

@@ -79,6 +79,20 @@ pub trait RuntimeOperations: Send + Sync {
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink>;
 
+    /// What a live connect would make of a link between `held`, an end of this stream's live
+    /// graph by its node's UUID and of `held_direction`, and port `port` of `node_type`, were a
+    /// node of the type placed as an add with no input values places it: the type described
+    /// first when an add would describe it, then judged as
+    /// [`Self::what_a_live_connect_makes_of_the_link`] judges a link, the port by what it
+    /// declares, and made nowhere; refused as the connect would be refused.
+    fn what_a_live_connect_makes_of_a_link_with_a_node_types_port(
+        &self,
+        held: &streamlib_project_repository::StreamGraphDocumentLinkEnd,
+        held_direction: crate::core::PortDirection,
+        node_type: &str,
+        port: &str,
+    ) -> BoxFuture<'_, Result<WhatALiveConnectMakesOfALink>>;
+
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.
     fn the_name_a_node_added_with_none_takes(

@@ -11,14 +11,15 @@ use crate::control_operation::{
 };
 use crate::control_operation_refusals::{ParamsThatDoNotMatchTheirSchema, the_params_read_as};
 use crate::control_operation_requests::{
-    AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest, CheckLinkRequest,
-    CloseViewerRequest, CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest,
-    CreateProjectRequest, CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest,
-    DescribeAssetRequest, DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest,
-    GraphRequest, ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest,
-    ListAssetsRequest, ListDependenciesRequest, ListProjectFilesRequest,
-    ListProjectNodeTypesRequest, ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest,
-    LogsRequest, OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
+    AddDependencyRequest, AddGroupRequest, AddNodeRequest, AddNoteRequest,
+    CheckLinkCandidatesRequest, CheckLinkRequest, CloseViewerRequest,
+    CollapseSelectionIntoSubgraphRequest, CreateNodeFileRequest, CreateProjectRequest,
+    CreateStreamRequest, DeleteAssetRequest, DeleteStreamRequest, DescribeAssetRequest,
+    DescribeRuntimeRequest, DiscoverRequest, DuplicateProjectRequest, GraphRequest,
+    ImportAssetRequest, ImportGraphGeneratorRequest, ImportProjectRequest, ListAssetsRequest,
+    ListDependenciesRequest, ListProjectFilesRequest, ListProjectNodeTypesRequest,
+    ListProjectViewsRequest, ListSamplesRequest, ListStreamsRequest, LogsRequest,
+    OneLinkGraphEditRequest, OneNodeGraphEditRequest, OneProjectByItsDirectoryRequest,
     OneStreamActionRequest, OpenViewerRequest, ReadAssetPreviewRequest, ReadProjectFileRequest,
     RefreshFragmentsRequest, RelocateAssetRequest, RemoveDependencyRequest, RemoveGroupRequest,
     RemoveNoteRequest, RenameNodeRequest, RenameProjectRequest, ReplaceAssetRequest,
@@ -54,10 +55,10 @@ pub use discovery_and_subscriptions::{
     SubscribeStreamActionChanges, SubscribeStreamGraphChanges,
 };
 pub use graph_edits::{
-    AddGroup, AddNode, AddNote, CheckLink, CollapseSelectionIntoSubgraph, Connect, Disconnect,
-    ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote, RenameNode,
-    SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue, SetNoteFields,
-    SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
+    AddGroup, AddNode, AddNote, CheckLink, CheckLinkCandidates, CollapseSelectionIntoSubgraph,
+    Connect, Disconnect, ImportGraphGenerator, Redo, RemoveGroup, RemoveNode, RemoveNote,
+    RenameNode, SetExposedConfigFields, SetGroupFields, SetNodeConfig, SetNodeInputValue,
+    SetNoteFields, SetPinValue, SetStudioFields, Transact, Undo, UnlockSubgraph, WriteGraphInput,
 };
 pub use playback_and_stream_actions::{
     CancelStreamAction, DescribeStreamAction, PausePlayback, ResumePlayback, SetStreamClockScale,
@@ -77,7 +78,7 @@ pub use project_lifecycle::{
 pub const CONTROL_CONTRACT_VERSION: u32 = 3;
 
 /// The contract's revision: raised by an addition, and reset to 0 when the version is bumped.
-pub const CONTROL_CONTRACT_REVISION: u32 = 7;
+pub const CONTROL_CONTRACT_REVISION: u32 = 8;
 
 const EVERY_SURFACE: &[ControlOperationExposure] = &[
     ControlOperationExposure::Studio,
@@ -105,6 +106,7 @@ pub const CONTROL_OPERATIONS: &[ControlOperationDeclaration] = &[
     ControlOperationDeclaration::of::<AddNode>(),
     ControlOperationDeclaration::of::<Connect>(),
     ControlOperationDeclaration::of::<CheckLink>(),
+    ControlOperationDeclaration::of::<CheckLinkCandidates>(),
     ControlOperationDeclaration::of::<ImportGraphGenerator>(),
     ControlOperationDeclaration::of::<RemoveNode>(),
     ControlOperationDeclaration::of::<Disconnect>(),
@@ -204,6 +206,8 @@ pub enum ControlOperationCall {
     Connect(OneLinkGraphEditRequest),
     /// A `check_link` call.
     CheckLink(CheckLinkRequest),
+    /// A `check_link_candidates` call.
+    CheckLinkCandidates(CheckLinkCandidatesRequest),
     /// A `import_graph_generator` call.
     ImportGraphGenerator(ImportGraphGeneratorRequest),
     /// A `remove_node` call.
@@ -420,6 +424,9 @@ impl ControlOperationCall {
             AddNode::METHOD_NAME => the_request_of::<AddNode>(params).map(Self::AddNode),
             Connect::METHOD_NAME => the_request_of::<Connect>(params).map(Self::Connect),
             CheckLink::METHOD_NAME => the_request_of::<CheckLink>(params).map(Self::CheckLink),
+            CheckLinkCandidates::METHOD_NAME => {
+                the_request_of::<CheckLinkCandidates>(params).map(Self::CheckLinkCandidates)
+            }
             ImportGraphGenerator::METHOD_NAME => {
                 the_request_of::<ImportGraphGenerator>(params).map(Self::ImportGraphGenerator)
             }
@@ -622,6 +629,7 @@ impl ControlOperationCall {
             Self::AddNode(_) => AddNode::METHOD_NAME,
             Self::Connect(_) => Connect::METHOD_NAME,
             Self::CheckLink(_) => CheckLink::METHOD_NAME,
+            Self::CheckLinkCandidates(_) => CheckLinkCandidates::METHOD_NAME,
             Self::ImportGraphGenerator(_) => ImportGraphGenerator::METHOD_NAME,
             Self::RemoveNode(_) => RemoveNode::METHOD_NAME,
             Self::Disconnect(_) => Disconnect::METHOD_NAME,
