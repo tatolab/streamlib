@@ -92,17 +92,29 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
     };
     assert_eq!(
         ports(&descriptor.inputs),
-        [(
-            "waveform".to_string(),
-            "What plays.".to_string(),
-            vec![PortFamily::Channels],
-            false
-        )]
+        [
+            (
+                "waveform".to_string(),
+                "What plays.".to_string(),
+                vec![PortFamily::Channels],
+                false
+            ),
+            (
+                "crossfader".to_string(),
+                "Left to right.".to_string(),
+                vec![PortFamily::Array],
+                false
+            )
+        ]
     );
     assert_eq!(
         descriptor.inputs[0].delivery_profile.as_deref(),
         Some("newest"),
         "a link into a view node's input is wired as a channel, which takes a delivery profile"
+    );
+    assert_eq!(
+        descriptor.inputs[0].input_mode, None,
+        "a declared input takes a wire"
     );
     assert_eq!(
         ports(&descriptor.outputs),
@@ -112,6 +124,44 @@ fn a_node_view_is_a_node_type_of_its_declared_ports_description_and_settings() {
             vec![PortFamily::Array],
             false
         )]
+    );
+}
+
+#[test]
+fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_each_run() {
+    let descriptor = crate::core::nodes::node_instance_factory::the_node_type_as_registered(
+        the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", the_deck_manifest()))
+            .expect("a node view that opens is a node type"),
+    )
+    .expect("an output takes the name of the setting whose value it publishes");
+    let [_waveform, setting] = descriptor.inputs.as_slice() else {
+        panic!("the deck takes its declared input and one input of its output's name");
+    };
+
+    assert_eq!(
+        (setting.name.as_str(), setting.description.as_str()),
+        ("crossfader", "Left to right.")
+    );
+    assert_eq!(
+        setting.family.families_an_input_takes(),
+        vec![PortFamily::Array]
+    );
+    assert_eq!(
+        setting.input_mode,
+        Some(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun
+        }),
+        "the input takes no wire and is read each run"
+    );
+    assert!(!setting.input_mode.unwrap().takes_a_wire());
+    assert_eq!(
+        setting.lifetime,
+        NodeValueLifetime::Reset,
+        "what a panel writes is live data, which no Stop keeps"
+    );
+    assert!(
+        descriptor.outputs[0].flows_as_a_value(),
+        "the output keeps its last message for a reader that connects later"
     );
 }
 
@@ -271,4 +321,42 @@ fn an_image_or_packets_value_is_never_written_from_a_panel() {
             the_message_a_value_written_onto_an_output_is(family, &json!({}), 0).unwrap_err();
         assert!(refusal.contains("never"), "{refusal}");
     }
+}
+
+#[test]
+fn an_image_or_packets_output_has_no_input_of_its_name_and_is_no_value() {
+    let mut manifest = the_deck_manifest();
+    manifest["outputs"] = json!([
+        { "name": "preview", "family": "image" },
+        { "name": "crossfader", "family": "array" }
+    ]);
+    let descriptor = the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", manifest))
+        .expect("a node view that opens is a node type");
+
+    assert_eq!(
+        descriptor
+            .inputs
+            .iter()
+            .map(|port| port.name.as_str())
+            .collect::<Vec<_>>(),
+        ["waveform", "crossfader"],
+        "no panel writes an Image output, so it has no input of its name"
+    );
+    assert!(!descriptor.outputs[0].flows_as_a_value());
+    assert!(descriptor.outputs[1].flows_as_a_value());
+}
+
+#[test]
+fn a_panel_writes_array_channels_and_records_outputs_alone() {
+    assert_eq!(
+        PortFamily::ALL
+            .into_iter()
+            .filter(|family| a_panel_writes(*family))
+            .collect::<Vec<_>>(),
+        [PortFamily::Array, PortFamily::Channels, PortFamily::Records]
+    );
+    assert_eq!(
+        why_a_panel_never_writes(PortFamily::Packets),
+        "a client writes Array, Channels and Records values, never Packets"
+    );
 }

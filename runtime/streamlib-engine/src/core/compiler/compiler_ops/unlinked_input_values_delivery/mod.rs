@@ -34,10 +34,12 @@ pub(crate) enum UnlinkedInputValuesDelivery {
         input_values: Map<String, Value>,
     },
     /// Through the node built in this process, keyed by the input each is read at: a shader
-    /// node's are those of every member of its island, read at the island's host.
+    /// node's are those of every member of its island, read at the island's host. `set_live`
+    /// names each input a client has just set live.
     TheNodeInThisProcess {
         node_instance: Arc<Mutex<NodeInstance>>,
         input_values: Map<String, Value>,
+        set_live: Vec<String>,
     },
     /// Through each island evaluating the function node, handed again; its caller hands them
     /// under the graph's write lock.
@@ -75,8 +77,27 @@ impl UnlinkedInputValuesDelivery {
             Some(node_instance) => Self::TheNodeInThisProcess {
                 node_instance: Arc::clone(&node_instance.0),
                 input_values,
+                set_live: Vec::new(),
             },
             None => Self::NoNodeBuiltYet,
+        }
+    }
+
+    /// This delivery, naming `set_live`, the inputs of its node a client has just set live,
+    /// when it is to a node in this process; a delivery to a helper, to an island or to a node
+    /// not built yet is left as it is, none of them telling a value just set from one held.
+    pub(crate) fn naming_the_inputs_set_live(self, set_live: Vec<String>) -> Self {
+        match self {
+            Self::TheNodeInThisProcess {
+                node_instance,
+                input_values,
+                ..
+            } => Self::TheNodeInThisProcess {
+                node_instance,
+                input_values,
+                set_live,
+            },
+            delivery => delivery,
         }
     }
 
@@ -94,7 +115,10 @@ impl UnlinkedInputValuesDelivery {
             Self::TheNodeInThisProcess {
                 node_instance,
                 input_values,
-            } => node_instance.lock().set_unlinked_input_values(&input_values),
+                set_live,
+            } => node_instance
+                .lock()
+                .set_unlinked_input_values_naming_those_set_live(&input_values, &set_live),
             Self::EachIslandEvaluatingIt(_) | Self::NoNodeBuiltYet => Ok(()),
         }
     }

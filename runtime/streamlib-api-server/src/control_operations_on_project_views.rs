@@ -82,7 +82,7 @@ fn the_view_on_the_wire(
 
 use streamlib_control_contract::{
     ControlOperation, GraphEditMode, ListProjectViewsRequest, WriteGraphInput,
-    WriteGraphInputRequest, WriteStudioViewOutputRequest,
+    WriteGraphInputRequest, WriteStudioViewOutput, WriteStudioViewOutputRequest,
 };
 impl ControlOperationDispatcher {
     pub(crate) async fn list_project_views(
@@ -110,6 +110,9 @@ impl ControlOperationDispatcher {
         Ok(listed)
     }
 
+    /// `write_studio_view_output`, replaced by `set_node_input_value`: the one live set of the
+    /// input of the view node `node` named after its output `port`, which the node publishes on
+    /// that output.
     pub(crate) async fn write_studio_view_output(
         &self,
         WriteStudioViewOutputRequest {
@@ -118,18 +121,23 @@ impl ControlOperationDispatcher {
             port,
             value,
         }: WriteStudioViewOutputRequest,
+        request_origin: &ControlRequestOrigin,
     ) -> Result<WriteStudioViewOutputToolResult, ControlOperationRefusal> {
-        let stream_operations =
-            self.the_stream_a_call_names("write_studio_view_output", &stream)?;
-        let written = stream_operations
-            .write_a_value_onto_an_output_of_a_view_node(node.clone(), port.clone(), value)
-            .await;
-        if let Err(refusal) = written {
-            return Err(the_refusal_of_a_reach_for_a_node(
-                "write_studio_view_output",
-                refusal,
-            ));
-        }
+        const ACTION_NAME: &str = <WriteStudioViewOutput as ControlOperation>::METHOD_NAME;
+        let view_node = self
+            .the_stream_a_call_names(ACTION_NAME, &stream)?
+            .the_running_view_node_a_panel_writes(node.clone(), port.clone(), value.clone())
+            .await
+            .map_err(|refusal| the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal))?;
+        self.set_one_input_value_live(
+            ACTION_NAME,
+            &stream,
+            view_node,
+            port.clone(),
+            value,
+            request_origin,
+        )
+        .await?;
         Ok(WriteStudioViewOutputToolResult { stream, node, port })
     }
 
@@ -151,18 +159,12 @@ impl ControlOperationDispatcher {
         if let Some(refusal) = graph_input.refusal_while_its_node_does_not_run {
             return Err(the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal));
         }
-        self.apply_a_graph_transaction(
+        self.set_one_input_value_live(
             ACTION_NAME,
-            vec![StreamGraphAction::SetNodeInputValue {
-                stream: GraphEditStream::StreamId(stream.clone()),
-                level: Vec::new(),
-                node: graph_input.node.to_string(),
-                input: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
-                value: Some(value),
-            }],
-            Some(GraphEditMode::Live),
-            None,
-            None,
+            &stream,
+            graph_input.node,
+            GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+            value,
             request_origin,
         )
         .await?;
@@ -171,6 +173,36 @@ impl ControlOperationDispatcher {
             input,
             family: graph_input.family.wire_name().to_owned(),
         })
+    }
+
+    /// One `live` `set_node_input_value` of `value` on input `input` of the node `node` at the
+    /// top level of the loaded stream `stream_id`, as `action_name`, an operation it replaces,
+    /// makes it.
+    async fn set_one_input_value_live(
+        &self,
+        action_name: &'static str,
+        stream_id: &str,
+        node: Uuid,
+        input: String,
+        value: serde_json::Value,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<(), ControlOperationRefusal> {
+        self.apply_a_graph_transaction(
+            action_name,
+            vec![StreamGraphAction::SetNodeInputValue {
+                stream: GraphEditStream::StreamId(stream_id.to_owned()),
+                level: Vec::new(),
+                node: node.to_string(),
+                input,
+                value: Some(value),
+            }],
+            Some(GraphEditMode::Live),
+            None,
+            None,
+            request_origin,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// The node a `set_node_input_value` naming no node sets the `value` input of, in the stream

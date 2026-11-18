@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -16,6 +17,9 @@ use streamlib_project_repository::{
 use super::*;
 use crate::core::descriptors::{NodeClassImportPath, PortFamily};
 use crate::core::graph::NodeInstanceWithItsOutOfProcessLinkWiring;
+use crate::core::graph::input_values::{
+    InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+};
 use crate::core::nodes::NodeSpec;
 use crate::core::runtime::a_project_on_disk_for_a_test::options_loading_a_stream_of_the_test_project_at;
 use crate::core::runtime::{Runner, RuntimeOperations};
@@ -38,6 +42,15 @@ fn the_deck_manifest() -> Value {
         "inputs": [{ "name": "cue_in", "family": "records", "description": "Cues to show." }],
         "outputs": [{ "name": "cue", "family": "records", "description": "The cue played." },
                     { "name": "fader", "family": "array", "range": [0, 1] }]
+    })
+}
+
+const PULSE_VIEW_TYPE: &str = "acme-dj:pulse";
+
+fn the_pulse_manifest() -> Value {
+    json!({
+        "contract": "1.0", "title": "Pulse", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "family": "channels" }]
     })
 }
 
@@ -86,6 +99,7 @@ impl AStreamOfAProjectBringingViews {
         .unwrap();
         a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
         a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
+        a_view_folder_in(project_directory.path(), "pulse", &the_pulse_manifest());
         a_view_folder_in(
             project_directory.path(),
             "broken",
@@ -164,13 +178,34 @@ impl AStreamOfAProjectBringingViews {
         (viewer, reader)
     }
 
+    /// A panel's write of `value` onto output `port` of the view node `node_uuid`, as
+    /// `write_studio_view_output` makes it in the engine: the view node is read, then its input
+    /// of the output's name set live, as a `live` transaction of that one set hands it over.
     fn write(&self, node_uuid: &str, port: &str, value: Value) -> Result<()> {
-        self.async_runtime
-            .block_on(self.stream.write_a_value_onto_an_output_of_a_view_node(
-                node_uuid.to_string(),
-                port.to_string(),
-                value,
-            ))
+        let node =
+            self.async_runtime
+                .block_on(self.stream.the_running_view_node_a_panel_writes(
+                    node_uuid.to_string(),
+                    port.to_string(),
+                    value.clone(),
+                ))?;
+        match self.stream.set_input_values_live(&[InputValueToSetLive {
+            node,
+            input: port.to_string(),
+            value: Some(value),
+        }]) {
+            Ok(InputValuesSetLive::ApartFromTheGraph(_)) => Ok(()),
+            Ok(InputValuesSetLive::OnTheGraph) => {
+                panic!("a view node's input of an output's name is set live, apart from the graph")
+            }
+            Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt { refusal, .. }) => {
+                Err(Error::Configuration(refusal.words))
+            }
+            Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
+                runtime_words, ..
+            }) => Err(Error::Configuration(runtime_words)),
+            Err(LiveInputValueSetRefusal::NotHandedOver(not_handed_over)) => Err(not_handed_over),
+        }
     }
 
     /// What the stream's graph holds of `node_id`: its config, pins and `studio` fields, and

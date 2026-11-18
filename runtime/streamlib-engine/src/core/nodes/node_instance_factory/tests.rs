@@ -256,6 +256,68 @@ fn a_descriptor_declaring_one_port_name_twice_is_refused_by_name() {
     );
 }
 
+/// `port` carried as a value of any type.
+fn carried_as_a_value(port: PortDescriptor) -> PortDescriptor {
+    port.with_pin_declaration(crate::core::descriptors::PinDeclaration {
+        pin_type: crate::core::descriptors::DeclaredPinType::Any,
+        flow: crate::core::descriptors::PinFlow::Value,
+        annotations: Default::default(),
+        former_names: Vec::new(),
+        may_be_unset: false,
+    })
+}
+
+/// `port` as a setting read each run, which takes no wire.
+fn a_setting_read_each_run(port: PortDescriptor) -> PortDescriptor {
+    port.with_input_mode(crate::core::descriptors::NodeInputMode::SettingOnly {
+        read: crate::core::descriptors::SettingReadTime::EachRun,
+    })
+}
+
+/// Whether `refusal` refuses the port `level` of `path` as declared twice.
+fn refuses_level_declared_twice(refusal: &Error, path: &str) -> bool {
+    matches!(
+        refusal,
+        Error::DescriptorPortNameDeclaredTwice { node_class_import_path, port_name }
+            if node_class_import_path.as_str() == path && port_name == "level"
+    )
+}
+
+#[test]
+fn an_output_sharing_the_name_of_the_setting_it_publishes_is_registered() {
+    let descriptor = descriptor_for("my_app.panels:Level")
+        .with_input(a_setting_read_each_run(carried_as_a_value(port_named(
+            "level",
+        ))))
+        .with_output(carried_as_a_value(port_named("level")));
+
+    assert!(the_node_type_as_registered(descriptor).is_ok());
+}
+
+#[test]
+fn an_output_that_is_no_value_sharing_a_settings_name_is_refused_by_name() {
+    let path = "my_app.panels:Level";
+    assert_refused_by_either_registration(
+        descriptor_for(path)
+            .with_input(a_setting_read_each_run(carried_as_a_value(port_named(
+                "level",
+            ))))
+            .with_output(port_named("level")),
+        |refusal| refuses_level_declared_twice(refusal, path),
+    );
+}
+
+#[test]
+fn a_value_output_sharing_the_name_of_an_input_that_takes_a_wire_is_refused_by_name() {
+    let path = "my_app.panels:Level";
+    assert_refused_by_either_registration(
+        descriptor_for(path)
+            .with_input(carried_as_a_value(port_named("level")))
+            .with_output(carried_as_a_value(port_named("level"))),
+        |refusal| refuses_level_declared_twice(refusal, path),
+    );
+}
+
 /// `port_named(name)` typed a Float, which was named each of `former_names` before.
 fn a_float_port_once_named(name: &str, former_names: &[&str]) -> PortDescriptor {
     port_named(name).with_pin_declaration(crate::core::descriptors::PinDeclaration {

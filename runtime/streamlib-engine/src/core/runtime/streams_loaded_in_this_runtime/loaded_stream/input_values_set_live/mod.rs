@@ -28,6 +28,7 @@ use crate::core::graph::legacy_config_of_a_node::{
     LegacyConfigOfANodeType, input_values_of_a_config_and_pin_values,
 };
 use crate::core::graph::{Graph, GraphNode, NodeRunId};
+use crate::core::nodes::{NodeTypesOneStreamResolves, is_the_input_of_an_output_a_panel_writes};
 use crate::core::pubsub::RuntimeEvent;
 
 impl LoadedStreamInThisRuntime {
@@ -198,7 +199,11 @@ fn set_the_input_values_live(
         set_on_each.push(set_on);
     }
     if playback == PlaybackOfTheStreamSetOn::Stopped {
-        refuse_a_value_on_a_reset_input_while_stopped(sets, &set_on_each)?;
+        refuse_a_value_on_a_reset_input_while_stopped(
+            graph.node_types_this_stream_resolves(),
+            sets,
+            &set_on_each,
+        )?;
     }
 
     let made: Vec<InputValueSetLive> = sets
@@ -228,7 +233,14 @@ fn set_the_input_values_live(
             UnlinkedInputValuesDelivery::EachIslandEvaluatingIt(function_node) => {
                 function_nodes_read_inside_an_island.push(function_node);
             }
-            delivery => deliveries.push(delivery),
+            delivery => deliveries.push(
+                delivery.naming_the_inputs_set_live(
+                    sets.iter()
+                        .filter(|set| set.node == set_on.node_uuid)
+                        .map(|set| set.input.clone())
+                        .collect(),
+                ),
+            ),
         }
     }
     Ok(Some(InputValuesHeldLive {
@@ -327,6 +339,7 @@ fn refuse_a_value_its_own_helper_does_not_read(
 /// a value on a `reset` input: the stream's playback is stopped, and a `reset` input holds no
 /// live value until it plays. Taking a live value off is no refusal, there being none to take.
 fn refuse_a_value_on_a_reset_input_while_stopped(
+    node_types: &NodeTypesOneStreamResolves,
     sets: &[InputValueToSetLive],
     set_on_each: &[&GraphNode],
 ) -> std::result::Result<(), LiveInputValueSetRefusal> {
@@ -341,11 +354,17 @@ fn refuse_a_value_on_a_reset_input_while_stopped(
     let Some((set_index, (set, set_on))) = refused else {
         return Ok(());
     };
+    let what_it_returns_to =
+        if is_the_input_of_an_output_a_panel_writes(node_types, &set_on.node_type, &set.input) {
+            "no value"
+        } else {
+            "its saved value"
+        };
     Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {
         set_index,
         runtime_words: format!(
-            "input `{}` of `{}` returns to its saved value at Stop, so it keeps no value set live \
-             while the stream is stopped; `start_playback` plays it",
+            "input `{}` of `{}` returns to {what_it_returns_to} at Stop, so it keeps no value set \
+             live while the stream is stopped; `start_playback` plays it",
             set.input, set_on.display_name
         ),
     })

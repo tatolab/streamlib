@@ -29,8 +29,13 @@ use crate::core::logging::{
 };
 use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
-use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
+use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::ChannelName;
+
+mod link_ends_this_graph_cannot_take;
+use link_ends_this_graph_cannot_take::{
+    refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
+};
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -487,44 +492,6 @@ fn apply_a_link(
     Ok(link_id)
 }
 
-fn refuse_a_source_this_graph_cannot_take(
-    graph: &crate::core::graph::Graph,
-    from: &OutputLinkPortRef,
-) -> Result<()> {
-    let from_node = graph
-        .traversal()
-        .v(from.node_run_id())
-        .first()
-        .ok_or_else(|| Error::NodeNotFound(from.node_run_id().to_string()))?;
-    if !from_node.has_output(from.port_name()) {
-        return Err(Error::NodePortNotFound {
-            node_run_id: from.node_run_id().to_string(),
-            port_name: from.port_name().to_string(),
-            direction: PortDirection::Output,
-        });
-    }
-    Ok(())
-}
-
-fn refuse_a_destination_this_graph_cannot_take(
-    graph: &crate::core::graph::Graph,
-    to: &InputLinkPortRef,
-) -> Result<()> {
-    let to_node = graph
-        .traversal()
-        .v(to.node_run_id())
-        .first()
-        .ok_or_else(|| Error::NodeNotFound(to.node_run_id().to_string()))?;
-    if !to_node.has_input(to.port_name()) {
-        return Err(Error::NodePortNotFound {
-            node_run_id: to.node_run_id().to_string(),
-            port_name: to.port_name().to_string(),
-            direction: PortDirection::Input,
-        });
-    }
-    to_node.refuse_a_link_into_a_setting(to.port_name())
-}
-
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
 pub(super) async fn disconnect_impl(
     live_graph_change: LiveGraphChangeOnOneStream,
@@ -792,13 +759,33 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         input: &str,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
+        self.refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+            node_type, node_name, input, value,
+        )?;
+        let node = crate::core::graph::input_values::NodeAnInputValueIsSetOn {
+            name: node_name,
+            node_type,
+            input_values_after_the_set,
+        };
         crate::core::graph::input_values::refuse_an_input_value_its_input_does_not_take(
             self.node_types_this_stream_resolves(),
-            &crate::core::graph::input_values::NodeAnInputValueIsSetOn {
-                name: node_name,
-                node_type,
-                input_values_after_the_set,
-            },
+            &node,
+            input,
+            value,
+        )
+    }
+
+    fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+        &self,
+        node_type: &NodeClassImportPath,
+        node_name: &str,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
+        crate::core::nodes::refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+            self.node_types_this_stream_resolves(),
+            node_type,
+            node_name,
             input,
             value,
         )
@@ -906,14 +893,14 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         })
     }
 
-    fn write_a_value_onto_an_output_of_a_view_node(
+    fn the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
         value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<()>> {
+    ) -> BoxFuture<'_, Result<uuid::Uuid>> {
         self.in_this_streams_log_route(
-            self.hand_a_value_written_by_a_panel_to_a_view_node(node_id, port_name, value),
+            self.read_the_running_view_node_a_panel_writes(node_id, port_name, value),
         )
     }
 

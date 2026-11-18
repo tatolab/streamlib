@@ -100,6 +100,15 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
             Ok(())
         }
+        fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+            &self,
+            _node_type: &::streamlib::sdk::descriptors::NodeClassImportPath,
+            _node_name: &str,
+            _input: &str,
+            _value: ::std::option::Option<&::serde_json::Value>,
+        ) -> ::std::result::Result<(), ::streamlib::sdk::graph::input_values::InputValueRefusal> {
+            Ok(())
+        }
         fn set_input_values_live(
             &self,
             _sets: &[::streamlib::sdk::graph::input_values::InputValueToSetLive],

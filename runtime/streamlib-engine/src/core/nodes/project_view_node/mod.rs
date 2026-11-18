@@ -1,10 +1,11 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! The value source: a node of a project view's type, the plug a Tato Studio view takes in a
-//! stream, whose inputs a panel reads through a viewer and whose outputs carry what a panel
-//! writes onto them; and a stream's top-level `GraphInput`, whose `value` output carries the
-//! value its `value` input is set to.
+//! The value source: a node that publishes the value each of its settings is set to on its output
+//! of the same name. A node of a project view's type, the plug a Tato Studio view takes in a
+//! stream, whose linked inputs a panel reads through a viewer and whose outputs carry what a
+//! panel sets their same-named inputs to; and a stream's top-level `GraphInput`, whose `value`
+//! output carries the value its `value` input is set to.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,18 +22,19 @@ use streamlib_project_repository::{
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{
     DeclaredPinType, NodeClassImportPath, NodeClassShortName, NodeDescriptor, NodeInputMode,
-    PinAnnotations, PinDeclaration, PinFlow, PortDescriptor, PortFamily, PortFamilyDeclaration,
-    SettingReadTime,
+    NodeValueLifetime, PinAnnotations, PinDeclaration, PinFlow, PortDescriptor, PortFamily,
+    PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::error::{Error, Result};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::GraphNode;
 use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
+use crate::core::graph::input_values::{InputValueRefusal, InputValueRefusalCode};
+use crate::core::graph::{GraphNode, GraphNodePorts};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
-use crate::core::nodes::DynGeneratedNode;
+use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
 };
@@ -82,13 +84,148 @@ pub(crate) fn the_node_type_of_a_project_view(
         .map(|port| {
             the_port_a_view_declares(port).with_delivery_profile(VIEW_NODE_INPUT_DELIVERY_PROFILE)
         })
+        .chain(
+            manifest
+                .outputs
+                .iter()
+                .filter(|port| a_panel_writes(port.family))
+                .map(the_input_of_an_output_a_panel_writes),
+        )
         .collect();
     descriptor.outputs = manifest
         .outputs
         .iter()
-        .map(the_port_a_view_declares)
+        .map(|port| {
+            if a_panel_writes(port.family) {
+                the_port_a_view_declares(port).with_pin_declaration(carried_as_a_value(Vec::new()))
+            } else {
+                the_port_a_view_declares(port)
+            }
+        })
         .collect();
     Ok(descriptor)
+}
+
+/// The families of the outputs a panel writes: each value of one is set on the view node's input
+/// of the output's name, and published on the output.
+const FAMILIES_A_PANEL_WRITES: [PortFamily; 3] =
+    [PortFamily::Array, PortFamily::Channels, PortFamily::Records];
+
+/// Whether a panel writes an output of `family`.
+pub(crate) fn a_panel_writes(family: PortFamily) -> bool {
+    FAMILIES_A_PANEL_WRITES.contains(&family)
+}
+
+/// Why a panel never writes an output of `family`, one it does not write.
+fn why_a_panel_never_writes(family: PortFamily) -> String {
+    let [families_listed @ .., last] = FAMILIES_A_PANEL_WRITES.map(PortFamily::declaration_name);
+    format!(
+        "a client writes {} and {last} values, never {}",
+        families_listed.join(", "),
+        family.declaration_name()
+    )
+}
+
+/// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
+/// output's name, family and description, a setting read each run that takes no wire and holds
+/// no saved value, and returned to no value at Stop, since what a panel writes is live data.
+fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
+    the_port_a_view_declares(port)
+        .with_pin_declaration(carried_as_a_value(Vec::new()))
+        .with_input_mode(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun,
+        })
+        .with_lifetime(NodeValueLifetime::Reset)
+}
+
+/// Whether input `input` of a node of `node_type` is the input of an output a panel writes, on a
+/// view this stream's project brings: a setting of the name of one of the type's outputs.
+pub(crate) fn is_the_input_of_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+    input: &str,
+) -> bool {
+    node_types.is_a_view_type_of_this_streams_project(node_type)
+        && node_types.port_info(node_type).is_some_and(|ports| {
+            is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(&ports, input)
+        })
+}
+
+/// Whether input `input`, among `ports`, the ports of a view node, is the input of an output a
+/// panel writes: a setting of the name of one of the outputs.
+fn is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(
+    ports: &GraphNodePorts,
+    input: &str,
+) -> bool {
+    ports.outputs.iter().any(|output| output.name == input)
+        && ports
+            .inputs
+            .iter()
+            .any(|port| port.name == input && !port.takes_a_wire())
+}
+
+/// A port carried as a value of any type, its family alone deciding what it takes; an output so
+/// declared keeps its last message for a reader that connects later.
+fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
+    PinDeclaration {
+        pin_type: DeclaredPinType::Any,
+        flow: PinFlow::Value,
+        annotations: PinAnnotations::default(),
+        former_names,
+        may_be_unset: false,
+    }
+}
+
+/// Refuse `value`, saved on input `input` of the node named `node_name` of `node_type`, when it is
+/// the input of an output a panel writes, which holds what a panel writes, live, and no saved
+/// value; taking a value off is no refusal.
+pub(crate) fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+    node_name: &str,
+    input: &str,
+    value: Option<&JsonValue>,
+) -> std::result::Result<(), InputValueRefusal> {
+    if value.is_none() || !is_the_input_of_an_output_a_panel_writes(node_types, node_type, input) {
+        return Ok(());
+    }
+    Err(InputValueRefusal {
+        code: InputValueRefusalCode::InputTakesNoValue,
+        words: format!(
+            "input `{input}` of `{node_name}` holds what a panel writes onto its output \
+             `{input}`, live, and no saved value: it returns to no value at Stop. To fix: set it \
+             with `mode` `live`, in a transaction of value sets alone"
+        ),
+    })
+}
+
+/// `pins`, the saved values given to the node named `node_name` of `node_type`, whose ports are
+/// `ports`, without any on the input of an output a panel writes, which holds no saved value;
+/// each dropped is logged, naming the node and the input. A node of a type that is no view of
+/// this stream's project keeps every one.
+pub(crate) fn the_saved_values_without_any_on_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+    ports: &GraphNodePorts,
+    node_name: &str,
+    mut pins: serde_json::Map<String, JsonValue>,
+) -> serde_json::Map<String, JsonValue> {
+    if !node_types.is_a_view_type_of_this_streams_project(node_type) {
+        return pins;
+    }
+    pins.retain(|input, _| {
+        let holds_no_saved_value =
+            is_among_the_ports_of_a_view_the_input_of_an_output_a_panel_writes(ports, input);
+        if holds_no_saved_value {
+            tracing::warn!(
+                node = node_name,
+                input = input.as_str(),
+                "a saved value on an input that holds only what a panel writes live is dropped"
+            );
+        }
+        !holds_no_saved_value
+    });
+    pins
 }
 
 /// The config schema a node of a view takes: the view's `settings`, closed to the settings it
@@ -125,13 +262,6 @@ pub(crate) const THE_FAMILY_A_GRAPH_INPUT_DECLARES: PortFamily = PortFamily::Rec
 pub(crate) fn the_node_type_of_a_top_level_graph_input() -> Result<NodeDescriptor> {
     let mut value_family = PortFamilyDeclaration::of_family(THE_FAMILY_A_GRAPH_INPUT_DECLARES);
     value_family.family_from_config_key = Some(GRAPH_INTERFACE_FAMILY_CONFIG_KEY.to_string());
-    let carried_as_a_value = |former_names: Vec<String>| PinDeclaration {
-        pin_type: DeclaredPinType::Any,
-        flow: PinFlow::Value,
-        annotations: PinAnnotations::default(),
-        former_names,
-        may_be_unset: false,
-    };
     let mut descriptor = NodeDescriptor::new(
         NodeClassShortName::new("GraphInput".to_string())
             .map_err(|refusal| Error::Configuration(refusal.to_string()))?,
@@ -176,10 +306,10 @@ fn the_value_family_declared(descriptor: &NodeDescriptor) -> Result<PortFamilyDe
     }
 }
 
-/// The node that is the source of the values a client sets: a stream's top-level `GraphInput`,
-/// which publishes the value its `value` input reads on its `value` output, once as it is handed
-/// its values when it starts and again each time it changes, and a view node, onto whose outputs
-/// a panel writes and which sends a reader that connects later the value each output carries.
+/// The node that is the source of the values a client sets, a stream's top-level `GraphInput` or a
+/// view node: it publishes the value each input of the name of one of its outputs reads on that
+/// output, once as it is handed its values when it starts and again each time one changes. Each
+/// output is a value, which keeps its last message for a reader that connects later.
 pub(crate) struct ValueSourceNode {
     node_name: String,
     descriptor: NodeDescriptor,
@@ -189,18 +319,6 @@ pub(crate) struct ValueSourceNode {
     next_start_sample_of_each_channels_output: HashMap<String, u64>,
     output_writer: Option<OutputWriter>,
     input_mailboxes: Option<InputMailboxes>,
-    kind: ValueSourceKind,
-}
-
-/// Which node a [`ValueSourceNode`] is, which decides where the values a client sets go.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ValueSourceKind {
-    /// A stream's top-level `GraphInput`: each input value is published on its same-named
-    /// output, which keeps its last message for a reader that connects later.
-    TopLevelGraphInput,
-    /// A view node: a panel writes onto its outputs, and each reader that connects later is
-    /// handed the value each output carries.
-    ViewNode,
 }
 
 impl ValueSourceNode {
@@ -216,10 +334,7 @@ impl ValueSourceNode {
         for port in descriptor.inputs.iter_mut().chain(&mut descriptor.outputs) {
             port.family = PortFamilyDeclaration::of_family(family);
         }
-        Ok(Self {
-            kind: ValueSourceKind::TopLevelGraphInput,
-            ..Self::for_the_node(node, descriptor)
-        })
+        Ok(Self::for_the_node(node, descriptor))
     }
 
     pub(crate) fn for_the_node(node: &GraphNode, descriptor: NodeDescriptor) -> Self {
@@ -243,12 +358,11 @@ impl ValueSourceNode {
             next_start_sample_of_each_channels_output: HashMap::new(),
             output_writer: None,
             input_mailboxes: None,
-            kind: ValueSourceKind::ViewNode,
         }
     }
 
     /// Publish `value` on output `port`, stamped with stream time now, as its family carries it.
-    pub(crate) fn publish_a_value_written_onto_an_output(
+    fn publish_a_value_written_onto_an_output(
         &mut self,
         port: &str,
         value: &JsonValue,
@@ -268,11 +382,12 @@ impl ValueSourceNode {
         let (payload_descriptor, payload) =
             the_message_a_value_written_onto_an_output_is(family, value, next_start_sample)
                 .map_err(|why| {
-                    Error::PortError(format!(
-                        "output `{port}` of node `{}` carries {}, and {why}",
-                        self.node_name,
-                        family.declaration_name()
-                    ))
+                    the_refusal_of_a_value_an_output_does_not_carry(
+                        &self.node_name,
+                        port,
+                        family,
+                        &why,
+                    )
                 })?;
         let output_writer = self.output_writer.as_ref().ok_or_else(|| {
             Error::Runtime(format!(
@@ -300,11 +415,14 @@ impl ValueSourceNode {
     }
 
     /// Publish the value each input of `input_values` names reads on its output of the same
-    /// name, where it differs from what that output carries; an output whose input reads nothing
-    /// now keeps what it carries. Answers the values of the inputs no output is named after.
+    /// name: every value of an input of `set_live`, which a client has just set, each set being
+    /// one message, and the value of any other input where it differs from what its output
+    /// carries; an output whose input reads nothing now keeps what it carries. Answers the values
+    /// of the inputs no output is named after.
     fn publish_each_input_value_on_its_output(
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
+        set_live: &[String],
     ) -> Result<serde_json::Map<String, JsonValue>> {
         let mut read_by_an_input_alone = serde_json::Map::new();
         for (input, value) in input_values {
@@ -312,32 +430,13 @@ impl ValueSourceNode {
                 read_by_an_input_alone.insert(input.clone(), value.clone());
                 continue;
             }
-            if self.current_value_of_each_output.get(input) != Some(value) {
+            if set_live.contains(input)
+                || self.current_value_of_each_output.get(input) != Some(value)
+            {
                 self.publish_a_value_written_onto_an_output(input, value)?;
             }
         }
         Ok(read_by_an_input_alone)
-    }
-
-    /// Publish the value each output carries again where a reader now connected missed it.
-    fn hand_each_current_value_to_a_reader_it_has_not_reached(&mut self) -> Result<()> {
-        let Some(output_writer_inner) = self
-            .output_writer
-            .as_ref()
-            .and_then(OutputWriter::inner_arc)
-        else {
-            return Ok(());
-        };
-        let outputs_a_reader_missed: Vec<(String, JsonValue)> = self
-            .current_value_of_each_output
-            .iter()
-            .filter(|(port, _)| output_writer_inner.has_a_reader_the_last_write_missed(port))
-            .map(|(port, value)| (port.clone(), value.clone()))
-            .collect();
-        for (port, value) in outputs_a_reader_missed {
-            self.publish_a_value_written_onto_an_output(&port, &value)?;
-        }
-        Ok(())
     }
 
     fn take_every_waiting_input_message(&self) -> Result<()> {
@@ -354,13 +453,27 @@ impl ValueSourceNode {
     }
 }
 
-fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
+pub(crate) fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
     let mut names: Vec<String> = names.map(|name| format!("`{name}`")).collect();
     if names.is_empty() {
         return "none".to_string();
     }
     names.sort();
     names.join(", ")
+}
+
+/// The refusal of a value output `port` of the node named `node_name`, of `family`, does not
+/// carry, for `why`.
+pub(crate) fn the_refusal_of_a_value_an_output_does_not_carry(
+    node_name: &str,
+    port: &str,
+    family: PortFamily,
+    why: &str,
+) -> Error {
+    Error::PortError(format!(
+        "output `{port}` of node `{node_name}` carries {}, and {why}",
+        family.declaration_name()
+    ))
 }
 
 /// The message `value`, written onto an output of `family`, is sent as: a Records output takes
@@ -384,10 +497,7 @@ pub(crate) fn the_message_a_value_written_onto_an_output_is(
         }
         PortFamily::Array => the_array_frame_of_a_value(value),
         PortFamily::Channels => the_channels_block_of_a_value(value, next_start_sample),
-        PortFamily::Image | PortFamily::Packets => Err(format!(
-            "a client writes Array, Channels and Records values, never {}",
-            family.declaration_name()
-        )),
+        PortFamily::Image | PortFamily::Packets => Err(why_a_panel_never_writes(family)),
     }
 }
 
@@ -573,13 +683,7 @@ impl DynGeneratedNode for ValueSourceNode {
     }
 
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.take_every_waiting_input_message()?;
-        match self.kind {
-            ValueSourceKind::TopLevelGraphInput => Ok(()),
-            ValueSourceKind::ViewNode => {
-                self.hand_each_current_value_to_a_reader_it_has_not_reached()
-            }
-        }
+        self.take_every_waiting_input_message()
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -651,12 +755,16 @@ impl DynGeneratedNode for ValueSourceNode {
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
-        let read_by_an_input_alone = match self.kind {
-            ValueSourceKind::TopLevelGraphInput => {
-                std::borrow::Cow::Owned(self.publish_each_input_value_on_its_output(input_values)?)
-            }
-            ValueSourceKind::ViewNode => std::borrow::Cow::Borrowed(input_values),
-        };
+        self.set_unlinked_input_values_naming_those_set_live(input_values, &[])
+    }
+
+    fn set_unlinked_input_values_naming_those_set_live(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+        set_live: &[String],
+    ) -> Result<()> {
+        let read_by_an_input_alone =
+            self.publish_each_input_value_on_its_output(input_values, set_live)?;
         land_the_unlinked_input_values_in_the_input_mailboxes(
             self.iceoryx2_input_mailboxes_inner(),
             &read_by_an_input_alone,

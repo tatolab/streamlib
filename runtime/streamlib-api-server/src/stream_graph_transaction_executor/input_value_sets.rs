@@ -70,27 +70,50 @@ impl StreamGraphTransactionExecutor<'_> {
                     name,
                     config,
                     pins,
-                    label: Some(label),
+                    label,
                     ..
                 } => {
-                    let mut input_values = Map::new();
-                    fold_into_input_values(
-                        &mut input_values,
-                        pins.clone().unwrap_or_default(),
-                        config.clone().unwrap_or_default(),
-                    );
-                    node_as_the_transaction_leaves_it.insert(
-                        (stream_id.clone(), level.clone(), label.clone()),
-                        StreamGraphDocumentNode {
-                            id: Uuid::nil(),
-                            name: name.clone().unwrap_or_else(|| label.clone()),
-                            node_type: node_type.clone(),
-                            input_values,
-                            exposed_config_fields: Vec::new(),
-                            studio: Box::default(),
-                            fragment: None,
-                        },
-                    );
+                    if let Some(stream) = staged.streams.get(stream_id)
+                        && let Ok(added_type) = NodeClassImportPath::new(node_type)
+                    {
+                        let added_name = name.as_deref().or(label.as_deref()).unwrap_or(node_type);
+                        for (input, value) in pins.iter().flatten() {
+                            stream
+                                .stream_operations
+                                .refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+                                    &added_type,
+                                    added_name,
+                                    input,
+                                    Some(value).filter(|value| !value.is_null()),
+                                )
+                                .map_err(|refusal| {
+                                    refused(GraphRequestRefusal::of_an_input_value(
+                                        refusal,
+                                        Some(format!("/pins/{input}")),
+                                    ))
+                                })?;
+                        }
+                    }
+                    if let Some(label) = label {
+                        let mut input_values = Map::new();
+                        fold_into_input_values(
+                            &mut input_values,
+                            pins.clone().unwrap_or_default(),
+                            config.clone().unwrap_or_default(),
+                        );
+                        node_as_the_transaction_leaves_it.insert(
+                            (stream_id.clone(), level.clone(), label.clone()),
+                            StreamGraphDocumentNode {
+                                id: Uuid::nil(),
+                                name: name.clone().unwrap_or_else(|| label.clone()),
+                                node_type: node_type.clone(),
+                                input_values,
+                                exposed_config_fields: Vec::new(),
+                                studio: Box::default(),
+                                fragment: None,
+                            },
+                        );
+                    }
                     continue;
                 }
                 StreamGraphAction::SetNodeInputValue { level, node, .. }

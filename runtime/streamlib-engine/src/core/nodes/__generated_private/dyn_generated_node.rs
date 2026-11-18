@@ -116,6 +116,16 @@ pub trait DynGeneratedNode: Send + 'static {
         )
     }
 
+    /// Take `input_values` as [`Self::set_unlinked_input_values`] does, where each input of
+    /// `set_live` was just set live by a client; by default a node takes them alike.
+    fn set_unlinked_input_values_naming_those_set_live(
+        &mut self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+        _set_live: &[String],
+    ) -> Result<()> {
+        self.set_unlinked_input_values(input_values)
+    }
+
     fn to_runtime_json(&self) -> serde_json::Value;
 
     /// Get the current config as JSON.

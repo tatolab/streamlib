@@ -93,7 +93,13 @@ impl<'a> TraversalSourceMut<'a> {
         if let Some(node_uuid) = spec.node_uuid {
             node.node_uuid = node_uuid;
         }
-        node.pins = node.ports.input_values_under_the_current_names(spec.pins);
+        node.pins = crate::core::nodes::the_saved_values_without_any_on_an_output_a_panel_writes(
+            node_types,
+            &node.node_type,
+            &node.ports,
+            &node.display_name,
+            node.ports.input_values_under_the_current_names(spec.pins),
+        );
         node.exposed_config_fields = spec.exposed_config_fields;
         node.studio = spec.studio;
 

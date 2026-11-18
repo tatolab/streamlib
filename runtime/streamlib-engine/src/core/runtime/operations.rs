@@ -94,14 +94,27 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
-    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
-    /// with `None` taking it off, when the input does not take it, as this stream resolves the
-    /// type; `input_values_after_the_set` are every input value the node holds once it is made.
+    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`
+    /// and held on the graph, with `None` taking it off, when the input does not take it, as this
+    /// stream resolves the type: among them a value on the input of an output a panel writes,
+    /// which holds no saved value; `input_values_after_the_set` are every input value the node
+    /// holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
         node_name: &str,
         input_values_after_the_set: &serde_json::Map<String, serde_json::Value>,
+        input: &str,
+        value: Option<&serde_json::Value>,
+    ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
+
+    /// Refuse `value`, saved on input `input` of the node named `node_name` of type `node_type`,
+    /// when that input is the input of an output a panel writes, which holds what a panel writes,
+    /// live, and no saved value; taking a value off is no refusal.
+    fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+        &self,
+        node_type: &NodeClassImportPath,
+        node_name: &str,
         input: &str,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal>;
@@ -153,15 +166,18 @@ pub trait RuntimeOperations: Send + Sync {
         process_id_of_the_viewer: Option<u32>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
-    /// Hand `value` to the view node whose UUID, as `graph` lists it under `id`, is `node_id`,
-    /// which publishes it on its output `port_name` as that port's family carries it. Live data:
-    /// nothing is recorded, and the last value written is what a reader keeps.
-    fn write_a_value_onto_an_output_of_a_view_node(
+    /// The UUID of the running view node whose UUID, as `graph` lists it under `id`, is
+    /// `node_id`, and one of whose outputs a panel writes `value` onto, as `port_name`: the node
+    /// whose input of that output's name the write sets, live, which it publishes on the output.
+    /// Refused while the stream is stopped; for a node not of a view type, not running, or with
+    /// no such output; and for a value no panel writes there: any onto an Image or Packets
+    /// output, and `null`.
+    fn the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
         value: serde_json::Value,
-    ) -> BoxFuture<'_, Result<()>>;
+    ) -> BoxFuture<'_, Result<uuid::Uuid>>;
 
     /// The top-level `GraphInput` declaring the stream's input `input_name`, whose `value` input
     /// a set naming no node sets, and why its node does not run while the stream's playback is
