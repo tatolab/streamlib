@@ -77,3 +77,43 @@ fn an_unknown_method_and_unknown_params_are_refused_by_name() {
         }
     ));
 }
+
+#[test]
+fn a_graph_edit_names_its_stream_by_its_stream_id_or_by_its_stream_assets_uuid() {
+    use streamlib_project_repository::GraphEditStream;
+
+    let stream_asset = uuid::Uuid::new_v4();
+    let Ok(ControlOperationCall::Transact(transact)) = ControlOperationCall::parse(
+        "transact",
+        Some(serde_json::json!({ "operations": [
+            { "operation": "remove_node", "stream": "main-0a1b2c", "node": "camera" },
+            { "operation": "remove_node", "stream": stream_asset, "node": "camera" },
+        ] })),
+    ) else {
+        panic!("a transact naming a stream by either name parses");
+    };
+    assert_eq!(
+        transact
+            .operations
+            .iter()
+            .map(|operation| operation.stream().clone())
+            .collect::<Vec<_>>(),
+        [
+            GraphEditStream::StreamId("main-0a1b2c".to_owned()),
+            GraphEditStream::StreamAsset(stream_asset),
+        ]
+    );
+    let Ok(ControlOperationCall::SetNodeInputValue(set)) = ControlOperationCall::parse(
+        "set_node_input_value",
+        Some(
+            serde_json::json!({ "stream": "main-0a1b2c", "node": "camera",
+                                 "input": "gain", "value": 1.0 }),
+        ),
+    ) else {
+        panic!("set_node_input_value naming a stream by its stream id parses");
+    };
+    assert_eq!(
+        set.stream,
+        GraphEditStream::StreamId("main-0a1b2c".to_owned())
+    );
+}

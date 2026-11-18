@@ -26,8 +26,9 @@ use streamlib_control_contract::{
     SubscribeStreamGraphChangesResult,
 };
 use streamlib_project_repository::{
-    ProjectRepositoriesOpenInThisRuntime, ProjectRepository, ProjectRepositoryRefusal,
-    ProjectTransactionAuthor, ProjectTransactionAuthorKind, StreamGraphAction,
+    GraphEditStream, ProjectRepositoriesOpenInThisRuntime, ProjectRepository,
+    ProjectRepositoryRefusal, ProjectTransactionAuthor, ProjectTransactionAuthorKind,
+    StreamGraphAction,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     AssetTransactionToolResult, CancelStreamActionToolResult, CaptureDeviceOnTheWire,
@@ -766,7 +767,7 @@ impl ControlOperationDispatcher {
     pub(crate) async fn apply_a_graph_transaction(
         &self,
         action_name: &'static str,
-        operations: Vec<StreamGraphAction>,
+        operations: Vec<StreamGraphAction<GraphEditStream>>,
         mode: Option<GraphEditMode>,
         author: Option<ProjectTransactionAuthorArgument>,
         idempotency_key: Option<String>,
@@ -788,13 +789,19 @@ impl ControlOperationDispatcher {
                 .iter()
                 .map(|operation| serde_json::to_value(operation).unwrap_or_default())
                 .collect();
-            let stream_assets_named: Vec<Uuid> =
-                operations.iter().map(StreamGraphAction::stream).collect();
+            let mut stream_assets_named: Vec<Uuid> = Vec::new();
             let (idempotency_key, applied) =
                 match the_idempotency_key_a_caller_sent(idempotency_key) {
                     Ok(idempotency_key) => {
-                        let applied =
-                            executor.apply(operations, mode, &author, idempotency_key.as_ref());
+                        let applied = executor
+                            .each_operation_to_the_stream_asset_it_names(operations)
+                            .and_then(|operations| {
+                                stream_assets_named = operations
+                                    .iter()
+                                    .map(|operation| *operation.stream())
+                                    .collect();
+                                executor.apply(operations, mode, &author, idempotency_key.as_ref())
+                            });
                         (idempotency_key, applied)
                     }
                     Err(refusal) => (None, Err(GraphTransactionRefusal::from(refusal))),

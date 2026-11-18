@@ -1,0 +1,238 @@
+// Copyright (c) 2025 Tatolab LLC
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Every graph edit names its stream by the stream id `list_streams` answers or by its stream
+//! asset's UUID: an edit sent by either records one action, under the stream asset's UUID, whose
+//! undo works once the project is loaded again; and a stream id the runtime holds no stream
+//! under is refused with `stream_not_found`, naming the streams it holds.
+
+use super::*;
+
+/// The answer of the graph edit `tool_name` sent `arguments` by alice, failing the test on a
+/// refusal.
+async fn the_edit_applied(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    tool_name: &str,
+    mut arguments: Value,
+) -> Value {
+    arguments["author"] = an_agent_named("alice");
+    engine
+        .the_answer_or_the_refusal_of(tool_name, arguments)
+        .await
+        .unwrap_or_else(|refusal| panic!("{tool_name} is refused: {refusal:?}"))
+}
+
+/// The actions history records in its newest `count` transactions, oldest first.
+fn the_actions_recorded_oldest_first(
+    project: &ProjectWithGraphDocuments,
+    count: usize,
+) -> Vec<Value> {
+    streamlib_project_repository::ProjectRepository::open(project.path())
+        .expect("the project opens")
+        .applied_transactions_newest_first(count)
+        .expect("history reads")
+        .into_iter()
+        .rev()
+        .map(|applied| serde_json::to_value(&applied.transaction.actions).unwrap())
+        .collect()
+}
+
+/// Each graph edit sent the stream id `list_streams` answers applies to that stream: a node
+/// added and linked, renamed, moved, grouped, noted, unlinked and taken out, each alone and
+/// inside `transact`, and every edit recorded under the stream asset's UUID.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_graph_edit_takes_the_stream_id_list_streams_answers() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let sink_type = StreamToolsTestSink::node_class_import_path();
+
+    let added = the_edit_applied(
+        &engine,
+        "add_node",
+        json!({ "stream": stream_id, "type": sink_type.as_str(), "name": "monitor" }),
+    )
+    .await;
+    assert_eq!(added["added_nodes"][0]["stream"], stream_id, "{added}");
+    let monitor = added["added_nodes"][0]["node"]
+        .as_str()
+        .expect("add_node answers the node's UUID")
+        .to_owned();
+    let link = json!({ "stream": stream_id,
+                       "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+                       "target": { "node": monitor, "port": "video" } });
+    let connected = the_edit_applied(&engine, "connect", link.clone()).await;
+    assert_eq!(connected["connected_links"][0]["stream"], stream_id);
+    the_edit_applied(
+        &engine,
+        "rename_node",
+        json!({ "stream": stream_id, "node": SOURCE_NODE_UUID, "name": "camera" }),
+    )
+    .await;
+    the_edit_applied(
+        &engine,
+        "set_studio_fields",
+        json!({ "stream": stream_id, "node": SOURCE_NODE_UUID,
+                "studio": { "position": [120, 40] } }),
+    )
+    .await;
+    let grouped = the_edit_applied(
+        &engine,
+        "add_group",
+        json!({ "stream": stream_id, "title": "sources", "nodes": [SOURCE_NODE_UUID] }),
+    )
+    .await;
+    let group = grouped["added_groups"][0]["group"].as_str().unwrap();
+    the_edit_applied(
+        &engine,
+        "set_group_fields",
+        json!({ "stream": stream_id, "group": group, "title": "cameras" }),
+    )
+    .await;
+    the_edit_applied(
+        &engine,
+        "remove_group",
+        json!({ "stream": stream_id, "group": group }),
+    )
+    .await;
+    let noted = the_edit_applied(
+        &engine,
+        "add_note",
+        json!({ "stream": stream_id, "text": "check the exposure",
+                "position": [40, 300], "size": [240, 120] }),
+    )
+    .await;
+    let note = noted["added_notes"][0]["note"].as_str().unwrap();
+    the_edit_applied(
+        &engine,
+        "set_note_fields",
+        json!({ "stream": stream_id, "note": note, "text": "check the focus" }),
+    )
+    .await;
+    the_edit_applied(
+        &engine,
+        "remove_note",
+        json!({ "stream": stream_id, "note": note }),
+    )
+    .await;
+    the_edit_applied(&engine, "disconnect", link).await;
+    the_edit_applied(
+        &engine,
+        "remove_node",
+        json!({ "stream": stream_id, "node": monitor }),
+    )
+    .await;
+    let transacted = the_edit_applied(
+        &engine,
+        "transact",
+        json!({ "operations": [
+            { "operation": "add_node", "stream": stream_id, "type": sink_type.as_str(),
+              "name": "spare", "as": "spare" },
+            { "operation": "connect", "stream": stream_id,
+              "source": { "node": SOURCE_NODE_UUID, "port": "video" },
+              "target": { "node": "spare", "port": "video" } },
+        ] }),
+    )
+    .await;
+    assert_eq!(transacted["added_nodes"][0]["stream"], stream_id);
+
+    let kept = project.the_graph_document_of("main");
+    assert_eq!(sorted_node_names_in(&kept), ["camera", "spare"], "{kept}");
+    assert_eq!(
+        links_by_node_name_in(&kept),
+        ["camera/video -> spare/video"]
+    );
+    let live = engine.the_live_graph_of(&stream_id);
+    assert_eq!(sorted_node_names_in(&live), ["camera", "spare"], "{live}");
+    for action in the_actions_recorded_oldest_first(&project, 14)
+        .iter()
+        .flat_map(|actions| actions.as_array().cloned().unwrap_or_default())
+    {
+        assert_eq!(action["stream"], stream_asset.to_string(), "{action}");
+    }
+}
+
+/// An `add_node` sent by the stream id records the action the same `add_node` sent by the
+/// stream asset's UUID records, and the undo of the one sent by id, made by a runtime that
+/// loaded the project again, takes the node out.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_edit_sent_by_id_records_the_action_sent_by_uuid_and_undoes_after_a_reload() {
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_asset = project.stream_asset_of("main");
+    let sink_type = StreamToolsTestSink::node_class_import_path();
+    let add_the_monitor =
+        |stream: Value| json!({ "stream": stream, "type": sink_type.as_str(), "name": "monitor" });
+    {
+        let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+        let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+        the_edit_applied(&engine, "add_node", add_the_monitor(json!(stream_asset))).await;
+        the_edit_applied(
+            &engine,
+            "undo",
+            json!({ "project_directory": project.path() }),
+        )
+        .await;
+        the_edit_applied(&engine, "add_node", add_the_monitor(json!(stream_id))).await;
+    }
+    let recorded = the_actions_recorded_oldest_first(&project, 3);
+    assert_eq!(recorded.len(), 3, "{recorded:?}");
+    assert_eq!(recorded[0], recorded[2], "{recorded:?}");
+    assert_eq!(recorded[2][0]["stream"], stream_asset.to_string());
+
+    let reloaded = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let reloaded_stream_id = reloaded.a_stream_loaded_from_its_graph_document(&project, "main");
+    assert_eq!(
+        sorted_node_names_in(&reloaded.the_live_graph_of(&reloaded_stream_id)),
+        ["monitor", "source"]
+    );
+    the_edit_applied(
+        &reloaded,
+        "undo",
+        json!({ "project_directory": project.path() }),
+    )
+    .await;
+    assert_eq!(
+        sorted_node_names_in(&project.the_graph_document_of("main")),
+        ["source"]
+    );
+    assert_eq!(
+        sorted_node_names_in(&reloaded.the_live_graph_of(&reloaded_stream_id)),
+        ["source"]
+    );
+}
+
+/// A stream id the runtime holds no stream under is refused with `stream_not_found`, at the
+/// operation that names it, in words naming the streams the runtime holds; nothing is saved.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stream_id_no_stream_is_held_under_is_refused_naming_the_streams_held() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_one_source();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let saved_before = project.the_graph_document_of("main");
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "author": an_agent_named("alice"), "operations": [
+                { "operation": "rename_node", "stream": stream_id,
+                  "node": SOURCE_NODE_UUID, "name": "camera" },
+                { "operation": "rename_node", "stream": "nowhere-0a1b2c",
+                  "node": SOURCE_NODE_UUID, "name": "lens" },
+            ] }),
+        )
+        .await
+        .expect_err("a stream id no stream is held under is refused");
+    assert_eq!(
+        refusal.refusal_code,
+        streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode::StreamNotFound,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(1), "{refusal:?}");
+    assert!(
+        refusal.runtime_words.contains("`nowhere-0a1b2c`")
+            && refusal.runtime_words.contains(&format!("`{stream_id}`")),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+}

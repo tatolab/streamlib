@@ -157,7 +157,7 @@ def link_end(node_uuid: str, port: str) -> "dict[str, str]":
 def add_node_live(local_api: LocalApiClient, stream_id: str, arguments: dict) -> "dict[str, str]":
     """Add a node to the running stream alone, and answer its `node` UUID and `name`."""
     answered = local_api.call_tool(
-        "add_node", {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+        "add_node", {**arguments, "stream": stream_id, "mode": "live"}
     )
     (added,) = answered["added_nodes"]
     return added
@@ -173,7 +173,7 @@ def connect_live(
     local_api.call_tool(
         "connect",
         {
-            "stream": local_api.stream_asset_of(stream_id),
+            "stream": stream_id,
             "source": source,
             "target": target,
             "mode": "live",
@@ -395,7 +395,7 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
     local_api.call_tool(
         "disconnect",
         {
-            "stream": local_api.stream_asset_of(stream_id),
+            "stream": stream_id,
             "source": link_end(pattern["id"], "video"),
             "target": link_end(added["node"], "video_from_upstream"),
             "mode": "live",
@@ -416,7 +416,7 @@ def test_a_node_written_after_launch_is_added_wired_and_removed_live(
 
     removed = local_api.call_tool(
         "remove_node",
-        {"stream": local_api.stream_asset_of(stream_id), "node": added["node"], "mode": "live"},
+        {"stream": stream_id, "node": added["node"], "mode": "live"},
     )
     assert [operation["operation"] for operation in removed["operations"]] == ["remove_node"]
     graph_after_remove = local_api.call_tool("graph", {"stream": stream_id})
@@ -556,7 +556,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     refusal = local_api.call_tool_refusal(
         "add_node",
         {
-            "stream": local_api.stream_asset_of(stream_id),
+            "stream": stream_id,
             "type": "nodes.no_such_module:Missing",
             "mode": "live",
         },
@@ -572,7 +572,7 @@ def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     port_refusal = local_api.call_tool_refusal(
         "connect",
         {
-            "stream": local_api.stream_asset_of(stream_id),
+            "stream": stream_id,
             "source": link_end(pattern["id"], "no_such_port"),
             "target": link_end(pattern["id"], "video"),
             "mode": "live",

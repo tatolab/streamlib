@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::StudioCanvasPair;
 
 /// How a graph action's `stream` is described to its caller.
-pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The stream the edit is to, by its stream asset's UUID: the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A stream asset no loaded stream runs is refused naming the loaded ones.";
+pub const GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION: &str = "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds.";
 /// How a graph action's `level` is described to its caller.
 pub const GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION: &str = "The subgraph the edit is inside, as the path of fragment node UUIDs from the stream's own level inward, each one `graph` lists as an `id` at the level before it; omit it, or send `[]`, for the stream's own level. Each node on the path places a stream of the project, and the edit is made on the document of the stream the last one places, which every stream placing it takes; the edit is made with `mode` `commit`. A graph generator's output is refused until `unlock_subgraph`, and a stream placed from an import is edited in the import's own project.";
 /// How a graph action's `node` is described to its caller.
@@ -75,15 +75,82 @@ pub struct StreamGraphActionLinkEnd {
     pub port: String,
 }
 
+/// The stream a graph edit is to, as its caller named it: by the stream id `list_streams`
+/// answers, or by its stream asset's UUID. One string on the wire: a string in UUID form names
+/// the stream asset, and any other a stream id, since a stream id the runtime makes ends in six
+/// hex digits where a UUID ends in twelve.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GraphEditStream {
+    /// The stream asset, by the UUID its graph document holds as `asset`.
+    StreamAsset(Uuid),
+    /// The stream, by the stream id `list_streams` answers.
+    StreamId(String),
+}
+
+impl From<Uuid> for GraphEditStream {
+    fn from(stream_asset: Uuid) -> Self {
+        Self::StreamAsset(stream_asset)
+    }
+}
+
+impl From<String> for GraphEditStream {
+    fn from(named: String) -> Self {
+        match Uuid::parse_str(&named) {
+            Ok(stream_asset) => Self::StreamAsset(stream_asset),
+            Err(_) => Self::StreamId(named),
+        }
+    }
+}
+
+impl std::fmt::Display for GraphEditStream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StreamAsset(stream_asset) => stream_asset.fmt(formatter),
+            Self::StreamId(stream_id) => stream_id.fmt(formatter),
+        }
+    }
+}
+
+impl Serialize for GraphEditStream {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> Deserialize<'de> for GraphEditStream {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(Self::from)
+    }
+}
+
+#[cfg(feature = "mcp-tool-json-schema")]
+impl JsonSchema for GraphEditStream {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "GraphEditStream".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": "string" })
+    }
+}
+
 /// One action on a stream's graph, as every caller sends it and history records it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "mcp-tool-json-schema", derive(JsonSchema))]
+#[cfg_attr(
+    feature = "mcp-tool-json-schema",
+    schemars(rename = "StreamGraphAction")
+)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
-pub enum StreamGraphAction {
+pub enum StreamGraphAction<Stream = Uuid> {
     /// Place a node, answering the UUID the runtime makes for it.
     AddNode {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -141,7 +208,7 @@ pub enum StreamGraphAction {
     /// Take a node out, with every link it has.
     RemoveNode {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -152,7 +219,7 @@ pub enum StreamGraphAction {
     /// with no `PreviousValue` node in it adds one and runs through it.
     Connect {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -170,7 +237,7 @@ pub enum StreamGraphAction {
     /// Take out the link between two ports.
     Disconnect {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -188,7 +255,7 @@ pub enum StreamGraphAction {
     /// Replace a node's config whole.
     SetNodeConfig {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -205,7 +272,7 @@ pub enum StreamGraphAction {
     /// Set the value on one of a node's inputs.
     SetPinValue {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -230,7 +297,7 @@ pub enum StreamGraphAction {
     /// Give a node another name.
     RenameNode {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -247,7 +314,7 @@ pub enum StreamGraphAction {
     /// Replace a node's studio fields whole.
     SetStudioFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -265,7 +332,7 @@ pub enum StreamGraphAction {
     /// refresh the fragment of that name with a fresh run.
     ImportGraphGenerator {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = IMPORT_GRAPH_GENERATOR_GENERATOR_ARGUMENT_DESCRIPTION))]
         generator: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = IMPORT_GRAPH_GENERATOR_NAME_ARGUMENT_DESCRIPTION))]
@@ -287,7 +354,7 @@ pub enum StreamGraphAction {
     /// Replace the config fields a node takes as inputs whole.
     SetExposedConfigFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -299,7 +366,7 @@ pub enum StreamGraphAction {
     /// Make a labelled group of nodes of one level of the stream.
     AddGroup {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -322,7 +389,7 @@ pub enum StreamGraphAction {
     /// Set a labelled group's title, description or colour.
     SetGroupFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -341,7 +408,7 @@ pub enum StreamGraphAction {
     /// Place a stream of an imported project as a fragment node referencing it.
     UseDependencyStream {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = DEPENDENCY_PROJECT_ARGUMENT_DESCRIPTION))]
         project: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = DEPENDENCY_STREAM_ARGUMENT_DESCRIPTION))]
@@ -364,7 +431,7 @@ pub enum StreamGraphAction {
     /// the selection carried through a `GraphInput` or `GraphOutput` of the new stream.
     CollapseSelectionIntoSubgraph {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -396,7 +463,7 @@ pub enum StreamGraphAction {
     /// plain nodes no refresh or edit of a placed stream reaches.
     UnlockSubgraph {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -411,7 +478,7 @@ pub enum StreamGraphAction {
     /// Place a canvas note on the stream's graph, answering the UUID the runtime makes for it.
     AddNote {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
         text: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_POSITION_ARGUMENT_DESCRIPTION, with = "[f64; 2]"))]
@@ -422,7 +489,7 @@ pub enum StreamGraphAction {
     /// Set a canvas note's text, position or size.
     SetNoteFields {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
         note: String,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_TEXT_ARGUMENT_DESCRIPTION))]
@@ -438,14 +505,14 @@ pub enum StreamGraphAction {
     /// Take a canvas note off the stream's graph.
     RemoveNote {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = NOTE_ARGUMENT_DESCRIPTION))]
         note: String,
     },
     /// Take out a labelled group, its nodes left ungrouped.
     RemoveGroup {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -456,7 +523,7 @@ pub enum StreamGraphAction {
     /// input reads its declared default.
     SetNodeInputValue {
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_STREAM_ARGUMENT_DESCRIPTION))]
-        stream: Uuid,
+        stream: Stream,
         #[cfg_attr(feature = "mcp-tool-json-schema", schemars(description = GRAPH_EDIT_LEVEL_ARGUMENT_DESCRIPTION))]
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         level: Vec<Uuid>,
@@ -473,7 +540,7 @@ pub enum StreamGraphAction {
 /// What a node's `exposed_config_fields` are, as every tool that takes them says.
 pub const EXPOSED_CONFIG_FIELDS_ARGUMENT_DESCRIPTION: &str = "The config fields the node takes as inputs too, each a number or bool field of its config schema, shown as an input of the field's name. A link into one drives the field: a function node reads it at each evaluation, a process node takes each new value as a live config update. Unlinked, it reads the node's config.";
 
-impl StreamGraphAction {
+impl<Stream> StreamGraphAction<Stream> {
     /// The path of fragment nodes, from the stream's own level inward, whose inside the action
     /// edits; empty for the stream's own level.
     pub fn level(&self) -> &[Uuid] {
@@ -501,8 +568,8 @@ impl StreamGraphAction {
         }
     }
 
-    /// The stream asset whose graph the action is to.
-    pub fn stream(&self) -> Uuid {
+    /// The stream whose graph the action is to.
+    pub fn stream(&self) -> &Stream {
         match self {
             Self::AddNode { stream, .. }
             | Self::RemoveNode { stream, .. }
@@ -523,7 +590,246 @@ impl StreamGraphAction {
             | Self::UnlockSubgraph { stream, .. }
             | Self::AddNote { stream, .. }
             | Self::SetNoteFields { stream, .. }
-            | Self::RemoveNote { stream, .. } => *stream,
+            | Self::RemoveNote { stream, .. } => stream,
+        }
+    }
+    /// The same action, to the stream `stream`.
+    pub fn to_the_stream<Other>(self, stream: Other) -> StreamGraphAction<Other> {
+        match self {
+            Self::AddNode {
+                stream: _,
+                level,
+                node_type,
+                name,
+                config,
+                pins,
+                exposed_config_fields,
+                studio,
+                label,
+            } => StreamGraphAction::AddNode {
+                stream,
+                level,
+                node_type,
+                name,
+                config,
+                pins,
+                exposed_config_fields,
+                studio,
+                label,
+            },
+            Self::RemoveNode {
+                stream: _,
+                level,
+                node,
+            } => StreamGraphAction::RemoveNode {
+                stream,
+                level,
+                node,
+            },
+            Self::Connect {
+                stream: _,
+                level,
+                source,
+                target,
+            } => StreamGraphAction::Connect {
+                stream,
+                level,
+                source,
+                target,
+            },
+            Self::Disconnect {
+                stream: _,
+                level,
+                source,
+                target,
+            } => StreamGraphAction::Disconnect {
+                stream,
+                level,
+                source,
+                target,
+            },
+            Self::SetNodeConfig {
+                stream: _,
+                level,
+                node,
+                config,
+            } => StreamGraphAction::SetNodeConfig {
+                stream,
+                level,
+                node,
+                config,
+            },
+            Self::SetPinValue {
+                stream: _,
+                level,
+                node,
+                input,
+                value,
+            } => StreamGraphAction::SetPinValue {
+                stream,
+                level,
+                node,
+                input,
+                value,
+            },
+            Self::RenameNode {
+                stream: _,
+                level,
+                node,
+                name,
+            } => StreamGraphAction::RenameNode {
+                stream,
+                level,
+                node,
+                name,
+            },
+            Self::SetStudioFields {
+                stream: _,
+                level,
+                node,
+                studio,
+            } => StreamGraphAction::SetStudioFields {
+                stream,
+                level,
+                node,
+                studio,
+            },
+            Self::ImportGraphGenerator {
+                stream: _,
+                generator,
+                name,
+                config,
+                label,
+            } => StreamGraphAction::ImportGraphGenerator {
+                stream,
+                generator,
+                name,
+                config,
+                label,
+            },
+            Self::SetExposedConfigFields {
+                stream: _,
+                level,
+                node,
+                exposed_config_fields,
+            } => StreamGraphAction::SetExposedConfigFields {
+                stream,
+                level,
+                node,
+                exposed_config_fields,
+            },
+            Self::AddGroup {
+                stream: _,
+                level,
+                title,
+                description,
+                colour,
+                nodes,
+            } => StreamGraphAction::AddGroup {
+                stream,
+                level,
+                title,
+                description,
+                colour,
+                nodes,
+            },
+            Self::SetGroupFields {
+                stream: _,
+                level,
+                group,
+                title,
+                description,
+                colour,
+            } => StreamGraphAction::SetGroupFields {
+                stream,
+                level,
+                group,
+                title,
+                description,
+                colour,
+            },
+            Self::UseDependencyStream {
+                stream: _,
+                project,
+                dependency_stream,
+                name,
+                label,
+            } => StreamGraphAction::UseDependencyStream {
+                stream,
+                project,
+                dependency_stream,
+                name,
+                label,
+            },
+            Self::CollapseSelectionIntoSubgraph {
+                stream: _,
+                level,
+                nodes,
+                name,
+                label,
+            } => StreamGraphAction::CollapseSelectionIntoSubgraph {
+                stream,
+                level,
+                nodes,
+                name,
+                label,
+            },
+            Self::UnlockSubgraph {
+                stream: _,
+                level,
+                fragment,
+            } => StreamGraphAction::UnlockSubgraph {
+                stream,
+                level,
+                fragment,
+            },
+            Self::AddNote {
+                stream: _,
+                text,
+                position,
+                size,
+            } => StreamGraphAction::AddNote {
+                stream,
+                text,
+                position,
+                size,
+            },
+            Self::SetNoteFields {
+                stream: _,
+                note,
+                text,
+                position,
+                size,
+            } => StreamGraphAction::SetNoteFields {
+                stream,
+                note,
+                text,
+                position,
+                size,
+            },
+            Self::RemoveNote { stream: _, note } => StreamGraphAction::RemoveNote { stream, note },
+            Self::RemoveGroup {
+                stream: _,
+                level,
+                group,
+            } => StreamGraphAction::RemoveGroup {
+                stream,
+                level,
+                group,
+            },
+            Self::SetNodeInputValue {
+                stream: _,
+                level,
+                node,
+                input,
+                value,
+            } => StreamGraphAction::SetNodeInputValue {
+                stream,
+                level,
+                node,
+                input,
+                value,
+            },
         }
     }
 }
