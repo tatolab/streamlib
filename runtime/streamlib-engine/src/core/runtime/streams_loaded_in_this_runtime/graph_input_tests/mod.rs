@@ -367,6 +367,12 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         json!({ "level": 0.75 }),
         "a saved edit renders on the `value` input the `default` its config renders: {rendered}"
     );
+    let value_input = rendered["ports"]["inputs"]
+        .as_array()
+        .and_then(|inputs| inputs.iter().find(|input| input["name"] == VALUE))
+        .unwrap_or_else(|| panic!("the running `GraphInput` keeps its `value` input: {rendered}"));
+    assert_eq!(value_input["value"], json!({ "level": 0.75 }), "{rendered}");
+    assert_eq!(value_input["value_comes_from"], "saved", "{rendered}");
     assert_eq!(
         rendered["components"]["graph_interface"]["current_value"],
         json!({ "level": 0.75 }),

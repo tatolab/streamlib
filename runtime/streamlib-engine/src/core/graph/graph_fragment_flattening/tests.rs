@@ -322,6 +322,11 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
     assert_eq!(look.id, LOOK_UUID);
     assert_eq!(look.ports.inputs[0].name, "video");
     assert_eq!(look.ports.outputs[0].name, "video");
+    assert_eq!(
+        look.ports.inputs[0].value_read,
+        Some(the_read_of_an_input_a_link_feeds()),
+        "`camera.video` feeds `look.video`"
+    );
     let look_holds = look.fragment.as_ref().expect("look holds its fragment");
     let names: Vec<&str> = look_holds
         .nodes
@@ -338,6 +343,16 @@ fn graph_renders_each_fragment_as_a_container_inside_its_container_that_reads_ba
         .map(|node| node.name.as_str())
         .collect();
     assert_eq!(names, ["source", "blur", "tint", "out"]);
+    assert_eq!(
+        soft.ports.inputs[0].value_read,
+        Some(the_read_of_an_input_a_link_feeds()),
+        "`look`'s `source` feeds `soft`: {soft:?}"
+    );
+    assert_eq!(
+        soft_holds.nodes[3].ports.inputs[0].value_read,
+        Some(the_read_of_an_input_a_link_feeds()),
+        "`tint` feeds the `GraphOutput` `out`"
+    );
     assert_eq!(
         soft_holds.nodes[1].components["running"],
         serde_json::json!(true)

@@ -21,6 +21,7 @@ use crate::core::graph::graph_snapshot::{
     GraphSnapshot, GraphSnapshotLink, GraphSnapshotNode, refuse_a_port_the_node_does_not_have,
     the_ports_of_a_graph_document_node,
 };
+use crate::core::graph::input_values::the_read_of_an_input_a_link_feeds;
 use crate::core::graph::legacy_config_of_a_node::{
     config_of_a_node, config_of_a_node_holding_no_pin_value,
 };
@@ -134,8 +135,8 @@ pub struct GraphInterfaceNodeAsDrawn {
 
 impl GraphInterfaceNodeAsDrawn {
     /// Render this running `GraphInput` over the node `graph_response` renders for it, as an
-    /// interface node renders, keeping what it carries running; and mark each link out of it
-    /// with the port it declares.
+    /// interface node renders, keeping what it carries running and its `value` input with the
+    /// value it reads; and mark each link out of it with the port it declares.
     fn render_over_its_running_node_in(&self, graph_response: &mut GraphResponse) {
         let node_cast = cast_or_as_written(&self.node.name);
         if let Some(running_node) = graph_response
@@ -148,6 +149,8 @@ impl GraphInterfaceNodeAsDrawn {
             components.extend(rendered_as_an_interface_node.components);
             rendered_as_an_interface_node.components = components;
             rendered_as_an_interface_node.id = std::mem::take(&mut running_node.id);
+            rendered_as_an_interface_node.ports.inputs =
+                std::mem::take(&mut running_node.ports.inputs);
             *running_node = rendered_as_an_interface_node;
         }
         for link in graph_response
@@ -162,10 +165,16 @@ impl GraphInterfaceNodeAsDrawn {
         }
     }
 
-    /// The interface node as `graph` renders it, its one port of the family it declares.
+    /// The interface node as `graph` renders it, its one port of the family it declares; a
+    /// `GraphOutput`'s reads from a wire once a link feeds it.
     pub fn rendered_as_a_node(&self) -> GraphNodeOutput {
         let declared = &self.declared_port;
-        let value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        let mut value_port = declared.rendered_as_a_port_named(GRAPH_INTERFACE_VALUE_PORT_NAME);
+        if declared.direction == GraphInterfacePortDirection::Output
+            && !declared.linked_ports.is_empty()
+        {
+            value_port.value_read = Some(the_read_of_an_input_a_link_feeds());
+        }
         let (inputs, outputs) = match declared.direction {
             GraphInterfacePortDirection::Output => (vec![value_port], Vec::new()),
             GraphInterfacePortDirection::Input => (Vec::new(), vec![value_port]),
