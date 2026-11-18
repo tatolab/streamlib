@@ -182,10 +182,6 @@ serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interferenc
 tempfile = "3.14"  # Temporary directories for logging and runtime tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 trybuild = "1.0.121"
-# The control contract's schema of the `graph` answer the engine builds, which tests read the
-# keys it states from.
-schemars_1 = { package = "schemars", version = "1.2" }
-streamlib-runtime-client-contract = { path = "../streamlib-runtime-client-contract", version = "0.68.82", features = ["json-schema"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # `CATapDescription` and `AudioHardwareCreateProcessTap` for the muted process

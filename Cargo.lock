@@ -5594,7 +5594,6 @@ dependencies = [
  "rspirv-reflect",
  "rubato",
  "schemars 0.8.22",
- "schemars 1.2.2",
  "serde",
  "serde_bytes",
  "serde_json",

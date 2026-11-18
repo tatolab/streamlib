@@ -443,13 +443,10 @@ fn a_key_this_runtime_does_not_read_is_refused_from_a_json_string_too() {
 /// into the node's input values, and every spec key one the render carries.
 #[test]
 fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
-    let render_schema = serde_json::to_value(schemars_1::schema_for!(
-        crate::core::json_schema::StreamGraphOnTheWire
-    ))
-    .unwrap();
-    let definitions = render_schema
-        .get("$defs")
-        .expect("the render's schema defines its nested objects");
+    let render_schema =
+        crate::core::test_support::the_control_contract_schema_named("StreamGraphOnTheWire");
+    let node_schema =
+        crate::core::test_support::the_control_contract_schema_named("GraphNodeOnTheWire");
     let link_schema =
         serde_json::to_value(schemars::schema_for!(crate::core::json_schema::LinkOutput)).unwrap();
     let link_definitions = link_schema
@@ -466,7 +463,7 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
 
     for (object_schema, keys) in [
         (&render_schema, &GRAPH_DOCUMENT_KEYS),
-        (&definitions["GraphNodeOnTheWire"], &GRAPH_NODE_KEYS),
+        (&node_schema, &GRAPH_NODE_KEYS),
         (&link_schema, &GRAPH_LINK_KEYS),
         (&link_definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
     ] {

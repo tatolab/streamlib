@@ -761,11 +761,10 @@ fn a_stream_saved_with_one_map_of_input_values_renders_the_keys_a_published_stud
         lights["components"]["graph_interface"]["current_value"],
         json!({"level": 0.0})
     );
-    let render_schema = serde_json::to_value(schemars_1::schema_for!(
-        crate::core::json_schema::StreamGraphOnTheWire
-    ))
-    .unwrap();
-    let properties_of = |component: &str| render_schema["$defs"][component]["properties"].clone();
+    let properties_of = |component: &str| {
+        crate::core::test_support::the_control_contract_schema_named(component)["properties"]
+            .clone()
+    };
     for key in ["config", "pins", "exposed_config_fields", "components"] {
         assert!(
             properties_of("GraphNodeOnTheWire").get(key).is_some(),
