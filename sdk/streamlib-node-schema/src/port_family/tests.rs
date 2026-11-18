@@ -66,7 +66,7 @@ fn a_family_mismatch_is_refused_naming_both_endpoints_and_the_conversion() {
     .expect("an Image output never feeds an Array input");
     assert!(refusal.contains("camera.video (Image)"), "{refusal}");
     assert!(refusal.contains("model.tensor (Array)"), "{refusal}");
-    assert!(refusal.contains("ImageToArray"), "{refusal}");
+    assert!(refusal.contains("TextureToTensor"), "{refusal}");
 }
 
 #[test]

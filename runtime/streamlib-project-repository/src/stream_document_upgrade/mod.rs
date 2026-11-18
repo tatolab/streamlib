@@ -149,6 +149,24 @@ const RENAMED_NODE_TYPES: &[(&str, &str)] = &[
         "tatolab.ops.image_file:ImageFile",
         "imports/core-nodes/core_nodes.image_file:ImageFile",
     ),
+    // The built-in conversions with a typed form, named for the pin types they convert between,
+    // under the same ports and config.
+    (
+        "tatolab.stream:ImageToArray",
+        "tatolab.stream:TextureToTensor",
+    ),
+    (
+        "tatolab.stream:ArrayToImage",
+        "tatolab.stream:TensorToTexture",
+    ),
+    (
+        "tatolab.stream:ChannelsToArray",
+        "tatolab.stream:AudioToTensor",
+    ),
+    (
+        "tatolab.stream:ArrayToChannels",
+        "tatolab.stream:TensorToAudio",
+    ),
 ];
 
 /// Upgrade `document` in place to the shape this runtime writes; whether it was in an older one.

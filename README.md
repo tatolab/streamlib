@@ -445,7 +445,7 @@ No package extends the runtime — there is no plugin ABI, no manifest and no lo
 an ordinary `pyproject.toml`.
 
 **It costs you** no media node in the runtime: its built-ins only reshape data between families
-(`ChannelsToRecords`, `ImageToArray` and the like). Every media node is a package, the MoQ gateway
+(`ChannelsToRecords`, `TextureToTensor` and the like). Every media node is a package, the MoQ gateway
 nodes (`tatolab-moq`) among them, and anything else is a package or a node you write.
 
 </details>

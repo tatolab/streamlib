@@ -323,18 +323,18 @@ fn an_image_frame_reads_back_claimed_and_writes_on_as_the_same_frame() {
     );
 }
 
-/// `ImageToArray` borrows an Image frame's pool slot as its one Array
+/// `TextureToTensor` borrows an Image frame's pool slot as its one Array
 /// attribute: the attribute a reader claims exports the very address the
 /// Image frame itself does, the slot's mapping, with no copy between.
 /// Needs a Vulkan device; skips where none comes up.
 #[cfg(target_os = "linux")]
 #[test]
-fn image_to_array_borrows_the_frames_own_slot_with_no_copy() {
+fn texture_to_tensor_borrows_the_frames_own_slot_with_no_copy() {
     use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
     use streamlib::sdk::context::{GpuPoolClaimTablesOfOnePool, SurfaceStore};
     use streamlib::sdk::engine::host_rhi::{HostVulkanBuffer, HostVulkanDevice};
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
-    use streamlib_media_builtins::port_family_conversion::image_to_array::array_frame_of_the_image_frame;
+    use streamlib_media_builtins::pin_type_conversion::texture_to_tensor::array_frame_of_the_image_frame;
 
     const POOL_SLOT_KEY: &str = "image-to-array-slot";
     let host_device = match HostVulkanDevice::new() {
@@ -503,13 +503,13 @@ fn image_to_array_borrows_the_frames_own_slot_with_no_copy() {
     );
 }
 
-/// `ArrayToImage` copies a CPU `[h, w, 4]` attribute once into a pixel
+/// `TensorToTexture` copies a CPU `[h, w, 4]` attribute once into a pixel
 /// buffer of its output pool, and the Image frame it describes reads back
 /// as exactly those pixels, claimed from that buffer's slot.
 /// Needs a Vulkan device; skips where none comes up.
 #[cfg(target_os = "linux")]
 #[test]
-fn array_to_image_copies_a_cpu_attribute_into_a_pixel_buffer_read_back_as_the_image() {
+fn tensor_to_texture_copies_a_cpu_attribute_into_a_pixel_buffer_read_back_as_the_image() {
     use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
     use streamlib::sdk::context::{
         GpuPoolClaimTablesOfOnePool, NativeNodeOutputPixelBufferFrame, SurfaceStore,
@@ -521,7 +521,7 @@ fn array_to_image_copies_a_cpu_attribute_into_a_pixel_buffer_read_back_as_the_im
     use streamlib::sdk::rhi::{
         PixelBuffer, PixelBufferPoolSlotId, PixelFormat, PublishedPixelBufferFrameId,
     };
-    use streamlib_media_builtins::port_family_conversion::array_to_image::image_frame_of_the_array_frame;
+    use streamlib_media_builtins::pin_type_conversion::tensor_to_texture::image_frame_of_the_array_frame;
 
     const POOL_SLOT_KEY: &str = "array-to-image-slot";
     const WIDTH: u32 = 64;

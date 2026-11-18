@@ -77,9 +77,9 @@ def a_control_value_round_trip(stream_builder: tatolab.stream.StreamBuilder) -> 
         tatolab.stream.RecordsToChannels,
         config={"channel_names": ["gain"], "sample_rate": 30},
     )
-    to_array = stream_builder.add(tatolab.stream.ChannelsToArray)
+    to_array = stream_builder.add(tatolab.stream.AudioToTensor)
     back_to_channels = stream_builder.add(
-        tatolab.stream.ArrayToChannels,
+        tatolab.stream.TensorToAudio,
         config={"channel_names": ["gain"], "sample_rate": 30},
     )
     to_records = stream_builder.add(
@@ -95,7 +95,7 @@ def test_the_conversion_built_ins_compile_with_no_runtime_installed():
 
     assert [node["type"] for node in graph["nodes"]] == [
         "tatolab.stream:RecordsToChannels",
-        "tatolab.stream:ChannelsToArray",
-        "tatolab.stream:ArrayToChannels",
+        "tatolab.stream:AudioToTensor",
+        "tatolab.stream:TensorToAudio",
         "tatolab.stream:ChannelsToRecords",
     ]

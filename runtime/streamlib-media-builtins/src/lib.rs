@@ -3,7 +3,7 @@
 
 //! First-party media built-ins: native pre-built blocks statically linked
 //! into the wheel and instantiated from Python by configuration
-//! (`stream_builder.add(ChannelsToArray)`), whose per-frame paths never enter the
+//! (`stream_builder.add(AudioToTensor)`), whose per-frame paths never enter the
 //! interpreter.
 //!
 //! Written against the SDK's handle-shaped primitives only — pixel-buffer
@@ -13,14 +13,14 @@ pub mod audio_block;
 pub mod h273_color_vui_translation;
 #[cfg(test)]
 mod msgpack_wire_test_support;
-pub mod port_family_conversion;
+pub mod pin_type_conversion;
 pub mod video_frame;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
-pub use port_family_conversion::{
-    ArrayToChannels, ArrayToChannelsConfig, ArrayToImage, ArrayToImageConfig, ChannelsToArray,
-    ChannelsToRecords, ChannelsToRecordsConfig, ImageToArray, RecordsToChannels,
-    RecordsToChannelsConfig,
+pub use pin_type_conversion::{
+    AudioToTensor, ChannelsToRecords, ChannelsToRecordsConfig, RecordsToChannels,
+    RecordsToChannelsConfig, TensorToAudio, TensorToAudioConfig, TensorToTexture,
+    TensorToTextureConfig, TextureToTensor,
 };
 pub use video_frame::VideoFrame;
 
@@ -73,12 +73,12 @@ const BUILT_INS_MOVED_TO_MODULES: &[(&str, &str, &str)] = &[
 /// module to install. In-process static registration (the api-server
 /// precedent) — no dlopen, and idempotent, so hosts may call it more than once.
 pub fn register_media_builtin_node_types() {
-    NODE_REGISTRY.register::<port_family_conversion::ChannelsToArray::Node>();
-    NODE_REGISTRY.register::<port_family_conversion::ArrayToChannels::Node>();
-    NODE_REGISTRY.register::<port_family_conversion::ChannelsToRecords::Node>();
-    NODE_REGISTRY.register::<port_family_conversion::RecordsToChannels::Node>();
-    NODE_REGISTRY.register::<port_family_conversion::ImageToArray::Node>();
-    NODE_REGISTRY.register::<port_family_conversion::ArrayToImage::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::AudioToTensor::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::TensorToAudio::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::ChannelsToRecords::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::RecordsToChannels::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::TextureToTensor::Node>();
+    NODE_REGISTRY.register::<pin_type_conversion::TensorToTexture::Node>();
 
     for (former_class_name, module_node_type, module_distribution) in BUILT_INS_MOVED_TO_MODULES {
         match NodeClassImportPath::new(*module_node_type) {
@@ -131,9 +131,7 @@ mod built_in_node_type_tests {
     fn every_built_in_is_registered_as_its_authored_name_in_the_stream_package() {
         let built_ins = every_built_in_registered_on_this_floor();
 
-        assert!(
-            built_ins.contains(&port_family_conversion::ChannelsToArray::node_class_import_path())
-        );
+        assert!(built_ins.contains(&pin_type_conversion::AudioToTensor::node_class_import_path()));
         let rust_module_paths: Vec<NodeClassImportPath> = NODE_REGISTRY
             .registered_node_class_import_paths()
             .into_iter()

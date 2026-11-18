@@ -159,10 +159,10 @@ mod tests {
 
     #[test]
     fn a_built_in_nodes_type_is_its_class_in_the_stream_package() {
-        let channels_to_array = NodeClassImportPath::of_built_in_node("ChannelsToArray");
+        let audio_to_tensor = NodeClassImportPath::of_built_in_node("AudioToTensor");
 
-        assert_eq!(channels_to_array.as_str(), "tatolab.stream:ChannelsToArray");
-        assert!(channels_to_array.names_a_built_in_node());
+        assert_eq!(audio_to_tensor.as_str(), "tatolab.stream:AudioToTensor");
+        assert!(audio_to_tensor.names_a_built_in_node());
     }
 
     #[test]
