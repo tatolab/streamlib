@@ -38,6 +38,16 @@ fn endpoint<'a>(
     }
 }
 
+/// The words of [`refusal_of_a_link_between_port_families`]'s refusal, whatever kind it is.
+fn refusal_words(
+    output: PortFamilyLinkEndpoint<'_>,
+    output_node_config: Option<&serde_json::Value>,
+    input: PortFamilyLinkEndpoint<'_>,
+) -> Option<String> {
+    refusal_of_a_link_between_port_families(output, output_node_config, input)
+        .map(|refusal| refusal.to_string())
+}
+
 fn channels_output_stating(names: &[&str]) -> PortFamilyDeclaration {
     PortFamilyDeclaration {
         names: Some(OutputPortDeclaredNames::Stated(
@@ -58,7 +68,7 @@ fn channels_input_requiring(names: &[&str]) -> PortFamilyDeclaration {
 fn a_family_mismatch_is_refused_naming_both_endpoints_and_the_conversion() {
     let image = PortFamilyDeclaration::of_family(PortFamily::Image);
     let array = PortFamilyDeclaration::of_family(PortFamily::Array);
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("camera", "video", &image),
         None,
         endpoint("model", "tensor", &array),
@@ -86,7 +96,7 @@ fn a_link_of_one_family_with_nothing_required_is_taken() {
 fn a_required_name_the_output_does_not_state_is_refused_naming_it() {
     let output = channels_output_stating(&["left", "right"]);
     let input = channels_input_requiring(&["left", "rpm"]);
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("mic", "audio", &output),
         None,
         endpoint("meter", "audio", &input),
@@ -103,7 +113,7 @@ fn a_required_name_the_output_does_not_state_is_refused_naming_it() {
 fn a_requirement_on_an_output_stating_no_names_is_refused() {
     let output = PortFamilyDeclaration::of_family(PortFamily::Channels);
     let input = channels_input_requiring(&["left"]);
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("mic", "audio", &output),
         None,
         endpoint("meter", "audio", &input),
@@ -139,7 +149,7 @@ fn names_from_config_resolve_against_the_output_nodes_config() {
         )
         .is_some()
     );
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("engine", "signals", &output),
         None,
         endpoint("gauge", "signals", &input),
@@ -158,7 +168,7 @@ fn a_codec_outside_the_required_set_is_refused() {
         requires_codec: vec!["h264".into()],
         ..PortFamilyDeclaration::of_family(PortFamily::Packets)
     };
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("encoder", "packets", &output),
         None,
         endpoint("publisher", "video", &input),
@@ -169,7 +179,7 @@ fn a_codec_outside_the_required_set_is_refused() {
 }
 
 #[test]
-fn image_formats_that_do_not_overlap_are_refused() {
+fn an_image_output_writing_only_formats_the_input_does_not_read_is_refused() {
     let output = PortFamilyDeclaration {
         formats: vec!["rgba16_float".into()],
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
@@ -178,7 +188,7 @@ fn image_formats_that_do_not_overlap_are_refused() {
         formats: vec!["rgba8_unorm".into()],
         ..PortFamilyDeclaration::of_family(PortFamily::Image)
     };
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         endpoint("render", "video", &output),
         None,
         endpoint("compositor", "video", &input),
@@ -194,6 +204,52 @@ fn image_formats_that_do_not_overlap_are_refused() {
             endpoint("render", "video", &output),
             None,
             endpoint("compositor", "video", &input_reading_both),
+        ),
+        None
+    );
+}
+
+#[test]
+fn an_image_output_writing_a_format_the_input_does_not_read_is_refused_though_others_overlap() {
+    let output = PortFamilyDeclaration {
+        formats: vec!["rgba8_unorm".into(), "nv12".into()],
+        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+    };
+    let input = PortFamilyDeclaration {
+        formats: vec!["rgba8_unorm".into()],
+        ..PortFamilyDeclaration::of_family(PortFamily::Image)
+    };
+    let refusal = refusal_of_a_link_between_port_families(
+        endpoint("camera", "video", &output),
+        None,
+        endpoint("compositor", "video", &input),
+    )
+    .expect("the camera may write nv12, which the compositor does not read");
+    let PortFamilyLinkRefusal::ImageFormatsNotRead(refusal) = refusal else {
+        panic!("a refusal by its formats alone: {refusal:?}");
+    };
+    assert!(
+        refusal.ends_with(
+            "camera.video may write [\"nv12\"], which compositor.video does not read (it reads \
+             only [\"rgba8_unorm\"])"
+        ),
+        "{refusal}"
+    );
+    let input_reading_any = PortFamilyDeclaration::of_family(PortFamily::Image);
+    assert_eq!(
+        refusal_of_a_link_between_port_families(
+            endpoint("camera", "video", &output),
+            None,
+            endpoint("compositor", "video", &input_reading_any),
+        ),
+        None
+    );
+    let output_stating_none = PortFamilyDeclaration::of_family(PortFamily::Image);
+    assert_eq!(
+        refusal_of_a_link_between_port_families(
+            endpoint("camera", "video", &output_stating_none),
+            None,
+            endpoint("compositor", "video", &input),
         ),
         None
     );
@@ -349,7 +405,7 @@ fn an_output_family_and_codec_from_config_resolve_against_the_output_nodes_confi
         ),
         None
     );
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         source,
         Some(&records_config),
         endpoint("decoder", "encoded_video", &h264_input),
@@ -361,7 +417,7 @@ fn an_output_family_and_codec_from_config_resolve_against_the_output_nodes_confi
     );
 
     let opus_config = serde_json::json!({"family": "packets", "codec": "opus"});
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         source,
         Some(&opus_config),
         endpoint("decoder", "encoded_video", &h264_input),
@@ -370,7 +426,7 @@ fn an_output_family_and_codec_from_config_resolve_against_the_output_nodes_confi
     assert!(refusal.contains("\"opus\""), "got {refusal}");
 
     let unknown_family = serde_json::json!({"family": "video"});
-    let refusal = refusal_of_a_link_between_port_families(
+    let refusal = refusal_words(
         source,
         Some(&unknown_family),
         endpoint("sink", "records", &records_input),
@@ -402,12 +458,8 @@ fn an_input_taking_several_families_takes_each_and_refuses_another_naming_the_co
         );
     }
     let image = PortFamilyDeclaration::of_family(PortFamily::Image);
-    let refusal = refusal_of_a_link_between_port_families(
-        endpoint("camera", "video", &image),
-        None,
-        destination,
-    )
-    .expect("an Image link is refused");
+    let refusal = refusal_words(endpoint("camera", "video", &image), None, destination)
+        .expect("an Image link is refused");
     assert!(
         refusal.contains("(Packets or Records)") && refusal.contains("H264Encoder"),
         "got {refusal}"

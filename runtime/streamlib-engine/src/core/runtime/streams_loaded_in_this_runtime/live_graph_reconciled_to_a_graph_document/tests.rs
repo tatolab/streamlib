@@ -86,7 +86,7 @@ fn reconcile(stream: &LoadedStreamInThisRuntime, graph_document: Value) -> Resul
         .expect("a current-thread runtime")
         .block_on(stream.reconcile_the_live_graph_to_the_graph_document(
             graph_document,
-            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+            LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
         ))
 }
 
@@ -110,6 +110,10 @@ const PICTURE_SOURCE_OF_ONE_FORMAT: &str = "SavedLinkCheckPictureSourceOfOneForm
 const PICTURE_SINK_OF_ANOTHER_FORMAT: &str = "SavedLinkCheckPictureSinkOfAnotherFormat";
 const PICTURE_SINK_OF_THE_SECOND_FORMAT: &str = "SavedLinkCheckPictureSinkOfTheSecondFormat";
 const LEVEL_SOURCE: &str = "SavedLinkCheckLevelSource";
+const FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS: &str = "SavedLinkCheckFamilyPictureSourceOfTwoFormats";
+const UNTYPED_PICTURE_SINK_OF_ONE_FORMAT: &str = "SavedLinkCheckUntypedPictureSinkOfOneFormat";
+const ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT: &str =
+    "SavedLinkCheckAnotherUntypedPictureSinkOfOneFormat";
 
 fn a_saved_link_fixture_type(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -137,6 +141,15 @@ fn register_the_saved_link_fixture_node_types() {
             )
             .with_pin_declaration(PinDeclaration::exactly(pin_type))
         };
+        let picture_of_family =
+            |family: PortFamilyDeclaration| PortDescriptor::new("picture", "picture", true, family);
+        // An input that takes Records besides Images states no exact pin type, so a link into
+        // it is judged by the family check alone.
+        let untyped_picture_of_one_format = || PortFamilyDeclaration {
+            formats: vec!["bgra8_unorm".to_owned()],
+            also_takes_families: vec![PortFamily::Records],
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        };
         let texture = |pixel_formats: &[TexturePixelFormat]| PinType::Texture {
             pixel_formats: pixel_formats.to_vec(),
         };
@@ -163,6 +176,16 @@ fn register_the_saved_link_fixture_node_types() {
             node_type(PICTURE_SINK_OF_THE_SECOND_FORMAT)
                 .with_input(picture(texture(&[TexturePixelFormat::Rgba8Unorm]))),
             node_type(LEVEL_SOURCE).with_output(picture(PinType::Float { exact_size: None })),
+            node_type(FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS).with_output(picture_of_family(
+                PortFamilyDeclaration {
+                    formats: vec!["bgra8_unorm".to_owned(), "rgba8_unorm".to_owned()],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+            )),
+            node_type(UNTYPED_PICTURE_SINK_OF_ONE_FORMAT)
+                .with_input(picture_of_family(untyped_picture_of_one_format())),
+            node_type(ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT)
+                .with_input(picture_of_family(untyped_picture_of_one_format())),
         ] {
             NODE_REGISTRY
                 .register_with_a_constructor_for_a_test(
@@ -246,7 +269,7 @@ fn a_saved_link_its_pin_types_refuse_is_kept_and_an_edit_making_it_anew_is_refus
             ANOTHER_PICTURE_SINK_OF_ONE_FORMAT,
             true,
         ),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect("an edit replacing the sink remakes the link the live graph held");
     assert_eq!(
@@ -281,7 +304,7 @@ fn a_saved_link_its_pin_types_refuse_is_kept_and_an_edit_making_it_anew_is_refus
     reconcile_making(
         &stream,
         unlinked,
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect("taking the link out is an edit");
     assert!(the_live_graph_by_node_uuid(&stream).1.is_empty());
@@ -294,10 +317,87 @@ fn a_saved_link_its_pin_types_refuse_is_kept_and_an_edit_making_it_anew_is_refus
     let refusal = reconcile_making(
         &stream,
         linked.clone(),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect_err("an edit making the link anew is judged as connect judges it");
     assert!(matches!(refusal, Error::PinLinkRefused(_)), "{refusal:?}");
+
+    reconcile_making(
+        &stream,
+        linked,
+        LinksAReconcileMakes::EachAsASavedGraphsLink,
+    )
+    .expect("a reconcile of a saved document keeps the link");
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
+}
+
+/// A saved link into an untyped picture input that does not read every format the output
+/// states, judged by the family check alone, is kept by a load, by an edit that remakes it into
+/// a node it replaces whose ports are judged as the first's were, and by a reconcile of a saved
+/// document; an edit making it anew is refused as `connect` is.
+///
+/// Mental-revert: recording at the start of a reconcile only the links whose pin types refuse
+/// them refuses the edit replacing the sink.
+#[test]
+#[serial]
+fn a_saved_link_its_formats_alone_refuse_on_the_family_check_is_kept_by_a_reconcile() {
+    ensure_test_mocks_registered();
+    register_the_saved_link_fixture_node_types();
+    let project_directory = tempfile::tempdir().expect("a project directory");
+    let runner = Runner::new().expect("Runner::new");
+    let the_picture_link = vec![format!("{NODE_A}/picture -> {NODE_B}/picture")];
+    let stream = a_stream_loaded_from(
+        &runner,
+        &project_directory,
+        a_document_of_a_picture_link(
+            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
+            UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
+            true,
+        ),
+    );
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
+
+    reconcile_making(
+        &stream,
+        a_document_of_a_picture_link(
+            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
+            ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
+            true,
+        ),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+    )
+    .expect("an edit replacing the sink remakes the link the live graph held");
+    assert_eq!(the_live_graph_by_node_uuid(&stream).1, the_picture_link);
+
+    reconcile_making(
+        &stream,
+        a_document_of_a_picture_link(
+            FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
+            ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
+            false,
+        ),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+    )
+    .expect("taking the link out is an edit");
+    assert!(the_live_graph_by_node_uuid(&stream).1.is_empty());
+
+    let linked = a_document_of_a_picture_link(
+        FAMILY_PICTURE_SOURCE_OF_TWO_FORMATS,
+        ANOTHER_UNTYPED_PICTURE_SINK_OF_ONE_FORMAT,
+        true,
+    );
+    let refusal = reconcile_making(
+        &stream,
+        linked.clone(),
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
+    )
+    .expect_err("an edit making the link anew is judged as connect judges it");
+    assert!(
+        refusal
+            .to_string()
+            .contains("may write [\"rgba8_unorm\"], which"),
+        "{refusal}"
+    );
 
     reconcile_making(
         &stream,
@@ -365,7 +465,7 @@ fn an_edit_replacing_a_sink_with_one_the_pin_types_refuse_is_refused() {
             PICTURE_SINK_OF_ANOTHER_FORMAT,
             true,
         ),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect_err("the link into a sink taking another format is judged as connect judges it");
     assert!(matches!(refusal, Error::PinLinkRefused(_)), "{refusal:?}");
@@ -403,7 +503,7 @@ fn an_edit_remaking_a_kept_saved_link_into_a_sink_of_other_pin_types_is_refused(
     let refusal = reconcile_making(
         &stream,
         into_the_second_format.clone(),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect_err("the link into a sink of other pin types is judged as connect judges it");
     assert!(matches!(refusal, Error::PinLinkRefused(_)), "{refusal:?}");
@@ -812,7 +912,7 @@ fn a_saved_link_the_engine_cannot_wire_is_set_aside_and_the_stream_plays_without
     reconcile_making(
         &stream,
         a_document_feeding_an_island_into_the_app_process(&switch_type, true),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect("an edit keeps the link the stream held set aside");
     assert_eq!(the_link_set_aside(&stream).len(), 1);
@@ -820,7 +920,7 @@ fn a_saved_link_the_engine_cannot_wire_is_set_aside_and_the_stream_plays_without
     reconcile_making(
         &stream,
         a_document_feeding_an_island_into_the_app_process(&switch_type, false),
-        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+        LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughConnectRefusesThem,
     )
     .expect("taking the link out is an edit");
     assert!(the_link_set_aside(&stream).is_empty());

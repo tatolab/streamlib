@@ -17,11 +17,17 @@ use crate::core::descriptors::{
     FreePinConversion, NamedPinTypeImportPath, NodeClassImportPath, NodeClassShortName,
     NodeDescriptor, NodeInputMode, OutputPortDeclaredNames, PinDeclaration, PinLinkOutcome,
     PinLinkRefusal, PinType, PortDescriptor, PortFamily, PortFamilyDeclaration, SettingReadTime,
+    TexturePixelFormat,
 };
-use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::core::graph::{
+    InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
+};
 use crate::core::nodes::{NODE_REGISTRY, NodeSpec};
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::{Error, Result};
+
+mod texture_formats_tests;
 
 const FLOAT_SOURCE: &str = "VerdictCheckFloatSource";
 const NUMBER_SINK: &str = "VerdictCheckNumberSink";
@@ -39,6 +45,11 @@ const NAMED_RECORDS_SOURCE: &str = "VerdictCheckNamedRecordsSource";
 const RECORDS_PASSTHROUGH: &str = "VerdictCheckRecordsPassthrough";
 const RECORDS_NEEDING_X: &str = "VerdictCheckRecordsNeedingX";
 const RECORDS_NEEDING_Z: &str = "VerdictCheckRecordsNeedingZ";
+const RGBA_OR_NV12_TEXTURE_SOURCE: &str = "VerdictCheckRgbaOrNv12TextureSource";
+const TEXTURE_PASSTHROUGH: &str = "VerdictCheckTexturePassthrough";
+const RGBA_TEXTURE_SINK: &str = "VerdictCheckRgbaTextureSink";
+const ANY_TEXTURE_SINK: &str = "VerdictCheckAnyTextureSink";
+const UNTYPED_RGBA_PICTURE_SINK: &str = "VerdictCheckUntypedRgbaPictureSink";
 
 fn class_path(class_name: &str) -> NodeClassImportPath {
     NodeClassImportPath::new(format!("{}::{class_name}", module_path!())).unwrap()
@@ -59,6 +70,26 @@ fn a_typed_port(name: &str, pin_type: PinType) -> PortDescriptor {
     let family = PortFamily::carrying(&pin_type).unwrap_or(PortFamily::Records);
     PortDescriptor::new(name, name, true, PortFamilyDeclaration::of_family(family))
         .with_pin_declaration(PinDeclaration::exactly(pin_type))
+}
+
+/// A Texture port stating `pixel_formats`, by its pin type and by its family as a declaration of
+/// an Image port states both.
+fn a_texture_port(name: &str, pixel_formats: &[TexturePixelFormat]) -> PortDescriptor {
+    PortDescriptor {
+        family: PortFamilyDeclaration {
+            formats: pixel_formats
+                .iter()
+                .map(|format| format.wire_name().to_owned())
+                .collect(),
+            ..PortFamilyDeclaration::of_family(PortFamily::Image)
+        },
+        ..a_typed_port(
+            name,
+            PinType::Texture {
+                pixel_formats: pixel_formats.to_vec(),
+            },
+        )
+    }
 }
 
 fn register(descriptor: NodeDescriptor) {
@@ -225,6 +256,47 @@ fn register_the_verdict_fixture_node_types() {
                 Vec::new(),
             ));
         }
+        use TexturePixelFormat::{Nv12, Rgba8Unorm};
+        register(a_node_type(
+            class_path(RGBA_OR_NV12_TEXTURE_SOURCE),
+            Vec::new(),
+            vec![a_texture_port("video", &[Rgba8Unorm, Nv12])],
+        ));
+        register(a_node_type(
+            class_path(TEXTURE_PASSTHROUGH),
+            vec![a_texture_port("in", &[])],
+            vec![PortDescriptor {
+                family: PortFamilyDeclaration {
+                    family_follows_input_port: Some("in".to_owned()),
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+                ..a_texture_port("out", &[])
+            }],
+        ));
+        register(a_node_type(
+            class_path(RGBA_TEXTURE_SINK),
+            vec![a_texture_port("video", &[Rgba8Unorm])],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(UNTYPED_RGBA_PICTURE_SINK),
+            vec![PortDescriptor::new(
+                "video",
+                "video",
+                true,
+                PortFamilyDeclaration {
+                    formats: vec![Rgba8Unorm.wire_name().to_owned()],
+                    also_takes_families: vec![PortFamily::Records],
+                    ..PortFamilyDeclaration::of_family(PortFamily::Image)
+                },
+            )],
+            Vec::new(),
+        ));
+        register(a_node_type(
+            class_path(ANY_TEXTURE_SINK),
+            vec![a_texture_port("video", &[])],
+            Vec::new(),
+        ));
         register(
             a_node_type(
                 NodeClassImportPath::of_built_in_node(DESCRIBED_ONLY_FAHRENHEIT_TO_CELSIUS),
