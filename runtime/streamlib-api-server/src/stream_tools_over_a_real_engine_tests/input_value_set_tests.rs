@@ -356,6 +356,60 @@ async fn a_live_input_value_on_a_stopped_stream_reaches_its_node_and_is_not_save
     assert_eq!(project.the_graph_document_of("main"), saved_before);
 }
 
+/// A `live` transaction that takes the staged path, a `set_node_config` before its value sets,
+/// and sets the mixer's `gain` twice is refused `refused` at the second set before anything is
+/// applied, naming the node and the input: the second value would replace the first before the
+/// node is handed either. The config, the live values and the document stay as they were.
+///
+/// Mental-revert: checking the sets only on the path that sets values apart from the graph
+/// applies all three, the mixer reading `gain` 0.75 live.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_staged_live_transaction_setting_one_input_twice_is_refused_at_the_second_set() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream_asset = project.stream_asset_of("main");
+    let saved_before = project.the_graph_document_of("main");
+    let set_gain = |gain: f64| {
+        json!({ "operation": "set_node_input_value", "stream": stream_asset,
+                "node": MIXER_NODE_UUID, "input": "gain", "value": gain })
+    };
+
+    let refusal = engine
+        .the_answer_or_the_refusal_of(
+            "transact",
+            json!({ "mode": "live", "author": an_agent_named("alice"), "operations": [
+                { "operation": "set_node_config", "stream": stream_asset,
+                  "node": MIXER_NODE_UUID, "config": { "frame_width": 320 } },
+                set_gain(0.25),
+                set_gain(0.75),
+            ] }),
+        )
+        .await
+        .expect_err("one live transaction sets each input once");
+
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::Refused,
+        "{refusal:?}"
+    );
+    assert_eq!(refusal.refused_operation_index, Some(2), "{refusal:?}");
+    assert!(
+        refusal
+            .runtime_words
+            .contains("input `gain` of `mixer` is set twice"),
+        "{refusal:?}"
+    );
+    assert_eq!(project.the_graph_document_of("main"), saved_before);
+    let mixer = the_node_named(&engine.the_live_graph_of(&stream_id), "mixer");
+    assert_eq!(mixer["config"], json!({}), "{mixer}");
+    assert_ne!(
+        the_input_named(&mixer, "gain")["value_comes_from"],
+        "live",
+        "{mixer}"
+    );
+}
+
 /// Each value the input does not take is refused with its code, naming the node, the input and
 /// the place of the value in the params.
 #[tokio::test(flavor = "multi_thread")]
