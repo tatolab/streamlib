@@ -638,3 +638,165 @@ fn bundles_connect_by_member_names_and_types_and_warn_of_member_meanings() {
     ));
     assert_eq!(bundle("frequency").to_string(), "Bundle (pitch: Float)");
 }
+
+/// Two bundles holding the same members in another order are one type: each member is matched
+/// by its name, and a meaning that differs is warned of under that member's name.
+///
+/// Mental-revert: pairing members by their place refuses the link, `pitch` meeting `gain`.
+#[test]
+fn bundles_holding_the_same_members_in_another_order_connect_member_by_name() {
+    let member = |name: &str, meaning: &str| BundleMember {
+        name: name.to_owned(),
+        member_type: float(),
+        meaning: Some(meaning.to_owned()),
+        default_value: None,
+    };
+    let output = PinType::Bundle {
+        members: vec![member("pitch", "frequency"), member("gain", "decibels")],
+    };
+    let input = PinType::Bundle {
+        members: vec![member("gain", "decibels"), member("pitch", "note")],
+    };
+    assert_eq!(
+        the_verdict_between(&output, &input),
+        PinLinkVerdict {
+            outcome: PinLinkOutcome::Connects,
+            warnings: vec![PinLinkWarning::MemberMeaningsDiffer {
+                member_name: "pitch".to_owned(),
+                output_meaning: "frequency".to_owned(),
+                input_meaning: "note".to_owned(),
+            }],
+        }
+    );
+    let with_another_member = PinType::Bundle {
+        members: vec![member("gain", "decibels"), member("pan", "position")],
+    };
+    assert!(matches!(
+        the_outcome_between(&output, &with_another_member),
+        PinLinkOutcome::Refused(_)
+    ));
+}
+
+/// A bundle naming one member twice is not the bundle naming each of its members once, in
+/// either direction, though every name of one is a name of the other.
+#[test]
+fn a_bundle_naming_a_member_twice_does_not_connect_to_one_naming_it_once() {
+    let bundle_of = |names: &[&str]| PinType::Bundle {
+        members: names
+            .iter()
+            .map(|name| BundleMember {
+                name: (*name).to_owned(),
+                member_type: float(),
+                meaning: None,
+                default_value: None,
+            })
+            .collect(),
+    };
+    for (output, input) in [
+        (
+            bundle_of(&["pitch", "pitch"]),
+            bundle_of(&["pitch", "gain"]),
+        ),
+        (
+            bundle_of(&["pitch", "gain"]),
+            bundle_of(&["pitch", "pitch"]),
+        ),
+    ] {
+        assert!(
+            matches!(
+                the_outcome_between(&output, &input),
+                PinLinkOutcome::Refused(_)
+            ),
+            "{output} into {input}"
+        );
+    }
+}
+
+/// The words a refusal of a link from `output` into `input`, which no conversion bridges, says.
+fn the_refusal_words_between(output: &PinType, input: &PinType) -> String {
+    let PinLinkOutcome::Refused(refusal) = the_outcome_between(output, input) else {
+        panic!("{output} does not connect to {input}");
+    };
+    refusal.to_string()
+}
+
+/// A refusal between an encoded stream and what it encodes names only an encoder or a decoder
+/// of a codec the encoded end states, and none between two ends no codec node joins.
+///
+/// Mental-revert: naming the node by the two ends' families alone tells Opus packets into a
+/// Texture to place a video decoder.
+#[test]
+fn a_refusal_names_an_encoder_or_decoder_only_of_a_codec_the_encoded_end_states() {
+    let encoded_audio = |codecs: &[&str]| PinType::EncodedAudio {
+        codecs: codecs.iter().map(|codec| codec.to_string()).collect(),
+    };
+    let any_texture = texture(&[]);
+    for (output, input, placement) in [
+        (
+            encoded_audio(&["opus"]),
+            any_texture.clone(),
+            "; no node type converts between them",
+        ),
+        (
+            encoded_video(&["h264"]),
+            any_texture.clone(),
+            "; place an H264Decoder node between them",
+        ),
+        (
+            encoded_video(&[]),
+            any_texture.clone(),
+            "; place one of H264Decoder, H265Decoder between them",
+        ),
+        (
+            encoded_video(&["vp9"]),
+            any_texture.clone(),
+            "; no node type converts between them",
+        ),
+        (
+            encoded_video(&["h264", "h265"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to one of \
+             h264, h265, then place its decoder between them",
+        ),
+        (
+            encoded_video(&["h264", "vp9"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to h264, \
+             then place an H264Decoder node between them",
+        ),
+        (
+            encoded_video(&["vp9", "h265", "h264"]),
+            any_texture.clone(),
+            "; no one decoder takes every codec the output states; narrow the output to one of \
+             h264, h265, then place its decoder between them",
+        ),
+        (
+            any_texture.clone(),
+            encoded_video(&["h264", "h265"]),
+            "; place one of H264Encoder, H265Encoder between them",
+        ),
+        (
+            any_texture.clone(),
+            encoded_video(&["h265"]),
+            "; place an H265Encoder node between them",
+        ),
+        (
+            encoded_audio(&["opus"]),
+            PinType::Audio {},
+            "; place an OpusDecoder node between them",
+        ),
+        (
+            PinType::Audio {},
+            encoded_audio(&["aac"]),
+            "; no node type converts between them",
+        ),
+        (
+            float(),
+            encoded_audio(&[]),
+            "; no node type converts between them",
+        ),
+    ] {
+        let words = the_refusal_words_between(&output, &input);
+        assert!(words.ends_with(placement), "{output} into {input}: {words}");
+    }
+}

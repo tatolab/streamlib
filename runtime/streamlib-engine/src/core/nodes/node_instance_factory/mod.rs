@@ -541,9 +541,14 @@ impl NodeInstanceFactory {
         let mut conversions = self.conversions.write();
         let mut stored = conversions.to_vec();
         stored.push(conversion);
-        stored.sort_by(|one, other| one.node_type.cmp(&other.node_type));
-        *conversions = stored.into();
+        *conversions = in_node_type_order(stored);
     }
+}
+
+/// `conversions` sorted by the node type stating each, as every list of them is kept.
+pub(crate) fn in_node_type_order(mut conversions: Vec<PinConversion>) -> Arc<[PinConversion]> {
+    conversions.sort_by(|one, other| one.node_type.cmp(&other.node_type));
+    conversions.into()
 }
 
 /// `config` as the `C` a node of `node_type` takes, or the refusal naming

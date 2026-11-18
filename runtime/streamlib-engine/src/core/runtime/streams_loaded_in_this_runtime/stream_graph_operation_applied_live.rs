@@ -19,6 +19,7 @@ use crate::core::graph::{
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
+use crate::core::runtime::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::runtime::operations::RuntimeOperations;
 use crate::core::runtime::operations_runtime::{
     ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
@@ -234,8 +235,11 @@ impl LoadedStreamInThisRuntime {
         &self,
     ) -> Result<()> {
         let graph_as_drawn = self.to_json()?;
-        self.reconcile_the_live_graph_to_the_graph_document(graph_as_drawn)
-            .await
+        self.reconcile_the_live_graph_to_the_graph_document(
+            graph_as_drawn,
+            LinksAReconcileMakes::EachAsASavedGraphsLink,
+        )
+        .await
     }
 
     /// Apply `graph_operation` to this stream's graph as drawn and reconcile the live graph to
@@ -271,11 +275,17 @@ impl LoadedStreamInThisRuntime {
             .apply(&graph_operation)
             .map_err(Error::GraphError)?;
         if let Err(refusal) = self
-            .reconcile_the_live_graph_to_the_graph_document(graph_document.to_value())
+            .reconcile_the_live_graph_to_the_graph_document(
+                graph_document.to_value(),
+                LinksAReconcileMakes::ThoseTheLiveGraphKeptThoughTheirPinTypesRefusedThem,
+            )
             .await
         {
             if let Err(not_restored) = self
-                .reconcile_the_live_graph_to_the_graph_document(graph_as_drawn)
+                .reconcile_the_live_graph_to_the_graph_document(
+                    graph_as_drawn,
+                    LinksAReconcileMakes::EachAsASavedGraphsLink,
+                )
                 .await
             {
                 tracing::error!(

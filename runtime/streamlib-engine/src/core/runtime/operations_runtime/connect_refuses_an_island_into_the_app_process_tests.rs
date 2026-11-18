@@ -16,7 +16,9 @@ use crate::core::descriptors::{
     PortDescriptor, PortFamily, PortFamilyDeclaration,
 };
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
-use crate::core::graph::{InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef};
+use crate::core::graph::{
+    ALinkThePinTypesRefuse, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+};
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::test_support::{MockInputOnlyNode, ensure_test_mocks_registered};
@@ -126,6 +128,7 @@ fn connect_on_this_thread(
             },
             from,
             to,
+            ALinkThePinTypesRefuse::IsRefused,
         ))
 }
 

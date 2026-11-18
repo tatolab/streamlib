@@ -12,8 +12,8 @@ use super::RuntimeStatus;
 use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
 use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
+use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
-use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
@@ -21,22 +21,20 @@ use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
 };
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
-    NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
-    refuse_a_link_its_pin_types_or_families_refuse,
+    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
+    node_named_or_refused,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
-use crate::core::nodes::{NODE_REGISTRY, NodeSpec, NodeState};
+use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
-use crate::iceoryx2::ChannelName;
 
+mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
-use link_ends_this_graph_cannot_take::{
-    refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
-};
+pub(super) use link_connected_between_two_ports::connect_impl;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -394,52 +392,6 @@ pub(super) async fn remove_node_impl(
     removal_outcome
 }
 
-/// Core implementation for connect - takes owned Arcs for 'static lifetime.
-///
-/// Connect judges two typed ports by their pin link verdict, and any other two
-/// by their families, names, codec and formats, and refuses a link that does
-/// not connect as it is, or that feeds a function node island into a node in
-/// the app process, by name before any channel exists.
-#[tracing::instrument(
-    name = "stream.connect",
-    skip(live_graph_change),
-    fields(from = %from, to = %to),
-)]
-pub(super) async fn connect_impl(
-    live_graph_change: LiveGraphChangeOnOneStream,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    let LiveGraphChangeOnOneStream {
-        compiler,
-        live,
-        stream,
-    } = live_graph_change;
-    let (from, to) = {
-        let from = from.with_its_port_name_cast()?;
-        let to = to.with_its_port_name_cast()?;
-        compiler.scope(|graph, _tx| graph.link_ends_under_their_current_port_names(from, to))
-    };
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
-        to: to.clone(),
-    });
-
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
-
-    commit_live_graph_change(&compiler, live).await?;
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
-        link_id: link_id.to_string(),
-        from,
-        to,
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-
-    Ok(link_id)
-}
-
 /// The node `node_name` names once cast in the stream `stream_id`, whose
 /// graph `compiler` holds.
 ///
@@ -456,49 +408,6 @@ fn the_node_this_stream_names(
             name: named.display_name.clone(),
         })
     })
-}
-
-/// Add the link from `from` to `to` to the graph and queue it for wiring.
-fn apply_a_link(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    let (link_id, channel) =
-        compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-            refuse_a_source_this_graph_cannot_take(graph, &from)?;
-            refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-            refuse_a_link_its_pin_types_or_families_refuse(
-                graph,
-                &from,
-                &to,
-                &NODE_REGISTRY.pin_conversions(),
-            )?;
-            refuse_a_link_feeding_an_island_into_the_app_process(graph, &from, &to)?;
-
-            let channel =
-                crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
-                    .map_err(|source| Error::InvalidLink(source.to_string()))?;
-
-            let link_id = graph
-                .traversal_mut()
-                .add_e(from, to)
-                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-                .first()
-                .map(|link| link.id.clone())
-                .ok_or_else(|| {
-                    Error::GraphError("failed to create link after validation".into())
-                })?;
-
-            Ok((link_id, channel))
-        })?;
-
-    tracing::debug!(
-        link_id = %link_id,
-        channel = channel.as_str(),
-        "connect assigned channel"
-    );
-    Ok(link_id)
 }
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
@@ -663,16 +572,32 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
+    /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
+    /// alone refuse it is kept when its ports' families take it.
+    pub(crate) fn connect_a_link_of_a_saved_graph(
+        &self,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
+    ) -> Result<LinkUniqueId> {
+        self.block_on_the_engines_tokio_runtime(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+        ))
+    }
+
     /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
     /// code, as [`Self::reconcile_the_live_graph_to_the_graph_document`] does.
     pub(super) fn reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
         self: &Arc<Self>,
         graph_document: serde_json::Value,
+        links_it_makes: LinksAReconcileMakes,
     ) -> Result<()> {
         let stream = Arc::clone(self);
         self.block_on_the_engines_tokio_runtime(async move {
             stream
-                .reconcile_the_live_graph_to_the_graph_document(graph_document)
+                .reconcile_the_live_graph_to_the_graph_document(graph_document, links_it_makes)
                 .await
         })
     }
@@ -712,7 +637,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        self.in_this_streams_log_route(connect_impl(self.live_graph_change(), from, to))
+        self.in_this_streams_log_route(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsRefused,
+        ))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -937,7 +867,12 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        self.block_on_the_engines_tokio_runtime(connect_impl(self.live_graph_change(), from, to))
+        self.block_on_the_engines_tokio_runtime(connect_impl(
+            self.live_graph_change(),
+            from,
+            to,
+            ALinkThePinTypesRefuse::IsRefused,
+        ))
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

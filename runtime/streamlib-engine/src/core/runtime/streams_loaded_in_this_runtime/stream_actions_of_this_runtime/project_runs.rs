@@ -299,7 +299,10 @@ impl Runner {
         let graph_document: serde_json::Value =
             serde_json::from_slice(stream_document.bytes.as_ref().ok()?).ok()?;
         if let Err(refusal) = loaded
-            .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(graph_document)
+            .reconcile_the_live_graph_to_the_graph_document_from_synchronous_code(
+                graph_document,
+                LinksAReconcileMakes::EachAsASavedGraphsLink,
+            )
         {
             tracing::info!(
                 "the stream `{stream_id}` is loaded again from its graph document, which its \
