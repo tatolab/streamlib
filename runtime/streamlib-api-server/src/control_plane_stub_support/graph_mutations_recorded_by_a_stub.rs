@@ -5,8 +5,18 @@
 
 /// What a stub runtime answers an `add_node` with when the test has armed a
 /// refusal, standing in for an engine-side one — a name already taken, an
-/// unknown class.
-pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
+/// unknown class: the engine error each refused add is made of.
+pub(crate) type ArmedAddNodeRefusal = ::std::sync::Arc<
+    ::parking_lot::Mutex<
+        Option<
+            ::std::sync::Arc<
+                dyn Fn() -> ::streamlib::sdk::error::Error
+                    + ::std::marker::Send
+                    + ::std::marker::Sync,
+            >,
+        >,
+    >,
+>;
 
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
@@ -150,7 +160,7 @@ macro_rules! graph_mutation_ops_record_the_call {
                     return Err(refusal.into());
                 }
                 match armed_refusal {
-                    Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
+                    Some(the_refusal) => Err(the_refusal()),
                     None => Ok(applied),
                 }
             })

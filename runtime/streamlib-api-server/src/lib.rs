@@ -35,6 +35,7 @@ mod notifications_sent_at_most_once_each_interval;
 #[cfg(test)]
 mod project_asset_tools_tests;
 mod project_node_types_followed_for_changes;
+mod refusal_code_and_place;
 mod state;
 mod stream_graph_drops_raises_and_link_states;
 mod stream_graph_transaction_executor;

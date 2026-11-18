@@ -197,25 +197,29 @@ async fn open_viewer_is_refused_over_post_and_for_a_node_not_running() {
 }
 
 /// `set_stream_clock_scale` reaches the named stream's clock, refusing a stream
-/// whose clock is not running and a stream the runtime has not loaded.
+/// whose clock is not running, coded `refused`, and a stream the runtime has not loaded.
 #[tokio::test(flavor = "multi_thread")]
 async fn set_stream_clock_scale_refuses_a_stream_with_no_clock_running() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
     let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("live"));
     let live = engine.a_stream_its_host_loaded_without_its_start(&project, "live");
 
-    let not_started = tool_answer(
-        &tool_call_result(
-            engine.operations_on_the_loaded_streams(),
-            "set_stream_clock_scale",
-            json!({ "stream": live, "scale": 0.5 }),
-        )
-        .await,
+    let not_started_result = tool_call_result(
+        engine.operations_on_the_loaded_streams(),
+        "set_stream_clock_scale",
+        json!({ "stream": live, "scale": 0.5 }),
     )
-    .expect_err("a stream that is not started has no clock to scale");
+    .await;
+    let not_started = tool_answer(&not_started_result)
+        .expect_err("a stream that is not started has no clock to scale");
     assert!(
         not_started.contains(&format!("`{live}` is not started")),
         "{not_started}"
+    );
+    assert_eq!(
+        crate::mcp::tests::the_refusal_of_a_tool_result(&not_started_result).refusal_code,
+        streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode::Refused,
+        "a stream the caller has not started is the caller's to start"
     );
 
     let not_loaded = tool_answer(

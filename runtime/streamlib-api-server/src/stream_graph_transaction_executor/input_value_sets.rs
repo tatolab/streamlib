@@ -230,8 +230,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     let config_the_running_node_holds = if level.is_empty() {
                         let rendered_graph = self
                             .async_runtime
-                            .block_on(stream_operations.to_json_async())
-                            .map_err(|refusal| refusal.to_string())?;
+                            .block_on(stream_operations.to_json_async())?;
                         the_config_a_running_node_holds(&rendered_graph, configured.id)
                     } else {
                         None
@@ -258,12 +257,10 @@ impl StreamGraphTransactionExecutor<'_> {
             } => {
                 if let Some(exposed_on) =
                     self.the_node_an_action_sets_values_on(stream_id, level, node, staged)
-                    && !stream_operations
-                        .an_exposure_of_config_fields_is_recorded_on(
-                            &the_node_type_of(&exposed_on)?,
-                            exposed_config_fields,
-                        )
-                        .map_err(|refusal| refusal.to_string())?
+                    && !stream_operations.an_exposure_of_config_fields_is_recorded_on(
+                        &the_node_type_of(&exposed_on)?,
+                        exposed_config_fields,
+                    )?
                 {
                     return Ok(Vec::new());
                 }
@@ -457,13 +454,10 @@ fn the_input_value_sets_a_config_stands_for(
         })
         .collect();
     if stream_operations.node_type_takes_a_config(&node_type) {
-        let config_held = match stream_operations
-            .the_config_a_node_holding_the_input_values_takes(
-                &configured.node_type,
-                &configured.input_values,
-            )
-            .map_err(|refusal| refusal.to_string())?
-        {
+        let config_held = match stream_operations.the_config_a_node_holding_the_input_values_takes(
+            &configured.node_type,
+            &configured.input_values,
+        )? {
             Value::Object(config_held) => config_held,
             Value::Null => Map::new(),
             other => {

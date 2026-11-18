@@ -461,6 +461,22 @@ pub enum ControlOperationRefusalCode {
     /// The value sent is not one the input takes: of another type, or outside its range. The
     /// runtime's words say what it takes.
     InputValueNotValid,
+    /// No stream the runtime holds, or no stream asset the project holds, is the one named.
+    StreamNotFound,
+    /// The stream holds no node of the UUID or `as` label sent; `refused_node` names it, when the
+    /// call named one.
+    NodeNotFound,
+    /// No node type of the name sent is one the stream can add.
+    NodeTypeNotFound,
+    /// Another node of the graph already has the name sent.
+    NodeNameTaken,
+    /// The link sent is already in the graph.
+    LinkAlreadyExists,
+    /// The project holds no file or folder at the path sent; `refused_file` names it.
+    FileNotFound,
+    /// The file changed, or was taken out, since it was read, so the write was not made;
+    /// `refused_file` names it. Read it again to see what it holds now.
+    FileChangedSinceItWasRead,
     /// The request was understood and not done; changing it can help. The runtime's words say
     /// what to change.
     // `#[serde(other)]` holds only on the last variant, so a new code goes above this one.
@@ -473,7 +489,8 @@ pub enum ControlOperationRefusalCode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct ProjectFilePlaceOnTheWire {
-    /// The file's path in the project, `/`-separated.
+    /// The file's path in the project, `/`-separated; its absolute path when the refusal is
+    /// about a file the runtime could not read from disk.
     pub path: String,
     /// The line, from 1, when the place is narrower than the file.
     #[serde(default, skip_serializing_if = "Option::is_none")]

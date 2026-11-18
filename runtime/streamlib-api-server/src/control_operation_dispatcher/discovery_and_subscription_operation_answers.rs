@@ -94,17 +94,17 @@ impl ControlOperationDispatcher {
             Some(stream) => self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(&stream)
-                .map_err(|refusal| {
-                    ControlOperationRefusal::Failed(format!("graph failed: {refusal}"))
-                })?
+                .map_err(|refusal| ControlOperationRefusal::of_an_engine_error("graph", &refusal))?
                 .to_json_async()
                 .await
-                .map_err(|e| ControlOperationRefusal::Failed(format!("graph export failed: {e}"))),
+                .map_err(|refusal| {
+                    ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
+                }),
             None => {
                 crate::handlers::machine_wide_graph_json(&self.operations_on_the_loaded_streams)
                     .await
-                    .map_err(|e| {
-                        ControlOperationRefusal::Failed(format!("graph export failed: {e}"))
+                    .map_err(|refusal| {
+                        ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
                     })
             }
         }
@@ -118,7 +118,7 @@ fn the_subscriptions_of_the_connection_a_subscription_arrived_on<'origin>(
     request_origin: &'origin ControlRequestOrigin,
 ) -> Result<&'origin Arc<ControlSubscriptionsOfOneConnection>, ControlOperationRefusal> {
     request_origin.subscriptions.as_ref().ok_or_else(|| {
-        ControlOperationRefusal::Failed(format!(
+        ControlOperationRefusal::failed(format!(
             "{method_name} failed: it is served only on a connection that stays open to be sent \
              notifications, `{CONTROL_JSON_RPC_WEBSOCKET_REQUEST_TARGET}`"
         ))
@@ -134,14 +134,14 @@ pub(super) fn subscribe_to_project_log_records(
         request_origin,
     )?;
     if project_directories.is_empty() {
-        return Err(ControlOperationRefusal::Failed(
+        return Err(ControlOperationRefusal::failed(
             "subscribe_project_log_records failed: `project_directories` names no project"
                 .to_owned(),
         ));
     }
     for project_directory in &project_directories {
         refuse_a_relative_project_directory(project_directory).map_err(|why| {
-            ControlOperationRefusal::Failed(format!("subscribe_project_log_records failed: {why}"))
+            ControlOperationRefusal::failed(format!("subscribe_project_log_records failed: {why}"))
         })?;
     }
     let project_logs_as_subscribed_with_symlinks_resolved_and_their_end = project_directories
@@ -151,7 +151,7 @@ pub(super) fn subscribe_to_project_log_records(
                 &project_directory,
             )
             .map_err(|not_resolved| {
-                ControlOperationRefusal::Failed(format!(
+                ControlOperationRefusal::failed(format!(
                     "subscribe_project_log_records failed: `{}` is not a folder on this machine: \
                      {not_resolved}",
                     project_directory.display()
@@ -161,7 +161,7 @@ pub(super) fn subscribe_to_project_log_records(
                 &project_directory_with_symlinks_resolved,
             )
             .map_err(|not_read| {
-                ControlOperationRefusal::Failed(format!(
+                ControlOperationRefusal::failed(format!(
                     "subscribe_project_log_records failed: {not_read}"
                 ))
             })?;
@@ -190,7 +190,7 @@ impl ControlOperationDispatcher {
             request_origin,
         )?;
         if projects.is_empty() {
-            return Err(ControlOperationRefusal::Failed(
+            return Err(ControlOperationRefusal::failed(
                 "subscribe_project_changes failed: `projects` names no project".to_owned(),
             ));
         }
@@ -247,7 +247,7 @@ impl ControlOperationDispatcher {
             )?,
         );
         if streams.is_empty() {
-            return Err(ControlOperationRefusal::Failed(format!(
+            return Err(ControlOperationRefusal::failed(format!(
                 "{method_name} failed: `streams` names no stream"
             )));
         }
@@ -261,12 +261,12 @@ impl ControlOperationDispatcher {
                 })
                 .collect::<streamlib::sdk::error::Result<Vec<_>>>()
                 .map_err(|refusal| {
-                    ControlOperationRefusal::Failed(format!("{method_name} failed: {refusal}"))
+                    ControlOperationRefusal::of_an_engine_error(method_name, &refusal)
                 })?;
             subscriptions
                 .follow_the_streams(streams_as_loaded_now, what)
                 .map_err(|not_subscribed| {
-                    ControlOperationRefusal::Failed(format!(
+                    ControlOperationRefusal::failed(format!(
                         "{method_name} failed: {not_subscribed}"
                     ))
                 })

@@ -156,7 +156,7 @@ fn a_link_closing_no_loop_reads_nothing_of_the_running_stream() {
         !the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
             &document,
             &another_link_the_same_way,
-            &|| Err("the running stream was read".to_owned()),
+            &|| Err("the running stream was read".into()),
         )
         .unwrap()
     );
