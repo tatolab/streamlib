@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use super::LoadedStreamInThisRuntime;
 use super::RuntimeStatus;
 use super::node_interpreters::node_interpreter_launch_record::NodeInterpreterLaunchRecordOfOneStream;
-use super::operations::{BoxFuture, NodeInTheGraph, RuntimeOperations};
+use super::operations::{
+    BoxFuture, NodeInTheGraph, RuntimeOperations, WhatALiveConnectMakesOfALink,
+};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::RuntimeContext;
-use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
@@ -23,19 +24,18 @@ use crate::core::graph::input_values::{
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
     NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
-    refuse_a_link_its_pin_types_or_families_refuse,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
 };
-use crate::core::nodes::{NODE_REGISTRY, NodeSpec, NodeState};
+use crate::core::nodes::{NodeSpec, NodeState};
 use crate::core::pubsub::{LoadedStreamIdentity, RuntimeEvent};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
-use crate::iceoryx2::ChannelName;
 
+mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
-use link_ends_this_graph_cannot_take::{
-    refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
+pub(super) use link_connected_between_two_ports::{
+    connect_impl, the_verdict_connect_takes_on_a_link,
 };
 
 // =============================================================================
@@ -394,52 +394,6 @@ pub(super) async fn remove_node_impl(
     removal_outcome
 }
 
-/// Core implementation for connect - takes owned Arcs for 'static lifetime.
-///
-/// Connect judges two typed ports by their pin link verdict, and any other two
-/// by their families, names, codec and formats, and refuses a link that does
-/// not connect as it is, or that feeds a function node island into a node in
-/// the app process, by name before any channel exists.
-#[tracing::instrument(
-    name = "stream.connect",
-    skip(live_graph_change),
-    fields(from = %from, to = %to),
-)]
-pub(super) async fn connect_impl(
-    live_graph_change: LiveGraphChangeOnOneStream,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    let LiveGraphChangeOnOneStream {
-        compiler,
-        live,
-        stream,
-    } = live_graph_change;
-    let (from, to) = {
-        let from = from.with_its_port_name_cast()?;
-        let to = to.with_its_port_name_cast()?;
-        compiler.scope(|graph, _tx| graph.link_ends_under_their_current_port_names(from, to))
-    };
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
-        from: from.clone(),
-        to: to.clone(),
-    });
-
-    let link_id = apply_a_link(&compiler, from.clone(), to.clone())?;
-
-    commit_live_graph_change(&compiler, live).await?;
-
-    stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeDidConnect {
-        link_id: link_id.to_string(),
-        from,
-        to,
-    });
-    stream.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-
-    Ok(link_id)
-}
-
 /// The node `node_name` names once cast in the stream `stream_id`, whose
 /// graph `compiler` holds.
 ///
@@ -456,49 +410,6 @@ fn the_node_this_stream_names(
             name: named.display_name.clone(),
         })
     })
-}
-
-/// Add the link from `from` to `to` to the graph and queue it for wiring.
-fn apply_a_link(
-    compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
-    to: InputLinkPortRef,
-) -> Result<LinkUniqueId> {
-    let (link_id, channel) =
-        compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-            refuse_a_source_this_graph_cannot_take(graph, &from)?;
-            refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-            refuse_a_link_its_pin_types_or_families_refuse(
-                graph,
-                &from,
-                &to,
-                &NODE_REGISTRY.pin_conversions(),
-            )?;
-            refuse_a_link_feeding_an_island_into_the_app_process(graph, &from, &to)?;
-
-            let channel =
-                crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
-                    .map_err(|source| Error::InvalidLink(source.to_string()))?;
-
-            let link_id = graph
-                .traversal_mut()
-                .add_e(from, to)
-                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-                .first()
-                .map(|link| link.id.clone())
-                .ok_or_else(|| {
-                    Error::GraphError("failed to create link after validation".into())
-                })?;
-
-            Ok((link_id, channel))
-        })?;
-
-    tracing::debug!(
-        link_id = %link_id,
-        channel = channel.as_str(),
-        "connect assigned channel"
-    );
-    Ok(link_id)
 }
 
 /// Core implementation for disconnect - takes owned Arcs for 'static lifetime.
@@ -726,6 +637,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.in_this_streams_log_route(
             self.apply_a_stream_graph_operation_to_the_live_graph(graph_operation),
         )
+    }
+
+    fn what_a_live_connect_makes_of_the_link(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink> {
+        self.what_a_connect_makes_of_the_link(link)
     }
 
     fn the_name_a_node_added_with_none_takes(

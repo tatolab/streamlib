@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 5
+    "x-contract-revision": 6
   },
   "methods": [
     {
@@ -732,6 +732,67 @@
         "public"
       ],
       "x-effect": "changes",
+      "x-agent-tool-listing": "reached_through_call_operation"
+    },
+    {
+      "name": "check_link",
+      "summary": "Answer what `connect` would answer for one link in a loaded stream, changing nothing.",
+      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is `connects`, `connects_with_free_conversion` (the input reads the output's value as its own type: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String), `connects_through_convert_node` with the `convert_node` `connect` would place between the ends, or `refused` with the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Only the stream's own level is checked yet: a non-empty `level` is refused.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "params",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/CheckLinkRequest"
+          }
+        }
+      ],
+      "result": {
+        "name": "check_link_result",
+        "schema": {
+          "$ref": "#/components/schemas/LinkCheckResult"
+        }
+      },
+      "errors": [
+        {
+          "code": 1,
+          "message": "refused",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 2,
+          "message": "failed",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": -32602,
+          "message": "params do not match",
+          "data": {
+            "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+          }
+        },
+        {
+          "code": 3,
+          "message": "contract mismatch",
+          "data": {
+            "$ref": "#/components/schemas/ControlContractVersionMismatch"
+          }
+        }
+      ],
+      "x-since": 3,
+      "x-stability": "experimental",
+      "x-group": "graph",
+      "x-exposures": [
+        "studio",
+        "agent",
+        "public"
+      ],
+      "x-effect": "reads_only",
       "x-agent-tool-listing": "reached_through_call_operation"
     },
     {
@@ -8720,6 +8781,245 @@
           "target"
         ],
         "description": "The params of an edit naming one link: `connect`'s, and `disconnect`'s."
+      },
+      "CheckLinkRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stream": {
+            "type": "string",
+            "description": "The stream the edit is to: the stream id `list_streams` answers as `stream`, or its stream asset's UUID, the `asset` its graph document holds, which `list_streams` reports as its `location`'s `stream_asset`. A string in UUID form names a stream asset, and any other a stream id. A name that matches no stream the runtime holds is refused with `stream_not_found`, naming the ones it holds."
+          },
+          "level": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The subgraph the link would be inside, by the fragment nodes leading to it; omitted or empty for the stream's own level, the only level checked yet: a non-empty `level` is refused."
+          },
+          "source": {
+            "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+            "description": "The output port the link would carry from: a node's UUID and its output port's name."
+          },
+          "target": {
+            "$ref": "#/components/schemas/StreamGraphActionLinkEnd",
+            "description": "The input port the link would carry into: a node's UUID and its input port's name."
+          }
+        },
+        "required": [
+          "stream",
+          "source",
+          "target"
+        ],
+        "description": "`check_link`'s params: the link `connect` takes, without what a kept edit carries."
+      },
+      "LinkCheckResult": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/PinLinkOutcomeOnTheWire",
+            "description": "Whether and how `connect` would make the link."
+          },
+          "convert_node": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConvertNodeToInsertOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The convert node `connect` would place between the two ends; present only when\n`outcome` is `connects_through_convert_node`."
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectActionRefusalOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The whole refusal `connect` would answer, with its code; present only when `outcome` is\n`refused`."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinLinkWarningOnTheWire"
+            },
+            "description": "What the link would do that a person may not expect; none of these blocks it."
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "description": "`check_link`'s answer: whether and how `connect` would make the link, and the refusal it\nwould answer when it would not."
+      },
+      "PinLinkOutcomeOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "connects",
+            "description": "The input takes what the output carries as it is."
+          },
+          {
+            "type": "string",
+            "const": "connects_with_free_conversion",
+            "description": "The input reads what the output carries as its own type, at no cost: Boolean, Integer\nand Float among themselves, a Vector into a Vector or a Color, one number into a Vector\nor a Color, or a Menu into a String."
+          },
+          {
+            "type": "string",
+            "const": "connects_through_convert_node",
+            "description": "The two ends connect through the convert node `convert_node` names, placed between them."
+          },
+          {
+            "type": "string",
+            "const": "refused",
+            "description": "The link is not made; `refusal` says why."
+          }
+        ],
+        "description": "Whether and how a link connects. The set grows: an outcome a client does not know reads as\n`refused`.",
+        "x-may-grow": true
+      },
+      "ConvertNodeToInsertOnTheWire": {
+        "type": "object",
+        "properties": {
+          "node_type": {
+            "type": "string",
+            "description": "The node type that converts."
+          },
+          "input_port": {
+            "type": "string",
+            "description": "The input the link's output feeds."
+          },
+          "input_pin_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The type that input takes."
+          },
+          "output_port": {
+            "type": "string",
+            "description": "The output that feeds the link's input."
+          },
+          "output_pin_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The type that output gives."
+          }
+        },
+        "required": [
+          "node_type",
+          "input_port",
+          "input_pin_type",
+          "output_port",
+          "output_pin_type"
+        ],
+        "description": "The node of one built-in conversion a link is made through."
+      },
+      "PinLinkWarningOnTheWire": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "output_meaning": {
+                "type": "string",
+                "description": "The output's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "The two ends state different meanings for what they carry."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string",
+                "description": "The member."
+              },
+              "output_meaning": {
+                "type": "string",
+                "description": "The output member's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input member's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "member_meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "member",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "A member of two bundles states a different meaning at each end."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "vector_read_as_a_color"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "option_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Each such option, as the output names it."
+              },
+              "warning": {
+                "type": "string",
+                "const": "menu_options_the_input_does_not_list"
+              }
+            },
+            "required": [
+              "warning",
+              "option_names"
+            ],
+            "description": "The output may send Menu options the input does not list."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "texture_output_states_no_format"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "The output states no pixel format, so it may send one the input cannot take."
+          }
+        ],
+        "description": "What a link does that a person may not expect, tagged by its `warning`."
       },
       "ImportGraphGeneratorRequest": {
         "type": "object",

@@ -19,9 +19,10 @@ use crate::core::graph::{
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
-use crate::core::runtime::operations::RuntimeOperations;
+use crate::core::runtime::operations::{RuntimeOperations, WhatALiveConnectMakesOfALink};
 use crate::core::runtime::operations_runtime::{
     ConfigReferencesOfTheAddedNode, describe_the_type_an_add_names_when_it_must,
+    the_verdict_connect_takes_on_a_link,
 };
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -447,15 +448,49 @@ impl LoadedStreamInThisRuntime {
     }
 
     async fn connect_the_link(&self, link: &StreamGraphDocumentLink) -> Result<LinkUniqueId> {
-        let from = OutputLinkPortRef::new(
-            self.the_node_of_the_node(link.source.node)?,
-            &link.source.port,
-        );
-        let to = InputLinkPortRef::new(
-            self.the_node_of_the_node(link.target.node)?,
-            &link.target.port,
-        );
+        let (from, to) = self.the_ends_of_the_link(link)?;
         self.connect_async(from, to).await
+    }
+
+    /// What a connect of `link`, each node by its UUID, would make of it, judged as
+    /// [`Self::apply_a_stream_graph_operation_to_the_live_graph`] judges a connect and made
+    /// nowhere: a link reaching a node no node runs as is refused only as the graph as drawn
+    /// refuses it, since the live graph judges the rest of it only as it is reconciled.
+    pub(crate) fn what_a_connect_makes_of_the_link(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink> {
+        let connect =
+            self.the_operation_under_the_current_port_names(StreamGraphOperation::Connect {
+                link: link.clone(),
+            });
+        if self.the_operation_touches_a_node_no_node_runs_as(&connect) {
+            StreamGraphDocument::from_value(self.to_json()?)
+                .map_err(Error::GraphError)?
+                .apply(&connect)
+                .map_err(Error::GraphError)?;
+            return Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade);
+        }
+        let (from, to) = self.the_ends_of_the_link(link)?;
+        the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
+            .map(WhatALiveConnectMakesOfALink::Makes)
+    }
+
+    /// The output and the input `link` names, each node by its UUID.
+    fn the_ends_of_the_link(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Result<(OutputLinkPortRef, InputLinkPortRef)> {
+        Ok((
+            OutputLinkPortRef::new(
+                self.the_node_of_the_node(link.source.node)?,
+                &link.source.port,
+            ),
+            InputLinkPortRef::new(
+                self.the_node_of_the_node(link.target.node)?,
+                &link.target.port,
+            ),
+        ))
     }
 
     /// The live link `link` names by its ends; `None` when the live graph holds none, and

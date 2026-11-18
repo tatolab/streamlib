@@ -5,7 +5,7 @@
 
 export const CONTROL_CONTRACT_VERSION = 3;
 
-export const CONTROL_CONTRACT_REVISION = 5;
+export const CONTROL_CONTRACT_REVISION = 6;
 
 export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "discover",
@@ -20,6 +20,7 @@ export const CONTROL_OPERATION_METHOD_NAMES = Object.freeze([
   "transact",
   "add_node",
   "connect",
+  "check_link",
   "import_graph_generator",
   "remove_node",
   "disconnect",
@@ -96,6 +97,7 @@ export const CONTROL_EXPERIMENTAL_OPERATION_METHOD_NAMES = Object.freeze([
   "subscribe_stream_action_changes",
   "subscribe_project_log_records",
   "graph",
+  "check_link",
   "set_node_input_value",
   "read_project_changes",
 ]);

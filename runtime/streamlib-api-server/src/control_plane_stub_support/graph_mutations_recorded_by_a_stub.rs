@@ -62,6 +62,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             Box::pin(async { Ok(()) })
         }
+        fn what_a_live_connect_makes_of_the_link(
+            &self,
+            _link: &::streamlib_project_repository::StreamGraphDocumentLink,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
+            Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             node_type: &str,

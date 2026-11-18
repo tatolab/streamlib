@@ -26,6 +26,17 @@ pub struct NodeInTheGraph {
     pub name: String,
 }
 
+/// What a live connect would make of one link, judged as it judges the link and made nowhere.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhatALiveConnectMakesOfALink {
+    /// It would make the link: the verdict of two typed ends that connect, `None` for ends
+    /// their families judge.
+    Makes(Option<crate::core::descriptors::PinLinkVerdict>),
+    /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
+    /// graph judges it only as it is reconciled to a document holding it.
+    JudgesItOnlyAsItIsMade,
+}
+
 pub trait RuntimeOperations: Send + Sync {
     // =========================================================================
     // Async Methods (primary implementation - safe from any context)
@@ -59,6 +70,14 @@ pub trait RuntimeOperations: Send + Sync {
         &self,
         graph_operation: streamlib_project_repository::StreamGraphOperation,
     ) -> BoxFuture<'_, Result<streamlib_project_repository::StreamGraphOperation>>;
+
+    /// What a live connect of `link`, each node by its UUID, would make of it on this stream's
+    /// live graph, judged as [`Self::apply_a_stream_graph_operation_live`] judges a connect and
+    /// made nowhere; refused as the connect is refused.
+    fn what_a_live_connect_makes_of_the_link(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Result<WhatALiveConnectMakesOfALink>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.

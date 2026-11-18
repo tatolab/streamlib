@@ -46,9 +46,22 @@ class FrameSink:
         ctx.inputs.read(self.video_from_upstream)
 '''
 
+#: The function node `build_a_graph`'s task names as `nodes.clamp:Clamp`, whose number input a
+#: picture output does not connect to.
+CLAMP_SOURCE = '''\
+from tatolab.stream import node
+
+
+@node.function
+def Clamp(x: float = 0.0, low: float = 0.0, high: float = 1.0) -> float:  # noqa: N802
+    """`x` held between `low` and `high`."""
+    return min(max(x, low), high)
+'''
+
 #: The files of the project every script runs on.
 AGENT_LOOP_PROJECT_FILES = {
     "nodes/__init__.py": "",
+    "nodes/clamp.py": CLAMP_SOURCE,
     "nodes/frame_sink.py": FRAME_SINK_SOURCE,
     "stream.py": STREAM_WITH_ONE_TEST_PATTERN_SOURCE,
 }

@@ -10,8 +10,8 @@ use super::port_family_link_checks::{
 };
 use super::{Graph, GraphNode, InputLinkPortRef, OutputLinkPortRef, PortInfo};
 use crate::core::descriptors::{
-    PinConversion, PinLinkEnd, PinLinkInputEnd, PortFamilyLinkEndpoint, pin_link_verdict,
-    refusal_of_the_names_and_codec_a_link_carries,
+    PinConversion, PinLinkEnd, PinLinkInputEnd, PinLinkVerdict, PortFamilyLinkEndpoint,
+    pin_link_verdict, refusal_of_the_names_and_codec_a_link_carries,
 };
 use crate::core::{Error, Result};
 
@@ -38,17 +38,19 @@ fn the_typed_link_end<'graph>(
 }
 
 /// Refuse a link from `from` to `to` its verdict among `conversions`, or its families, refuse.
+/// Answers the verdict of a link between two typed ends that connects as it is, and `None` for
+/// one its families judge.
 pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,
     conversions: &[PinConversion],
-) -> Result<()> {
+) -> Result<Option<PinLinkVerdict>> {
     let (Some(from_node), Some(to_node)) = (
         graph.traversal().v(from.node_run_id()).first(),
         graph.traversal().v(to.node_run_id()).first(),
     ) else {
-        return Ok(());
+        return Ok(None);
     };
     let typed_ends = from_node
         .output_port(from.port_name())
@@ -62,15 +64,15 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
             ))
         });
     let Some((output_port, output, input_port, input)) = typed_ends else {
-        return refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to);
+        return refuse_a_link_between_ports_whose_families_do_not_match(graph, from, to)
+            .map(|()| None);
     };
     let input = PinLinkInputEnd {
         end: input,
         input_mode: input_port.input_mode,
     };
-    if let Some(refusal) =
-        pin_link_verdict(output, input, conversions).refusal_of_the_link_made_as_it_is()
-    {
+    let verdict = pin_link_verdict(output, input, conversions);
+    if let Some(refusal) = verdict.refusal_of_the_link_made_as_it_is() {
         return Err(Error::PinLinkRefused(Box::new(refusal.clone())));
     }
     if let Some(refusal) = refusal_of_the_names_and_codec_a_link_carries(
@@ -93,5 +95,5 @@ pub(crate) fn refuse_a_link_its_pin_types_or_families_refuse(
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
         refuse_what_a_link_carries_on_past_its_input(carried_on, &inputs_carried_on_to, from, to)?;
     }
-    Ok(())
+    Ok(Some(verdict))
 }
