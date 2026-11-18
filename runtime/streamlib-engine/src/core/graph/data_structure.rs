@@ -339,7 +339,7 @@ impl Graph {
                 .map(|stream_asset| stream_asset.to_string()),
             display_name: self.stream_display_name.clone(),
             stream: self.loaded_stream_id.clone(),
-            clock: crate::core::json_schema::clock_rendered(self.stream_clock_spec),
+            clock: (!self.stream_clock_spec.is_real()).then_some(self.stream_clock_spec),
             nodes: self
                 .digraph
                 .node_weights()

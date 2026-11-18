@@ -16,9 +16,10 @@ use crate::core::descriptors::{
     DeclaredPinType, NodeInputMode, PinAnnotations, PortFamilyDeclaration, SettingReadTime,
 };
 use crate::core::graph::legacy_config_of_a_node::{
-    ConfigAndPinValues, ConfigFieldDescribedAsASetting, config_of_a_node_as_drawn,
-    config_of_a_node_holding_no_pin_value, input_values_of_a_config_and_pin_values,
-    the_config_fields_a_node_of_the_type_can_expose, the_config_fields_described_as_settings,
+    ConfigAndPinValues, ConfigFieldDescribedAsASetting, LegacyConfigOfANodeType,
+    config_of_a_node_as_drawn, config_of_a_node_holding_no_pin_value,
+    input_values_of_a_config_and_pin_values, the_config_fields_a_node_of_the_type_can_expose,
+    the_config_fields_described_as_settings,
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
@@ -36,14 +37,14 @@ use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughT
 // Graph Response (/api/graph and the `graph` operation)
 // =============================================================================
 
-/// One stream's graph as `graph` answers it: the control contract's, with each link the engine
-/// renders, so it loads back as a
+/// One stream's graph as `graph` answers it: the control contract's, with each link and the
+/// clock the engine renders, so it loads back as a
 /// [`GraphSnapshot`](crate::core::graph::graph_snapshot::GraphSnapshot).
-pub type GraphResponse = StreamGraphOnTheWire<LinkOutput>;
+pub type GraphResponse = StreamGraphOnTheWire<LinkOutput, StreamClockSpec>;
 
 /// Every loaded stream's graph under the machine's name, as `graph` answers it when no stream
 /// is named.
-pub type MachineWideGraphResponse = MachineWideGraphOnTheWire<LinkOutput>;
+pub type MachineWideGraphResponse = MachineWideGraphOnTheWire<LinkOutput, StreamClockSpec>;
 
 /// A node of a stream's graph, as `graph` answers it.
 pub type GraphNodeOutput = GraphNodeOnTheWire<LinkOutput>;
@@ -62,18 +63,12 @@ pub(crate) struct InputValuesRendered {
 }
 
 impl InputValuesRendered {
-    /// `input_values`, split into `config_and_pin_values` as the node's type takes them.
-    pub(crate) fn split_as(
+    /// `input_values`, split as a node whose type `legacy_config` describes takes them.
+    pub(crate) fn split_by(
+        legacy_config: &LegacyConfigOfANodeType,
         input_values: &serde_json::Map<String, serde_json::Value>,
-        config_and_pin_values: ConfigAndPinValues,
     ) -> Self {
-        let ConfigAndPinValues { config, pin_values } = config_and_pin_values;
-        Self {
-            input_values: input_values.clone(),
-            config_checksum: crate::core::utils::compute_json_checksum(&config),
-            config,
-            pins: pin_values,
-        }
+        Self::split_as(input_values, legacy_config.split(input_values))
     }
 
     /// `input_values` of a node that has no input of its own to hold a value on, a variable or
@@ -90,35 +85,30 @@ impl InputValuesRendered {
         )
     }
 
-    /// `input_values`, as a graph document holds them, drawn over a running node whose inputs
-    /// hold `pins`: every other value is its config.
-    pub(crate) fn drawn_over_the_pins(
+    fn split_as(
         input_values: &serde_json::Map<String, serde_json::Value>,
-        pins: &serde_json::Map<String, serde_json::Value>,
+        config_and_pin_values: ConfigAndPinValues,
     ) -> Self {
-        Self::split_as(
-            input_values,
-            ConfigAndPinValues {
-                config: config_of_a_node_as_drawn(input_values, pins),
-                pin_values: pins.clone(),
-            },
-        )
-    }
-
-    /// Render these values on `node`, in place of the ones it carried.
-    pub(crate) fn render_on(self, node: &mut GraphNodeOutput) {
-        node.input_values = self.input_values;
-        node.config = Some(self.config);
-        node.config_checksum = self.config_checksum;
-        node.pins = self.pins;
+        let ConfigAndPinValues { config, pin_values } = config_and_pin_values;
+        Self {
+            input_values: input_values.clone(),
+            config_checksum: crate::core::utils::compute_json_checksum(&config),
+            config,
+            pins: pin_values,
+        }
     }
 }
 
-/// A stream's clock as `graph` renders it: its spec tagged by `mode`, absent when the stream
-/// runs on real time.
-pub(crate) fn clock_rendered(clock: StreamClockSpec) -> Option<serde_json::Value> {
-    (!clock.is_real())
-        .then(|| serde_json::to_value(clock).expect("a stream clock spec serializes as JSON"))
+/// Redraw `node` from `input_values`, as a graph document holds them, over the values its inputs
+/// already hold: every other value is its config. Its pins stay as they are.
+pub(crate) fn redraw_a_node_over_its_pins(
+    node: &mut GraphNodeOutput,
+    input_values: &serde_json::Map<String, serde_json::Value>,
+) {
+    let config = config_of_a_node_as_drawn(input_values, &node.pins);
+    node.config_checksum = crate::core::utils::compute_json_checksum(&config);
+    node.config = Some(config);
+    node.input_values = input_values.clone();
 }
 
 /// A link (connection) between two node ports.

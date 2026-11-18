@@ -31,6 +31,7 @@ use crate::core::graph::{
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphNodeKindOnTheWire, GraphNodeOutput, GraphNodePortsOnTheWire,
     GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput, LinkStateOutput,
+    redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
@@ -441,8 +442,7 @@ impl GraphFragmentAsDrawn {
                 let mut running = running_nodes_by_cast_name
                     .remove(&cast_or_as_written(&name_it_runs_under))
                     .unwrap_or_else(|| rendered_as_stored(node, node_types));
-                InputValuesRendered::drawn_over_the_pins(&node.input_values, &running.pins)
-                    .render_on(&mut running);
+                redraw_a_node_over_its_pins(&mut running, &node.input_values);
                 running
             };
             rendered.name = cast_or_as_written(&node.name);
@@ -499,12 +499,11 @@ impl GraphFragmentAsDrawn {
                 GraphInterfacePortDirection::Output => outputs.push(port),
             }
         }
-        let values = InputValuesRendered::split_as(
-            &self.node.input_values,
-            LegacyConfigOfANodeType::of_the_input_ports(
+        let values = InputValuesRendered::split_by(
+            &LegacyConfigOfANodeType::of_the_input_ports(
                 inputs.iter().map(|port| port.name.clone()),
-            )
-            .split(&self.node.input_values),
+            ),
+            &self.node.input_values,
         );
         GraphNodeOutput {
             id: self
@@ -756,8 +755,7 @@ fn rendered_as_stored(
         ),
         None => LegacyConfigOfANodeType::of(node_types, &node.node_type),
     };
-    let values =
-        InputValuesRendered::split_as(&node.input_values, legacy_config.split(&node.input_values));
+    let values = InputValuesRendered::split_by(&legacy_config, &node.input_values);
     GraphNodeOutput {
         id: node
             .id

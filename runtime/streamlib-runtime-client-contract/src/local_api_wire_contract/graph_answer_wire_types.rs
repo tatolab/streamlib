@@ -4,10 +4,10 @@
 //! The answer `graph` gives: a stream's graph, its nodes, their ports and the value each input
 //! reads. The engine builds these types and nothing mirrors them.
 //!
-//! A link is typed by the engine alone for now, so each type holding one takes the link's type
-//! as `Link`: the engine renders its own, and a client reads the default, open JSON. A port's
-//! family, audio window and stream facts, a node's live components and a stream's clock are
-//! open JSON here as well.
+//! A link and a stream's clock are typed by the engine alone, so each type holding one takes its
+//! type as `Link` or `Clock`: the engine renders its own, and a client reads the default, open
+//! JSON. A port's family, audio window and stream facts and a node's live components are open
+//! JSON here as well.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -33,12 +33,12 @@ pub enum GraphToolResult {
     derive(schemars::JsonSchema),
     schemars(rename = "MachineWideGraphOnTheWire")
 )]
-#[serde(bound(deserialize = "Link: Deserialize<'de>"))]
-pub struct MachineWideGraphOnTheWire<Link = Value> {
+#[serde(bound(deserialize = "Link: Deserialize<'de>, Clock: Deserialize<'de>"))]
+pub struct MachineWideGraphOnTheWire<Link = Value, Clock = Value> {
     /// The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`.
     pub machine: String,
     /// Each loaded stream's graph, as a call naming that stream answers it.
-    pub streams: Vec<StreamGraphOnTheWire<Link>>,
+    pub streams: Vec<StreamGraphOnTheWire<Link, Clock>>,
 }
 
 /// One stream's graph: its spec keys, the stream document's own, with the live keys beside
@@ -49,8 +49,8 @@ pub struct MachineWideGraphOnTheWire<Link = Value> {
     derive(schemars::JsonSchema),
     schemars(rename = "StreamGraphOnTheWire")
 )]
-#[serde(bound(deserialize = "Link: Deserialize<'de>"))]
-pub struct StreamGraphOnTheWire<Link = Value> {
+#[serde(bound(deserialize = "Link: Deserialize<'de>, Clock: Deserialize<'de>"))]
+pub struct StreamGraphOnTheWire<Link = Value, Clock = Value> {
     /// The UUID of the stream asset whose graph document this graph was loaded from: a spec key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
@@ -63,7 +63,7 @@ pub struct StreamGraphOnTheWire<Link = Value> {
     /// The clock the stream runs on, tagged by its `mode`: a spec key. Absent when it runs on
     /// real time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clock: Option<Value>,
+    pub clock: Option<Clock>,
     /// Every node of the stream's own level.
     pub nodes: Vec<GraphNodeOnTheWire<Link>>,
     /// Every link between those nodes' ports.

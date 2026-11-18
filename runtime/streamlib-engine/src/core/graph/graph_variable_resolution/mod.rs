@@ -26,6 +26,7 @@ use crate::core::graph::{cast_exposed_name_to_url_safe, names_listed_for_a_refus
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortOnTheWire, GraphNodePortsOnTheWire, GraphResponse,
     InputValuesRendered, LinkOutput, LinkPortRefOutput, PortKindOnTheWire,
+    redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
@@ -202,8 +203,7 @@ impl GraphVariablesAsDrawn {
             if config_of_a_node_as_drawn(&config_naming_a_get.as_resolved, &node.pins)
                 == running_config
             {
-                InputValuesRendered::drawn_over_the_pins(&config_naming_a_get.as_drawn, &node.pins)
-                    .render_on(node);
+                redraw_a_node_over_its_pins(node, &config_naming_a_get.as_drawn);
             }
         }
         for (variable_node, drawn_position) in self
