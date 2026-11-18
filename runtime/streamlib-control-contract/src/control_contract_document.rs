@@ -253,6 +253,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stream_clock_spec_with_a_scale_step_or_pace_of_zero_is_no_clock_the_contract_takes() {
+        let document = control_contract_document();
+        let schema = &document["components"]["schemas"]["StreamClockSpec"];
+        let validator = jsonschema::validator_for(schema)
+            .unwrap_or_else(|refusal| panic!("`StreamClockSpec` is a schema: {refusal}"));
+        for taken in [
+            json!({"mode": "real"}),
+            json!({"mode": "scaled", "scale": 0.5}),
+            json!({"mode": "scaled", "scale": 2.0, "step_ns": 1}),
+            json!({"mode": "stepped", "step_ns": 1}),
+            json!({"mode": "stepped", "step_ns": 1000, "pace": null}),
+            json!({"mode": "stepped", "step_ns": 1000, "pace": 0.5}),
+        ] {
+            assert!(validator.is_valid(&taken), "{taken} is a clock");
+        }
+        for refused in [
+            json!({"mode": "scaled", "scale": 0}),
+            json!({"mode": "scaled", "scale": 1.0, "step_ns": 0}),
+            json!({"mode": "stepped", "step_ns": 0}),
+            json!({"mode": "stepped", "step_ns": 1000, "pace": 0}),
+        ] {
+            assert!(!validator.is_valid(&refused), "{refused} is refused");
+        }
+    }
+
+    #[test]
     fn the_document_lists_every_registered_operation_in_table_order() {
         let document = control_contract_document();
         let method_names: Vec<&str> = document["methods"]
@@ -471,7 +497,7 @@ mod tests {
 
     #[test]
     fn every_component_schema_uses_only_the_keywords_the_contract_uses() {
-        const KEYWORDS: [&str; 16] = [
+        const KEYWORDS: [&str; 17] = [
             "type",
             "properties",
             "required",
@@ -485,6 +511,7 @@ mod tests {
             "$ref",
             "format",
             "minimum",
+            "exclusiveMinimum",
             "description",
             "default",
             "x-may-grow",

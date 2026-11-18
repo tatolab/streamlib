@@ -6439,13 +6439,14 @@
               "scale": {
                 "type": "number",
                 "format": "double",
-                "description": "Stream seconds per machine second; greater than zero."
+                "description": "Stream seconds per machine second; greater than zero.",
+                "exclusiveMinimum": 0
               },
               "step_ns": {
                 "type": "integer",
                 "format": "uint64",
-                "minimum": 0,
-                "description": "Stream nanoseconds per step when the scale runs behind the step barrier.",
+                "minimum": 1,
+                "description": "Stream nanoseconds per step when the scale runs behind the step barrier; at least one.",
                 "default": 16666667
               },
               "mode": {
@@ -6466,8 +6467,8 @@
               "step_ns": {
                 "type": "integer",
                 "format": "uint64",
-                "minimum": 0,
-                "description": "Stream nanoseconds per step; greater than zero."
+                "minimum": 1,
+                "description": "Stream nanoseconds per step; at least one."
               },
               "pace": {
                 "type": [
@@ -6475,8 +6476,9 @@
                   "null"
                 ],
                 "format": "double",
-                "description": "The multiple of real time steps are paced to; unpaced when absent.",
-                "default": null
+                "description": "The multiple of real time steps are paced to, greater than zero; unpaced when absent\nor null.",
+                "default": null,
+                "exclusiveMinimum": 0
               },
               "stop_after_steps": {
                 "type": [
@@ -7585,7 +7587,7 @@
           "process_raising_because",
           "not_ready_because"
         ],
-        "description": "What the runtime keeps on a node, each under its own key; a key is absent where the node\nkeeps nothing of that kind."
+        "description": "What the runtime keeps on a node, each under its own key. `failed_because`,\n`process_raising_because` and `not_ready_because` are always present, null when unset; every\nother key is absent where the node keeps nothing of that kind."
       },
       "NodeStateOnTheWire": {
         "oneOf": [

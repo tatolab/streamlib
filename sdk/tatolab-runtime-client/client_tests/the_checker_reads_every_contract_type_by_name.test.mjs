@@ -150,3 +150,12 @@ test("every component the schema data holds is read by its name, and a name it d
   assert.throws(() => controlContractIssues("NoSuchComponent", {}, "read"), TypeError);
   assert.throws(() => controlContractIssues("PinType", {}, "both"), TypeError);
 });
+
+test("a number with an exclusive minimum refuses that minimum and takes anything above it", () => {
+  assert.deepEqual(controlContractIssues("StreamClockSpec", { mode: "scaled", scale: 0.5 }, "read"), []);
+  assert.deepEqual(
+    controlContractIssues("StreamClockSpec", { mode: "stepped", step_ns: 1000, pace: 0 }, "read").map((issue) => issue.code),
+    ["too_small"],
+  );
+  assert.deepEqual(controlContractIssues("StreamClockSpec", { mode: "stepped", step_ns: 1000, pace: null }, "read"), []);
+});

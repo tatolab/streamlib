@@ -591,17 +591,18 @@ export type StreamClockSpec = {
    */
   scale: number;
   /**
-   * Stream nanoseconds per step when the scale runs behind the step barrier.
+   * Stream nanoseconds per step when the scale runs behind the step barrier; at least one.
    */
   step_ns?: number | bigint;
   mode: "scaled";
 }) | ({
   /**
-   * Stream nanoseconds per step; greater than zero.
+   * Stream nanoseconds per step; at least one.
    */
   step_ns: number | bigint;
   /**
-   * The multiple of real time steps are paced to; unpaced when absent.
+   * The multiple of real time steps are paced to, greater than zero; unpaced when absent
+   * or null.
    */
   pace?: number | null;
   /**
@@ -790,8 +791,9 @@ export type PortKindOnTheWire = "data" | "event" | "control";
 export type InputValueComesFromOnTheWire = "live" | "saved" | "default" | "wire";
 
 /**
- * What the runtime keeps on a node, each under its own key; a key is absent where the node
- * keeps nothing of that kind.
+ * What the runtime keeps on a node, each under its own key. `failed_because`,
+ * `process_raising_because` and `not_ready_because` are always present, null when unset; every
+ * other key is absent where the node keeps nothing of that kind.
  */
 export interface GraphNodeComponentsOnTheWire {
   /**

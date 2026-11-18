@@ -11,8 +11,9 @@ use serde_json::{Map, Value};
 
 use super::{GraphInterfacePortOnTheWire, GraphVariableOnTheWire};
 
-/// What the runtime keeps on a node, each under its own key; a key is absent where the node
-/// keeps nothing of that kind.
+/// What the runtime keeps on a node, each under its own key. `failed_because`,
+/// `process_raising_because` and `not_ready_because` are always present, null when unset; every
+/// other key is absent where the node keeps nothing of that kind.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct GraphNodeComponentsOnTheWire {
