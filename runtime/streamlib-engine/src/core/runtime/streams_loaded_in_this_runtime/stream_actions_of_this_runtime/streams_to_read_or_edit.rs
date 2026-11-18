@@ -75,25 +75,27 @@ impl Runner {
         &self,
         stream_ids: &[String],
     ) -> Result<StreamsToReadOrEdit<'_>> {
+        let each_loaded: Option<HashMap<String, Arc<dyn RuntimeOperations>>> = stream_ids
+            .iter()
+            .map(|stream_id| {
+                self.loaded_stream_of_the_id_when_loaded(stream_id)
+                    .map(|loaded| (stream_id.clone(), loaded as Arc<dyn RuntimeOperations>))
+            })
+            .collect();
+        if let Some(each_loaded) = each_loaded {
+            return Ok(StreamsToReadOrEdit::of_streams_each_loaded(each_loaded));
+        }
+        // One of them is not loaded: resolve every one of them while no stream action runs, so
+        // none is loaded or unloaded between its lookup and the edits made through it.
         let mut streams = StreamsToReadOrEdit::of_streams_each_loaded(HashMap::new());
+        streams.no_stream_action_while_any_is_held =
+            Some(self.stream_actions.one_stream_action_at_a_time.lock());
         for stream_id in stream_ids {
             if streams
                 .runtime_operations_of_each_stream
                 .contains_key(stream_id)
             {
                 continue;
-            }
-            if streams.no_stream_action_while_any_is_held.is_none()
-                && let Some(loaded) = self.loaded_stream_of_the_id_when_loaded(stream_id)
-            {
-                streams
-                    .runtime_operations_of_each_stream
-                    .insert(stream_id.clone(), loaded as Arc<dyn RuntimeOperations>);
-                continue;
-            }
-            if streams.no_stream_action_while_any_is_held.is_none() {
-                streams.no_stream_action_while_any_is_held =
-                    Some(self.stream_actions.one_stream_action_at_a_time.lock());
             }
             let stream_operations: Arc<dyn RuntimeOperations> =
                 match self.loaded_stream_of_the_id_when_loaded(stream_id) {

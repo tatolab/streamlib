@@ -475,7 +475,29 @@ exit 1
     );
 
     std::fs::write(&uv_released, "").expect("uv is released");
-    the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+    let finished = the_stream_action_once_finished(operations_on_the_loaded_streams, &action).await;
+    assert_eq!(finished["state"], "done", "{finished}");
+    let listed = tool_answer(
+        &tool_call_result(
+            Arc::clone(operations_on_the_loaded_streams),
+            "list_streams",
+            json!({}),
+        )
+        .await,
+    )
+    .expect("list_streams answers");
+    let listed_main = listed["streams"]
+        .as_array()
+        .expect("the streams listed")
+        .iter()
+        .find(|listed_stream| listed_stream["stream"] == main.as_str())
+        .unwrap_or_else(|| panic!("the stream is listed: {listed}"));
+    // The held uv exits failing, so the stream is loaded failed for its venv, its graph in the
+    // stream table.
+    assert_eq!(
+        listed_main["node_count"], 2,
+        "the stream loaded with the edit rather than being held from its document: {listed_main}"
+    );
     let read_once_loaded = tool_answer(
         &tool_call_result(
             Arc::clone(operations_on_the_loaded_streams),
