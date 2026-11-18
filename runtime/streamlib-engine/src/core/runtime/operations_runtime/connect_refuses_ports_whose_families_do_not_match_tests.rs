@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{ALinkConnected, LiveGraphChangeOnOneStream, connect_impl};
+use super::{
+    ALinkConnected, ALinkConnectedOrSetAside, LiveGraphChangeOnOneStream,
+    WhenTheEngineCannotWireALink, connect_impl,
+};
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
     NodeClassImportPath, NodeClassShortName, NodeDescriptor, OutputPortDeclaredNames,
@@ -162,7 +165,9 @@ fn connect_on_this_thread(
             from,
             to,
             ALinkConnected::MadeNow,
+            WhenTheEngineCannotWireALink::Refuse,
         ))
+        .and_then(ALinkConnectedOrSetAside::connected)
 }
 
 fn the_links_in(compiler: &Compiler) -> usize {

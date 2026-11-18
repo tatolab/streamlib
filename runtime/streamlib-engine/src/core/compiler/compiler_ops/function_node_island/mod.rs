@@ -13,10 +13,15 @@
 mod island_edit_refusals;
 mod island_placement;
 
-use island_edit_refusals::the_refusal_of_an_island_fed_into_the_app_process;
 pub(crate) use island_edit_refusals::{
     refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+    refuse_a_link_leaving_a_reactive_reader_fed_only_by_islands,
+    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands,
     refuse_an_edit_an_island_cannot_take,
+};
+use island_edit_refusals::{
+    the_refusal_of_a_reactive_reader_fed_only_by_islands,
+    the_refusal_of_an_island_fed_into_the_app_process,
 };
 pub(crate) use island_placement::{the_island_feeding_a_link, the_state_fields_of_a_function_node};
 
@@ -277,12 +282,8 @@ fn open_the_reads_an_island_link_needs_at_its_reader(
     island_link_id: &LinkUniqueId,
     iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
-    let function_node_ids: Vec<NodeRunId> =
-        the_function_nodes_an_island_link_evaluates(graph, island_link_id)
-            .into_iter()
-            .collect();
     for link_into_the_island in
-        the_links_into_function_nodes_from_outside_any_island(graph, &function_node_ids)
+        the_links_an_island_link_reads_from_outside_any_island(graph, island_link_id)
     {
         open_a_read_of_a_link_at_the_reader_of_an_island_link_unless_open(
             graph,
@@ -341,6 +342,19 @@ pub(crate) fn close_the_channels_no_island_reads_any_more(graph: &mut Graph) -> 
         )?;
     }
     Ok(())
+}
+
+/// Each link from outside any island that island link `island_link_id`, which `graph` holds,
+/// reads at its reader: one into a function node the island link evaluates.
+pub(crate) fn the_links_an_island_link_reads_from_outside_any_island(
+    graph: &Graph,
+    island_link_id: &LinkUniqueId,
+) -> Vec<LinkUniqueId> {
+    let function_node_ids: Vec<NodeRunId> =
+        the_function_nodes_an_island_link_evaluates(graph, island_link_id)
+            .into_iter()
+            .collect();
+    the_links_into_function_nodes_from_outside_any_island(graph, &function_node_ids)
 }
 
 /// The links into the function nodes `function_node_ids` from nodes outside
@@ -413,11 +427,9 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
     if reader_link_wiring.far_side_process_execution() == ProcessExecution::Reactive
         && !is_fed_by_a_node_that_is_not_a_function_node(graph, &reader_id)
     {
-        return Err(Error::InvalidLink(format!(
-            "`{reader_id}` runs reactively and only function node islands feed it, and an \
-             island has no source to wake it, so it would never run. To fix: declare it \
-             `execution=\"continuous\"` with an `interval_ms`, or link it a source"
-        )));
+        return Err(the_refusal_of_a_reactive_reader_fed_only_by_islands(
+            &reader_id,
+        ));
     }
     let function_node_ids = the_function_node_ids_an_island_calls(&island);
     open_the_reads_an_island_link_needs_at_its_reader(graph, link_id, iceoryx2_node)?;
@@ -743,7 +755,7 @@ fn mark_a_link(graph: &mut Graph, link_id: &LinkUniqueId, link_state: LinkState)
 
 /// The nodes outside any island that `function_node_id`'s outputs reach,
 /// through the function nodes downstream of it.
-fn the_readers_a_function_node_feeds(
+pub(crate) fn the_readers_a_function_node_feeds(
     graph: &Graph,
     function_node_id: &NodeRunId,
 ) -> HashSet<NodeRunId> {

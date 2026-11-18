@@ -537,7 +537,7 @@ fn the_host_input_port_of_a_fused_input_is_already_in_cast_form() {
 /// placed on no island, so the compile goes on and the rest of the stream plays; a shader node
 /// outside the cycle is placed as ever.
 ///
-/// Mental-revert: refusing the placement, as it once did, fails the whole stream at its start.
+/// Mental-revert: refusing the placement fails the whole stream at its start.
 #[test]
 fn shader_nodes_reading_their_own_image_in_a_cycle_are_failed_on_their_nodes() {
     let mut graph = a_graph_resolving_shader_and_process_types();

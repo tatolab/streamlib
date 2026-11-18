@@ -11,7 +11,8 @@ use serde_json::Value;
 use parking_lot::Mutex;
 
 use super::{
-    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, disconnect_impl,
+    ALinkConnected, ALinkConnectedOrSetAside, LiveGraphChangeOnOneStream,
+    WhenTheEngineCannotWireALink, connect_impl, disconnect_impl,
     mark_the_node_and_each_of_its_links_pending_deletion, the_node_this_stream_names,
 };
 use crate::core::compiler::{Compiler, PendingOperation};
@@ -146,7 +147,9 @@ fn connect_wires_a_producer_to_a_consumer_without_warning() {
                 from,
                 to,
                 ALinkConnected::MadeNow,
+                WhenTheEngineCannotWireALink::Refuse,
             ))
+            .and_then(ALinkConnectedOrSetAside::connected)
     });
 
     result.expect("connect wires two Image ports");
@@ -171,7 +174,9 @@ fn removing_a_node_logs_every_incident_link_ahead_of_the_node() {
             from,
             to,
             ALinkConnected::MadeNow,
+            WhenTheEngineCannotWireALink::Refuse,
         ))
+        .and_then(ALinkConnectedOrSetAside::connected)
         .expect("the link is created");
     compiler
         .scope(|graph, tx| {
@@ -221,7 +226,9 @@ fn connect_on_this_thread(
             from,
             to,
             ALinkConnected::MadeNow,
+            WhenTheEngineCannotWireALink::Refuse,
         ))
+        .and_then(ALinkConnectedOrSetAside::connected)
 }
 
 /// The display name the graph gave one of the fixture's nodes.

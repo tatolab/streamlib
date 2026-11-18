@@ -17,18 +17,20 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::refuse_a_pin_val
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::UnlinkedInputValuesDelivery;
 use crate::core::compiler::compiler_ops::unlinked_input_values_delivery::deliver_the_unlinked_input_values_of_each_node;
 use crate::core::descriptors::NodeValueLifetime;
-use crate::core::graph::graph_snapshot::{
-    GraphSnapshot, LinkSetAsideByTheGraphsValidation, NodeChangeADrawnLinkBlocks,
-};
+use crate::core::graph::graph_snapshot::{GraphSnapshot, LinkSetAside, NodeChangeADrawnLinkBlocks};
 use crate::core::graph::input_values::{the_input_value_change, the_lifetime_of_the_input};
 use crate::core::graph::legacy_config_of_a_node::{
     input_values_of_a_config_and_pin_values, node_spec_holding_the_input_values,
 };
-use crate::core::graph::{Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe};
+use crate::core::graph::{
+    ALinkConnected, Graph, LinkUniqueId, NodeRunId, cast_exposed_name_to_url_safe,
+};
 use crate::core::nodes::NodeSpec;
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::RuntimeOperations;
-use crate::core::runtime::operations_runtime::ALinkOfASavedGraphMade;
+use crate::core::runtime::operations_runtime::{
+    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
+};
 use crate::core::runtime::streams_loaded_in_this_runtime::stream_actions_of_this_runtime::LoadedStreamHolding;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
@@ -36,6 +38,25 @@ impl LoadedStreamInThisRuntime {
     // =========================================================================
     // Graph operations
     // =========================================================================
+
+    /// `links` with each from a function node after the others, so a saved graph links each
+    /// reader its own sources before an island feeding it is judged; `the_node_a_link_leaves`
+    /// finds the node a link comes from.
+    pub(in crate::core::runtime) fn links_from_function_nodes_last<'links, Link>(
+        &self,
+        links: &'links [Link],
+        the_node_a_link_leaves: impl Fn(&Link) -> Option<NodeRunId>,
+    ) -> Vec<&'links Link> {
+        let mut ordered: Vec<&Link> = links.iter().collect();
+        self.compiler.scope_reading(|graph| {
+            ordered.sort_by_key(|link| {
+                the_node_a_link_leaves(link).is_some_and(|source_node| {
+                    runs_inside_the_read_of_each_node_it_feeds(graph, &source_node)
+                })
+            });
+        });
+        ordered
+    }
 
     pub fn add_node(&self, spec: impl Into<NodeSpec>) -> Result<NodeRunId> {
         <Self as RuntimeOperations>::add_node(self, spec.into())
@@ -362,9 +383,9 @@ impl LoadedStreamInThisRuntime {
     /// every type it names that no native registration holds described in the
     /// stream's own interpreter, the graph validated against what the stream
     /// resolves, each node added under its name, and each link connected by
-    /// name as a saved graph's link. A link the engine cannot wire is set aside
-    /// on a stream the runtime records, so it opens and plays without it, and
-    /// refused on any other.
+    /// name as a saved graph's link, each from a function node after the
+    /// others. A link the engine cannot wire is set aside, so the stream opens
+    /// and plays without it.
     pub(crate) fn load_graph_snapshot_into_this_stream(
         &self,
         graph: &GraphSnapshot,
@@ -439,7 +460,9 @@ impl LoadedStreamInThisRuntime {
         };
 
         let mut links_the_engine_cannot_wire = Vec::new();
-        for link in &graph.links {
+        for link in self.links_from_function_nodes_last(&graph.links, |link| {
+            node_run_id_of(&link.source.node).ok()
+        }) {
             let refused_as_a_link_of_the_graph = |refusal: Error| match resolution
                 .graph_only_nodes_as_drawn
                 .variables_as_drawn
@@ -460,31 +483,24 @@ impl LoadedStreamInThisRuntime {
                 None => refusal,
             };
             let made = self
-                .connect_a_link_of_a_saved_graph(
+                .block_on_the_engines_tokio_runtime(connect_impl(
+                    self.live_graph_change(),
                     OutputLinkPortRef::new(node_run_id_of(&link.source.node)?, &link.source.port),
                     InputLinkPortRef::new(node_run_id_of(&link.target.node)?, &link.target.port),
-                )
+                    ALinkConnected::OfASavedGraph,
+                    WhenTheEngineCannotWireALink::SetAside,
+                ))
                 .map_err(refused_as_a_link_of_the_graph)?;
-            match made {
-                ALinkOfASavedGraphMade::Connected => {}
-                ALinkOfASavedGraphMade::SetAside(why_the_engine_cannot_wire_it)
-                    if self.holding == LoadedStreamHolding::RecordedByTheRuntime =>
-                {
-                    links_the_engine_cannot_wire.push(LinkSetAsideByTheGraphsValidation {
-                        link: link.clone(),
-                        why_its_validation_refused_it: why_the_engine_cannot_wire_it.to_string(),
-                    });
-                }
-                ALinkOfASavedGraphMade::SetAside(why_the_engine_cannot_wire_it) => {
-                    return Err(refused_as_a_link_of_the_graph(
-                        why_the_engine_cannot_wire_it,
-                    ));
-                }
+            if let ALinkConnectedOrSetAside::SetAside(why_the_engine_cannot_wire_it) = made {
+                links_the_engine_cannot_wire.push(LinkSetAside::because_of(
+                    link.clone(),
+                    &why_the_engine_cannot_wire_it,
+                ));
             }
         }
         resolution
             .graph_only_nodes_as_drawn
-            .links_its_validation_set_aside
+            .links_set_aside
             .extend(links_the_engine_cannot_wire);
         *self.graph_only_nodes_as_drawn.lock() = resolution.graph_only_nodes_as_drawn;
         self.hold_the_live_values_the_project_store_keeps();

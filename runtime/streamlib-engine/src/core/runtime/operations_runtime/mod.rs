@@ -16,6 +16,10 @@ use super::operations::{
 use super::runtime::TokioRuntimeVariant;
 use super::streams_loaded_in_this_runtime::live_graph_reconciled_to_a_graph_document::LinksAReconcileMakes;
 use crate::core::RuntimeContext;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands,
+    runs_inside_the_read_of_each_node_it_feeds,
+};
 use crate::core::compiler::{Compiler, CompilerTransactionHandle, PendingOperation};
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::graph::graph_snapshot::NodeChangeADrawnLinkBlocks;
@@ -37,8 +41,8 @@ use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 mod link_connected_between_two_ports;
 mod link_ends_this_graph_cannot_take;
 pub(super) use link_connected_between_two_ports::{
-    ALinkOfASavedGraphMade, connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it,
-    connect_impl, the_verdict_connect_takes_on_a_link,
+    ALinkConnectedOrSetAside, WhenTheEngineCannotWireALink, connect_impl,
+    refuse_a_held_link_the_engine_cannot_wire, the_verdict_connect_takes_on_a_link,
 };
 
 // =============================================================================
@@ -46,6 +50,42 @@ pub(super) use link_connected_between_two_ports::{
 // =============================================================================
 
 type LiveCommitContext = Option<Arc<RuntimeContext>>;
+
+/// Refuse `removal` from `graph` when it leaves a reader it does not take out that runs
+/// reactively, fed only by function node islands, which have no source to wake it.
+fn refuse_a_removal_that_strands_a_reactive_reader(
+    graph: &Graph,
+    removal: ARemoval<'_>,
+) -> Result<()> {
+    let links_removed: Vec<LinkUniqueId> = graph
+        .traversal()
+        .e(())
+        .iter()
+        .filter(|link| match removal {
+            ARemoval::OfALink(link_id) => &link.id == link_id,
+            ARemoval::OfANode(node_run_id) => {
+                link.source().node_run_id() == node_run_id
+                    || link.to_port().node_run_id() == node_run_id
+            }
+        })
+        .map(|link| link.id.clone())
+        .collect();
+    refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
+        graph,
+        &links_removed,
+        |reader_id| {
+            !matches!(removal, ARemoval::OfANode(node_run_id) if node_run_id == reader_id)
+                && !runs_inside_the_read_of_each_node_it_feeds(graph, reader_id)
+        },
+    )
+}
+
+/// One edit that takes something out of a stream's graph.
+#[derive(Clone, Copy)]
+enum ARemoval<'removed> {
+    OfANode(&'removed NodeRunId),
+    OfALink(&'removed LinkUniqueId),
+}
 
 /// What every graph change on one stream works through: the stream's
 /// compiler, the context it compiles against right away, if any, and the
@@ -534,7 +574,7 @@ impl LoadedStreamInThisRuntime {
 
     /// Run `operation` to completion from synchronous code, whichever tokio
     /// runtime the engine runs on, with this stream's log route entered.
-    fn block_on_the_engines_tokio_runtime<T: Send + 'static>(
+    pub(super) fn block_on_the_engines_tokio_runtime<T: Send + 'static>(
         &self,
         operation: impl std::future::Future<Output = Result<T>> + Send + 'static,
     ) -> Result<T> {
@@ -577,22 +617,14 @@ impl LoadedStreamInThisRuntime {
         ))
     }
 
-    /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// or Image formats alone refuse it is kept when its ports' families take it, and one the
-    /// engine cannot wire is not made, answered with why.
-    pub(in crate::core::runtime) fn connect_a_link_of_a_saved_graph(
+    /// Refuse `removal` when it leaves a reader it does not take out that runs reactively, fed
+    /// only by function node islands, which have no source to wake it.
+    fn refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
         &self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-    ) -> Result<ALinkOfASavedGraphMade> {
-        self.block_on_the_engines_tokio_runtime(
-            connect_a_link_of_a_saved_graph_unless_the_engine_cannot_wire_it(
-                self.live_graph_change(),
-                from,
-                to,
-                ALinkConnected::OfASavedGraph,
-            ),
-        )
+        removal: ARemoval<'_>,
+    ) -> Result<()> {
+        self.compiler
+            .scope_reading(|graph| refuse_a_removal_that_strands_a_reactive_reader(graph, removal))
     }
 
     /// Bring this stream's live graph to the graph `graph_document` holds, from synchronous
@@ -631,10 +663,17 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
     }
 
     fn remove_node_async(&self, node_run_id: NodeRunId) -> BoxFuture<'_, Result<()>> {
-        if let Err(refusal) = self.refuse_a_node_change_a_drawn_link_names(
-            &node_run_id,
-            NodeChangeADrawnLinkBlocks::Removal,
-        ) {
+        if let Err(refusal) = self
+            .refuse_a_node_change_a_drawn_link_names(
+                &node_run_id,
+                NodeChangeADrawnLinkBlocks::Removal,
+            )
+            .and_then(|()| {
+                self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
+                    ARemoval::OfANode(&node_run_id),
+                )
+            })
+        {
             return Box::pin(std::future::ready(Err(refusal)));
         }
         self.in_this_streams_log_route(remove_node_impl(self.live_graph_change(), node_run_id))
@@ -645,15 +684,22 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        self.in_this_streams_log_route(connect_impl(
+        let connect = connect_impl(
             self.live_graph_change(),
             from,
             to,
             ALinkConnected::MadeNow,
-        ))
+            WhenTheEngineCannotWireALink::Refuse,
+        );
+        self.in_this_streams_log_route(async move { connect.await?.connected() })
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
+        if let Err(refusal) = self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(
+            ARemoval::OfALink(&link_id),
+        ) {
+            return Box::pin(std::future::ready(Err(refusal)));
+        }
         self.in_this_streams_log_route(disconnect_impl(self.live_graph_change(), link_id))
     }
 
@@ -875,6 +921,9 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             node_run_id,
             NodeChangeADrawnLinkBlocks::Removal,
         )?;
+        self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(ARemoval::OfANode(
+            node_run_id,
+        ))?;
         self.block_on_the_engines_tokio_runtime(remove_node_impl(
             self.live_graph_change(),
             node_run_id.clone(),
@@ -887,10 +936,15 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             from,
             to,
             ALinkConnected::MadeNow,
-        ))
+            WhenTheEngineCannotWireALink::Refuse,
+        ))?
+        .connected()
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
+        self.refuse_a_removal_leaving_a_reactive_reader_fed_only_by_islands(ARemoval::OfALink(
+            link_id,
+        ))?;
         self.block_on_the_engines_tokio_runtime(disconnect_impl(
             self.live_graph_change(),
             link_id.clone(),

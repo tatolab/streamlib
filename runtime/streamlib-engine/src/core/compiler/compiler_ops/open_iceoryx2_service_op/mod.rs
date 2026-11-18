@@ -5,6 +5,7 @@ mod channel_service_naming_and_sizing;
 mod link_destination_side;
 mod link_source_side;
 
+pub(crate) use channel_service_naming_and_sizing::refuse_a_link_a_channel_cannot_carry;
 pub(crate) use link_source_side::{
     SourceSideHeldOpenForAReaderOnTheReservedSlot,
     open_the_source_side_for_a_reader_on_the_reserved_slot,

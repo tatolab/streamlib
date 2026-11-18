@@ -92,7 +92,17 @@ impl LoadedStreamInThisRuntime {
                     }
                 };
                 node.name = added.name;
-                for link in &links {
+                let links_and_the_nodes_they_leave: Vec<(
+                    &StreamGraphDocumentLink,
+                    Option<NodeRunId>,
+                )> = links
+                    .iter()
+                    .map(|link| (link, self.the_node_of_the_node(link.source.node).ok()))
+                    .collect();
+                for (link, _) in self.links_from_function_nodes_last(
+                    &links_and_the_nodes_they_leave,
+                    |(_, the_node_it_leaves)| the_node_it_leaves.clone(),
+                ) {
                     if let Err(refusal) = self.connect_the_link(link).await {
                         self.take_out_the_node_a_refused_add_left(node.id, &refusal)
                             .await;

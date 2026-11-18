@@ -10,7 +10,8 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{
-    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link,
+    ALinkConnected, ALinkConnectedOrSetAside, LiveGraphChangeOnOneStream,
+    WhenTheEngineCannotWireALink, connect_impl, the_verdict_connect_takes_on_a_link,
 };
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
@@ -359,7 +360,9 @@ fn connect_on_this_thread_as(
             from,
             to,
             a_link_connected,
+            WhenTheEngineCannotWireALink::Refuse,
         ))
+        .and_then(ALinkConnectedOrSetAside::connected)
 }
 
 fn the_links_in(compiler: &Compiler) -> usize {

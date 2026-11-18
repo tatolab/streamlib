@@ -28,21 +28,29 @@ pub struct GraphOnlyNodesAsDrawn {
     pub interface_as_drawn: GraphInterfaceAsDrawn,
     pub groups_as_drawn: Vec<LabelledNodeGroup>,
     pub studio_as_drawn: Option<serde_json::Value>,
-    pub links_its_validation_set_aside: Vec<LinkSetAsideByTheGraphsValidation>,
+    pub links_set_aside: Vec<LinkSetAside>,
 }
 
-/// A link of a graph document its validation refused, or the engine cannot wire, held as drawn
-/// and never wired, so the stream's graph still reads and edits and the stream plays without it.
+/// A link of a graph document held as drawn and never wired, because the graph's validation
+/// refuses it or the engine cannot wire it, so the stream's graph still reads and edits and the
+/// stream plays without it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LinkSetAsideByTheGraphsValidation {
+pub struct LinkSetAside {
     /// The link as the document draws it.
     pub link: GraphSnapshotLink,
-    /// Why the graph's validation refused it, or the engine cannot wire it, in the runtime's
-    /// words.
-    pub why_its_validation_refused_it: String,
+    /// Why it is set aside, in the runtime's words.
+    pub why_it_is_set_aside: String,
 }
 
-impl LinkSetAsideByTheGraphsValidation {
+impl LinkSetAside {
+    /// `link`, set aside for `refusal`.
+    pub fn because_of(link: GraphSnapshotLink, refusal: &Error) -> Self {
+        Self {
+            link,
+            why_it_is_set_aside: refusal.to_string(),
+        }
+    }
+
     /// The link and why it is refused, as a reader is told it.
     pub fn described(&self) -> String {
         format!(
@@ -51,7 +59,7 @@ impl LinkSetAsideByTheGraphsValidation {
             self.link.source.port,
             self.link.target.node,
             self.link.target.port,
-            self.why_its_validation_refused_it
+            self.why_it_is_set_aside
         )
     }
 }
@@ -172,7 +180,7 @@ impl GraphOnlyNodesAsDrawn {
                 .map(std::borrow::Cow::into_owned)
                 .unwrap_or_else(|_| name.to_string())
         };
-        for set_aside in &self.links_its_validation_set_aside {
+        for set_aside in &self.links_set_aside {
             graph_response
                 .links
                 .push(crate::core::json_schema::LinkOutput {
@@ -187,7 +195,7 @@ impl GraphOnlyNodesAsDrawn {
                     },
                     capacity: 0,
                     state: crate::core::json_schema::LinkStateOutput::Error,
-                    error_reason: Some(set_aside.why_its_validation_refused_it.clone()),
+                    error_reason: Some(set_aside.why_it_is_set_aside.clone()),
                     components: serde_json::Map::new(),
                 });
         }
@@ -226,11 +234,8 @@ impl GraphSnapshotWithGraphOnlyNodesResolved {
             };
             if let Some(link) = self.graph_the_runtime_runs.links.pop() {
                 self.graph_only_nodes_as_drawn
-                    .links_its_validation_set_aside
-                    .push(LinkSetAsideByTheGraphsValidation {
-                        link,
-                        why_its_validation_refused_it: link_refusal.to_string(),
-                    });
+                    .links_set_aside
+                    .push(LinkSetAside::because_of(link, &link_refusal));
             }
         }
         Ok(self)

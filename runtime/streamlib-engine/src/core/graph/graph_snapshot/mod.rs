@@ -24,8 +24,8 @@ pub(crate) use graph_document_refusals_and_link_end_naming::{
     the_ports_of_a_graph_document_node,
 };
 pub use graph_only_nodes_as_drawn::{
-    GraphOnlyNodesAsDrawn, GraphSnapshotWithGraphOnlyNodesResolved,
-    LinkSetAsideByTheGraphsValidation, NodeChangeADrawnLinkBlocks,
+    GraphOnlyNodesAsDrawn, GraphSnapshotWithGraphOnlyNodesResolved, LinkSetAside,
+    NodeChangeADrawnLinkBlocks,
 };
 
 use std::collections::HashMap;
@@ -459,7 +459,7 @@ impl GraphSnapshot {
                 interface_as_drawn: interface.interface_as_drawn,
                 groups_as_drawn: self.groups.clone(),
                 studio_as_drawn: self.studio.clone(),
-                links_its_validation_set_aside: Vec::new(),
+                links_set_aside: Vec::new(),
             },
             values_the_set_variables_hold: variables.values_the_set_variables_hold,
         })

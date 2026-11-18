@@ -5,7 +5,9 @@
 
 use crate::core::NodeRunId;
 use crate::core::compiler::compiler_ops::function_node_island::{
-    runs_inside_the_read_of_each_node_it_feeds, the_reader_input_ports_a_function_node_feeds,
+    runs_inside_the_read_of_each_node_it_feeds,
+    the_links_an_island_link_reads_from_outside_any_island,
+    the_reader_input_ports_a_function_node_feeds, the_readers_a_function_node_feeds,
 };
 use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
@@ -85,6 +87,16 @@ fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize
 /// A source output port past the cap is refused here by name, before any
 /// service is touched.
 pub(super) fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<usize> {
+    refuse_an_output_port_past_its_destination_cap(graph, source)?;
+    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL)
+}
+
+/// Refuse the output port `source` when its channel would feed more destinations than a
+/// channel carries.
+fn refuse_an_output_port_past_its_destination_cap(
+    graph: &Graph,
+    source: &OutputLinkPortRef,
+) -> Result<()> {
     let destinations = channel_destination_count(graph, source);
     if destinations > MAX_DESTINATIONS_PER_CHANNEL {
         return Err(Error::Configuration(format!(
@@ -92,7 +104,94 @@ pub(super) fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef)
              carries at most {MAX_DESTINATIONS_PER_CHANNEL}"
         )));
     }
-    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_PUBLISHER_SUBSCRIBER_SLOTS_PER_CHANNEL)
+    Ok(())
+}
+
+/// Refuse `link_id`, which `graph` holds, when its wiring would refuse it for what a channel
+/// carries: a second link into a port that windows, an output port past its destination cap,
+/// or a destination past its inbound cap, each counted from the graph as the stream wires it.
+pub(crate) fn refuse_a_link_a_channel_cannot_carry(
+    graph: &Graph,
+    link_id: &LinkUniqueId,
+) -> Result<()> {
+    let link = graph
+        .traversal()
+        .e(link_id)
+        .first()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    let destination_id = link.to_port().node_run_id();
+    let destination_port = link.to_port().port_name();
+    if audio_windowing_declared_by_input_port_of(graph, destination_id, destination_port)?.is_some()
+    {
+        refuse_a_second_inbound_link_into_a_windowed_port(
+            graph,
+            destination_id,
+            destination_port,
+            link_id,
+        )?;
+    }
+    let sources_it_feeds_more_from: Vec<OutputLinkPortRef> =
+        if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
+            the_links_an_island_link_reads_from_outside_any_island(graph, link_id)
+                .iter()
+                .filter_map(|read_link_id| graph.traversal().e(read_link_id).first())
+                .map(|read_link| read_link.source().clone())
+                .collect()
+        } else {
+            vec![link.source().clone()]
+        };
+    for source in &sources_it_feeds_more_from {
+        refuse_an_output_port_past_its_destination_cap(graph, source)?;
+    }
+    let destinations_it_feeds_more_into =
+        if runs_inside_the_read_of_each_node_it_feeds(graph, destination_id) {
+            the_readers_a_function_node_feeds(graph, destination_id)
+        } else {
+            std::collections::HashSet::from([destination_id.clone()])
+        };
+    for reader_id in &destinations_it_feeds_more_into {
+        refuse_a_destination_past_its_inbound_cap(
+            reader_id,
+            the_inbound_links_a_destination_holds_once_wired(graph, reader_id),
+        )?;
+    }
+    Ok(())
+}
+
+/// The inbound links `dest_proc_id` holds once the graph is wired: one for each link into it
+/// through a channel, and one for each link from outside any island that a link from an island
+/// into it reads.
+fn the_inbound_links_a_destination_holds_once_wired(
+    graph: &Graph,
+    dest_proc_id: &NodeRunId,
+) -> usize {
+    graph
+        .traversal()
+        .v(dest_proc_id)
+        .in_e()
+        .iter()
+        .map(|link| {
+            if runs_inside_the_read_of_each_node_it_feeds(graph, link.source().node_run_id()) {
+                the_links_an_island_link_reads_from_outside_any_island(graph, &link.id).len()
+            } else {
+                1
+            }
+        })
+        .sum()
+}
+
+/// Refuse `dest_proc_id` when it would hold `inbound_links`, more than a destination carries.
+fn refuse_a_destination_past_its_inbound_cap(
+    dest_proc_id: &NodeRunId,
+    inbound_links: usize,
+) -> Result<()> {
+    if inbound_links > MAX_INBOUND_LINKS_PER_DESTINATION {
+        return Err(Error::Configuration(format!(
+            "node '{dest_proc_id}' would hold {inbound_links} inbound links, and a \
+             destination carries at most {MAX_INBOUND_LINKS_PER_DESTINATION}"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether a channel created now makes room for a windowed reader the
@@ -245,13 +344,10 @@ pub(super) fn destination_max_notifiers(
                 })
         })
         .sum();
-    let inbound_links = links_into_it_through_a_channel + links_read_through_it_into_its_islands;
-    if inbound_links > MAX_INBOUND_LINKS_PER_DESTINATION {
-        return Err(Error::Configuration(format!(
-            "node '{dest_proc_id}' would hold {inbound_links} inbound links, and a \
-             destination carries at most {MAX_INBOUND_LINKS_PER_DESTINATION}"
-        )));
-    }
+    refuse_a_destination_past_its_inbound_cap(
+        dest_proc_id,
+        links_into_it_through_a_channel + links_read_through_it_into_its_islands,
+    )?;
     Ok(MAX_INBOUND_LINKS_PER_DESTINATION)
 }
 
@@ -318,13 +414,13 @@ pub(super) fn audio_windowing_declared_by_input_port_of(
 /// audio — the worst outcome available to a contract whose whole promise is
 /// that a window is exact.
 pub(super) fn refuse_a_second_inbound_link_into_a_windowed_port(
-    graph: &mut Graph,
+    graph: &Graph,
     dest_proc_id: &NodeRunId,
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
     let already_inbound = graph
-        .traversal_mut()
+        .traversal()
         .v(dest_proc_id)
         .in_e()
         .iter()
