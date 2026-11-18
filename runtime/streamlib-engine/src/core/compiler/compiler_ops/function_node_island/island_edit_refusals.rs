@@ -8,12 +8,14 @@ use std::collections::HashSet;
 use serde_json::Value as JsonValue;
 
 use crate::core::NodeRunId;
+use crate::core::descriptors::NodeClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ProcessExecution;
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, GraphWeight, InputLinkPortRef, Link, LinkUniqueId,
     OutOfProcessLinkWiringComponent, OutputLinkPortRef,
 };
+use crate::core::nodes::NodeTypesOneStreamResolves;
 
 use super::{
     is_a_previous_value_node, link_in, runs_inside_the_read_of_each_node_it_feeds,
@@ -98,16 +100,31 @@ pub(crate) fn refuse_a_link_feeding_an_island_into_the_app_process(
     let Some(reader) = graph.traversal().v(reader_id).first() else {
         return Ok(());
     };
-    if !graph
-        .node_types_this_stream_resolves()
-        .runs_each_of_its_nodes_in_the_app_process(reader.node_type())
-    {
+    if !runs_each_of_its_nodes_in_the_app_process(
+        graph.node_types_this_stream_resolves(),
+        reader.node_type(),
+    ) {
         return Ok(());
     }
     Err(the_refusal_of_an_island_fed_into_the_app_process(
         &format!("the link from `{from}` to `{to}`"),
         reader_id,
     ))
+}
+
+/// Whether every node of `node_type` runs in the app process: a natively compiled type, or a
+/// view the stream's project brings. A type the stream's node code describes runs in a helper
+/// process, a shader node on whichever evaluator its island has, and a type held as a
+/// placeholder runs nowhere, so none of them is.
+fn runs_each_of_its_nodes_in_the_app_process(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+) -> bool {
+    node_types
+        .placeholder_of_the_node_type_not_described(node_type)
+        .is_none()
+        && (node_types.is_a_natively_compiled_node_type(node_type)
+            || node_types.is_a_view_type_of_this_streams_project(node_type))
 }
 
 /// The refusal of `link_named`, a link feeding a function node island into `reader_id`, which

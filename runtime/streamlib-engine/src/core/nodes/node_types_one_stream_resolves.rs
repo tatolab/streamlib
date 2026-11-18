@@ -234,20 +234,6 @@ impl NodeTypesOneStreamResolves {
             .contains_key(node_type)
     }
 
-    /// Whether every node of `node_type` runs in the app process: a natively compiled type, or a
-    /// view this stream's project brings. A type this stream's node code describes runs in a
-    /// helper process, a shader node on whichever evaluator its island has, and a type held as
-    /// a placeholder runs nowhere, so none of them is.
-    pub(crate) fn runs_each_of_its_nodes_in_the_app_process(
-        &self,
-        node_type: &NodeClassImportPath,
-    ) -> bool {
-        self.placeholder_of_the_node_type_not_described(node_type)
-            .is_none()
-            && (self.is_a_natively_compiled_node_type(node_type)
-                || self.is_a_view_type_of_this_streams_project(node_type))
-    }
-
     /// Why no node takes `node_type` when it names a view this stream's project brings that is
     /// no node type: it does not open, or no node takes it.
     pub fn why_no_node_takes_the_view(&self, node_type: &NodeClassImportPath) -> Option<String> {
