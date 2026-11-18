@@ -27,13 +27,30 @@ impl StreamGraphTransactionExecutor<'_> {
             }
         }
 
+        let mut streams_held_from_their_documents_alone = Vec::new();
         let mut streams: BTreeMap<String, StreamATransactionEdits> = BTreeMap::new();
         let mut former_port_names_moved: Vec<ProjectOperation> = Vec::new();
         for stream_id in &stream_ids_in_order {
-            let stream_operations = self
+            let stream_operations = match self
                 .operations_on_the_loaded_streams
                 .runtime_operations_of_the_stream_a_call_names(stream_id)
-                .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
+            {
+                Ok(loaded) => loaded,
+                Err(streamlib::sdk::error::Error::NotFound(_))
+                    if project_repository_held.is_some() =>
+                {
+                    let held_alone = self
+                        .operations_on_the_loaded_streams
+                        .the_stream_held_from_its_document_alone(stream_id)
+                        .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
+                    let stream_operations = held_alone.runtime_operations();
+                    streams_held_from_their_documents_alone.push(held_alone);
+                    stream_operations
+                }
+                Err(refusal) => {
+                    return Err(GraphTransactionRefusal::of_the_whole_transaction(refusal));
+                }
+            };
             let stream_location = stream_locations.get(stream_id).cloned().ok_or_else(|| {
                 GraphTransactionRefusal::of_the_whole_transaction(format!(
                     "stream `{stream_id}` is not loaded"

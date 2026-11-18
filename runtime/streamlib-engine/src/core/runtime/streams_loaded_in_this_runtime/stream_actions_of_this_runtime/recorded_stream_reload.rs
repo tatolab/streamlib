@@ -776,8 +776,17 @@ pub(super) enum LoadedOrHeldFromItsDocument {
 pub(super) fn the_graph_the_recorded_stream_holds(
     record: &StreamRecord,
 ) -> std::result::Result<GraphSnapshot, String> {
-    let (project_file, stream_document) = the_graph_document_of_the_stream_at(&record.location)?;
-    let project_directory = &record.location.project_directory;
+    the_graph_the_document_of_the_stream_at_holds(&record.location)
+}
+
+/// The graph the document of the stream asset at `location` holds as it is on disk now, or
+/// why there is none: the project is gone from where it was, or no document holds the stream
+/// asset, or the document holds no graph.
+pub(super) fn the_graph_the_document_of_the_stream_at_holds(
+    location: &StreamLocation,
+) -> std::result::Result<GraphSnapshot, String> {
+    let (project_file, stream_document) = the_graph_document_of_the_stream_at(location)?;
+    let project_directory = &location.project_directory;
     let asset_uuids_the_project_holds =
         every_asset_uuid_the_project_holds(project_directory, project_file.project)
             .map_err(|refusal| format!("its project's assets do not read: {refusal}"))?;

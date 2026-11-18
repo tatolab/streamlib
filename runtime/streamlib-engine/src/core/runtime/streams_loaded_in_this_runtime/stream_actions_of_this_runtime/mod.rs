@@ -797,7 +797,10 @@ mod project_runs;
 mod project_venv_actions;
 mod recorded_stream_reload;
 mod stream_action_queue;
+mod stream_held_from_its_document_alone;
 mod stream_records;
+
+pub use stream_held_from_its_document_alone::StreamHeldFromItsDocumentAlone;
 
 #[cfg(test)]
 mod tests;

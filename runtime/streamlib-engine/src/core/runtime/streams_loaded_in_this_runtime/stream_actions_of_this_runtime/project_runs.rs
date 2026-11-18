@@ -127,7 +127,7 @@ impl Runner {
                     .map(|stream_asset| &stream_asset.graph_or_why_none),
             ),
         )?;
-        let mut stream_assets: Vec<StreamAssetRead> = every_stream_asset
+        let stream_assets: Vec<StreamAssetRead> = every_stream_asset
             .into_iter()
             .filter(|stream_asset| {
                 only_the_stream_assets
@@ -212,12 +212,20 @@ impl Runner {
         let node_code_of_the_project =
             ProjectNodeCodeContentHash::of_the_project_at(&project.project_directory);
         let _one_stream_action_at_a_time = self.stream_actions.one_stream_action_at_a_time.lock();
-        let stream_assets_the_project_holds_as_it_starts =
-            ProjectAsALoadReadsIt::read(&project_directory)?.stream_assets();
-        stream_assets.retain(|stream_asset| {
-            stream_assets_the_project_holds_as_it_starts
-                .contains(&stream_asset.stream_location.stream_asset)
-        });
+        // Read again, so each stream loads its document as edits made while its project
+        // prepared left it.
+        let project_as_it_starts = ProjectAsALoadReadsIt::read(&project_directory)?;
+        let stream_assets_the_project_holds_as_it_starts = project_as_it_starts.stream_assets();
+        let stream_assets: Vec<StreamAssetRead> = project_as_it_starts
+            .stream_documents
+            .iter()
+            .map(|stream_document| project_as_it_starts.stream_asset_read_from(stream_document))
+            .filter(|stream_asset_as_it_starts| {
+                stream_assets.iter().any(|stream_asset| {
+                    stream_asset.stream_location == stream_asset_as_it_starts.stream_location
+                })
+            })
+            .collect();
         let mut streams_loaded_or_failed = Vec::with_capacity(stream_assets.len());
         for stream_asset in stream_assets {
             if progress.is_some_and(StreamActionProgress::is_cancelled) {
