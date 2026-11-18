@@ -587,6 +587,7 @@ pub(crate) struct StreamActionsOfTheEngine {
 /// One stream a stream action loads, recorded by the runtime under its id: its display name
 /// and location, the graph its document holds, where its interpreters start, and whether its
 /// capture devices may ask the user.
+#[derive(Clone)]
 struct OneStreamAStreamActionLoads<'load> {
     stream_id: &'load str,
     display_name: &'load str,

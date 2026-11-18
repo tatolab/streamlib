@@ -498,3 +498,50 @@ fn a_recorded_stream_linking_into_a_graph_inputs_value_is_held_with_that_link_se
     assert_eq!(links_loaded.len(), 1, "{rendered}");
     assert_eq!(links_loaded[0]["target"]["node"], "sink", "{rendered}");
 }
+
+#[test]
+#[serial]
+fn a_stream_whose_load_is_refused_is_held_from_its_document_reading_none_of_its_node_code() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let mut graph = the_graph_of_a_stream_named("camera");
+    graph["nodes"] = serde_json::json!([{
+        "name": "source",
+        "type": crate::core::test_support::MockSourceTakingOneSetting::Node::node_class_import_path().as_str(),
+        "config": {"frame_width": "wide"},
+    }]);
+    let project = ProjectWithGraphDocuments::holding(graph);
+    let camera = project.stream_id_of("camera");
+
+    let run = runner
+        .load_the_project_off_its_queue(project.run_request())
+        .expect("a refused load is a failed stream, not a refused run");
+
+    let (stream, failed_because) = the_one_failed_stream_of(&run);
+    assert_eq!(stream.stream_id, camera);
+    assert!(failed_because.contains("frame_width"), "{failed_because}");
+    let held = runner
+        .loaded_stream_of_the_id(&camera)
+        .expect("the stream is held from its document, its graph there to read and edit");
+    assert!(held.is_held_stopped() && held.runtime_context.lock().is_none());
+    assert_eq!(held.node_count(), 1, "every node of its document is held");
+    assert!(
+        held.node_types_this_stream_resolves()
+            .why_every_node_type_is_held_as_a_placeholder()
+            .is_some_and(|why| why == failed_because),
+        "every node type is held as a placeholder, for why the load was refused"
+    );
+    assert_eq!(
+        the_record_of(state_directory.path(), &camera)
+            .failed_because
+            .as_deref(),
+        Some(failed_because)
+    );
+    let listed = runner
+        .list_streams()
+        .into_iter()
+        .find(|listed| listed.stream_id == camera)
+        .unwrap();
+    assert_eq!(listed.state, StreamListingState::Failed);
+    assert_eq!(listed.node_count, Some(1), "{listed:?}");
+}
