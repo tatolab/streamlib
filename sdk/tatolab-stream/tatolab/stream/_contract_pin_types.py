@@ -350,6 +350,10 @@ type NamedPinTypeImportPath = str
 """The class that declares a named pin type, `module:QualifiedClassName`."""
 
 
+type PinFlow = Literal["value", "stream", "trigger"]
+"""How a pin's messages are read."""
+
+
 class PinDeclarationOnTheWire(TypedDict):
     """What a port declares about what it carries."""
 
@@ -419,10 +423,6 @@ type DeclaredPinType = (
     | SetByInputDeclaredPinType
 )
 """The pin type a port declares, or how it is found."""
-
-
-type PinFlow = Literal["value", "stream", "trigger"]
-"""How a pin's messages are read."""
 
 
 class PinAnnotations(TypedDict):

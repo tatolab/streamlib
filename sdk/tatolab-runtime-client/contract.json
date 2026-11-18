@@ -443,7 +443,7 @@
     {
       "name": "graph",
       "summary": "Export a loaded stream's live graph, or every loaded stream's, with each node's and link's state.",
-      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, config and ports, its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
+      "description": "Export a loaded stream's current graph as JSON: the stream it was loaded as, its nodes by name with their types, the values their graph document holds for their inputs (`input_values`) and their ports, each input with the `value` it reads while unlinked and `value_comes_from`, where that value comes from: `live`, `saved` or `default`, or `wire` with no `value` when a link feeds it; a port whose pin type is exact names it as `pin_type`, with its `flow`. Its links by node and port, with each node's and link's live state and counters beside them, and this machine's name (`machine`), the first part of `<machine>/<stream id>/<node>/<port>`. A fragment — a graph generator's stored output — renders as one node of `kind` `fragment` whose ports are its Graph Input and Output nodes' and whose `fragment` holds its own nodes and links, a fragment inside it rendered the same way; its nodes run under their path of names, `look/soft/blur`. Without `stream`, `{machine, streams}` holds every loaded stream's graph.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -456,7 +456,9 @@
       ],
       "result": {
         "name": "graph_result",
-        "schema": true
+        "schema": {
+          "$ref": "#/components/schemas/GraphToolResult"
+        }
       },
       "errors": [
         {
@@ -5636,6 +5638,1102 @@
           }
         },
         "description": "`graph`'s params."
+      },
+      "GraphToolResult": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/StreamGraphOnTheWire",
+            "description": "The graph of the stream `stream` named."
+          },
+          {
+            "$ref": "#/components/schemas/MachineWideGraphOnTheWire",
+            "description": "Every loaded stream's graph, when no `stream` was named."
+          }
+        ],
+        "description": "`graph`'s answer: the graph of the stream it names, or every loaded stream's graph under the\nmachine's name when it names none."
+      },
+      "StreamGraphOnTheWire": {
+        "type": "object",
+        "properties": {
+          "asset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The UUID of the stream asset whose graph document this graph was loaded from: a spec key."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the stream is shown under: a spec key, which its graph document writes."
+          },
+          "stream": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The stream id this graph was loaded under, its stream's address. Absent until a load."
+          },
+          "clock": {
+            "description": "The clock the stream runs on, tagged by its `mode`: a spec key. Absent when it runs on\nreal time."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphNodeOnTheWire"
+            },
+            "description": "Every node of the stream's own level."
+          },
+          "links": {
+            "type": "array",
+            "items": true,
+            "description": "Every link between those nodes' ports."
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigNodeReferenceEdgeOnTheWire"
+            },
+            "description": "Every reference edge: a node's config key naming another node. A live key, read back\nfrom the configs; absent when the graph holds none."
+          },
+          "machine": {
+            "type": "string",
+            "description": "The name of the machine the stream runs on, the first part of\n`<machine>/<stream id>/<node>/<port>`."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledNodeGroup"
+            },
+            "description": "Every labelled group of the stream's own level: a spec key, read by nothing that runs."
+          },
+          "studio": {
+            "description": "What Tato Studio draws beside the nodes, its canvas notes, under the studio contract: a\nspec key, read by nothing that runs."
+          },
+          "function_node_pool": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphNodeOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The stream's function node pool, rendered as a node is: a live key, absent when no\nisland runs in it. It is no node of the graph, so it is never a link's end; each link it\ncarries renders as the link it was given, naming the pool's ports under\n`carried_through_the_function_node_pool`."
+          }
+        },
+        "required": [
+          "nodes",
+          "links",
+          "machine"
+        ],
+        "description": "One stream's graph: its spec keys, the stream document's own, with the live keys beside\nthem, so it loads back as a graph document."
+      },
+      "GraphNodeOnTheWire": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The node's UUID: a spec key, kept across every run and restart of its stream."
+          },
+          "type": {
+            "type": "string",
+            "description": "The import path of the class this node is."
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphNodeKindOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the node's code runs. Absent on a node whose type nothing registers."
+          },
+          "language": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FunctionNodeLanguageOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The language a function node is written in; absent on every other kind."
+          },
+          "name": {
+            "type": "string",
+            "description": "The node's name, unique in its graph and cast to lowercase URL-safe: what a link end, an\nexposure and a port address name it by."
+          },
+          "config": {
+            "description": "The input values a node type not yet typed takes whole as its config, the rest of\n`input_values` being its `pins`. Served for a client that reads no `input_values`."
+          },
+          "config_checksum": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0,
+            "description": "A checksum of `config`, for change detection.",
+            "default": 0
+          },
+          "ports": {
+            "$ref": "#/components/schemas/GraphNodePortsOnTheWire",
+            "description": "Every input port and output port."
+          },
+          "input_values": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The values the node's graph document holds for its inputs, by input name: a sparse map,\nso an input it leaves out reads its default. A value set live shows only as its input's\n`value`.",
+            "default": {}
+          },
+          "pins": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The input values that are no config field, by input name; empty when none is saved.\nServed for a client that reads no `input_values`.",
+            "default": {}
+          },
+          "exposed_config_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The config fields the node takes as inputs too, each an input of the field's name."
+          },
+          "studio": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "What the studio draws the node with: canvas position, group, comment, colour."
+          },
+          "inputs_waiting_for_a_value": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The inputs of a function node that no link feeds, that carry no saved value and that\ndeclare no default; the node holds without evaluating until each has a value."
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The node's live state and counters, by component."
+          },
+          "fragment": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphFragmentOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What a fragment holds: its graph generator's stored output, each node rendered as this\nnode is. A spec key, present on a fragment alone."
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "name",
+          "ports",
+          "components"
+        ],
+        "description": "A node of a stream's graph, a fragment holding the nodes and links of its graph generator's\nstored output."
+      },
+      "GraphNodeKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "shader",
+            "description": "A shader on the GPU."
+          },
+          {
+            "type": "string",
+            "const": "function",
+            "description": "A function evaluated where its reader reads."
+          },
+          {
+            "type": "string",
+            "const": "process",
+            "description": "A class in a process of its own."
+          },
+          {
+            "type": "string",
+            "const": "fragment",
+            "description": "A graph generator's stored output, flattened into the nodes it holds when it runs."
+          }
+        ],
+        "description": "How a node's code runs."
+      },
+      "FunctionNodeLanguageOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "python",
+            "description": "Python."
+          },
+          {
+            "type": "string",
+            "const": "rust",
+            "description": "Rust."
+          }
+        ],
+        "description": "The language a function node is written in."
+      },
+      "GraphNodePortsOnTheWire": {
+        "type": "object",
+        "properties": {
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphNodePortOnTheWire"
+            },
+            "description": "The ports that receive data, each with the value it reads while unlinked."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphNodePortOnTheWire"
+            },
+            "description": "The ports that send data."
+          }
+        },
+        "required": [
+          "inputs",
+          "outputs"
+        ],
+        "description": "A node's input ports and output ports."
+      },
+      "GraphNodePortOnTheWire": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The port's name."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the port carries, as declared beside it.",
+            "default": ""
+          },
+          "port_kind": {
+            "$ref": "#/components/schemas/PortKindOnTheWire",
+            "description": "Always `data`, served until the contract's version changes; how a port's messages are\nread is its `flow`.",
+            "default": "data"
+          },
+          "delivery_profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The delivery profile an input port reads by, `newest` or `ordered`: the one it declares,\nelse its pin's default; null on an output port."
+          },
+          "borrow_quota": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0,
+            "description": "The samples each link into this input port may hold beyond its mailbox, declared;\nabsent on a port that takes the default."
+          },
+          "audio_window": {
+            "description": "The window contract an audio input port declares, tagged by `resolved_from`; absent on\na port that declares none."
+          },
+          "stream_facts": {
+            "description": "The stream facts this output port carries now, tagged by `family`; absent on a port that\nstates none."
+          },
+          "values_checked": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`false` on a Records port, whose values no type checks; absent on every other family."
+          },
+          "family": {
+            "description": "The port family this port declares and its family's keys. Absent on a graph variable's\nvalue port, which keeps the family of the setter's source port. Served for a client that\nreads no `pin_type`."
+          },
+          "pin_default": {
+            "description": "The value this input reads while nothing is linked into it and no value is set on its\nnode; absent on a port that declares none."
+          },
+          "pin_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The type it carries."
+          },
+          "flow": {
+            "$ref": "#/components/schemas/PinFlow",
+            "description": "How its messages are read."
+          },
+          "value": {
+            "description": "The value it reads, null when it reads nothing; absent when a link feeds it."
+          },
+          "value_comes_from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InputValueComesFromOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where the value comes from; absent when it reads nothing."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "description": "One port of a node of a stream's graph."
+      },
+      "PortKindOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "data",
+            "description": "Every port."
+          },
+          {
+            "type": "string",
+            "const": "event",
+            "description": "No port is declared so any more."
+          },
+          {
+            "type": "string",
+            "const": "control",
+            "description": "No port is declared so any more."
+          }
+        ],
+        "description": "The kind a port was once declared as; every port is `data`."
+      },
+      "PinType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "boolean"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "True or false."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exact_size": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IntegerSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The size the number must fit; absent, any whole number exact to 2^53."
+              },
+              "type": {
+                "type": "string",
+                "const": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A whole number."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "exact_size": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/FloatSize"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The size the number is held in; absent, a 64-bit float."
+              },
+              "type": {
+                "type": "string",
+                "const": "float"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A number."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Text."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "option_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The options, spelled as declared."
+              },
+              "type": {
+                "type": "string",
+                "const": "menu"
+              }
+            },
+            "required": [
+              "type",
+              "option_names"
+            ],
+            "description": "One of a fixed list of option names."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "color"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "An sRGB colour with alpha."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "component_count": {
+                "$ref": "#/components/schemas/VectorComponentCount",
+                "description": "How many numbers it holds."
+              },
+              "type": {
+                "type": "string",
+                "const": "vector"
+              }
+            },
+            "required": [
+              "type",
+              "component_count"
+            ],
+            "description": "Two, three or four numbers."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "rectangle"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A rectangle by its left and top edges, width and height."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "transform"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A 4 by 4 matrix."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pixel_formats": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TexturePixelFormat"
+                },
+                "description": "The formats it may hold; on an input, empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "texture"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A GPU picture."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "audio"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A stream of audio samples."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "codecs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The codecs it may hold; empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "encoded_video"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Encoded video, one access unit per message."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "codecs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The codecs it may hold; empty takes any."
+              },
+              "type": {
+                "type": "string",
+                "const": "encoded_audio"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "Encoded audio, one packet per message."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "tensor"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "An array of numbers with a shape."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "media": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ProjectAssetMedia"
+                },
+                "description": "The media the asset must hold one of; empty takes any asset."
+              },
+              "type": {
+                "type": "string",
+                "const": "asset"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "One of the project's assets."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "trigger"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "An event with no payload."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "element_type": {
+                "$ref": "#/components/schemas/PinType",
+                "description": "The type of each element."
+              },
+              "type": {
+                "type": "string",
+                "const": "list_of"
+              }
+            },
+            "required": [
+              "type",
+              "element_type"
+            ],
+            "description": "A list of values of one type."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/BundleMember"
+                },
+                "description": "The members, in declared order."
+              },
+              "type": {
+                "type": "string",
+                "const": "bundle"
+              }
+            },
+            "required": [
+              "type",
+              "members"
+            ],
+            "description": "Named members, each of its own type, carried as one."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "named_pin_type": {
+                "$ref": "#/components/schemas/NamedPinTypeImportPath",
+                "description": "The class that declares it."
+              },
+              "type": {
+                "type": "string",
+                "const": "named"
+              }
+            },
+            "required": [
+              "type",
+              "named_pin_type"
+            ],
+            "description": "A type a module declares by its class."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "referenced_node_type": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The node type the referenced node must be; absent, any node."
+              },
+              "one_referrer_per_referenced_node": {
+                "type": "boolean",
+                "description": "Whether one node at most may name a given node through this setting.",
+                "default": false
+              },
+              "type": {
+                "type": "string",
+                "const": "node_reference"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A setting naming another node of the graph. It never takes a wire."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "among": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/PinType"
+                },
+                "description": "The types it may choose; empty chooses any."
+              },
+              "type": {
+                "type": "string",
+                "const": "pin_type_choice"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes\na wire."
+          }
+        ],
+        "description": "What a port carries, as an author, a person and a client name it.\n\nThe set is closed: a named type and a bundle are how a project adds its own."
+      },
+      "IntegerSize": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "int8",
+            "description": "A signed 8-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int16",
+            "description": "A signed 16-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int32",
+            "description": "A signed 32-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "int64",
+            "description": "A signed 64-bit integer, as a Tensor or List element only."
+          },
+          {
+            "type": "string",
+            "const": "uint8",
+            "description": "An unsigned 8-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint16",
+            "description": "An unsigned 16-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint32",
+            "description": "An unsigned 32-bit integer."
+          },
+          {
+            "type": "string",
+            "const": "uint64",
+            "description": "An unsigned 64-bit integer, as a Tensor or List element only."
+          }
+        ],
+        "description": "The size an Integer must fit."
+      },
+      "FloatSize": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "float32",
+            "description": "A 32-bit float."
+          },
+          {
+            "type": "string",
+            "const": "float64",
+            "description": "A 64-bit float."
+          }
+        ],
+        "description": "The size a Float is held in."
+      },
+      "VectorComponentCount": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "two",
+            "description": "`x` and `y`."
+          },
+          {
+            "type": "string",
+            "const": "three",
+            "description": "`x`, `y` and `z`."
+          },
+          {
+            "type": "string",
+            "const": "four",
+            "description": "`x`, `y`, `z` and `w`."
+          }
+        ],
+        "description": "How many numbers a Vector holds."
+      },
+      "TexturePixelFormat": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "rgba8_unorm",
+            "description": "Four 8-bit channels, red first, read as 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "rgba8_unorm_srgb",
+            "description": "Four 8-bit channels, red first, sRGB-encoded."
+          },
+          {
+            "type": "string",
+            "const": "bgra8_unorm",
+            "description": "Four 8-bit channels, blue first, read as 0 to 1."
+          },
+          {
+            "type": "string",
+            "const": "bgra8_unorm_srgb",
+            "description": "Four 8-bit channels, blue first, sRGB-encoded."
+          },
+          {
+            "type": "string",
+            "const": "rgba16_float",
+            "description": "Four 16-bit float channels."
+          },
+          {
+            "type": "string",
+            "const": "rgba32_float",
+            "description": "Four 32-bit float channels."
+          },
+          {
+            "type": "string",
+            "const": "nv12",
+            "description": "8-bit luma, then interleaved half-size chroma."
+          }
+        ],
+        "description": "A texture format, spelled as the escalate wire spells it."
+      },
+      "ProjectAssetMedia": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "image",
+            "description": "A still picture."
+          },
+          {
+            "type": "string",
+            "const": "video",
+            "description": "Moving pictures."
+          },
+          {
+            "type": "string",
+            "const": "audio",
+            "description": "Sound."
+          },
+          {
+            "type": "string",
+            "const": "lut",
+            "description": "A colour lookup table."
+          },
+          {
+            "type": "string",
+            "const": "scene",
+            "description": "A 3D scene."
+          },
+          {
+            "type": "string",
+            "const": "stream",
+            "description": "A stream's graph document, matched against the asset's kind."
+          }
+        ],
+        "description": "What an asset holds, as its media facts or its kind name it."
+      },
+      "BundleMember": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The member's name, a key of the bundle's stored value."
+          },
+          "member_type": {
+            "$ref": "#/components/schemas/PinType",
+            "description": "The member's type."
+          },
+          "meaning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the member's value stands for, such as `frequency`."
+          },
+          "default_value": {
+            "description": "The value a stored bundle that leaves the member out reads; absent, the member must be\npresent."
+          }
+        },
+        "required": [
+          "name",
+          "member_type"
+        ],
+        "description": "One member of a bundle."
+      },
+      "NamedPinTypeImportPath": {
+        "type": "string",
+        "description": "The class that declares a named pin type, `module:QualifiedClassName`."
+      },
+      "PinFlow": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "value",
+            "description": "The newest message is read until a newer one arrives."
+          },
+          {
+            "type": "string",
+            "const": "stream",
+            "description": "Each message is read as it arrives."
+          },
+          {
+            "type": "string",
+            "const": "trigger",
+            "description": "Each message is an event, read in order."
+          }
+        ],
+        "description": "How a pin's messages are read."
+      },
+      "InputValueComesFromOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "live",
+            "description": "A value set live, which no document holds."
+          },
+          {
+            "type": "string",
+            "const": "saved",
+            "description": "The value the stream's graph document holds."
+          },
+          {
+            "type": "string",
+            "const": "default",
+            "description": "The default the input declares."
+          },
+          {
+            "type": "string",
+            "const": "wire",
+            "description": "A link feeds the input; it holds no value."
+          }
+        ],
+        "description": "Where the value an input reads comes from, as `graph` renders it."
+      },
+      "GraphFragmentOnTheWire": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GraphNodeOnTheWire"
+            },
+            "description": "Every node of the fragment, a fragment it holds rendered as a container in turn."
+          },
+          "links": {
+            "type": "array",
+            "items": true,
+            "description": "Every link between those nodes' ports."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledNodeGroup"
+            },
+            "description": "Every labelled group of the fragment's nodes, made by its graph generator."
+          }
+        },
+        "required": [
+          "nodes",
+          "links"
+        ],
+        "description": "The nodes and links a fragment holds, each link end naming a node of the fragment."
+      },
+      "LabelledNodeGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The group's UUID, the runtime's from its placement on."
+          },
+          "title": {
+            "type": "string",
+            "description": "The group's title."
+          },
+          "description": {
+            "type": "string",
+            "description": "What the group's nodes do, for the next person who reads the graph."
+          },
+          "colour": {
+            "type": "string",
+            "description": "The colour the studio draws the group with."
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "description": "A labelled group of one level's nodes, which a node joins by naming its `id` as its\n`studio.group`; it changes nothing that runs."
+      },
+      "ConfigNodeReferenceEdgeOnTheWire": {
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "The name of the node whose config holds the reference."
+          },
+          "config_key": {
+            "type": "string",
+            "description": "The config key the reference sits under."
+          },
+          "referenced_node": {
+            "type": "string",
+            "description": "The name of the node the reference names."
+          }
+        },
+        "required": [
+          "node",
+          "config_key",
+          "referenced_node"
+        ],
+        "description": "One reference edge: the config key `config_key` of node `node` names node\n`referenced_node`. It carries no data and is never a link."
+      },
+      "MachineWideGraphOnTheWire": {
+        "type": "object",
+        "properties": {
+          "machine": {
+            "type": "string",
+            "description": "The machine's name, the first part of `<machine>/<stream id>/<node>/<port>`."
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StreamGraphOnTheWire"
+            },
+            "description": "Each loaded stream's graph, as a call naming that stream answers it."
+          }
+        },
+        "required": [
+          "machine",
+          "streams"
+        ],
+        "description": "Every loaded stream's graph under the machine's name."
       },
       "TransactRequest": {
         "type": "object",
@@ -12155,31 +13253,6 @@
         ],
         "description": "`input_value_changed`'s params."
       },
-      "InputValueComesFromOnTheWire": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "live",
-            "description": "A value set live, which no document holds."
-          },
-          {
-            "type": "string",
-            "const": "saved",
-            "description": "The value the stream's graph document holds."
-          },
-          {
-            "type": "string",
-            "const": "default",
-            "description": "The default the input declares."
-          },
-          {
-            "type": "string",
-            "const": "wire",
-            "description": "A link feeds the input; it holds no value."
-          }
-        ],
-        "description": "Where the value an input reads comes from, as `graph` renders it."
-      },
       "StreamActionChangedNotificationParams": {
         "type": "object",
         "properties": {
@@ -12681,593 +13754,6 @@
         ],
         "description": "A config value naming another node of the graph, of any type."
       },
-      "PinType": {
-        "oneOf": [
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "boolean"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "True or false."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "exact_size": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/IntegerSize"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The size the number must fit; absent, any whole number exact to 2^53."
-              },
-              "type": {
-                "type": "string",
-                "const": "integer"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A whole number."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "exact_size": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/FloatSize"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "The size the number is held in; absent, a 64-bit float."
-              },
-              "type": {
-                "type": "string",
-                "const": "float"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A number."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "string"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "Text."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "option_names": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "The options, spelled as declared."
-              },
-              "type": {
-                "type": "string",
-                "const": "menu"
-              }
-            },
-            "required": [
-              "type",
-              "option_names"
-            ],
-            "description": "One of a fixed list of option names."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "color"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "An sRGB colour with alpha."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "component_count": {
-                "$ref": "#/components/schemas/VectorComponentCount",
-                "description": "How many numbers it holds."
-              },
-              "type": {
-                "type": "string",
-                "const": "vector"
-              }
-            },
-            "required": [
-              "type",
-              "component_count"
-            ],
-            "description": "Two, three or four numbers."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "rectangle"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A rectangle by its left and top edges, width and height."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "transform"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A 4 by 4 matrix."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "pixel_formats": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/TexturePixelFormat"
-                },
-                "description": "The formats it may hold; on an input, empty takes any."
-              },
-              "type": {
-                "type": "string",
-                "const": "texture"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A GPU picture."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "audio"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A stream of audio samples."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "codecs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "The codecs it may hold; empty takes any."
-              },
-              "type": {
-                "type": "string",
-                "const": "encoded_video"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "Encoded video, one access unit per message."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "codecs": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "The codecs it may hold; empty takes any."
-              },
-              "type": {
-                "type": "string",
-                "const": "encoded_audio"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "Encoded audio, one packet per message."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "tensor"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "An array of numbers with a shape."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "media": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/ProjectAssetMedia"
-                },
-                "description": "The media the asset must hold one of; empty takes any asset."
-              },
-              "type": {
-                "type": "string",
-                "const": "asset"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "One of the project's assets."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "trigger"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "An event with no payload."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "element_type": {
-                "$ref": "#/components/schemas/PinType",
-                "description": "The type of each element."
-              },
-              "type": {
-                "type": "string",
-                "const": "list_of"
-              }
-            },
-            "required": [
-              "type",
-              "element_type"
-            ],
-            "description": "A list of values of one type."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "members": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/BundleMember"
-                },
-                "description": "The members, in declared order."
-              },
-              "type": {
-                "type": "string",
-                "const": "bundle"
-              }
-            },
-            "required": [
-              "type",
-              "members"
-            ],
-            "description": "Named members, each of its own type, carried as one."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "named_pin_type": {
-                "$ref": "#/components/schemas/NamedPinTypeImportPath",
-                "description": "The class that declares it."
-              },
-              "type": {
-                "type": "string",
-                "const": "named"
-              }
-            },
-            "required": [
-              "type",
-              "named_pin_type"
-            ],
-            "description": "A type a module declares by its class."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "referenced_node_type": {
-                "type": [
-                  "string",
-                  "null"
-                ],
-                "description": "The node type the referenced node must be; absent, any node."
-              },
-              "one_referrer_per_referenced_node": {
-                "type": "boolean",
-                "description": "Whether one node at most may name a given node through this setting.",
-                "default": false
-              },
-              "type": {
-                "type": "string",
-                "const": "node_reference"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A setting naming another node of the graph. It never takes a wire."
-          },
-          {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "among": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/PinType"
-                },
-                "description": "The types it may choose; empty chooses any."
-              },
-              "type": {
-                "type": "string",
-                "const": "pin_type_choice"
-              }
-            },
-            "required": [
-              "type"
-            ],
-            "description": "A setting that chooses another port's pin type; its value is a pin type. It never takes\na wire."
-          }
-        ],
-        "description": "What a port carries, as an author, a person and a client name it.\n\nThe set is closed: a named type and a bundle are how a project adds its own."
-      },
-      "IntegerSize": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "int8",
-            "description": "A signed 8-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "int16",
-            "description": "A signed 16-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "int32",
-            "description": "A signed 32-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "int64",
-            "description": "A signed 64-bit integer, as a Tensor or List element only."
-          },
-          {
-            "type": "string",
-            "const": "uint8",
-            "description": "An unsigned 8-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "uint16",
-            "description": "An unsigned 16-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "uint32",
-            "description": "An unsigned 32-bit integer."
-          },
-          {
-            "type": "string",
-            "const": "uint64",
-            "description": "An unsigned 64-bit integer, as a Tensor or List element only."
-          }
-        ],
-        "description": "The size an Integer must fit."
-      },
-      "FloatSize": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "float32",
-            "description": "A 32-bit float."
-          },
-          {
-            "type": "string",
-            "const": "float64",
-            "description": "A 64-bit float."
-          }
-        ],
-        "description": "The size a Float is held in."
-      },
-      "VectorComponentCount": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "two",
-            "description": "`x` and `y`."
-          },
-          {
-            "type": "string",
-            "const": "three",
-            "description": "`x`, `y` and `z`."
-          },
-          {
-            "type": "string",
-            "const": "four",
-            "description": "`x`, `y`, `z` and `w`."
-          }
-        ],
-        "description": "How many numbers a Vector holds."
-      },
-      "TexturePixelFormat": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "rgba8_unorm",
-            "description": "Four 8-bit channels, red first, read as 0 to 1."
-          },
-          {
-            "type": "string",
-            "const": "rgba8_unorm_srgb",
-            "description": "Four 8-bit channels, red first, sRGB-encoded."
-          },
-          {
-            "type": "string",
-            "const": "bgra8_unorm",
-            "description": "Four 8-bit channels, blue first, read as 0 to 1."
-          },
-          {
-            "type": "string",
-            "const": "bgra8_unorm_srgb",
-            "description": "Four 8-bit channels, blue first, sRGB-encoded."
-          },
-          {
-            "type": "string",
-            "const": "rgba16_float",
-            "description": "Four 16-bit float channels."
-          },
-          {
-            "type": "string",
-            "const": "rgba32_float",
-            "description": "Four 32-bit float channels."
-          },
-          {
-            "type": "string",
-            "const": "nv12",
-            "description": "8-bit luma, then interleaved half-size chroma."
-          }
-        ],
-        "description": "A texture format, spelled as the escalate wire spells it."
-      },
-      "ProjectAssetMedia": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "image",
-            "description": "A still picture."
-          },
-          {
-            "type": "string",
-            "const": "video",
-            "description": "Moving pictures."
-          },
-          {
-            "type": "string",
-            "const": "audio",
-            "description": "Sound."
-          },
-          {
-            "type": "string",
-            "const": "lut",
-            "description": "A colour lookup table."
-          },
-          {
-            "type": "string",
-            "const": "scene",
-            "description": "A 3D scene."
-          },
-          {
-            "type": "string",
-            "const": "stream",
-            "description": "A stream's graph document, matched against the asset's kind."
-          }
-        ],
-        "description": "What an asset holds, as its media facts or its kind name it."
-      },
-      "BundleMember": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "The member's name, a key of the bundle's stored value."
-          },
-          "member_type": {
-            "$ref": "#/components/schemas/PinType",
-            "description": "The member's type."
-          },
-          "meaning": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What the member's value stands for, such as `frequency`."
-          },
-          "default_value": {
-            "description": "The value a stored bundle that leaves the member out reads; absent, the member must be\npresent."
-          }
-        },
-        "required": [
-          "name",
-          "member_type"
-        ],
-        "description": "One member of a bundle."
-      },
-      "NamedPinTypeImportPath": {
-        "type": "string",
-        "description": "The class that declares a named pin type, `module:QualifiedClassName`."
-      },
       "PinDeclaration": {
         "type": "object",
         "additionalProperties": false,
@@ -13399,26 +13885,6 @@
           }
         ],
         "description": "The pin type a port declares, or how it is found."
-      },
-      "PinFlow": {
-        "oneOf": [
-          {
-            "type": "string",
-            "const": "value",
-            "description": "The newest message is read until a newer one arrives."
-          },
-          {
-            "type": "string",
-            "const": "stream",
-            "description": "Each message is read as it arrives."
-          },
-          {
-            "type": "string",
-            "const": "trigger",
-            "description": "Each message is an event, read in order."
-          }
-        ],
-        "description": "How a pin's messages are read."
       },
       "PinAnnotations": {
         "type": "object",

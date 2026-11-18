@@ -15,10 +15,10 @@ fn a_graph_renders_no_extensions_key_and_its_schema_declares_none() {
     let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
     assert_eq!(keys, ["nodes", "links", "machine"]);
 
-    let schema = serde_json::to_value(schemars::schema_for!(GraphResponse)).unwrap();
+    let schema = serde_json::to_value(schemars_1::schema_for!(StreamGraphOnTheWire)).unwrap();
     let mut declared: Vec<&String> = schema["properties"]
         .as_object()
-        .expect("the GraphResponse schema declares its properties")
+        .expect("the contract's schema of a stream's graph declares its properties")
         .keys()
         .collect();
     declared.sort();

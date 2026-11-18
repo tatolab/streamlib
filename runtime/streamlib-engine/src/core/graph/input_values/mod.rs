@@ -19,8 +19,8 @@ mod live_input_values;
 mod live_input_values_kept_in_the_project_store;
 
 pub use live_input_values::{
-    InputValueComesFrom, InputValueRead, InputValueSetLive, InputValueToSetLive,
-    InputValuesSetLive, LiveInputValueSetRefusal, LiveInputValuesOfAStream,
+    InputValueSetLive, InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
+    LiveInputValuesOfAStream,
 };
 pub(crate) use live_input_values::{
     the_input_port_takes_a_value, the_input_value_change, the_lifetime_of_the_input,

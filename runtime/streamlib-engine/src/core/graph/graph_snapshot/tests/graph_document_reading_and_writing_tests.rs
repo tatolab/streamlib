@@ -443,14 +443,18 @@ fn a_key_this_runtime_does_not_read_is_refused_from_a_json_string_too() {
 /// into the node's input values, and every spec key one the render carries.
 #[test]
 fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
-    let render_schema = serde_json::to_value(schemars::schema_for!(
-        crate::core::json_schema::GraphResponse
+    let render_schema = serde_json::to_value(schemars_1::schema_for!(
+        crate::core::json_schema::StreamGraphOnTheWire
     ))
     .unwrap();
     let definitions = render_schema
-        .get("definitions")
-        .or_else(|| render_schema.get("$defs"))
+        .get("$defs")
         .expect("the render's schema defines its nested objects");
+    let link_schema =
+        serde_json::to_value(schemars::schema_for!(crate::core::json_schema::LinkOutput)).unwrap();
+    let link_definitions = link_schema
+        .get("definitions")
+        .expect("a link's schema defines its ends");
     let keys_rendered_on = |object_schema: &serde_json::Value| -> HashSet<String> {
         object_schema["properties"]
             .as_object()
@@ -462,9 +466,9 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
 
     for (object_schema, keys) in [
         (&render_schema, &GRAPH_DOCUMENT_KEYS),
-        (&definitions["GraphNodeOutput"], &GRAPH_NODE_KEYS),
-        (&definitions["LinkOutput"], &GRAPH_LINK_KEYS),
-        (&definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
+        (&definitions["GraphNodeOnTheWire"], &GRAPH_NODE_KEYS),
+        (&link_schema, &GRAPH_LINK_KEYS),
+        (&link_definitions["LinkPortRefOutput"], &GRAPH_LINK_END_KEYS),
     ] {
         let rendered = keys_rendered_on(object_schema);
         for key in &rendered {
@@ -480,13 +484,8 @@ fn every_key_graph_renders_is_one_a_load_reads_or_skips() {
             );
         }
         for spec_key in keys.spec_keys {
-            let rendered_as_the_keys_it_folds = *spec_key
-                == streamlib_project_repository::NODE_INPUT_VALUES_KEY
-                && streamlib_project_repository::NODE_KEYS_FOLDED_INTO_INPUT_VALUES
-                    .iter()
-                    .all(|folded| rendered.contains(*folded));
             assert!(
-                rendered.contains(*spec_key) || rendered_as_the_keys_it_folds,
+                rendered.contains(*spec_key),
                 "a load reads `{spec_key}` on {}, which `graph` does not render",
                 keys.object_kind
             );

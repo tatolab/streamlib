@@ -180,18 +180,21 @@ fn stream_operations_or_refusal(
 }
 
 /// What `GET /api/graph` answers: one stream's graph, or every loaded
-/// stream's under the machine's name.
+/// stream's under the machine's name, each as the control contract's `graph`
+/// answer types it, which this description leaves open.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 #[expect(
     dead_code,
-    reason = "documents the route's two answers; each is served as the engine renders it, with \
-              every live key the typed form would drop"
+    reason = "documents the route's two answers; each is served as the engine renders it"
 )]
 pub(crate) enum GraphOfOneStreamOrOfEveryStream {
-    /// The graph of the stream `stream` named.
+    /// The graph of the stream `stream` named: the contract's `StreamGraphOnTheWire`.
+    #[schema(value_type = Object)]
     OneStream(Box<GraphResponse>),
-    /// Every loaded stream's graph, when no `stream` was named.
+    /// Every loaded stream's graph, when no `stream` was named: the contract's
+    /// `MachineWideGraphOnTheWire`.
+    #[schema(value_type = Object)]
     EveryStream(MachineWideGraphResponse),
 }
 
@@ -538,30 +541,30 @@ pub(crate) mod router_surface_tests {
         }
     }
 
-    /// The machine-wide answers are documented under the types the schema
-    /// generator writes, so a generated client parses both forms.
+    /// The registry's machine-wide answer is documented under the type the
+    /// schema generator writes, so a generated client parses both forms; the
+    /// graph's two forms are documented as open objects, which the control
+    /// contract's `graph` answer types.
     #[test]
     fn the_openapi_spec_documents_both_forms_of_the_graph_and_registry_answers() {
         let spec = serde_json::to_value(control_plane_openapi_spec()).unwrap();
         let schemas = &spec["components"]["schemas"];
-        for (answer, one_stream, every_stream) in [
-            (
-                "GraphOfOneStreamOrOfEveryStream",
-                "GraphResponse",
-                "MachineWideGraphResponse",
-            ),
-            (
-                "NodeTypesOfOneStreamOrOfEveryStream",
-                "RegistryResponse",
-                "MachineWideRegistryResponse",
-            ),
-        ] {
-            let rendered = schemas[answer].to_string();
-            assert!(
-                rendered.contains(one_stream) && rendered.contains(every_stream),
-                "{answer}: {rendered}"
-            );
-            assert!(schemas[every_stream].is_object(), "{every_stream}: {spec}");
+        let registry_answer = schemas["NodeTypesOfOneStreamOrOfEveryStream"].to_string();
+        assert!(
+            registry_answer.contains("RegistryResponse")
+                && registry_answer.contains("MachineWideRegistryResponse"),
+            "{registry_answer}"
+        );
+        assert!(
+            schemas["MachineWideRegistryResponse"].is_object(),
+            "MachineWideRegistryResponse: {spec}"
+        );
+        let graph_forms = schemas["GraphOfOneStreamOrOfEveryStream"]["oneOf"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the graph's answer has two forms: {spec}"));
+        assert_eq!(graph_forms.len(), 2, "{graph_forms:?}");
+        for form in graph_forms {
+            assert_eq!(form["type"], "object", "{form}");
         }
     }
 

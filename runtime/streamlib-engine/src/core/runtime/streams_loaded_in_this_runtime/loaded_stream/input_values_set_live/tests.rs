@@ -24,9 +24,11 @@ use crate::core::compiler::compiler_ops::input_port_pin_values::tests::{
 };
 use crate::core::descriptors::NodeValueLifetime;
 use crate::core::graph::WhyTheNodeLeaves;
-use crate::core::graph::input_values::{InputValueComesFrom, InputValueRead};
 use crate::core::test_support::RecordingOutOfProcessFarSideLinkDelivery;
 use crate::iceoryx2::Iceoryx2Node;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    InputValueComesFromOnTheWire, InputValueReadOnTheWire,
+};
 
 fn the_uuid_of(graph: &Graph, node_run_id: &NodeRunId) -> Uuid {
     graph.traversal().v(node_run_id).first().unwrap().node_uuid
@@ -177,9 +179,9 @@ fn only_the_helper_of_the_node_set_on_is_handed_its_live_values_over_the_saved_o
         vec![RuntimeEvent::InputValueDidChange {
             node,
             input: "level".to_owned(),
-            value_read: Some(InputValueRead {
+            value_read: Some(InputValueReadOnTheWire {
                 value: Some(json!(0.75)),
-                value_comes_from: Some(InputValueComesFrom::Live),
+                value_comes_from: Some(InputValueComesFromOnTheWire::Live),
             }),
         }]
     );
@@ -330,9 +332,9 @@ fn an_input_reading_its_declared_default_renders_it_as_the_default() {
         Some(RuntimeEvent::InputValueDidChange {
             node: node.node_uuid,
             input: "level".to_owned(),
-            value_read: Some(InputValueRead {
+            value_read: Some(InputValueReadOnTheWire {
                 value: Some(json!(0.5)),
-                value_comes_from: Some(InputValueComesFrom::Default),
+                value_comes_from: Some(InputValueComesFromOnTheWire::Default),
             }),
         })
     );
@@ -389,8 +391,8 @@ fn a_function_node_read_inside_an_island_hands_its_reader_the_live_value_then_th
         matches!(
             committed.as_slice(),
             [RuntimeEvent::InputValueDidChange {
-                value_read: Some(InputValueRead {
-                    value_comes_from: Some(InputValueComesFrom::Saved),
+                value_read: Some(InputValueReadOnTheWire {
+                    value_comes_from: Some(InputValueComesFromOnTheWire::Saved),
                     ..
                 }),
                 ..
@@ -645,8 +647,8 @@ fn a_string_set_live_on_a_function_node_in_a_helper_of_its_own_is_refused() {
     let node = graph.node_by_uuid(remap_uuid).unwrap();
     assert!(matches!(
         crate::core::graph::input_values::the_input_value_change(&graph, node, "x"),
-        Some(RuntimeEvent::InputValueDidChange { value_read: Some(InputValueRead {
-            value: Some(ref value), value_comes_from: Some(InputValueComesFrom::Saved) }), .. })
+        Some(RuntimeEvent::InputValueDidChange { value_read: Some(InputValueReadOnTheWire {
+            value: Some(ref value), value_comes_from: Some(InputValueComesFromOnTheWire::Saved) }), .. })
             if value == &json!(0.25)
     ));
 }

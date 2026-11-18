@@ -46,6 +46,7 @@ mod an_edit_recorded_before_the_update_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
 mod graph_action_feed_and_subscription_tests;
+mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;
 mod graph_generator_fragment_tests;
 mod imported_and_nested_stream_fragment_tests;
@@ -509,6 +510,38 @@ impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
             .expect("the stream is loaded")
             .to_json()
             .expect("the graph renders")
+    }
+
+    /// `project` opened and its stream `main` started, served over a fresh socket; answers the
+    /// stream id and the control plane serving it.
+    async fn the_stream_main_of_the_project_started_and_served(
+        &self,
+        project: &ProjectWithGraphDocuments,
+    ) -> (
+        String,
+        crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient,
+    ) {
+        let operations_on_the_loaded_streams = self.operations_on_the_loaded_streams();
+        the_run_of_the_project_once_finished(&operations_on_the_loaded_streams, project.path())
+            .await;
+        let served = crate::control_json_rpc_adapter::tests::ControlServedWithAnMcpClient::over(
+            Arc::clone(&operations_on_the_loaded_streams),
+        )
+        .await;
+        let queued = served
+            .control_call(
+                "start_playback",
+                json!({ "project_directory": project.path() }),
+            )
+            .await;
+        let action = queued["result"]["action"]
+            .as_str()
+            .unwrap_or_else(|| panic!("start_playback is queued: {queued}"))
+            .to_owned();
+        let started =
+            the_stream_action_once_finished(&operations_on_the_loaded_streams, &action).await;
+        assert_eq!(started["state"], "done", "{started}");
+        (project.stream_id_of("main"), served)
     }
 }
 

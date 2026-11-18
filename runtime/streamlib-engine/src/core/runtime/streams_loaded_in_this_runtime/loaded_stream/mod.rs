@@ -21,7 +21,7 @@ use crate::core::graph::graph_snapshot::GraphOnlyNodesAsDrawn;
 use crate::core::graph::input_values::{
     LiveInputValuesKeptInTheProjectStore, LiveInputValuesOfAStream,
 };
-use crate::core::json_schema::ConfigNodeReferenceEdgeOutput;
+use crate::core::json_schema::ConfigNodeReferenceEdgeOnTheWire;
 use crate::core::logging::{ProjectLogRouteEntry, the_project_log_route_entry_of_this_thread};
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::pubsub::{EventListener, LoadedStreamIdentity, PUBSUB, RuntimeEvent, topics};
@@ -584,7 +584,7 @@ impl LoadedStreamInThisRuntime {
     fn reference_edges_the_configs_of(
         &self,
         nodes: &[crate::core::json_schema::GraphNodeOutput],
-    ) -> Vec<ConfigNodeReferenceEdgeOutput> {
+    ) -> Vec<ConfigNodeReferenceEdgeOnTheWire> {
         nodes
             .iter()
             .flat_map(|node| {
@@ -605,7 +605,7 @@ impl LoadedStreamInThisRuntime {
                     .ok()
                 })
                 .flatten()
-                .map(|reference| ConfigNodeReferenceEdgeOutput {
+                .map(|reference| ConfigNodeReferenceEdgeOnTheWire {
                     referenced_node: cast_exposed_name_to_url_safe(&reference.edge.referenced_node)
                         .map(std::borrow::Cow::into_owned)
                         .unwrap_or(reference.edge.referenced_node),

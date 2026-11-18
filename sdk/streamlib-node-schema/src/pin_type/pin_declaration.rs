@@ -63,17 +63,16 @@ impl PinDeclaration {
 
 /// The pin type a port of a graph carries, resolved, and how its messages are read.
 // `Eq` because a graph's port info, which holds one, is compared whole.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "contract-json-schema",
+    derive(schemars_1::JsonSchema),
+    schemars(crate = "schemars_1")
+)]
 pub struct ResolvedPin {
-    /// The type it carries. Its schema here is open JSON: only the control contract's schemars
-    /// renders pin types.
-    #[schemars(with = "serde_json::Value")]
-    #[cfg_attr(feature = "utoipa", schema(value_type = Object))]
+    /// The type it carries.
     pub pin_type: PinType,
-    /// How its messages are read: `value`, `stream` or `trigger`.
-    #[schemars(with = "String")]
-    #[cfg_attr(feature = "utoipa", schema(value_type = String))]
+    /// How its messages are read.
     pub flow: PinFlow,
 }
 

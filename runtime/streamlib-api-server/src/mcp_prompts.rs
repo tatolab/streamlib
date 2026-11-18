@@ -23,7 +23,8 @@ use streamlib::sdk::descriptors::{NodeClassImportPath, NodeDescriptor};
 use streamlib::sdk::error::{Error, PortDirection};
 use streamlib::sdk::graph::{GraphNodePorts, cast_exposed_name_to_url_safe};
 use streamlib::sdk::json_schema::{
-    GraphNodeOutput, GraphResponse, NodeDescriptorOutput, PortDescriptorOutput, PortInfoOutput,
+    GraphNodeOutput, GraphNodePortOnTheWire, GraphResponse, NodeDescriptorOutput,
+    PortDescriptorOutput,
 };
 use streamlib::sdk::runtime::{OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations};
 use streamlib_control_contract::CALL_OPERATION_TOOL_NAME;
@@ -359,7 +360,7 @@ fn node_named<'graph>(
 fn input_port_of<'graph>(
     node: &'graph GraphNodeOutput,
     port_name: &str,
-) -> Option<&'graph PortInfoOutput> {
+) -> Option<&'graph GraphNodePortOnTheWire> {
     node.ports.inputs.iter().find(|port| port.name == port_name)
 }
 
