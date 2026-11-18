@@ -16,15 +16,15 @@ use crate::core::compiler::compiler_ops::function_node_island::{
 };
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::{
-    DeclaredPinType, NodeClassImportPath, PinDeclaration, PinLinkOutcome, PinLinkVerdict,
-    PinLinkWarning, ResolvedPin,
+    DeclaredPinType, NodeClassImportPath, NodeDescriptor, PinDeclaration, PinLinkOutcome,
+    PinLinkVerdict, PinLinkWarning, PinType, ResolvedPin,
 };
-use crate::core::graph::legacy_config_of_a_node::config_of_a_node;
+use crate::core::graph::legacy_config_of_a_node::node_spec_holding_the_input_values;
 use crate::core::graph::{
     ALinkConnected, Graph, LinkUniqueId, NodeRunId, WhyTheNodeLeaves,
-    refuse_a_link_its_pin_types_or_families_refuse,
+    cast_exposed_name_to_url_safe, refuse_a_link_its_pin_types_or_families_refuse,
 };
-use crate::core::nodes::NodeSpec;
+use crate::core::nodes::{NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use crate::iceoryx2::ChannelName;
@@ -52,7 +52,7 @@ pub(in crate::core::runtime) async fn connect_impl(
         live,
         stream,
     } = live_graph_change;
-    let (from, to) = the_ends_connect_links(&compiler, from, to)?;
+    let (from, to) = compiler.scope(|graph, _tx| the_ends_connect_links(graph, from, to))?;
 
     stream.publish_on_this_streams_topic(RuntimeEvent::RuntimeWillConnect {
         from: from.clone(),
@@ -73,16 +73,16 @@ pub(in crate::core::runtime) async fn connect_impl(
     Ok(link_id)
 }
 
-/// The ends `from` and `to` as connect links them: each port name cast, and a name a port had
-/// read as its current one.
+/// The ends `from` and `to` as connect links them in `graph`: each port name cast, and a name a
+/// port had read as its current one.
 fn the_ends_connect_links(
-    compiler: &Arc<Compiler>,
+    graph: &Graph,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<(OutputLinkPortRef, InputLinkPortRef)> {
     let from = from.with_its_port_name_cast()?;
     let to = to.with_its_port_name_cast()?;
-    Ok(compiler.scope(|graph, _tx| graph.link_ends_under_their_current_port_names(from, to)))
+    Ok(graph.link_ends_under_their_current_port_names(from, to))
 }
 
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
@@ -112,7 +112,6 @@ fn refuse_a_link_connect_refuses(
             .map_err(|source| Error::InvalidLink(source.to_string()))?;
     Ok((verdict, channel))
 }
-
 /// The verdict a connect made now takes on a link from `from` to `to` in the graph `compiler`
 /// holds, judged as [`connect_impl`] judges it under [`ALinkConnected::MadeNow`] and made
 /// nowhere: the verdict of two typed ends that connect, `None` for ends their families
@@ -122,8 +121,8 @@ pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<Option<PinLinkVerdict>> {
-    let (from, to) = the_ends_connect_links(compiler, from, to)?;
     compiler.scope(|graph, _tx| {
+        let (from, to) = the_ends_connect_links(graph, from, to)?;
         refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
             .map(|(verdict, _)| verdict)
     })
@@ -140,6 +139,62 @@ pub(in crate::core::runtime) enum ALinkEndTheGraphHolds {
 }
 
 impl ALinkEndTheGraphHolds {
+    /// This end in `graph`, its port name cast and a name its port had read as its current one;
+    /// an end whose node or port the graph does not hold is left as given, for its refusal to
+    /// name.
+    fn under_its_current_port_name(self, graph: &Graph) -> Result<Self> {
+        let node_of = |node_run_id: &NodeRunId| graph.traversal().v(node_run_id).first();
+        Ok(match self {
+            Self::Output(from) => {
+                let from = from.with_its_port_name_cast()?;
+                Self::Output(
+                    node_of(from.node_run_id())
+                        .and_then(|node| node.try_output(from.port_name()))
+                        .unwrap_or(from),
+                )
+            }
+            Self::Input(to) => {
+                let to = to.with_its_port_name_cast()?;
+                Self::Input(
+                    node_of(to.node_run_id())
+                        .and_then(|node| node.try_input(to.port_name()))
+                        .unwrap_or(to),
+                )
+            }
+        })
+    }
+
+    /// The direction of this end's port.
+    fn direction(&self) -> PortDirection {
+        match self {
+            Self::Output(_) => PortDirection::Output,
+            Self::Input(_) => PortDirection::Input,
+        }
+    }
+
+    /// The node and the port name of this end.
+    fn node_and_port_name(&self) -> (&NodeRunId, &str) {
+        match self {
+            Self::Output(from) => (from.node_run_id(), from.port_name()),
+            Self::Input(to) => (to.node_run_id(), to.port_name()),
+        }
+    }
+
+    /// The pin type this end's port carries in `graph`, resolved; `None` for a port of no
+    /// resolved pin, or one the graph does not hold.
+    fn its_pin_type(&self, graph: &Graph) -> Option<PinType> {
+        let (node_run_id, port_name) = self.node_and_port_name();
+        graph
+            .traversal()
+            .v(node_run_id)
+            .first()?
+            .ports
+            .the_one_a_name_finds(self.direction(), port_name)?
+            .pin
+            .as_ref()
+            .map(|pin| pin.pin_type.clone())
+    }
+
     /// The link between this end and port `port_name` of the node `node_run_id`, output first.
     fn the_link_to(
         &self,
@@ -157,151 +212,159 @@ impl ALinkEndTheGraphHolds {
             ),
         }
     }
+}
 
-    /// The direction of the link's other end.
-    fn the_other_ends_direction(&self) -> PortDirection {
-        match self {
-            Self::Output(_) => PortDirection::Input,
-            Self::Input(_) => PortDirection::Output,
+/// A port of a node type the stream has described, as the other end of a link to judge: the spec
+/// an add with no input values places a node of the type by, and what the port declares, both
+/// read before the graph's lock is taken.
+pub(in crate::core::runtime) struct ANodeTypesPortToJudge {
+    node_type: NodeClassImportPath,
+    spec: NodeSpec,
+    port_name: String,
+    declaration: Option<PinDeclaration>,
+}
+
+impl ANodeTypesPortToJudge {
+    /// Port `port_name` of `direction` of the type `descriptor` describes, as `node_types`
+    /// resolves the type.
+    pub(in crate::core::runtime) fn of(
+        node_types: &NodeTypesOneStreamResolves,
+        descriptor: NodeDescriptor,
+        port_name: &str,
+        direction: PortDirection,
+    ) -> Self {
+        let NodeDescriptor {
+            node_class_import_path: node_type,
+            inputs,
+            outputs,
+            ..
+        } = descriptor;
+        let cast = cast_exposed_name_to_url_safe(port_name).ok();
+        let declaration = match direction {
+            PortDirection::Input => inputs,
+            PortDirection::Output => outputs,
+        }
+        .into_iter()
+        .find(|port| port.name == port_name || cast.as_deref() == Some(port.name.as_str()))
+        .and_then(|port| port.pin_declaration);
+        Self {
+            spec: node_spec_holding_the_input_values(
+                node_types,
+                node_type.clone(),
+                &serde_json::Map::new(),
+                serde_json::Map::new(),
+            ),
+            node_type,
+            port_name: port_name.to_owned(),
+            declaration,
         }
     }
 }
 
-/// The verdict a connect made now takes on a link between `held`, an end the graph `compiler`
-/// holds, and port `port_name` of `node_type`, judged as [`the_verdict_connect_takes_on_a_link`]
-/// judges a link once an add with no input values had placed a node of the type: that node is
-/// held in the graph for the judgement alone, under the graph's lock, logging nothing a commit
-/// reads, and dropped before the lock is let go.
+/// The verdict a connect made now takes on each link between `held`, an end the graph
+/// `compiler` holds, and one of `node_types_ports`, in their order, judged as
+/// [`the_verdict_connect_takes_on_a_link`] judges a link once an add with no input values had
+/// placed a node of the type. The graph's lock is taken once; each node is held in the graph
+/// for its one judgement, logging nothing a commit reads, and dropped before the next is placed.
 ///
-/// The port is judged by what it declares. One of several types is judged as each in turn, and
-/// answers the one that connects best. Any type, or a type found from a link or a setting, is
-/// judged as the held end's type, the last warning that it is found only once a node is placed;
-/// with the held end untyped it is judged by its family. A node type the stream does not
-/// resolve is refused as unknown, and a port it does not declare as not found on the type.
-pub(in crate::core::runtime) fn the_verdict_connect_takes_on_a_link_with_a_node_types_port(
-    compiler: &Arc<Compiler>,
-    held: &ALinkEndTheGraphHolds,
-    node_type: &NodeClassImportPath,
-    port_name: &str,
-) -> Result<Option<PinLinkVerdict>> {
+/// A link is first judged with the node as placed, as `connect` would judge it after an
+/// `add_node`, so a family that refuses the link refuses it here. The port is then judged by
+/// what it declares: one of several types as each in turn, answering the one that connects
+/// best; any type, or a type found from a link or a setting, as the held end's type, the last
+/// warning that it is found only once a node is placed. A port the type does not declare is
+/// refused as not found on the type.
+pub(in crate::core::runtime) fn the_verdicts_connect_takes_on_links_with_node_types_ports(
+    compiler: &Compiler,
+    held: ALinkEndTheGraphHolds,
+    node_types_ports: Vec<ANodeTypesPortToJudge>,
+) -> Result<Vec<Result<Option<PinLinkVerdict>>>> {
     compiler.scope(|graph, _tx| {
-        let mut placed = NodeHeldForOneJudgement::placed_in(graph, node_type)?;
-        let (from, to) = held.the_link_to(&placed.node_run_id, port_name);
-        let (from, to) = placed.graph().link_ends_under_their_current_port_names(
-            from.with_its_port_name_cast()?,
-            to.with_its_port_name_cast()?,
-        );
-        let direction = held.the_other_ends_direction();
-        let port_name = match direction {
-            PortDirection::Input => to.port_name(),
-            PortDirection::Output => from.port_name(),
+        let held = held.under_its_current_port_name(graph)?;
+        let the_held_ends_type = held.its_pin_type(graph);
+        let mut verdicts = Vec::with_capacity(node_types_ports.len());
+        for port in node_types_ports {
+            verdicts.push(the_verdict_on_a_link_with_a_node_types_port(
+                graph,
+                &held,
+                the_held_ends_type.as_ref(),
+                port,
+            ));
         }
-        .to_owned();
-        if !placed.has_the_port(&port_name, direction) {
-            return Err(Error::NodePortNotFound {
-                node_run_id: node_type.to_string(),
-                port_name,
-                direction,
-            });
-        }
-        let judge = |graph: &Graph| {
-            refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
-                .map(|(verdict, _)| verdict)
-        };
-        let Some(declaration) =
-            the_pin_declaration_of(placed.graph(), node_type, &port_name, direction)
-        else {
-            return judge(placed.graph());
-        };
-        let the_held_ends_type = || {
-            let (node_run_id, held_port_name, held_direction) = match held {
-                ALinkEndTheGraphHolds::Output(_) => {
-                    (from.node_run_id(), from.port_name(), PortDirection::Output)
-                }
-                ALinkEndTheGraphHolds::Input(_) => {
-                    (to.node_run_id(), to.port_name(), PortDirection::Input)
-                }
-            };
-            the_resolved_pin_of(placed.graph(), node_run_id, held_port_name, held_direction)
-                .map(|pin| pin.pin_type)
-        };
-        let types_judged: Vec<_> = match &declaration.pin_type {
-            DeclaredPinType::Is { .. } => return judge(placed.graph()),
-            DeclaredPinType::OneOf { pin_types } => pin_types.clone(),
-            DeclaredPinType::Any
-            | DeclaredPinType::SameAsInput { .. }
-            | DeclaredPinType::SetByInput { .. } => the_held_ends_type().into_iter().collect(),
-        };
-        let found_only_once_placed = matches!(
-            declaration.pin_type,
-            DeclaredPinType::SameAsInput { .. } | DeclaredPinType::SetByInput { .. }
-        );
-        let judged = types_judged
-            .into_iter()
-            .map(|pin_type| {
-                placed.type_the_port(
-                    &port_name,
-                    direction,
-                    ResolvedPin {
-                        pin_type,
-                        flow: declaration.flow,
-                    },
-                );
-                judge(placed.graph())
-            })
-            .min_by_key(how_well_a_judged_link_connects)
-            .unwrap_or_else(|| judge(placed.graph()));
-        if !found_only_once_placed {
-            return judged;
-        }
-        judged.map(|verdict| {
-            let mut verdict = verdict.unwrap_or(PinLinkVerdict {
-                outcome: PinLinkOutcome::Connects,
-                warnings: Vec::new(),
-            });
-            verdict
-                .warnings
-                .push(PinLinkWarning::TypeFoundOnlyOncePlaced);
-            Some(verdict)
-        })
+        Ok(verdicts)
     })
 }
 
-/// The pin `node_type`'s port `port_name` of `direction` declares, as `graph`'s stream resolves
-/// the type; `None` for a port that declares none.
-fn the_pin_declaration_of(
-    graph: &Graph,
-    node_type: &NodeClassImportPath,
-    port_name: &str,
-    direction: PortDirection,
-) -> Option<PinDeclaration> {
-    let descriptor = graph
-        .node_types_this_stream_resolves()
-        .descriptor(node_type)?;
-    let ports = match direction {
-        PortDirection::Input => descriptor.inputs,
-        PortDirection::Output => descriptor.outputs,
+/// The verdict a connect made now takes on the link between `held` and `port`, in `graph`, as
+/// [`the_verdicts_connect_takes_on_links_with_node_types_ports`] judges each.
+fn the_verdict_on_a_link_with_a_node_types_port(
+    graph: &mut Graph,
+    held: &ALinkEndTheGraphHolds,
+    the_held_ends_type: Option<&PinType>,
+    ANodeTypesPortToJudge {
+        node_type,
+        spec,
+        port_name,
+        declaration,
+    }: ANodeTypesPortToJudge,
+) -> Result<Option<PinLinkVerdict>> {
+    let direction = held.direction().opposite();
+    let mut placed = NodeHeldForOneJudgement::placed_in(graph, spec)?;
+    let port_name = placed
+        .the_name_of_its_port(&port_name, direction)?
+        .ok_or_else(|| Error::NodeTypePortNotFound {
+            node_type,
+            port_name,
+            direction,
+        })?;
+    let (from, to) = held.the_link_to(&placed.node_run_id, &port_name);
+    let judge = |graph: &Graph| {
+        refuse_a_link_connect_refuses(graph, &from, &to, ALinkConnected::MadeNow)
+            .map(|(verdict, _)| verdict)
     };
-    ports
-        .into_iter()
-        .find(|port| port.name == port_name)?
-        .pin_declaration
-}
-
-/// The pin port `port_name` of `direction` of the node `node_run_id` carries, resolved; `None`
-/// for a port of no resolved pin, or one the node does not have.
-fn the_resolved_pin_of(
-    graph: &Graph,
-    node_run_id: &NodeRunId,
-    port_name: &str,
-    direction: PortDirection,
-) -> Option<ResolvedPin> {
-    let node = graph.traversal().v(node_run_id).first()?;
-    let port = match direction {
-        PortDirection::Input => node.input_port(port_name),
-        PortDirection::Output => node.output_port(port_name),
-    }?;
-    port.pin.clone()
+    let as_placed = judge(placed.graph())?;
+    let Some(declaration) = declaration else {
+        return Ok(as_placed);
+    };
+    let found_only_once_placed = matches!(
+        declaration.pin_type,
+        DeclaredPinType::SameAsInput { .. } | DeclaredPinType::SetByInput { .. }
+    );
+    let types_judged = match declaration.pin_type {
+        DeclaredPinType::Is { .. } => return Ok(as_placed),
+        DeclaredPinType::OneOf { pin_types } => pin_types,
+        DeclaredPinType::Any
+        | DeclaredPinType::SameAsInput { .. }
+        | DeclaredPinType::SetByInput { .. } => the_held_ends_type.cloned().into_iter().collect(),
+    };
+    let mut best = None;
+    for pin_type in types_judged {
+        placed.type_the_port(
+            &port_name,
+            direction,
+            ResolvedPin {
+                pin_type,
+                flow: declaration.flow,
+            },
+        );
+        let judged = judge(placed.graph());
+        if best.as_ref().is_none_or(|best| {
+            how_well_a_judged_link_connects(&judged) < how_well_a_judged_link_connects(best)
+        }) {
+            best = Some(judged);
+        }
+    }
+    let judged = best.unwrap_or(Ok(as_placed))?;
+    if !found_only_once_placed {
+        return Ok(judged);
+    }
+    let mut verdict = judged.unwrap_or(PinLinkVerdict {
+        outcome: PinLinkOutcome::Connects,
+        warnings: Vec::new(),
+    });
+    verdict
+        .warnings
+        .push(PinLinkWarning::TypeFoundOnlyOncePlaced);
+    Ok(Some(verdict))
 }
 
 /// How well a link judged as connect judges it connects, the best first: as it is, through a
@@ -327,19 +390,12 @@ struct NodeHeldForOneJudgement<'graph> {
 }
 
 impl<'graph> NodeHeldForOneJudgement<'graph> {
-    /// A node of `node_type` placed in `graph`; a type the stream does not resolve is refused
-    /// as unknown, and one it cannot add as the add refuses it.
-    fn placed_in(graph: &'graph mut Graph, node_type: &NodeClassImportPath) -> Result<Self> {
-        let node_types = Arc::clone(graph.node_types_this_stream_resolves());
-        if node_types.port_info(node_type).is_none() {
-            return Err(Error::UnknownNodeType {
-                ident: node_type.clone(),
-            });
-        }
-        let config = config_of_a_node(&node_types, node_type, &serde_json::Map::new());
+    /// A node placed in `graph` by `spec`, refused as the add refuses it.
+    fn placed_in(graph: &'graph mut Graph, spec: NodeSpec) -> Result<Self> {
+        let node_type = spec.name.clone();
         let node_run_id = graph
             .traversal_mut()
-            .add_v(NodeSpec::new(node_type.clone(), config))?
+            .add_v(spec)?
             .first()
             .map(|node| node.id.clone())
             .ok_or_else(|| Error::GraphError(format!("a node of `{node_type}` was not placed")))?;
@@ -351,16 +407,21 @@ impl<'graph> NodeHeldForOneJudgement<'graph> {
         self.graph
     }
 
-    /// Whether the node has a port `port_name` of `direction`.
-    fn has_the_port(&self, port_name: &str, direction: PortDirection) -> bool {
-        self.graph
+    /// The current name of the node's port of `direction` that `port_name`, cast, finds;
+    /// `None` when it finds none.
+    fn the_name_of_its_port(
+        &self,
+        port_name: &str,
+        direction: PortDirection,
+    ) -> Result<Option<String>> {
+        let port_name = cast_exposed_name_to_url_safe(port_name)?;
+        Ok(self
+            .graph
             .traversal()
             .v(&self.node_run_id)
             .first()
-            .is_some_and(|node| match direction {
-                PortDirection::Input => node.has_input(port_name),
-                PortDirection::Output => node.has_output(port_name),
-            })
+            .and_then(|node| node.ports.current_name(direction, &port_name))
+            .map(str::to_owned))
     }
 
     /// Type the node's port `port_name` of `direction` as `pin`.
@@ -368,11 +429,12 @@ impl<'graph> NodeHeldForOneJudgement<'graph> {
         let Some(node) = self.graph.traversal_mut().v(&self.node_run_id).first_mut() else {
             return;
         };
-        let ports = match direction {
-            PortDirection::Input => &mut node.ports.inputs,
-            PortDirection::Output => &mut node.ports.outputs,
-        };
-        if let Some(port) = ports.iter_mut().find(|port| port.name == port_name) {
+        if let Some(port) = node
+            .ports
+            .on_mut(direction)
+            .iter_mut()
+            .find(|port| port.name == port_name)
+        {
             port.pin = Some(pin);
         }
     }
@@ -380,10 +442,9 @@ impl<'graph> NodeHeldForOneJudgement<'graph> {
 
 impl Drop for NodeHeldForOneJudgement<'_> {
     fn drop(&mut self) {
-        let dropped = self
+        let _ = self
             .graph
             .drop_the_node(&self.node_run_id, WhyTheNodeLeaves::Removed);
-        debug_assert!(dropped, "the node held for one judgement is dropped");
     }
 }
 

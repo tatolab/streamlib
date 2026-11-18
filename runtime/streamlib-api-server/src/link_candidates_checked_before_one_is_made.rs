@@ -6,6 +6,7 @@
 //! makes, and made nowhere.
 
 use streamlib::sdk::error::PortDirection;
+use streamlib::sdk::runtime::ANodeTypesPort;
 use streamlib_control_contract::{
     CheckLinkCandidates, CheckLinkCandidatesRequest, ControlOperation, LinkCandidatesAmong,
     LinkCandidatesFrom,
@@ -17,14 +18,16 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
 };
 
 use crate::control_operation_dispatcher::{ControlOperationDispatcher, ControlOperationRefusal};
-use crate::link_checked_before_it_is_made::TheRunningGraphLinksAreCheckedOn;
-use crate::stream_graph_transaction_executor::GraphTransactionRefusal;
+use crate::link_checked_before_it_is_made::NoRunningGraphToCheckLinksOn;
+use crate::stream_graph_transaction_executor::{GraphRequestRefusal, GraphTransactionRefusal};
 
 impl ControlOperationDispatcher {
     /// What `check_link` would answer for each link between the placed end `request` names and
-    /// each candidate it names, in the order judged: the stream resolved once, as `check_link`
-    /// resolves it, and each link judged as `check_link` judges it. A stream the runtime does
-    /// not hold, and a non-empty `level`, refuse the call itself.
+    /// each candidate it names, in the order named: the stream resolved and rendered once, as
+    /// `check_link` resolves it, and each link judged as `check_link` judges it, every placed
+    /// candidate against that one render and every node type's port after them. A stream the
+    /// runtime does not hold, a non-empty `level`, and a `from` naming a node or a port of its
+    /// direction the graph does not hold refuse the call itself.
     pub(crate) async fn check_link_candidates(
         &self,
         CheckLinkCandidatesRequest {
@@ -36,26 +39,30 @@ impl ControlOperationDispatcher {
         }: CheckLinkCandidatesRequest,
     ) -> Result<LinkCandidatesCheckResult, ControlOperationRefusal> {
         let method_name = CheckLinkCandidates::METHOD_NAME;
+        let refusing_the_call = |refusal: GraphRequestRefusal| {
+            ControlOperationRefusal::RefusedAction(Box::new(
+                GraphTransactionRefusal::of_the_whole_transaction(refusal)
+                    .into_the_refusal_on_the_wire(method_name),
+            ))
+        };
         let running_graph = self
             .the_running_graph_links_are_checked_on(method_name, &stream, level.as_deref())
-            .await?
-            .map_err(|refusal| {
-                ControlOperationRefusal::RefusedAction(Box::new(
-                    GraphTransactionRefusal::of_the_whole_transaction(refusal)
-                        .into_the_refusal_on_the_wire(method_name),
-                ))
+            .await
+            .map_err(|no_running_graph| match no_running_graph {
+                NoRunningGraphToCheckLinksOn::StreamNotFound(refusal) => refusing_the_call(refusal),
+                NoRunningGraphToCheckLinksOn::Refused(refusal) => refusal,
             })?;
         let (held, held_direction) = match from {
             LinkCandidatesFrom::Output(held) => (held, PortDirection::Output),
             LinkCandidatesFrom::Input(held) => (held, PortDirection::Input),
         };
-        let candidate_direction = match held_direction {
-            PortDirection::Output => PortDirection::Input,
-            PortDirection::Input => PortDirection::Output,
-        };
+        let placed_end = running_graph
+            .the_placed_end(&held, held_direction)
+            .map_err(refusing_the_call)?;
+        let candidate_direction = held_direction.opposite();
         let ends = match among {
             LinkCandidatesAmong::PlacedPorts => {
-                the_placed_ports_of(&running_graph, candidate_direction)?
+                the_placed_ports_of(running_graph.rendered(), candidate_direction)
             }
             LinkCandidatesAmong::NodeTypePorts => self
                 .operations_on_the_loaded_streams
@@ -80,27 +87,38 @@ impl ControlOperationDispatcher {
                 .collect(),
             LinkCandidatesAmong::Ends(ends) => ends,
         };
-        let mut answer = LinkCandidatesCheckResult {
-            candidates: Vec::new(),
-            not_checked: Vec::new(),
-        };
-        for end in ends {
-            let checked = match &end {
+        let mut placed_checks = Vec::with_capacity(ends.len());
+        let mut node_types_ports = Vec::new();
+        for end in &ends {
+            match end {
                 LinkCandidateEnd::PlacedPort { node, port } => {
                     let candidate = StreamGraphActionLinkEnd {
                         node: node.clone(),
                         port: port.clone(),
                     };
-                    match held_direction {
+                    placed_checks.push(Some(match held_direction {
                         PortDirection::Output => running_graph.check(&held, &candidate),
                         PortDirection::Input => running_graph.check(&candidate, &held),
-                    }
+                    }));
                 }
                 LinkCandidateEnd::NodeTypePort { node_type, port } => {
-                    running_graph
-                        .check_with_a_node_types_port(&held, held_direction, node_type, port)
-                        .await
+                    node_types_ports.push(ANodeTypesPort { node_type, port });
+                    placed_checks.push(None);
                 }
+            }
+        }
+        let mut node_types_checks = running_graph
+            .check_with_node_types_ports(&placed_end, held_direction, &node_types_ports)
+            .into_iter();
+        let mut answer = LinkCandidatesCheckResult {
+            candidates: Vec::new(),
+            not_checked: Vec::new(),
+        };
+        for (end, placed_check) in ends.into_iter().zip(placed_checks) {
+            let Some(checked) = placed_check.or_else(|| node_types_checks.next()) else {
+                return Err(ControlOperationRefusal::runtime_failed(format!(
+                    "{method_name} failed: a node type's port was answered no check"
+                )));
             };
             match checked {
                 Ok(check)
@@ -116,34 +134,23 @@ impl ControlOperationDispatcher {
     }
 }
 
-/// Each port of `direction` of each node at the running graph's own level, as `graph` lists
-/// them.
+/// Each port of `direction` of each node at the level `rendered` holds, as `graph` lists them.
 fn the_placed_ports_of(
-    running_graph: &TheRunningGraphLinksAreCheckedOn,
+    rendered: &StreamGraphOnTheWire,
     direction: PortDirection,
-) -> Result<Vec<LinkCandidateEnd>, ControlOperationRefusal> {
-    let rendered: StreamGraphOnTheWire =
-        serde_json::from_value(running_graph.rendered_graph().clone()).map_err(|refusal| {
-            ControlOperationRefusal::runtime_failed(format!(
-                "{} failed: the stream's graph did not read as `graph` renders one: {refusal}",
-                CheckLinkCandidates::METHOD_NAME
-            ))
-        })?;
-    Ok(rendered
+) -> Vec<LinkCandidateEnd> {
+    rendered
         .nodes
-        .into_iter()
+        .iter()
         .flat_map(|node| {
             let ports = match direction {
-                PortDirection::Input => node.ports.inputs,
-                PortDirection::Output => node.ports.outputs,
+                PortDirection::Input => &node.ports.inputs,
+                PortDirection::Output => &node.ports.outputs,
             };
-            let node_id = node.id;
-            ports
-                .into_iter()
-                .map(move |port| LinkCandidateEnd::PlacedPort {
-                    node: node_id.clone(),
-                    port: port.name,
-                })
+            ports.iter().map(|port| LinkCandidateEnd::PlacedPort {
+                node: node.id.clone(),
+                port: port.name.clone(),
+            })
         })
-        .collect())
+        .collect()
 }

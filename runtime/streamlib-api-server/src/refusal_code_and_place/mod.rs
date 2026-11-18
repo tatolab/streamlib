@@ -193,6 +193,11 @@ impl RefusalCodeAndPlace {
                 port_name,
                 direction,
                 ..
+            }
+            | Error::NodeTypePortNotFound {
+                port_name,
+                direction,
+                ..
             } => Self {
                 refused_field: (*direction == PortDirection::Input).then(|| port_name.clone()),
                 ..Self::coded(PortNotFound)

@@ -59,9 +59,9 @@ mod streams_each_operation_names;
 pub(crate) use streams_each_operation_names::StreamsTheRuntimeHolds;
 mod transaction_answers;
 
+pub(crate) use former_port_names::the_current_name_of_a_port;
 use former_port_names::{
-    move_each_former_port_name, the_current_name_of_a_port,
-    the_link_ends_under_their_current_port_names,
+    move_each_former_port_name, the_link_ends_under_their_current_port_names,
     the_placed_streams_with_each_former_port_name_moved, the_request_under_the_current_port_names,
 };
 use input_value_sets::*;

@@ -68,14 +68,13 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))
         }
-        fn what_a_live_connect_makes_of_a_link_with_a_node_types_port(
+        fn what_a_live_connect_makes_of_links_with_node_types_ports(
             &self,
             _held: &::streamlib_project_repository::StreamGraphDocumentLinkEnd,
             _held_direction: ::streamlib::sdk::error::PortDirection,
-            _node_type: &str,
-            _port: &str,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>> {
-            Box::pin(async { Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None)) })
+            node_types_ports: &[::streamlib::sdk::runtime::ANodeTypesPort<'_>],
+        ) -> ::streamlib::sdk::error::Result<::std::vec::Vec<::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink>>> {
+            Ok(node_types_ports.iter().map(|_| Ok(::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink::Makes(None))).collect())
         }
         fn the_name_a_node_added_with_none_takes(
             &self,

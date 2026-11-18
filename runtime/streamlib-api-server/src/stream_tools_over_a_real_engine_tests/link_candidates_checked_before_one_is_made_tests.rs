@@ -5,6 +5,9 @@
 //! `check_link` answers for its link with the placed end, from an output or from an input, over
 //! the placed ports, the node types' ports or a list of ends, and changes nothing.
 
+use streamlib::sdk::runtime::graph_renders_and_commits_counted_for_a_test::commits_begun_of;
+use streamlib_project_repository::GRAPH_INPUT_NODE_TYPE;
+
 use super::input_value_set_tests::{MIXER_NODE_UUID, a_project_whose_main_stream_holds_a_mixer};
 use super::link_checked_before_it_is_made_tests::{
     FRAMES_TYPE, FRAMES_UUID, MIX_UUID, REMAP_UUID, SECONDS_TYPE, SECONDS_UUID,
@@ -277,9 +280,22 @@ async fn a_node_types_output_is_judged_into_a_placed_input_among_a_list_of_ends(
     assert_eq!(answer["candidates"][1]["check"], placed, "{answer}");
 }
 
-/// A node type no module describes is answered `refused` with the refusal of its describe, as
-/// an `add_node` of it is refused, and a port its type does not have with `port_not_found`,
-/// naming the node type.
+/// The node types `stream_id`'s catalog lists, by import path.
+fn the_node_catalog_of(
+    engine: &AnEngineRecordingItsStreamsInATemporaryStateDirectory,
+    stream_id: &str,
+) -> Vec<String> {
+    engine
+        .operations_on_the_loaded_streams()
+        .node_catalog_of_the_stream_a_call_names(stream_id)
+        .expect("the stream is loaded")
+        .into_iter()
+        .map(|node_type| node_type.node_class_import_path.as_str().to_owned())
+        .collect()
+}
+
+/// A port its node type does not have is answered `refused` with `port_not_found`, naming the
+/// node type.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_node_types_port_that_is_no_port_is_answered_refused() {
     let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
@@ -292,36 +308,249 @@ async fn a_node_types_port_that_is_no_port_is_answered_refused() {
             "output",
             (SECONDS_UUID, "elapsed"),
             json!({ "ends": [
-                { "kind": "node_type_port", "node_type": "link_check_test:NoSuchType", "port": "x" },
                 { "kind": "node_type_port", "node_type": FRAMES_TYPE, "port": "nothing" },
             ] }),
             true,
         ))
         .await;
 
-    assert!(
-        answer["candidates"][0]["check"]["refusal"]["runtime_words"]
-            .as_str()
-            .is_some_and(|words| words.contains("link_check_test:NoSuchType")),
-        "{answer}"
-    );
+    let refused = &answer["candidates"][0]["check"];
+    assert_eq!(refused["outcome"], "refused", "{answer}");
+    assert_eq!(refused["refusal"]["action"], "connect", "{answer}");
     assert_eq!(
-        answer["candidates"][1]["check"]["refusal"]["refusal_code"], "port_not_found",
+        refused["refusal"]["refusal_code"], "port_not_found",
         "{answer}"
     );
     assert!(
-        answer["candidates"][1]["check"]["refusal"]["runtime_words"]
+        refused["refusal"]["runtime_words"]
             .as_str()
             .is_some_and(|words| words.contains(FRAMES_TYPE)),
         "{answer}"
     );
-    for candidate in answer["candidates"].as_array().expect("candidates") {
-        assert_eq!(candidate["check"]["outcome"], "refused", "{candidate}");
+}
+
+/// A node type the stream has not described yet is listed under `not_checked`, saying to place
+/// a node of it first; it is not described, so the stream's node catalog is left as it was.
+///
+/// Mental-revert: describing the type, as an `add_node` of it would, registers it into the
+/// stream, so the catalog afterwards lists one more type.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_type_not_described_yet_is_not_checked_and_not_described() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let catalog_before = the_node_catalog_of(&engine, &stream_id);
+    let not_described = json!({
+        "kind": "node_type_port", "node_type": "link_check_test:NotDescribedYet", "port": "x",
+    });
+
+    let answer = engine
+        .the_candidates_checked(the_candidates(
+            json!(project.stream_asset_of("main")),
+            "output",
+            (SECONDS_UUID, "elapsed"),
+            json!({ "ends": [not_described] }),
+            true,
+        ))
+        .await;
+
+    assert!(
+        answer
+            .get("candidates")
+            .is_none_or(|candidates| candidates == &json!([])),
+        "{answer}"
+    );
+    assert_eq!(answer["not_checked"][0]["end"], not_described, "{answer}");
+    assert!(
+        answer["not_checked"][0]["why"]
+            .as_str()
+            .is_some_and(|why| why.contains("not described yet") && why.contains("`add_node`")),
+        "{answer}"
+    );
+    assert_eq!(the_node_catalog_of(&engine, &stream_id), catalog_before);
+}
+
+/// A graph interface's or a fragment's node type, as a candidate, is listed under `not_checked`
+/// with the reason `check_link` gives for a link reaching such a placed node.
+///
+/// Mental-revert: placing a node of the type for the judgement would judge a link the live
+/// graph judges only as it is reconciled, answering where `add_node` and `connect` would not.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_graph_interface_or_fragment_node_type_is_not_checked_as_check_link_does_not() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let ends: Vec<Value> = [
+        GRAPH_INPUT_NODE_TYPE,
+        GRAPH_OUTPUT_NODE_TYPE,
+        STREAM_FRAGMENT_NODE_TYPE,
+    ]
+    .into_iter()
+    .map(|node_type| json!({ "kind": "node_type_port", "node_type": node_type, "port": "value" }))
+    .collect();
+
+    let answer = engine
+        .the_candidates_checked(the_candidates(
+            json!(project.stream_asset_of("main")),
+            "output",
+            (SECONDS_UUID, "elapsed"),
+            json!({ "ends": ends }),
+            true,
+        ))
+        .await;
+
+    let not_checked = answer["not_checked"].as_array().expect("not_checked");
+    assert_eq!(
+        not_checked
+            .iter()
+            .map(|it| it["end"].clone())
+            .collect::<Vec<_>>(),
+        ends,
+        "{answer}"
+    );
+    for it in not_checked {
         assert_eq!(
-            candidate["check"]["refusal"]["action"], "connect",
-            "{candidate}"
+            it["why"],
+            "the link reaches a node that runs as no node of its own, such as a fragment",
+            "{answer}"
         );
     }
+}
+
+/// Placed ports and node types' ports interleaved are each answered in the order sent, and a
+/// node type's port answers what the placed node of that type answers.
+///
+/// Mental-revert: answering the placed candidates first and the node types' after would list
+/// them out of the order sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn placed_and_node_types_candidates_interleaved_are_answered_in_the_order_sent() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let ends = vec![
+        json!({ "kind": "node_type_port", "node_type": FRAMES_TYPE, "port": "count" }),
+        json!({ "kind": "placed_port", "node": FRAMES_UUID, "port": "count" }),
+        json!({ "kind": "node_type_port", "node_type": FRAMES_TYPE, "port": "nothing" }),
+        json!({ "kind": "placed_port", "node": MIX_UUID, "port": "b" }),
+    ];
+
+    let answer = engine
+        .the_candidates_checked(the_candidates(
+            json!(project.stream_asset_of("main")),
+            "output",
+            (SECONDS_UUID, "elapsed"),
+            json!({ "ends": ends }),
+            true,
+        ))
+        .await;
+
+    let candidates = answer["candidates"].as_array().expect("candidates");
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|it| it["end"].clone())
+            .collect::<Vec<_>>(),
+        ends,
+        "{answer}"
+    );
+    assert_eq!(candidates[0]["check"], candidates[1]["check"], "{answer}");
+    assert_eq!(candidates[2]["check"]["outcome"], "refused", "{answer}");
+}
+
+/// A `from` naming a node the graph does not hold, or an input as an output, refuses the call
+/// itself, coded, before any candidate is judged.
+///
+/// Mental-revert: judging each candidate against a `from` never resolved answers every
+/// candidate refused, or a node type's port judged against no end at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_from_naming_no_node_or_a_port_of_the_other_direction_refuses_the_call() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    engine.a_stream_loaded_from_its_graph_document(&project, "main");
+    let stream = json!(project.stream_asset_of("main"));
+
+    for (from, code) in [
+        (
+            ("6f6f6f6f-6f6f-4f6f-8f6f-6f6f6f6f6f6e", "elapsed"),
+            "node_not_found",
+        ),
+        ((FRAMES_UUID, "count"), "port_not_found"),
+    ] {
+        let refused = engine
+            .the_answer_or_the_refusal_of(
+                "check_link_candidates",
+                the_candidates(
+                    stream.clone(),
+                    "output",
+                    from,
+                    json!("node_type_ports"),
+                    true,
+                ),
+            )
+            .await
+            .expect_err("the call is refused");
+
+        assert_eq!(refused.action, "check_link_candidates", "{refused:?}");
+        assert_eq!(
+            serde_json::to_value(refused.refusal_code).unwrap(),
+            json!(code),
+            "{refused:?}"
+        );
+    }
+}
+
+/// On a playing stream, judging every node type's port changes nothing a commit reads: no
+/// commit begins, the live graph holds as many nodes as before, and the stream still runs.
+///
+/// Mental-revert: a node held for a judgement logged as a pending operation, or left placed,
+/// begins a commit and leaves one node more in the live graph.
+#[tokio::test(flavor = "multi_thread")]
+async fn node_types_candidates_on_a_playing_stream_begin_no_commit_and_leave_it_running() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_a_mixer();
+    let (stream_id, served) = engine
+        .the_stream_main_of_the_project_started_and_served(&project)
+        .await;
+    let loaded_stream = engine
+        .operations_on_the_loaded_streams()
+        .loaded_stream_identity_of_the_stream_a_call_names(&stream_id)
+        .expect("the stream is loaded");
+    let nodes_in = |graph: Value| graph["nodes"].as_array().map(Vec::len);
+    let nodes_before = nodes_in(engine.the_live_graph_of(&stream_id));
+    let commits_begun_before = commits_begun_of(&loaded_stream);
+
+    let answer = served
+        .control_call(
+            "check_link_candidates",
+            the_candidates(
+                json!(project.stream_asset_of("main")),
+                "output",
+                (MIXER_NODE_UUID, "level"),
+                json!("node_type_ports"),
+                true,
+            ),
+        )
+        .await;
+
+    assert!(
+        answer["result"]["candidates"]
+            .as_array()
+            .is_some_and(|candidates| !candidates.is_empty()),
+        "{answer}"
+    );
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        commits_begun_of(&loaded_stream),
+        commits_begun_before,
+        "a judgement began a commit"
+    );
+    assert_eq!(nodes_in(engine.the_live_graph_of(&stream_id)), nodes_before);
+    let listed = served.control_call("list_streams", json!({})).await;
+    let main = listed["result"]["streams"]
+        .as_array()
+        .and_then(|streams| streams.iter().find(|listed| listed["stream"] == stream_id))
+        .unwrap_or_else(|| panic!("the stream is listed: {listed}"));
+    assert_eq!(main["state"], "running", "{listed}");
 }
 
 /// A candidate whose link `check_link` would not check yet, one `connect` closes through a
