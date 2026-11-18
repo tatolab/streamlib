@@ -18,13 +18,56 @@ pub struct PinConversion {
     pub output_port_name: String,
     /// The type that output gives.
     pub output_pin_type: PinType,
+    /// The settings it picks for the input its output feeds, when what its output gives
+    /// follows a setting; `None` when its output gives `output_pin_type` whatever it holds.
+    pub output_picked_for_the_input: Option<PinConversionOutputPick>,
 }
 
 impl PinConversion {
-    /// Whether the verdict may answer a convert node of it, a built-in's; `connect` refuses it yet.
+    /// Whether a transaction's `connect` places a node of it, a built-in's, on a link it bridges.
     pub fn may_be_inserted(&self) -> bool {
         self.node_type.names_a_built_in_node()
     }
+
+    /// The settings a node of it holds to feed an input of `input`, and the type its output then
+    /// gives; `None` when no setting makes it give a type that input takes.
+    pub fn output_picked_for(&self, input: &PinType) -> Option<PinConversionOutputPicked> {
+        match self.output_picked_for_the_input {
+            None => Some(PinConversionOutputPicked {
+                input_values: serde_json::Map::new(),
+                output_pin_type: self.output_pin_type.clone(),
+            }),
+            Some(PinConversionOutputPick(pick)) => pick(input),
+        }
+    }
+}
+
+/// The one function a conversion whose output follows a setting supplies: for the type of the
+/// input its output feeds, the settings it then holds and the type its output then gives, or
+/// `None` when none of its settings gives a type that input takes.
+#[derive(Clone, Copy)]
+pub struct PinConversionOutputPick(pub fn(&PinType) -> Option<PinConversionOutputPicked>);
+
+impl std::fmt::Debug for PinConversionOutputPick {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PinConversionOutputPick(..)")
+    }
+}
+
+impl PartialEq for PinConversionOutputPick {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::fn_addr_eq(self.0, other.0)
+    }
+}
+
+/// What a conversion picks to feed one input: the settings its node holds and the type its output
+/// gives under them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PinConversionOutputPicked {
+    /// Each setting picked, by its input's name, as the node's input values hold it.
+    pub input_values: serde_json::Map<String, serde_json::Value>,
+    /// The type the output gives under them.
+    pub output_pin_type: PinType,
 }
 
 impl NodeDescriptor {
@@ -86,6 +129,7 @@ impl NodeDescriptor {
             input_pin_type,
             output_port_name: output.name.clone(),
             output_pin_type,
+            output_picked_for_the_input: None,
         }))
     }
 }

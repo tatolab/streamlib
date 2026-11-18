@@ -5,7 +5,7 @@
 //! the project repository's refusals and one over the engine's errors, so a new case does not
 //! compile until it has a code.
 
-use streamlib::sdk::descriptors::PinLinkRefusal;
+use streamlib::sdk::descriptors::{PinConversion, PinLinkRefusal};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -22,6 +22,9 @@ pub(crate) struct RefusalCodeAndPlace {
     pub(crate) refused_field: Option<String>,
     pub(crate) refused_file: Option<ProjectFilePlaceOnTheWire>,
     pub(crate) not_running_because: Option<NodeNotRunningBecauseOnTheWire>,
+    /// The one conversion a module or the project's own node declares that bridges a refused
+    /// link, which a caller places with one more call.
+    pub(crate) conversion_to_place: Option<Box<PinConversion>>,
 }
 
 impl RefusalCodeAndPlace {
@@ -165,8 +168,9 @@ impl RefusalCodeAndPlace {
     /// A variant with fields is coded by what it names.
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
-            InputTakesNoWire, LinkAlreadyExists, LinkPinTypesDoNotConnect, NodeNameTaken,
-            NodeNotFound, NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
+            InputTakesNoWire, LinkAlreadyExists, LinkNeedsAModuleConversion,
+            LinkPinTypesDoNotConnect, NodeNameTaken, NodeNotFound, NodeNotRunning,
+            NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
         };
         match refusal {
             Error::NodeOfAStreamIsNotRunning {
@@ -220,6 +224,22 @@ impl RefusalCodeAndPlace {
                     refused_field: Some(input_name.clone()),
                     ..Self::coded(InputTakesNoWire)
                 },
+                PinLinkRefusal::PinTypesDoNotConnect {
+                    conversions_that_bridge,
+                    ..
+                } if !conversions_that_bridge.is_empty()
+                    && !conversions_that_bridge
+                        .iter()
+                        .any(PinConversion::may_be_inserted) =>
+                {
+                    Self {
+                        conversion_to_place: match conversions_that_bridge.as_slice() {
+                            [conversion] => Some(Box::new(conversion.clone())),
+                            _ => None,
+                        },
+                        ..Self::coded(LinkNeedsAModuleConversion)
+                    }
+                }
                 PinLinkRefusal::PinTypesDoNotConnect { .. } => {
                     Self::coded(LinkPinTypesDoNotConnect)
                 }

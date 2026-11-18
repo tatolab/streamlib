@@ -9,6 +9,7 @@ use streamlib::sdk::context::{
     NativeNodeOutputPixelBufferFrame, NodeOutputPixelBufferPoolOfOneNativeNode,
     RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
+use streamlib::sdk::descriptors::{PinConversionOutputPicked, PinType, TexturePixelFormat};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::{
     ArrayFrameAttributeResidency, ArrayFrameDescriptorBody, DataChannelPayloadDescriptor,
@@ -143,6 +144,41 @@ impl ReactiveNode for TensorToTexture::Node {
         }
         Ok(())
     }
+}
+
+/// The `format` a `TensorToTexture` placed to feed an input of `input` holds, and the Texture it
+/// then writes: the first format the input takes that one `[h, w, c]` tensor holds, or the
+/// default `format` for an input that takes any; `None` for an input that takes no such format,
+/// or is no Texture.
+pub fn the_format_picked_for_the_input(input: &PinType) -> Option<PinConversionOutputPicked> {
+    let PinType::Texture { pixel_formats } = input else {
+        return None;
+    };
+    let format = if pixel_formats.is_empty() {
+        default_image_format_wire_name()
+    } else {
+        pixel_formats
+            .iter()
+            .map(|format| format.wire_name())
+            .find(|wire_name| {
+                TextureFormat::from_wire_name(wire_name).is_some_and(|format| {
+                    tensor_element_and_channels_of_one_pixel(format).is_some()
+                })
+            })?
+            .to_string()
+    };
+    let output_pin_type = PinType::Texture {
+        pixel_formats: TexturePixelFormat::from_wire_name(&format)
+            .into_iter()
+            .collect(),
+    };
+    Some(PinConversionOutputPicked {
+        input_values: streamlib::sdk::serde_json::Map::from_iter([(
+            "format".to_string(),
+            format.into(),
+        )]),
+        output_pin_type,
+    })
 }
 
 /// The texture format `config.format` names, refused unless one `[h, w, c]`

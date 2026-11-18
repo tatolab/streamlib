@@ -41,6 +41,7 @@ fn the_typed_conversions() -> [PinConversion; 4] {
             input_pin_type,
             output_port_name: output_port_name.to_owned(),
             output_pin_type,
+            output_picked_for_the_input: None,
         }
     };
     [
@@ -199,4 +200,72 @@ fn the_verdict_between(
         },
         conversions,
     )
+}
+
+/// Every built-in pin type a conversion's ends are judged against, each Texture format alone and a
+/// Texture of any.
+fn every_built_in_end_type() -> Vec<PinType> {
+    let mut end_types: Vec<PinType> = TexturePixelFormat::EVERY_FORMAT
+        .into_iter()
+        .map(|format| a_texture_of(&[format]))
+        .collect();
+    end_types.extend([
+        a_texture_of(&[]),
+        PinType::Tensor {},
+        PinType::Audio {},
+        PinType::Boolean {},
+        PinType::Integer { exact_size: None },
+        PinType::Float { exact_size: None },
+        PinType::String {},
+        PinType::Color {},
+        PinType::Rectangle {},
+        PinType::Transform {},
+        PinType::Trigger {},
+        PinType::EncodedVideo { codecs: Vec::new() },
+        PinType::EncodedAudio { codecs: Vec::new() },
+    ]);
+    end_types
+}
+
+/// No two conversions `connect` may place bridge the same pair of built-in types, so a link never
+/// has two built-in nodes to choose between. Each is judged by its declaration alone, which
+/// bridges every pair the setting it picks for an input lets it bridge.
+///
+/// Mental-revert: a second built-in Tensor-to-Texture conversion makes two bridge a Tensor into a
+/// Texture.
+#[test]
+fn no_two_insertable_conversions_bridge_the_same_pair_of_built_in_types() {
+    register_media_builtin_node_types();
+    let insertable: Vec<PinConversion> = NODE_REGISTRY
+        .list_registered()
+        .into_iter()
+        .filter_map(|descriptor| {
+            descriptor
+                .pin_conversion()
+                .unwrap_or_else(|refusal| panic!("{refusal}"))
+        })
+        .filter(PinConversion::may_be_inserted)
+        .collect();
+    assert!(!insertable.is_empty());
+    let end_types = every_built_in_end_type();
+
+    for output in &end_types {
+        for input in &end_types {
+            let bridging: Vec<&NodeClassImportPath> = insertable
+                .iter()
+                .filter(|conversion| {
+                    matches!(
+                        the_verdict_between(output, input, std::slice::from_ref(conversion))
+                            .outcome,
+                        PinLinkOutcome::ConnectsThroughConvertNode(_)
+                    )
+                })
+                .map(|conversion| &conversion.node_type)
+                .collect();
+            assert!(
+                bridging.len() <= 1,
+                "{output} into {input} is bridged by {bridging:?}"
+            );
+        }
+    }
 }

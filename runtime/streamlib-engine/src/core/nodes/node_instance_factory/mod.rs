@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
-use crate::core::descriptors::{PinConversion, PortDescriptor};
+use crate::core::descriptors::{PinConversion, PinConversionOutputPick, PortDescriptor};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
@@ -265,10 +265,43 @@ impl NodeInstanceFactory {
         }
     }
 
+    /// Register `P`, a node type stating a conversion whose output follows a setting, with
+    /// `pick`, the one function that picks that setting for the input its output feeds; log
+    /// rather than return a registration that fails, or a `P` stating no conversion.
+    pub fn register_a_conversion_whose_output_a_setting_picks<P>(
+        &self,
+        pick: PinConversionOutputPick,
+    ) where
+        P: GeneratedNode + 'static,
+        P::Config: Config,
+    {
+        if let Err(e) = self.register_host_compiled_node_type_picking::<P>(Some(pick)) {
+            tracing::warn!(
+                "Node type registration for {} failed: {}",
+                std::any::type_name::<P>(),
+                e
+            );
+        }
+    }
+
     /// Register host-compiled Rust type `P` under its descriptor's import
     /// path, returned, with a constructor and a check that refuses a config
     /// `P::Config` would not take before any node of it is added.
     pub(crate) fn register_host_compiled_node_type<P>(&self) -> Result<NodeClassImportPath>
+    where
+        P: GeneratedNode + 'static,
+        P::Config: Config,
+    {
+        self.register_host_compiled_node_type_picking::<P>(None)
+    }
+
+    /// Register `P` as [`Self::register_host_compiled_node_type`] does, the conversion it states
+    /// picking its output's setting with `pick` when one is given; one given to a `P` stating no
+    /// conversion is refused.
+    fn register_host_compiled_node_type_picking<P>(
+        &self,
+        pick: Option<PinConversionOutputPick>,
+    ) -> Result<NodeClassImportPath>
     where
         P: GeneratedNode + 'static,
         P::Config: Config,
@@ -301,21 +334,33 @@ impl NodeInstanceFactory {
                 constructor,
                 config_taken_check,
             },
+            pick,
         )?;
         Ok(node_class_import_path)
     }
 
     /// Register `registration` under `descriptor`'s import path, refusing a
-    /// path already claimed.
+    /// path already claimed, the conversion it states picking its output's setting with `pick`.
     fn register_with_constructor(
         &self,
         descriptor: NodeDescriptor,
         registration: HostCompiledRustTypeRegistration,
+        pick: Option<PinConversionOutputPick>,
     ) -> Result<()> {
         let NodeTypeAsRegistered {
             descriptor,
-            conversion,
+            mut conversion,
         } = the_node_type_as_registered(descriptor)?;
+        if let Some(pick) = pick {
+            let Some(conversion) = conversion.as_mut() else {
+                return Err(Error::Configuration(format!(
+                    "`{}` is given a function picking its conversion's setting, and states no \
+                     conversion",
+                    descriptor.node_class_import_path
+                )));
+            };
+            conversion.output_picked_for_the_input = Some(pick);
+        }
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -397,6 +442,7 @@ impl NodeInstanceFactory {
                 constructor,
                 config_taken_check: Box::new(|_, _, _| Ok(())),
             },
+            None,
         )
     }
 

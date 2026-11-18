@@ -473,9 +473,13 @@ pub enum ControlOperationRefusalCode {
     /// The link sent is already in the graph.
     LinkAlreadyExists,
     /// The two ends of the link sent carry pin types that do not connect, or connect only
-    /// through a convert node; the runtime's words name both ends, both types and each node type
-    /// that converts between them.
+    /// through a convert node `connect` does not place; the runtime's words name both ends, both
+    /// types and each node type that converts between them.
     LinkPinTypesDoNotConnect,
+    /// The two ends of the link sent connect only through a conversion a module or the project's
+    /// own node declares, which `connect` never places; the runtime's words name each such node
+    /// type, and with exactly one `suggested_call` is the `transact` that places it between them.
+    LinkNeedsAModuleConversion,
     /// The link sent ends at an input that is a setting, which takes a stored value and never a
     /// link; `refused_field` names it.
     InputTakesNoWire,

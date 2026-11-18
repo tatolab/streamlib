@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use streamlib::sdk::descriptors::{ConvertNodeToInsert, PinLinkOutcome};
+use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib::sdk::runtime::{
     OperationsOnTheStreamsLoadedInThisRuntime, RuntimeOperations, StreamLocation,
 };
@@ -37,8 +39,8 @@ use streamlib_project_repository::{
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, GraphLinkEndOnTheWire, GraphTransactionAddedGroup,
     GraphTransactionAddedNode, GraphTransactionAddedNote, GraphTransactionConnectedLink,
-    GraphTransactionInputOverriddenByALink, GraphTransactionToolResult,
-    NodeNotRunningBecauseOnTheWire, ProjectActionRefusalOnTheWire, RefusedGraphLinkOnTheWire,
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
 };
 use uuid::Uuid;
 
@@ -50,6 +52,10 @@ use crate::mcp_project_change_feed::project_transaction_on_the_wire;
 use crate::refusal_code_and_place::RefusalCodeAndPlace;
 
 mod former_port_names;
+mod graph_request_refusals;
+pub(crate) use graph_request_refusals::{
+    GraphRequestRefusal, GraphTransactionRefusal, WhatAGraphOperationNames,
+};
 mod input_value_sets;
 mod input_values_set_live;
 mod live_application_and_reversal;
@@ -95,8 +101,9 @@ fn what_a_link_action_names(
 /// The operation a `connect` from `source` to `target` at the own level of the running stream
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
 /// stream's graph as `rendered_graph` renders it: each port under its current name, each node
-/// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, and a
-/// link the graph already holds refused, in the order
+/// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, a link
+/// whose pin types connect through a built-in conversion carried through its convert node added
+/// on it, and a link the graph already holds refused, in the order
 /// [`StreamGraphTransactionExecutor::apply_one_request`] takes those steps.
 pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
     source: StreamGraphActionLinkEnd,
@@ -119,11 +126,33 @@ pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
         &level_as_drawn,
         &no_node_by_label,
         &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
+        &|link| the_convert_node_a_live_connect_places(stream_operations, link),
     )?;
     if let StreamGraphOperation::Connect { link } = &operation {
         refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
     }
     Ok(operation)
+}
+
+/// The convert node a transaction's `connect` places on `link`, a link of the running stream
+/// `stream_operations` runs whose nodes it runs, when its two typed ends connect only through a
+/// built-in conversion; `None` for any other link, a refused one among them, which `connect`
+/// then refuses as it judges it.
+pub(crate) fn the_convert_node_a_live_connect_places(
+    stream_operations: &dyn RuntimeOperations,
+    link: &StreamGraphDocumentLink,
+) -> Option<ConvertNodeToInsert> {
+    let Ok(WhatALiveConnectMakesOfALink::Makes(Some(verdict))) =
+        stream_operations.what_a_live_connect_makes_of_the_link(link)
+    else {
+        return None;
+    };
+    match verdict.outcome {
+        PinLinkOutcome::ConnectsThroughConvertNode(convert_node) => Some(convert_node),
+        PinLinkOutcome::Connects
+        | PinLinkOutcome::ConnectsWithFreeConversion(_)
+        | PinLinkOutcome::Refused(_) => None,
+    }
 }
 
 /// The node, link and field `action` names, as its caller named them.
@@ -325,243 +354,6 @@ fn label_what_the_operation_adds(
     };
     if let (Some(label), Some(added_node)) = (label, added_node) {
         labels_of_added_nodes.insert(drawn_uuid_of(added_node), label);
-    }
-}
-
-/// The node, link and field one operation of a graph action names, as its caller named them.
-/// An operation on one node names it as `node`, which a refusal names over any node of its own;
-/// an operation on many nodes names the node it makes of them as
-/// `node_unless_the_refusal_names_one`, since a refusal naming one of the many is the more exact.
-#[derive(Default)]
-pub(crate) struct WhatAGraphOperationNames {
-    node: Option<String>,
-    node_unless_the_refusal_names_one: Option<String>,
-    link: Option<RefusedGraphLinkOnTheWire>,
-    field: Option<String>,
-}
-
-/// Why one graph action was refused: its code and the place it names, the runtime's own words,
-/// and the JSON pointer, into the action's own params, of the value refused.
-#[derive(Debug)]
-pub(crate) struct GraphRequestRefusal {
-    code_and_place: Box<RefusalCodeAndPlace>,
-    runtime_words: String,
-    refused_params_pointer: Option<String>,
-}
-
-impl GraphRequestRefusal {
-    /// A refusal coded and placed by `code_and_place`, in `runtime_words`.
-    pub(crate) fn coded(code_and_place: RefusalCodeAndPlace, runtime_words: String) -> Self {
-        Self {
-            code_and_place: Box::new(code_and_place),
-            runtime_words,
-            refused_params_pointer: None,
-        }
-    }
-
-    /// A refusal of a value set on an input, coded by `refusal`; the value is at
-    /// `refused_params_pointer` in the action's params, when a caller sent it there.
-    fn of_an_input_value(
-        refusal: streamlib::sdk::graph::input_values::InputValueRefusal,
-        refused_params_pointer: Option<String>,
-    ) -> Self {
-        use streamlib::sdk::graph::input_values::InputValueRefusalCode;
-        Self {
-            refused_params_pointer,
-            ..Self::coded(
-                RefusalCodeAndPlace::coded(match refusal.code {
-                    InputValueRefusalCode::PortNotFound => {
-                        ControlOperationRefusalCode::PortNotFound
-                    }
-                    InputValueRefusalCode::InputTakesNoValue => {
-                        ControlOperationRefusalCode::InputTakesNoValue
-                    }
-                    InputValueRefusalCode::InputValueNotValid => {
-                        ControlOperationRefusalCode::InputValueNotValid
-                    }
-                }),
-                refusal.words,
-            )
-        }
-    }
-
-    /// A refusal of a value set live on a `reset` input while its stream's playback is stopped,
-    /// in the runtime's words: coded `node_not_running`, because the playback is stopped.
-    fn of_a_reset_input_while_stopped(runtime_words: String) -> Self {
-        Self::coded(
-            RefusalCodeAndPlace {
-                not_running_because: Some(NodeNotRunningBecauseOnTheWire::PlaybackStopped),
-                ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotRunning)
-            },
-            runtime_words,
-        )
-    }
-
-    /// The refusal of a node `node` the action names that its stream does not hold, in the
-    /// runtime's words `why_no_node_is_it`.
-    fn of_a_node_not_found(node: &str, why_no_node_is_it: String) -> Self {
-        Self::coded(
-            RefusalCodeAndPlace {
-                refused_node: Some(node.to_owned()),
-                ..RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotFound)
-            },
-            why_no_node_is_it,
-        )
-    }
-
-    /// This refusal's words, for a project repository call that takes a reader answering words;
-    /// the refusal itself is kept in `kept`, so the call's refusal reads back typed.
-    fn words_kept_in(self, kept: &std::cell::RefCell<Option<Self>>) -> String {
-        let runtime_words = self.runtime_words.clone();
-        *kept.borrow_mut() = Some(self);
-        runtime_words
-    }
-
-    /// The refusal of a project repository call that answered `why`: the one its reader kept in
-    /// `kept`, when it kept one.
-    fn kept_in_or(kept: &std::cell::RefCell<Option<Self>>, why: String) -> Self {
-        kept.take().unwrap_or_else(|| why.into())
-    }
-
-    /// The refusal naming `input` as the field refused.
-    fn of_the_field(mut self, input: &str) -> Self {
-        self.code_and_place.refused_field = Some(input.to_owned());
-        self
-    }
-}
-
-impl From<String> for GraphRequestRefusal {
-    fn from(runtime_words: String) -> Self {
-        Self::coded(
-            RefusalCodeAndPlace::coded(ControlOperationRefusalCode::Refused),
-            runtime_words,
-        )
-    }
-}
-
-impl From<streamlib_project_repository::NodeNotRead> for GraphRequestRefusal {
-    fn from(not_read: streamlib_project_repository::NodeNotRead) -> Self {
-        match not_read {
-            streamlib_project_repository::NodeNotRead::NoSuchNode(why) => Self::coded(
-                RefusalCodeAndPlace::coded(ControlOperationRefusalCode::NodeNotFound),
-                why,
-            ),
-            streamlib_project_repository::NodeNotRead::DoesNotRead(why) => why.into(),
-        }
-    }
-}
-
-impl From<&str> for GraphRequestRefusal {
-    fn from(runtime_words: &str) -> Self {
-        runtime_words.to_owned().into()
-    }
-}
-
-impl From<streamlib::sdk::error::Error> for GraphRequestRefusal {
-    fn from(refusal: streamlib::sdk::error::Error) -> Self {
-        Self::coded(
-            RefusalCodeAndPlace::of_an_engine_error(&refusal),
-            refusal.to_string(),
-        )
-    }
-}
-
-impl From<ProjectRepositoryRefusal> for GraphRequestRefusal {
-    fn from(refusal: ProjectRepositoryRefusal) -> Self {
-        Self::coded(
-            RefusalCodeAndPlace::of_a_project_repository_refusal(&refusal),
-            refusal.to_string(),
-        )
-    }
-}
-
-/// Why a graph action was refused, in the runtime's own words, and which of its operations
-/// was refused when one was.
-pub(crate) struct GraphTransactionRefusal {
-    refused_operation_index: Option<usize>,
-    what_the_refused_operation_names: Box<WhatAGraphOperationNames>,
-    refusal: GraphRequestRefusal,
-}
-
-impl GraphTransactionRefusal {
-    fn of_the_operation(
-        refused_operation_index: usize,
-        what_the_refused_operation_names: WhatAGraphOperationNames,
-        refusal: impl Into<GraphRequestRefusal>,
-    ) -> Self {
-        Self {
-            refused_operation_index: Some(refused_operation_index),
-            what_the_refused_operation_names: Box::new(what_the_refused_operation_names),
-            refusal: refusal.into(),
-        }
-    }
-
-    /// The refusal of a `connect` from `source` to `target`, its one operation, as its caller
-    /// named the link.
-    pub(crate) fn of_a_connect(
-        source: &StreamGraphActionLinkEnd,
-        target: &StreamGraphActionLinkEnd,
-        refusal: GraphRequestRefusal,
-    ) -> Self {
-        Self::of_the_operation(0, what_a_link_action_names(source, target), refusal)
-    }
-
-    pub(crate) fn of_the_whole_transaction(refusal: impl Into<GraphRequestRefusal>) -> Self {
-        Self {
-            refused_operation_index: None,
-            what_the_refused_operation_names: Box::default(),
-            refusal: refusal.into(),
-        }
-    }
-
-    /// The refusal of the action the tool `tool_name` was sent, as the wire carries it: the
-    /// node as the refused operation's caller named it, else as the refusal names it, else the
-    /// node an operation on many nodes makes of them; the input the refusal names, else the one
-    /// the operation names; and the link the operation names.
-    pub(crate) fn into_the_refusal_on_the_wire(
-        self,
-        tool_name: &str,
-    ) -> ProjectActionRefusalOnTheWire {
-        let what_the_refused_operation_names = *self.what_the_refused_operation_names;
-        let GraphRequestRefusal {
-            code_and_place,
-            runtime_words,
-            refused_params_pointer,
-        } = self.refusal;
-        let mut code_and_place = *code_and_place;
-        let refused_params_pointer = match (refused_params_pointer, self.refused_operation_index) {
-            (Some(pointer), Some(index)) if tool_name == <streamlib_control_contract::Transact as streamlib_control_contract::ControlOperation>::METHOD_NAME => {
-                Some(format!("/operations/{index}{pointer}"))
-            }
-            (pointer, _) => pointer,
-        };
-        let the_links_target_as_its_caller_named_it = what_the_refused_operation_names
-            .link
-            .as_ref()
-            .filter(|_| {
-                code_and_place.refusal_code == ControlOperationRefusalCode::InputTakesNoWire
-            })
-            .map(|link| link.target.node.clone());
-        code_and_place.refused_node = what_the_refused_operation_names
-            .node
-            .or(the_links_target_as_its_caller_named_it)
-            .or(code_and_place.refused_node)
-            .or(what_the_refused_operation_names.node_unless_the_refusal_names_one);
-        code_and_place.refused_field = code_and_place
-            .refused_field
-            .or(what_the_refused_operation_names.field);
-        ProjectActionRefusalOnTheWire {
-            refused_operation_index: self.refused_operation_index,
-            refused_link: what_the_refused_operation_names.link,
-            refused_params_pointer,
-            ..code_and_place.on_the_refusal_of(tool_name, runtime_words)
-        }
-    }
-}
-
-impl From<ProjectRepositoryRefusal> for GraphTransactionRefusal {
-    fn from(refusal: ProjectRepositoryRefusal) -> Self {
-        Self::of_the_whole_transaction(refusal)
     }
 }
 
@@ -807,6 +599,12 @@ type FamilyOfAnOutputPortOfTheRunningStream<'stream> =
 type FunctionNodesOfTheRunningStream<'stream> =
     dyn Fn() -> Result<HashSet<Uuid>, GraphRequestRefusal> + 'stream;
 
+/// The built-in convert node a transaction's `connect` places on a link of the running stream,
+/// when its two ends' pin types connect only through one; `None` for a link the running stream
+/// does not judge so, which is connected, or refused, as it is.
+type ConvertNodeALinkOfTheRunningStreamNeeds<'stream> =
+    dyn Fn(&StreamGraphDocumentLink) -> Option<ConvertNodeToInsert> + 'stream;
+
 /// The config a node of a type holding some input values takes whole, as the running stream
 /// resolves the type.
 type ConfigANodeOfTheRunningStreamTakes<'stream> =
@@ -819,6 +617,7 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     document_of_a_placed_stream: &'reads DocumentOfAPlacedStream<'reads>,
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
+    convert_node_a_link_needs: &'reads ConvertNodeALinkOfTheRunningStreamNeeds<'reads>,
     config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
 }
 

@@ -131,7 +131,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "link_pin_types_do_not_connect" | "link_needs_a_module_conversion" | "input_takes_no_wire" | "file_not_found" | "file_changed_since_it_was_read" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -1365,7 +1365,22 @@ export interface GraphTransactionAddedNode {
    * The `as` its `add_node` gave it, which later operations of the transaction named it by.
    */
   as?: string | null;
+  /**
+   * Its node type; present on a node the runtime inserted, whose `inserted_because` says why.
+   */
+  node_type?: string | null;
+  /**
+   * Why the runtime inserted it on a link a `connect` asked for; absent on a node an
+   * operation added.
+   */
+  inserted_because?: GraphTransactionNodeInsertedBecause | null;
 }
+
+/**
+ * Why a `connect` placed a node of its own on the link it asked for, the link carried through
+ * it. The set grows: a reason a client does not know still names an inserted node.
+ */
+export type GraphTransactionNodeInsertedBecause = "converts_pin_types" | "closes_a_loop";
 
 /**
  * A link a graph transaction made, with the state the stream's graph reads it in.
@@ -1391,7 +1406,60 @@ export interface GraphTransactionConnectedLink {
    * Why a link reading `error` will carry nothing, in the refusing end's own words.
    */
   error_reason?: string | null;
+  /**
+   * How the input reads what the output carries as its own type, when it does so for free.
+   */
+  free_conversion?: FreePinConversionOnTheWire | null;
+  /**
+   * What the link does that a person may not expect; none of these blocks it.
+   */
+  warnings?: Array<PinLinkWarningOnTheWire>;
 }
+
+/**
+ * How the input reads what the output carries as its own type, at no cost. The set grows: a
+ * conversion a client does not know reads as a free conversion it cannot name.
+ */
+export type FreePinConversionOnTheWire = "between_numbers" | "between_vectors" | "vector_into_color" | "number_spread_over_vector" | "number_spread_over_color" | "menu_option_name_as_string";
+
+/**
+ * What a link does that a person may not expect, tagged by its `warning`.
+ */
+export type PinLinkWarningOnTheWire = {
+  /**
+   * The output's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input's meaning.
+   */
+  input_meaning: string;
+  warning: "meanings_differ";
+} | {
+  /**
+   * The member.
+   */
+  member: string;
+  /**
+   * The output member's meaning.
+   */
+  output_meaning: string;
+  /**
+   * The input member's meaning.
+   */
+  input_meaning: string;
+  warning: "member_meanings_differ";
+} | {
+  warning: "vector_read_as_a_color";
+} | {
+  /**
+   * Each such option, as the output names it.
+   */
+  option_names: Array<string>;
+  warning: "menu_options_the_input_does_not_list";
+} | {
+  warning: "texture_output_states_no_format";
+};
 
 /**
  * A labelled group a graph transaction made.
@@ -1625,49 +1693,15 @@ export interface ConvertNodeToInsertOnTheWire {
    */
   output_port: string;
   /**
-   * The type that output gives.
+   * The type that output gives, under the settings `input_values` holds.
    */
   output_pin_type: PinType;
+  /**
+   * The settings the node holds, each by its input's name, picked for the link's input; absent
+   * when what its output gives follows no setting.
+   */
+  input_values?: { [key: string]: unknown };
 }
-
-/**
- * What a link does that a person may not expect, tagged by its `warning`.
- */
-export type PinLinkWarningOnTheWire = {
-  /**
-   * The output's meaning.
-   */
-  output_meaning: string;
-  /**
-   * The input's meaning.
-   */
-  input_meaning: string;
-  warning: "meanings_differ";
-} | {
-  /**
-   * The member.
-   */
-  member: string;
-  /**
-   * The output member's meaning.
-   */
-  output_meaning: string;
-  /**
-   * The input member's meaning.
-   */
-  input_meaning: string;
-  warning: "member_meanings_differ";
-} | {
-  warning: "vector_read_as_a_color";
-} | {
-  /**
-   * Each such option, as the output names it.
-   */
-  option_names: Array<string>;
-  warning: "menu_options_the_input_does_not_list";
-} | {
-  warning: "texture_output_states_no_format";
-};
 
 /**
  * `import_graph_generator`'s params.
@@ -4982,7 +5016,10 @@ export interface ControlContractComponents {
   ProjectTransactionAuthorKindArgument: ProjectTransactionAuthorKindArgument;
   GraphTransactionToolResult: GraphTransactionToolResult;
   GraphTransactionAddedNode: GraphTransactionAddedNode;
+  GraphTransactionNodeInsertedBecause: GraphTransactionNodeInsertedBecause;
   GraphTransactionConnectedLink: GraphTransactionConnectedLink;
+  FreePinConversionOnTheWire: FreePinConversionOnTheWire;
+  PinLinkWarningOnTheWire: PinLinkWarningOnTheWire;
   GraphTransactionAddedGroup: GraphTransactionAddedGroup;
   GraphTransactionAddedNote: GraphTransactionAddedNote;
   GraphTransactionRebuiltNode: GraphTransactionRebuiltNode;
@@ -4993,7 +5030,6 @@ export interface ControlContractComponents {
   LinkCheckResult: LinkCheckResult;
   PinLinkOutcomeOnTheWire: PinLinkOutcomeOnTheWire;
   ConvertNodeToInsertOnTheWire: ConvertNodeToInsertOnTheWire;
-  PinLinkWarningOnTheWire: PinLinkWarningOnTheWire;
   ImportGraphGeneratorRequest: ImportGraphGeneratorRequest;
   OneNodeGraphEditRequest: OneNodeGraphEditRequest;
   SetNodeConfigRequest: SetNodeConfigRequest;
@@ -5297,7 +5333,7 @@ export interface ControlOperations {
   /**
    * Link an output port to an input port in one loaded stream, as one transaction.
    *
-   * Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes` and both of its links under `connected_links`. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These pin type rules judge a link in the stream's own graph; a link inside a placed stream, under a non-empty `level`, is not judged by them yet.
+   * Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These pin type rules judge a link in the stream's own graph; a link inside a placed stream, under a non-empty `level`, is not judged by them yet.
    *
    * Since contract version 1, stable.
    */
@@ -5308,7 +5344,7 @@ export interface ControlOperations {
   /**
    * Answer what `connect` would answer for one link in a loaded stream, changing nothing.
    *
-   * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. A link that needs a convert node is refused today, as `connect` refuses it. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
+   * Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.
    *
    * Since contract version 3, experimental.
    */
@@ -6097,7 +6133,7 @@ export type ControlNotificationMethodName = keyof ControlNotifications;
 export declare const CONTROL_CONTRACT_VERSION: 3;
 
 /** The contract revision this package was generated from: the additions made within its version. */
-export declare const CONTROL_CONTRACT_REVISION: 7;
+export declare const CONTROL_CONTRACT_REVISION: 8;
 
 /** Every method name the contract declares, in its order. */
 export declare const CONTROL_OPERATION_METHOD_NAMES: readonly ControlOperationMethodName[];

@@ -45,6 +45,7 @@ mod a_stream_outliving_its_connection_tests;
 mod an_edit_recorded_before_the_update_tests;
 mod canvas_group_and_note_tests;
 mod collapsed_selection_and_placed_stream_tests;
+mod convert_node_inserted_on_a_link_tests;
 mod graph_action_feed_and_subscription_tests;
 mod graph_answer_read_through_the_contract_tests;
 mod graph_edit_transaction_and_undo_tests;

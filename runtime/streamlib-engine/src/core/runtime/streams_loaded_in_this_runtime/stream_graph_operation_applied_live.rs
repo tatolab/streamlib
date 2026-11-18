@@ -15,7 +15,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{
     LinkUniqueId, NodeRunId, WhyTheNodeLeaves, cast_exposed_name_to_url_safe,
-    the_default_name_a_new_node_takes,
+    the_default_name_a_new_node_takes, the_verdict_of_two_typed_ends,
 };
 use crate::core::pubsub::RuntimeEvent;
 use crate::core::runtime::LoadedStreamInThisRuntime;
@@ -489,6 +489,25 @@ impl LoadedStreamInThisRuntime {
         let (from, to) = self.the_ends_of_the_link(link)?;
         the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))
+    }
+
+    /// The verdict of `link`, a link the live graph holds, each node by its UUID and each port
+    /// under its current name, by its two typed ends; `None` when either end is no typed port of
+    /// a node that runs.
+    pub(crate) fn the_verdict_of_a_held_link(
+        &self,
+        link: &StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        let StreamGraphOperation::Connect { link } = self
+            .the_operation_under_the_current_port_names(StreamGraphOperation::Connect {
+                link: link.clone(),
+            })
+        else {
+            return None;
+        };
+        let (from, to) = self.the_ends_of_the_link(&link).ok()?;
+        self.compiler
+            .scope_reading(|graph| the_verdict_of_two_typed_ends(graph, &from, &to))
     }
 
     /// The output and the input `link` names, each node by its UUID.

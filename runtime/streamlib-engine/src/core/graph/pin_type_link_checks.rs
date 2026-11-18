@@ -120,6 +120,19 @@ pub(crate) fn the_ends_a_link_is_judged_by(
     })
 }
 
+/// The verdict of a link from `from` to `to` in `graph` by its two typed ends, among the
+/// conversions `graph`'s stream resolves, made nowhere; `None` when either end is no typed port of
+/// it.
+pub(crate) fn the_verdict_of_two_typed_ends(
+    graph: &Graph,
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Option<PinLinkVerdict> {
+    let TypedLinkEnds { output, input, .. } = the_typed_ends_of(graph, from, to)?;
+    let conversions = graph.node_types_this_stream_resolves().pin_conversions();
+    Some(pin_link_verdict(output, input, &conversions))
+}
+
 /// Whether `connect` would refuse a link from `from` to `to` made now in `graph`.
 pub(crate) fn a_link_made_now_would_be_refused(
     graph: &Graph,

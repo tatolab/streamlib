@@ -6,7 +6,9 @@
 
 use streamlib::sdk::runtime::WhatALiveConnectMakesOfALink;
 use streamlib_control_contract::{CheckLink, CheckLinkRequest, Connect, ControlOperation};
-use streamlib_project_repository::StreamGraphOperation;
+use streamlib_project_repository::{
+    PREVIOUS_VALUE_NODE_TYPE, StreamGraphDocumentLink, StreamGraphOperation,
+};
 use streamlib_runtime_client_contract::local_api_wire_contract::{
     ControlOperationRefusalCode, LinkCheckResult,
 };
@@ -21,8 +23,9 @@ use crate::stream_graph_transaction_executor::{
 impl ControlOperationDispatcher {
     /// What `connect` would answer for the link `request` names: the stream it names resolved
     /// as a graph edit resolves it, the link read as a transaction's `connect` reads it, and
-    /// the rest judged by the engine's own judgement of a live connect. Neither the graph nor
-    /// the project's history is changed, and no refusal is kept on the project's change feed.
+    /// the rest judged by the engine's own judgement of a live connect. A link `connect` carries
+    /// through the convert node it places answers that node. Neither the graph nor the project's
+    /// history is changed, and no refusal is kept on the project's change feed.
     ///
     /// Three links are refused unchecked: one inside a placed stream, under a non-empty
     /// `level`; one closing a loop of function nodes no `PreviousValue` node is in, which
@@ -47,9 +50,9 @@ impl ControlOperationDispatcher {
         let of_an_engine_error = |refusal: streamlib::sdk::error::Error| {
             ControlOperationRefusal::of_an_engine_error(CheckLink::METHOD_NAME, &refusal)
         };
-        let refused_as_connect_refuses = |refusal: GraphRequestRefusal| {
+        let refused_as_connect_refuses = |stream_id: Option<&str>, refusal: GraphRequestRefusal| {
             LinkCheckResult::of_a_link_connect_refuses(
-                GraphTransactionRefusal::of_a_connect(&source, &target, refusal)
+                GraphTransactionRefusal::of_a_connect(stream_id, &source, &target, refusal)
                     .into_the_refusal_on_the_wire(Connect::METHOD_NAME),
             )
         };
@@ -65,10 +68,13 @@ impl ControlOperationDispatcher {
         {
             Ok((_, stream_id)) => stream_id,
             Err(runtime_words) => {
-                return Ok(refused_as_connect_refuses(GraphRequestRefusal::coded(
-                    RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
-                    runtime_words,
-                )));
+                return Ok(refused_as_connect_refuses(
+                    None,
+                    GraphRequestRefusal::coded(
+                        RefusalCodeAndPlace::coded(ControlOperationRefusalCode::StreamNotFound),
+                        runtime_words,
+                    ),
+                ));
             }
         };
         let stream_operations = self
@@ -86,13 +92,22 @@ impl ControlOperationDispatcher {
             stream_operations.as_ref(),
         ) {
             Ok(operation) => operation,
-            Err(refusal) => return Ok(refused_as_connect_refuses(refusal)),
+            Err(refusal) => return Ok(refused_as_connect_refuses(Some(&stream_id), refusal)),
         };
-        let StreamGraphOperation::Connect { link } = operation else {
-            return Err(not_checked_yet(
-                "the link closes a loop of function nodes no `PreviousValue` node is in, which \
-                 `connect` closes through a `PreviousValue` node it adds",
-            ));
+        let link = match operation {
+            StreamGraphOperation::Connect { link } => link,
+            StreamGraphOperation::AddNode { node, links }
+                if node.node_type != PREVIOUS_VALUE_NODE_TYPE =>
+            {
+                the_link_carried_through_the_added_node(links)
+                    .ok_or_else(|| not_checked_yet("the convert node carries no link"))?
+            }
+            _ => {
+                return Err(not_checked_yet(
+                    "the link closes a loop of function nodes no `PreviousValue` node is in, \
+                     which `connect` closes through a `PreviousValue` node it adds",
+                ));
+            }
         };
         match stream_operations.what_a_live_connect_makes_of_the_link(&link) {
             Ok(WhatALiveConnectMakesOfALink::Makes(verdict)) => {
@@ -101,7 +116,19 @@ impl ControlOperationDispatcher {
             Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade) => Err(not_checked_yet(
                 "the link reaches a node that runs as no node of its own, such as a fragment",
             )),
-            Err(refusal) => Ok(refused_as_connect_refuses(refusal.into())),
+            Err(refusal) => Ok(refused_as_connect_refuses(Some(&stream_id), refusal.into())),
         }
     }
+}
+
+/// The link a node added on it carries, from its first link's output to its second link's
+/// input, as `connect` asked for it.
+fn the_link_carried_through_the_added_node(
+    links: Vec<StreamGraphDocumentLink>,
+) -> Option<StreamGraphDocumentLink> {
+    let [into_the_node, out_of_the_node] = <[StreamGraphDocumentLink; 2]>::try_from(links).ok()?;
+    Some(StreamGraphDocumentLink {
+        source: into_the_node.source,
+        target: out_of_the_node.target,
+    })
 }

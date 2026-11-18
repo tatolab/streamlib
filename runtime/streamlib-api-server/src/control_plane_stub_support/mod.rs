@@ -126,6 +126,12 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::WhatALiveConnectMakesOfALink> {
             unreachable!(concat!("the control plane serves no graph edit ", $surface))
         }
+        fn the_verdict_of_a_link_it_holds(
+            &self,
+            _link: &::streamlib_project_repository::StreamGraphDocumentLink,
+        ) -> ::std::option::Option<::streamlib::sdk::descriptors::PinLinkVerdict> {
+            None
+        }
         fn the_name_a_node_added_with_none_takes(
             &self,
             _node_type: &str,

@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::{FreePinConversionOnTheWire, PinLinkWarningOnTheWire};
+
 /// The link a refused operation names, each end as the caller named it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -36,6 +38,26 @@ pub struct GraphTransactionAddedNode {
     /// The `as` its `add_node` gave it, which later operations of the transaction named it by.
     #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Its node type; present on a node the runtime inserted, whose `inserted_because` says why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_type: Option<String>,
+    /// Why the runtime inserted it on a link a `connect` asked for; absent on a node an
+    /// operation added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_because: Option<GraphTransactionNodeInsertedBecause>,
+}
+
+/// Why a `connect` placed a node of its own on the link it asked for, the link carried through
+/// it. The set grows: a reason a client does not know still names an inserted node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
+#[serde(rename_all = "snake_case")]
+pub enum GraphTransactionNodeInsertedBecause {
+    /// The two ends' pin types connect only through this built-in convert node.
+    ConvertsPinTypes,
+    /// The link closes a loop of function nodes, which this `PreviousValue` node breaks.
+    ClosesALoop,
 }
 
 /// A labelled group a graph transaction made.
@@ -76,6 +98,12 @@ pub struct GraphTransactionConnectedLink {
     /// Why a link reading `error` will carry nothing, in the refusing end's own words.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    /// How the input reads what the output carries as its own type, when it does so for free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_conversion: Option<FreePinConversionOnTheWire>,
+    /// What the link does that a person may not expect; none of these blocks it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<PinLinkWarningOnTheWire>,
 }
 
 /// An input a graph transaction set a value on while a link feeds it, so the link's messages

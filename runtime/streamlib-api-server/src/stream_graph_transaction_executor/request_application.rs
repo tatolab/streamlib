@@ -119,7 +119,8 @@ impl StreamGraphTransactionExecutor<'_> {
             .into_iter()
             .enumerate()
         {
-            let what_the_request_names = what_a_graph_action_names(&request);
+            let what_the_request_names =
+                what_a_graph_action_names(&request).in_the_stream(&stream_id, request.level());
             let applied = match self.apply_one_action(request, &stream_id, &mut staged) {
                 Ok(applied) => applied,
                 Err(refusal) => {
@@ -344,6 +345,14 @@ impl StreamGraphTransactionExecutor<'_> {
                 .block_on(stream_operations.to_json_async())?;
             Ok(the_function_nodes_of_the_render(&rendered_graph))
         };
+        let the_running_stream_holds_the_level_as_drawn = reached.is_the_streams_own_level()
+            && !streams_taking_their_edits_once_the_documents_hold_them.contains(stream_id);
+        let convert_node_a_link_needs = |link: &StreamGraphDocumentLink| {
+            if !the_running_stream_holds_the_level_as_drawn {
+                return None;
+            }
+            the_convert_node_a_live_connect_places(stream_operations.as_ref(), link)
+        };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations
                 .the_config_a_node_holding_the_input_values_takes(node_type, input_values)
@@ -360,6 +369,7 @@ impl StreamGraphTransactionExecutor<'_> {
                 document_of_a_placed_stream: &document_of_a_placed_stream,
                 family_of_an_output_port: &family_of_an_output_port,
                 function_nodes_of_the_running_stream: &function_nodes_of_the_running_stream,
+                convert_node_a_link_needs: &convert_node_a_link_needs,
                 config_a_node_takes: &config_a_node_takes,
             },
             &mut placed_stream_a_collapse_saves,

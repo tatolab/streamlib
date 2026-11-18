@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use streamlib_node_schema::NodeClassImportPath;
 use streamlib_node_schema::pin_type::{
-    ConvertNodeToInsert, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
+    ConvertNodeToInsert, FreePinConversion, PinLinkOutcome, PinLinkVerdict, PinLinkWarning, PinType,
 };
 
 use super::ProjectActionRefusalOnTheWire;
@@ -86,9 +86,8 @@ pub enum PinLinkOutcomeOnTheWire {
     /// and Float among themselves, a Vector into a Vector or a Color, one number into a Vector
     /// or a Color, or a Menu into a String.
     ConnectsWithFreeConversion,
-    /// The two ends connect through the convert node `convert_node` names, placed between them.
-    /// Not answered yet: `connect` refuses a link that needs a convert node, so such a link is
-    /// answered `refused`.
+    /// The two ends connect through the built-in convert node `convert_node` names, which
+    /// `connect` places between them in the same edit, collapsed, linking each end to it.
     ConnectsThroughConvertNode,
     /// The link is not made; `refusal` says why.
     Refused,
@@ -118,12 +117,16 @@ pub struct ConvertNodeToInsertOnTheWire {
     pub input_pin_type: PinType,
     /// The output that feeds the link's input.
     pub output_port: String,
-    /// The type that output gives.
+    /// The type that output gives, under the settings `input_values` holds.
     pub output_pin_type: PinType,
+    /// The settings the node holds, each by its input's name, picked for the link's input; absent
+    /// when what its output gives follows no setting.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub input_values: serde_json::Map<String, serde_json::Value>,
 }
 
 impl ConvertNodeToInsertOnTheWire {
-    /// The wire form of `convert_node`.
+    /// The wire form of `convert_node`, its output typed as the settings it picks make it.
     fn of(convert_node: &ConvertNodeToInsert) -> Self {
         let conversion = &convert_node.conversion;
         Self {
@@ -131,7 +134,45 @@ impl ConvertNodeToInsertOnTheWire {
             input_port: conversion.input_port_name.clone(),
             input_pin_type: conversion.input_pin_type.clone(),
             output_port: conversion.output_port_name.clone(),
-            output_pin_type: conversion.output_pin_type.clone(),
+            output_pin_type: convert_node.output_pin_type.clone(),
+            input_values: convert_node.input_values.clone(),
+        }
+    }
+}
+
+/// How the input reads what the output carries as its own type, at no cost. The set grows: a
+/// conversion a client does not know reads as a free conversion it cannot name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "json-schema", schemars(extend("x-may-grow" = true)))]
+#[serde(rename_all = "snake_case")]
+pub enum FreePinConversionOnTheWire {
+    /// Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away
+    /// from zero.
+    BetweenNumbers,
+    /// A Vector into one of another size, its components dropped or padded with 0.
+    BetweenVectors,
+    /// A Vector into a Color, x, y, z and w read as red, green, blue and alpha, alpha padded
+    /// with 1.
+    VectorIntoColor,
+    /// One number into a Vector, read as every component.
+    NumberSpreadOverVector,
+    /// One number into a Color, read as red, green and blue, with an alpha of 1.
+    NumberSpreadOverColor,
+    /// A Menu into a String, its option name read as the text.
+    MenuOptionNameAsString,
+}
+
+impl FreePinConversionOnTheWire {
+    /// The wire form of `free_conversion`.
+    pub fn of(free_conversion: FreePinConversion) -> Self {
+        match free_conversion {
+            FreePinConversion::BetweenNumbers => Self::BetweenNumbers,
+            FreePinConversion::BetweenVectors => Self::BetweenVectors,
+            FreePinConversion::VectorIntoColor => Self::VectorIntoColor,
+            FreePinConversion::NumberSpreadOverVector => Self::NumberSpreadOverVector,
+            FreePinConversion::NumberSpreadOverColor => Self::NumberSpreadOverColor,
+            FreePinConversion::MenuOptionNameAsString => Self::MenuOptionNameAsString,
         }
     }
 }
@@ -170,7 +211,7 @@ pub enum PinLinkWarningOnTheWire {
 
 impl PinLinkWarningOnTheWire {
     /// The wire form of `warning`.
-    fn of(warning: &PinLinkWarning) -> Self {
+    pub fn of(warning: &PinLinkWarning) -> Self {
         match warning {
             PinLinkWarning::MeaningsDiffer {
                 output_meaning,

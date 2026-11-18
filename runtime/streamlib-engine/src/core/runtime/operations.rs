@@ -30,7 +30,8 @@ pub struct NodeInTheGraph {
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhatALiveConnectMakesOfALink {
     /// It would make the link: the verdict of two typed ends that connect, `None` for ends
-    /// their families judge.
+    /// their families judge. A verdict that connects through a convert node names the node a
+    /// transaction's `connect` places between the two ends, connecting each to it.
     Makes(Option<Box<crate::core::descriptors::PinLinkVerdict>>),
     /// The link reaches a node that runs as no node of its own, such as a fragment, so the live
     /// graph judges it only as it is reconciled to a document holding it.
@@ -73,11 +74,19 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// What a live connect of `link`, each node by its UUID, would make of it on this stream's
     /// live graph, judged as [`Self::apply_a_stream_graph_operation_live`] judges a connect and
-    /// made nowhere; refused as the connect is refused.
+    /// made nowhere; refused as the connect is refused, but for a link that connects through a
+    /// convert node, which answers the verdict naming it.
     fn what_a_live_connect_makes_of_the_link(
         &self,
         link: &streamlib_project_repository::StreamGraphDocumentLink,
     ) -> Result<WhatALiveConnectMakesOfALink>;
+
+    /// The verdict of `link`, a link this stream's live graph holds, each node by its UUID, by
+    /// its two typed ends; `None` when either end is no typed port of a node that runs.
+    fn the_verdict_of_a_link_it_holds(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict>;
 
     /// The name a node of type `node_type` added with none takes at a level whose nodes are
     /// named `names_at_the_level`, as this stream resolves the type.

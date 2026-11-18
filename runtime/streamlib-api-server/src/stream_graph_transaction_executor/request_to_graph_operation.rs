@@ -44,14 +44,17 @@ pub(super) fn the_link_named(
 }
 
 /// The operation a connect from `source` to `target` asks of the graph `staged_graph` holds:
-/// the link between them, or, when it closes a loop of function nodes no `PreviousValue` node
-/// is in, a `PreviousValue` node added on it.
+/// the link between them; when it closes a loop of function nodes no `PreviousValue` node is
+/// in, a `PreviousValue` node added on it; and when its two ends' pin types connect only through
+/// a built-in conversion, as `convert_node_a_link_needs` judges it, that convert node added on
+/// it.
 pub(super) fn the_operation_a_connect_asks(
     source: &StreamGraphActionLinkEnd,
     target: &StreamGraphActionLinkEnd,
     staged_graph: &StreamGraphDocument,
     node_by_label: &HashMap<String, Uuid>,
     function_nodes_of_the_running_stream: &FunctionNodesOfTheRunningStream<'_>,
+    convert_node_a_link_needs: &ConvertNodeALinkOfTheRunningStreamNeeds<'_>,
 ) -> Result<StreamGraphOperation, GraphRequestRefusal> {
     let link = the_link_named(source, target, node_by_label)?;
     if the_link_closes_a_loop_of_function_nodes_no_previous_value_node_is_in(
@@ -59,12 +62,18 @@ pub(super) fn the_operation_a_connect_asks(
         &link,
         function_nodes_of_the_running_stream,
     )? {
-        Ok(the_previous_value_node_added_on_the_link(
+        return Ok(the_previous_value_node_added_on_the_link(
             staged_graph,
             link,
-        ))
-    } else {
-        Ok(StreamGraphOperation::Connect { link })
+        ));
+    }
+    match convert_node_a_link_needs(&link) {
+        Some(convert_node) => Ok(the_convert_node_added_on_the_link(
+            staged_graph,
+            link,
+            &convert_node,
+        )),
+        None => Ok(StreamGraphOperation::Connect { link }),
     }
 }
 
@@ -98,6 +107,7 @@ pub(super) fn graph_operation_for_the_request(
         document_of_a_placed_stream,
         family_of_an_output_port,
         function_nodes_of_the_running_stream,
+        convert_node_a_link_needs,
         config_a_node_takes,
     } = what_the_request_reads;
     let label_the_node = |label: Option<String>,
@@ -234,6 +244,7 @@ pub(super) fn graph_operation_for_the_request(
             staged_graph,
             node_by_label,
             function_nodes_of_the_running_stream,
+            convert_node_a_link_needs,
         ),
         StreamGraphAction::Disconnect { source, target, .. } => {
             Ok(StreamGraphOperation::Disconnect {
@@ -560,6 +571,58 @@ pub(super) fn the_previous_value_node_added_on_the_link(
     staged_graph: &StreamGraphDocument,
     link: StreamGraphDocumentLink,
 ) -> StreamGraphOperation {
+    a_node_added_on_the_link(
+        staged_graph,
+        link,
+        NodeCarryingTheLink {
+            node_type: PREVIOUS_VALUE_NODE_TYPE,
+            input_port: PREVIOUS_VALUE_NODE_INPUT_PORT,
+            output_port: PREVIOUS_VALUE_NODE_OUTPUT_PORT,
+            input_values: Map::new(),
+            collapsed: None,
+        },
+    )
+}
+
+/// The addition of `convert_node` to `staged_graph` with `link` carried through it: holding the
+/// settings its conversion picked, drawn collapsed, halfway between the two nodes `link` joins
+/// when the canvas places both.
+pub(super) fn the_convert_node_added_on_the_link(
+    staged_graph: &StreamGraphDocument,
+    link: StreamGraphDocumentLink,
+    convert_node: &ConvertNodeToInsert,
+) -> StreamGraphOperation {
+    let conversion = &convert_node.conversion;
+    a_node_added_on_the_link(
+        staged_graph,
+        link,
+        NodeCarryingTheLink {
+            node_type: conversion.node_type.as_str(),
+            input_port: &conversion.input_port_name,
+            output_port: &conversion.output_port_name,
+            input_values: convert_node.input_values.clone(),
+            collapsed: Some(true),
+        },
+    )
+}
+
+/// A node a connect adds on the link it asks for: its type, the input and output the link is
+/// carried through, the input values it holds, and whether the canvas draws it collapsed.
+struct NodeCarryingTheLink<'node> {
+    node_type: &'node str,
+    input_port: &'node str,
+    output_port: &'node str,
+    input_values: Map<String, Value>,
+    collapsed: Option<bool>,
+}
+
+/// The addition of `carrying` to `staged_graph`, with no name of its own, `link` carried through
+/// it, drawn halfway between the two nodes `link` joins when the canvas places both.
+fn a_node_added_on_the_link(
+    staged_graph: &StreamGraphDocument,
+    link: StreamGraphDocumentLink,
+    carrying: NodeCarryingTheLink<'_>,
+) -> StreamGraphOperation {
     let canvas_position_of = |node: Uuid| {
         let [x, y] = staged_graph.node(node).ok()?.studio.position?;
         Some((x.as_f64()?, y.as_f64()?))
@@ -572,16 +635,17 @@ pub(super) fn the_previous_value_node_added_on_the_link(
                 serde_json::Number::from_f64((source_y + target_y) / 2.0)?,
             ])
         });
-    let previous_value_node = Uuid::new_v4();
+    let added_node = Uuid::new_v4();
     StreamGraphOperation::AddNode {
         node: StreamGraphDocumentNode {
-            id: previous_value_node,
+            id: added_node,
             name: String::new(),
-            node_type: PREVIOUS_VALUE_NODE_TYPE.to_owned(),
-            input_values: Map::new(),
+            node_type: carrying.node_type.to_owned(),
+            input_values: carrying.input_values,
             exposed_config_fields: Vec::new(),
             studio: Box::new(StreamGraphNodeStudioFields {
                 position: position_halfway_along_the_link,
+                collapsed: carrying.collapsed,
                 ..StreamGraphNodeStudioFields::default()
             }),
             fragment: None,
@@ -590,14 +654,14 @@ pub(super) fn the_previous_value_node_added_on_the_link(
             StreamGraphDocumentLink {
                 source: link.source,
                 target: StreamGraphDocumentLinkEnd {
-                    node: previous_value_node,
-                    port: PREVIOUS_VALUE_NODE_INPUT_PORT.to_owned(),
+                    node: added_node,
+                    port: carrying.input_port.to_owned(),
                 },
             },
             StreamGraphDocumentLink {
                 source: StreamGraphDocumentLinkEnd {
-                    node: previous_value_node,
-                    port: PREVIOUS_VALUE_NODE_OUTPUT_PORT.to_owned(),
+                    node: added_node,
+                    port: carrying.output_port.to_owned(),
                 },
                 target: link.target,
             },

@@ -22,11 +22,12 @@ pub use graph_answer_wire_types::{
 pub use graph_wire_types::{
     GraphLinkEndOnTheWire, GraphTransactionAddedGroup, GraphTransactionAddedNode,
     GraphTransactionAddedNote, GraphTransactionConnectedLink,
-    GraphTransactionInputOverriddenByALink, GraphTransactionRebuiltNode,
-    GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
+    GraphTransactionInputOverriddenByALink, GraphTransactionNodeInsertedBecause,
+    GraphTransactionRebuiltNode, GraphTransactionToolResult, RefusedGraphLinkOnTheWire,
 };
 pub use link_check_wire_types::{
-    ConvertNodeToInsertOnTheWire, LinkCheckResult, PinLinkOutcomeOnTheWire, PinLinkWarningOnTheWire,
+    ConvertNodeToInsertOnTheWire, FreePinConversionOnTheWire, LinkCheckResult,
+    PinLinkOutcomeOnTheWire, PinLinkWarningOnTheWire,
 };
 pub use log_wire_types::LogsToolResult;
 pub use project_wire_types::{

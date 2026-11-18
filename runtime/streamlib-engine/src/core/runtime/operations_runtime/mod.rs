@@ -670,6 +670,13 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         self.what_a_connect_makes_of_the_link(link)
     }
 
+    fn the_verdict_of_a_link_it_holds(
+        &self,
+        link: &streamlib_project_repository::StreamGraphDocumentLink,
+    ) -> Option<crate::core::descriptors::PinLinkVerdict> {
+        self.the_verdict_of_a_held_link(link)
+    }
+
     fn the_name_a_node_added_with_none_takes(
         &self,
         node_type: &str,

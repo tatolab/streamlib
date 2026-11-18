@@ -5,7 +5,7 @@
     "version": "3",
     "description": "Every operation a StreamLib runtime's control plane serves. `x-contract-version` is bumped only by a breaking change, and resets `x-contract-revision`, which an addition raises; an added method is also marked by its `x-since`. A runtime serves a client of its own version and a revision no higher than its own.",
     "x-contract-version": 3,
-    "x-contract-revision": 7
+    "x-contract-revision": 8
   },
   "methods": [
     {
@@ -676,7 +676,7 @@
     {
       "name": "connect",
       "summary": "Link an output port to an input port in one loaded stream, as one transaction.",
-      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes` and both of its links under `connected_links`. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These pin type rules judge a link in the stream's own graph; a link inside a placed stream, under a non-empty `level`, is not judged by them yet.",
+      "description": "Link an output port to an input port in one loaded stream, as one transaction, each end a node's UUID and a port name `graph` lists under that node's `ports`. A stream reads another stream's track at a relay through a `MoqTrackReceive` node. A link is spliced in by connecting a new node on both sides, then disconnecting the link it replaces — or all three in one `transact`. A link that would close a loop of function nodes with no `tatolab.stream:PreviousValue` node in it adds one and runs through it: the result names it under `added_nodes`, with its `node_type` and `inserted_because` `closes_a_loop`, and both of its links under `connected_links`. A link whose two pin types connect only through one built-in conversion, such as a Texture into a Tensor, adds that convert node in the same edit, collapsed, holding the settings it picks for the input, and runs through it: the result names it under `added_nodes` with `inserted_because` `converts_pin_types`; one `undo` removes the node and both links. Each `connected_links` entry carries the `free_conversion` and `warnings` its link gets. Two ends that both state a pin type connect when the input takes what the output sends: the same type; a Texture whose every pixel format is one the input lists, an input listing none taking any, and an output listing none connecting to an input that lists some; an encoded video or audio stream or an Asset whose every codec or media is one the input lists, an input listing none taking any, and an output listing none connecting only to an input that lists none; a Menu into a Menu, whatever options each lists; or a type the input reads from the output's for free: Boolean, Integer and Float among themselves, a Vector into a Vector or a Color, one number into a Vector or a Color, a Menu into a String. Any other pair is refused with `link_pin_types_do_not_connect`, naming both types and either the node or nodes to place between the two ends or that no node type converts between them. A pair that only a conversion an installed module or the project's own node declares bridges is refused with `link_needs_a_module_conversion`, naming each such node type; with exactly one, `suggested_call` is the `transact` that places it between the two ends. A link a saved graph document already holds that these rules refuse is kept when the stream loads, as long as its two ports' families match, and the runtime logs the refusal. A link into an input that is a setting is refused with `input_takes_no_wire`; set its value with `set_node_input_value`. These pin type rules judge a link in the stream's own graph; a link inside a placed stream, under a non-empty `level`, is not judged by them yet.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -737,7 +737,7 @@
     {
       "name": "check_link",
       "summary": "Answer what `connect` would answer for one link in a loaded stream, changing nothing.",
-      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect` or `input_takes_no_wire`. A link that needs a convert node is refused today, as `connect` refuses it. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
+      "description": "Answer what `connect` would answer for one link in a loaded stream, judged against its running graph by the same rules, changing neither the graph nor the project's history: it takes `connect`'s `stream`, `level`, `source` and `target`. `outcome` is one of the values its schema lists, each described there; with `refused` comes the whole `refusal` `connect` would answer, its `refusal_code` among them, such as `link_pin_types_do_not_connect`, `link_needs_a_module_conversion` or `input_takes_no_wire`. With `connects_through_convert_node` comes `convert_node`, the built-in node `connect` would place between the two ends: its `node_type`, the `input_port` and `output_port` the link runs through, their pin types, and the `input_values` it would hold. `warnings` lists what the link would do that a person may not expect, none of which blocks it. Three links are not checked yet, and `check_link` itself fails on them: one under a non-empty `level`, one reaching a fragment node, and one closing a loop of function nodes, which `connect` closes through a `PreviousValue` node it adds.",
       "paramStructure": "by-name",
       "params": [
         {
@@ -5643,7 +5643,12 @@
           {
             "type": "string",
             "const": "link_pin_types_do_not_connect",
-            "description": "The two ends of the link sent carry pin types that do not connect, or connect only\nthrough a convert node; the runtime's words name both ends, both types and each node type\nthat converts between them."
+            "description": "The two ends of the link sent carry pin types that do not connect, or connect only\nthrough a convert node `connect` does not place; the runtime's words name both ends, both\ntypes and each node type that converts between them."
+          },
+          {
+            "type": "string",
+            "const": "link_needs_a_module_conversion",
+            "description": "The two ends of the link sent connect only through a conversion a module or the project's\nown node declares, which `connect` never places; the runtime's words name each such node\ntype, and with exactly one `suggested_call` is the `transact` that places it between them."
           },
           {
             "type": "string",
@@ -8480,6 +8485,24 @@
               "null"
             ],
             "description": "The `as` its `add_node` gave it, which later operations of the transaction named it by."
+          },
+          "node_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its node type; present on a node the runtime inserted, whose `inserted_because` says why."
+          },
+          "inserted_because": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GraphTransactionNodeInsertedBecause"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why the runtime inserted it on a link a `connect` asked for; absent on a node an\noperation added."
           }
         },
         "required": [
@@ -8488,6 +8511,22 @@
           "name"
         ],
         "description": "A node a graph transaction added."
+      },
+      "GraphTransactionNodeInsertedBecause": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "converts_pin_types",
+            "description": "The two ends' pin types connect only through this built-in convert node."
+          },
+          {
+            "type": "string",
+            "const": "closes_a_loop",
+            "description": "The link closes a loop of function nodes, which this `PreviousValue` node breaks."
+          }
+        ],
+        "description": "Why a `connect` placed a node of its own on the link it asked for, the link carried through\nit. The set grows: a reason a client does not know still names an inserted node.",
+        "x-may-grow": true
       },
       "GraphTransactionConnectedLink": {
         "type": "object",
@@ -8517,6 +8556,24 @@
               "null"
             ],
             "description": "Why a link reading `error` will carry nothing, in the refusing end's own words."
+          },
+          "free_conversion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FreePinConversionOnTheWire"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How the input reads what the output carries as its own type, when it does so for free."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PinLinkWarningOnTheWire"
+            },
+            "description": "What the link does that a person may not expect; none of these blocks it."
           }
         },
         "required": [
@@ -8525,6 +8582,145 @@
           "target"
         ],
         "description": "A link a graph transaction made, with the state the stream's graph reads it in."
+      },
+      "FreePinConversionOnTheWire": {
+        "oneOf": [
+          {
+            "type": "string",
+            "const": "between_numbers",
+            "description": "Boolean, Integer and Float among themselves; a Float read as an Integer rounds half away\nfrom zero."
+          },
+          {
+            "type": "string",
+            "const": "between_vectors",
+            "description": "A Vector into one of another size, its components dropped or padded with 0."
+          },
+          {
+            "type": "string",
+            "const": "vector_into_color",
+            "description": "A Vector into a Color, x, y, z and w read as red, green, blue and alpha, alpha padded\nwith 1."
+          },
+          {
+            "type": "string",
+            "const": "number_spread_over_vector",
+            "description": "One number into a Vector, read as every component."
+          },
+          {
+            "type": "string",
+            "const": "number_spread_over_color",
+            "description": "One number into a Color, read as red, green and blue, with an alpha of 1."
+          },
+          {
+            "type": "string",
+            "const": "menu_option_name_as_string",
+            "description": "A Menu into a String, its option name read as the text."
+          }
+        ],
+        "description": "How the input reads what the output carries as its own type, at no cost. The set grows: a\nconversion a client does not know reads as a free conversion it cannot name.",
+        "x-may-grow": true
+      },
+      "PinLinkWarningOnTheWire": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "output_meaning": {
+                "type": "string",
+                "description": "The output's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "The two ends state different meanings for what they carry."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "member": {
+                "type": "string",
+                "description": "The member."
+              },
+              "output_meaning": {
+                "type": "string",
+                "description": "The output member's meaning."
+              },
+              "input_meaning": {
+                "type": "string",
+                "description": "The input member's meaning."
+              },
+              "warning": {
+                "type": "string",
+                "const": "member_meanings_differ"
+              }
+            },
+            "required": [
+              "warning",
+              "member",
+              "output_meaning",
+              "input_meaning"
+            ],
+            "description": "A member of two bundles states a different meaning at each end."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "vector_read_as_a_color"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "option_names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Each such option, as the output names it."
+              },
+              "warning": {
+                "type": "string",
+                "const": "menu_options_the_input_does_not_list"
+              }
+            },
+            "required": [
+              "warning",
+              "option_names"
+            ],
+            "description": "The output may send Menu options the input does not list."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "warning": {
+                "type": "string",
+                "const": "texture_output_states_no_format"
+              }
+            },
+            "required": [
+              "warning"
+            ],
+            "description": "The output states no pixel format, so it may send one the input cannot take."
+          }
+        ],
+        "description": "What a link does that a person may not expect, tagged by its `warning`."
       },
       "GraphTransactionAddedGroup": {
         "type": "object",
@@ -8874,7 +9070,7 @@
           {
             "type": "string",
             "const": "connects_through_convert_node",
-            "description": "The two ends connect through the convert node `convert_node` names, placed between them.\nNot answered yet: `connect` refuses a link that needs a convert node, so such a link is\nanswered `refused`."
+            "description": "The two ends connect through the built-in convert node `convert_node` names, which\n`connect` places between them in the same edit, collapsed, linking each end to it."
           },
           {
             "type": "string",
@@ -8906,7 +9102,12 @@
           },
           "output_pin_type": {
             "$ref": "#/components/schemas/PinType",
-            "description": "The type that output gives."
+            "description": "The type that output gives, under the settings `input_values` holds."
+          },
+          "input_values": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The settings the node holds, each by its input's name, picked for the link's input; absent\nwhen what its output gives follows no setting."
           }
         },
         "required": [
@@ -8917,109 +9118,6 @@
           "output_pin_type"
         ],
         "description": "The node of one built-in conversion a link is made through."
-      },
-      "PinLinkWarningOnTheWire": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "output_meaning": {
-                "type": "string",
-                "description": "The output's meaning."
-              },
-              "input_meaning": {
-                "type": "string",
-                "description": "The input's meaning."
-              },
-              "warning": {
-                "type": "string",
-                "const": "meanings_differ"
-              }
-            },
-            "required": [
-              "warning",
-              "output_meaning",
-              "input_meaning"
-            ],
-            "description": "The two ends state different meanings for what they carry."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "member": {
-                "type": "string",
-                "description": "The member."
-              },
-              "output_meaning": {
-                "type": "string",
-                "description": "The output member's meaning."
-              },
-              "input_meaning": {
-                "type": "string",
-                "description": "The input member's meaning."
-              },
-              "warning": {
-                "type": "string",
-                "const": "member_meanings_differ"
-              }
-            },
-            "required": [
-              "warning",
-              "member",
-              "output_meaning",
-              "input_meaning"
-            ],
-            "description": "A member of two bundles states a different meaning at each end."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "warning": {
-                "type": "string",
-                "const": "vector_read_as_a_color"
-              }
-            },
-            "required": [
-              "warning"
-            ],
-            "description": "A Vector is read as a Color: x, y, z and w become red, green, blue and alpha."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "option_names": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Each such option, as the output names it."
-              },
-              "warning": {
-                "type": "string",
-                "const": "menu_options_the_input_does_not_list"
-              }
-            },
-            "required": [
-              "warning",
-              "option_names"
-            ],
-            "description": "The output may send Menu options the input does not list."
-          },
-          {
-            "type": "object",
-            "properties": {
-              "warning": {
-                "type": "string",
-                "const": "texture_output_states_no_format"
-              }
-            },
-            "required": [
-              "warning"
-            ],
-            "description": "The output states no pixel format, so it may send one the input cannot take."
-          }
-        ],
-        "description": "What a link does that a person may not expect, tagged by its `warning`."
       },
       "ImportGraphGeneratorRequest": {
         "type": "object",

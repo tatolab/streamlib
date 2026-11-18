@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::{
+    FreePinConversionOnTheWire, PinLinkWarningOnTheWire,
+};
 
 /// What the answer of a graph transaction names beside the operations it applied: the `as` of
 /// each node added, and each input value set that a link overrides.
@@ -73,12 +76,15 @@ impl StreamGraphTransactionExecutor<'_> {
         let mut operations = Vec::with_capacity(applied_live.len());
         for (stream_id, applied) in applied_live {
             match &applied {
-                StreamGraphOperation::AddNode { node, .. } => {
+                StreamGraphOperation::AddNode { node, links } => {
+                    let inserted_because = why_a_connect_inserted_the_node(node, links);
                     added_nodes.push(GraphTransactionAddedNode {
                         stream: stream_id.clone(),
                         node: node.id.to_string(),
                         name: node.name.clone(),
                         label: labels_of_added_nodes.get(&node.id).cloned(),
+                        node_type: inserted_because.map(|_| node.node_type.clone()),
+                        inserted_because,
                     });
                 }
                 StreamGraphOperation::FoldIntoFragment { fold } => {
@@ -88,6 +94,8 @@ impl StreamGraphTransactionExecutor<'_> {
                             node: fragment.to_string(),
                             name: fold.fragment_name().to_owned(),
                             label: labels_of_added_nodes.get(&fragment).cloned(),
+                            node_type: None,
+                            inserted_because: None,
                         });
                     }
                 }
@@ -111,11 +119,15 @@ impl StreamGraphTransactionExecutor<'_> {
                 StreamGraphOperation::AddNode { links, .. } => links.as_slice(),
                 _ => &[],
             };
+            let stream_operations = stream_operations_of(&stream_id);
             for link in links_the_operation_connects {
+                let verdict = stream_operations.as_ref().and_then(|stream_operations| {
+                    stream_operations.the_verdict_of_a_link_it_holds(link)
+                });
                 let graph_render = graph_render_of_each_stream
                     .entry(stream_id.clone())
                     .or_insert_with(|| {
-                        let stream_operations = stream_operations_of(&stream_id)?;
+                        let stream_operations = stream_operations.as_ref()?;
                         match self
                             .async_runtime
                             .block_on(stream_operations.to_json_async())
@@ -141,6 +153,19 @@ impl StreamGraphTransactionExecutor<'_> {
                     target: link_end_on_the_wire(&link.target),
                     state,
                     error_reason,
+                    free_conversion: verdict.as_ref().and_then(|verdict| match verdict.outcome {
+                        PinLinkOutcome::ConnectsWithFreeConversion(free_conversion) => {
+                            Some(FreePinConversionOnTheWire::of(free_conversion))
+                        }
+                        PinLinkOutcome::Connects
+                        | PinLinkOutcome::ConnectsThroughConvertNode(_)
+                        | PinLinkOutcome::Refused(_) => None,
+                    }),
+                    warnings: verdict
+                        .iter()
+                        .flat_map(|verdict| &verdict.warnings)
+                        .map(PinLinkWarningOnTheWire::of)
+                        .collect(),
                 });
             }
             let mut operation = serde_json::to_value(&applied).unwrap_or_default();
@@ -162,6 +187,22 @@ impl StreamGraphTransactionExecutor<'_> {
             overridden_by_links,
         }
     }
+}
+
+/// Why a `connect` inserted `node`, added with `links` carried through it; `None` for a node an
+/// operation added, which carries no link.
+fn why_a_connect_inserted_the_node(
+    node: &StreamGraphDocumentNode,
+    links: &[StreamGraphDocumentLink],
+) -> Option<GraphTransactionNodeInsertedBecause> {
+    if links.is_empty() {
+        return None;
+    }
+    Some(if node.node_type == PREVIOUS_VALUE_NODE_TYPE {
+        GraphTransactionNodeInsertedBecause::ClosesALoop
+    } else {
+        GraphTransactionNodeInsertedBecause::ConvertsPinTypes
+    })
 }
 
 fn link_end_on_the_wire(end: &StreamGraphDocumentLinkEnd) -> GraphLinkEndOnTheWire {
