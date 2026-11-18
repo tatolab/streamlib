@@ -651,14 +651,15 @@ fn the_value_of_each_graph_input(
 }
 
 /// Render the value of each `GraphInput`'s `value` input: the one it reads under its
-/// `graph_interface` component, as `current_value`, and its saved one in its config under
-/// `default`, the key a published Tato Studio reads.
+/// `graph_interface` component, as `current_value`, and its saved one on its `value` input and in
+/// its config under `default`, the key a published Tato Studio reads.
 fn render_the_value_of_each_graph_input_into(
     nodes: &mut [crate::core::json_schema::GraphNodeOutput],
     mut value_of_each_graph_input: HashMap<String, ValueOfAGraphInputRendered>,
 ) {
     use crate::core::graph::graph_interface_resolution::{
-        GRAPH_INTERFACE_COMPONENT_KEY, render_the_saved_value_of_a_graph_input_as_its_default,
+        GRAPH_INTERFACE_COMPONENT_KEY, GRAPH_INTERFACE_VALUE_PORT_NAME,
+        render_the_saved_value_of_a_graph_input_as_its_default,
     };
     for node in nodes {
         let Some(rendered) = value_of_each_graph_input.remove(&node.id) else {
@@ -673,6 +674,13 @@ fn render_the_value_of_each_graph_input_into(
                 current_value,
             );
         }
+        match &rendered.saved_value {
+            Some(saved_value) => node.input_values.insert(
+                GRAPH_INTERFACE_VALUE_PORT_NAME.to_string(),
+                saved_value.clone(),
+            ),
+            None => node.input_values.remove(GRAPH_INTERFACE_VALUE_PORT_NAME),
+        };
         if let Some(serde_json::Value::Object(config)) = &mut node.config {
             render_the_saved_value_of_a_graph_input_as_its_default(config, rendered.saved_value);
             node.config_checksum = crate::core::utils::compute_json_checksum(

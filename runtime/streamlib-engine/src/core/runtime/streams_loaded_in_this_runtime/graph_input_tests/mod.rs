@@ -363,6 +363,11 @@ fn a_graph_inputs_saved_value_reaches_a_reader_opened_after_it_was_published() {
         "{rendered}"
     );
     assert_eq!(
+        rendered["input_values"][VALUE],
+        json!({ "level": 0.75 }),
+        "a saved edit renders on the `value` input the `default` its config renders: {rendered}"
+    );
+    assert_eq!(
         rendered["components"]["graph_interface"]["current_value"],
         json!({ "level": 0.75 }),
         "{rendered}"
