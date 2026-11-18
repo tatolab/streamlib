@@ -243,6 +243,14 @@ pub(crate) fn the_input_port_takes_a_value(node_kind: Option<NodeKind>, port: &P
     }
 }
 
+/// What an input a link feeds reads: no value of its own, and `wire` as where it comes from.
+pub(crate) fn the_read_of_an_input_a_link_feeds() -> InputValueReadOnTheWire {
+    InputValueReadOnTheWire {
+        value: None,
+        value_comes_from: Some(InputValueComesFromOnTheWire::Wire),
+    }
+}
+
 /// The value input `port` of `node` in `graph` reads, `is_linked` when a link feeds it: wire;
 /// else its live value, its saved one, which is its config field's for a config field the node
 /// exposes as an input, or its declared default; else nothing. `None` for an input that takes
@@ -254,10 +262,7 @@ pub(crate) fn the_value_an_input_reads(
     is_linked: bool,
 ) -> Option<InputValueReadOnTheWire> {
     if is_linked {
-        return Some(InputValueReadOnTheWire {
-            value: None,
-            value_comes_from: Some(InputValueComesFromOnTheWire::Wire),
-        });
+        return Some(the_read_of_an_input_a_link_feeds());
     }
     let exposed_config_field = node.is_an_exposed_config_field_input(&port.name);
     if !exposed_config_field && !the_input_port_takes_a_value(node.node_kind(), port) {

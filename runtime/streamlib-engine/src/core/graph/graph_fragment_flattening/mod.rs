@@ -24,6 +24,7 @@ use crate::core::graph::graph_snapshot::{GraphSnapshot, GraphSnapshotLink, Graph
 use crate::core::graph::graph_variable_resolution::{
     SET_VARIABLE_NODE_REFERENCE_CONFIG_KEY, SET_VARIABLE_NODE_TYPE,
 };
+use crate::core::graph::input_values::the_read_of_an_input_a_link_feeds;
 use crate::core::graph::legacy_config_of_a_node::LegacyConfigOfANodeType;
 use crate::core::graph::{
     cast_exposed_name_to_url_safe, config_keys_of_a_node_type_holding_a_node_reference,
@@ -451,7 +452,7 @@ impl GraphFragmentAsDrawn {
         }
         let mut running_node_names_cast_inside = HashSet::new();
         self.running_node_names_cast(&mut running_node_names_cast_inside);
-        let links = stored
+        let links: Vec<LinkOutput> = stored
             .links
             .iter()
             .enumerate()
@@ -490,6 +491,7 @@ impl GraphFragmentAsDrawn {
                 rendered
             })
             .collect();
+        mark_each_fragment_input_a_link_feeds_as_read_from_a_wire(&mut nodes, &links);
 
         let mut inputs = Vec::new();
         let mut outputs = Vec::new();
@@ -703,6 +705,32 @@ impl GraphFragmentsAsDrawn {
                 position,
                 rendered_with_the_live_keys_of(&drawn.link, &running_links_it_stands_for),
             );
+        }
+        mark_each_fragment_input_a_link_feeds_as_read_from_a_wire(
+            &mut graph_response.nodes,
+            &graph_response.links,
+        );
+    }
+}
+
+/// Mark each input of each fragment among `nodes`, one level's, that one of `links`, the same
+/// level's, feeds as reading from a wire; a link inside the fragment says nothing about it.
+fn mark_each_fragment_input_a_link_feeds_as_read_from_a_wire(
+    nodes: &mut [GraphNodeOutput],
+    links: &[LinkOutput],
+) {
+    for fragment in nodes
+        .iter_mut()
+        .filter(|node| node.kind == Some(GraphNodeKindOnTheWire::Fragment))
+    {
+        for input in &mut fragment.ports.inputs {
+            let a_link_feeds_it = links.iter().any(|link| {
+                link.target.node == fragment.name
+                    && cast_or_as_written(&link.target.port) == input.name
+            });
+            if a_link_feeds_it {
+                input.value_read = Some(the_read_of_an_input_a_link_feeds());
+            }
         }
     }
 }
