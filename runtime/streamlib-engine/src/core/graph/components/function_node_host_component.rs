@@ -3,7 +3,7 @@
 
 use streamlib_runtime_client_contract::local_api_wire_contract::FunctionNodeHostOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 /// Where a function node runs, rendered by `graph` as `host`: inside the read
@@ -17,15 +17,13 @@ pub enum FunctionNodeHostComponent {
     InAHelperProcessOfItsOwn,
 }
 
-impl NodeComponentGraphRenders for FunctionNodeHostComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for FunctionNodeHostComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.host = Some(match self {
             Self::InsideTheReadOf(reader_ids) => {
                 FunctionNodeHostOnTheWire::InsideTheReadOf(reader_ids.clone())
             }
-            Self::InAHelperProcessOfItsOwn => {
-                FunctionNodeHostOnTheWire::InAHelperProcessOfItsOwn(true)
-            }
+            Self::InAHelperProcessOfItsOwn => FunctionNodeHostOnTheWire::InAHelperProcessOfItsOwn,
         });
     }
 }

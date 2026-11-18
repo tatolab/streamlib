@@ -8,7 +8,7 @@ use std::os::fd::OwnedFd;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeShutdownChannelOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct ShutdownChannelComponent {
@@ -160,10 +160,9 @@ impl Default for ShutdownChannelComponent {
     }
 }
 
-impl NodeComponentGraphRenders for ShutdownChannelComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ShutdownChannelComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.shutdown_channel = Some(NodeShutdownChannelOnTheWire {
-            attached: true,
             receiver_taken: self.receiver.is_none(),
         });
     }

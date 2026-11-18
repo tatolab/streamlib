@@ -6,7 +6,7 @@ use std::sync::Arc;
 use streamlib_ipc_types::HelperProcessStepProgressBoardEntry;
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeMetricsOnTheWire;
 
-use super::{FunctionNodePromotionOutOfItsReadersIslands, NodeComponentGraphRenders};
+use super::{FunctionNodePromotionOutOfItsReadersIslands, GraphRenders};
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::iceoryx2::{
     BagCountsByOutputPort, DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
@@ -107,7 +107,7 @@ impl NodeMetrics {
     }
 }
 
-impl NodeComponentGraphRenders for NodeMetrics {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeMetrics {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         // One snapshot for every key: taken apart, an eviction landing between them renders a
         // total smaller than the per-link counts it claims to be the sum of.

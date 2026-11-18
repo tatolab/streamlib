@@ -7,7 +7,7 @@ use std::time::Instant;
 use parking_lot::{Condvar, Mutex};
 use streamlib_runtime_client_contract::local_api_wire_contract::HelperProcessRestartsOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::error::{Error, PrivacyGatedCaptureDevice};
 use crate::core::graph::NodeRunId;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
@@ -257,7 +257,7 @@ impl StateComponent {
 
 pub struct HelperProcessRestartsComponent(pub Arc<ObservableNodeState>);
 
-impl NodeComponentGraphRenders for HelperProcessRestartsComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for HelperProcessRestartsComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         let record = self.0.helper_process_restart_record();
         components.helper_process_restarts = Some(HelperProcessRestartsOnTheWire {
@@ -269,7 +269,7 @@ impl NodeComponentGraphRenders for HelperProcessRestartsComponent {
 
 pub struct NodeFailureReasonComponent(pub Arc<ObservableNodeState>);
 
-impl NodeComponentGraphRenders for NodeFailureReasonComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeFailureReasonComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.failed_because = (self.0.current() == NodeState::Error)
             .then(|| self.0.failure_reason())
@@ -279,23 +279,23 @@ impl NodeComponentGraphRenders for NodeFailureReasonComponent {
 
 pub struct ProcessRaisingBecauseComponent(pub Arc<ObservableNodeState>);
 
-impl NodeComponentGraphRenders for ProcessRaisingBecauseComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ProcessRaisingBecauseComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.process_raising_because = self.0.why_process_is_raising();
     }
 }
 
 /// Why a running node is not ready, rendered beside its state as
-/// `not_ready_because`: the node's own words while it says so, else absent.
+/// `not_ready_because`: the node's own words while it says so, else null.
 pub struct NodeNotReadyBecauseComponent(pub Arc<ObservableNodeState>);
 
-impl NodeComponentGraphRenders for NodeNotReadyBecauseComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeNotReadyBecauseComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.not_ready_because = self.0.why_the_node_is_not_ready();
     }
 }
 
-impl NodeComponentGraphRenders for StateComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for StateComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.state = Some(self.current().into());
     }
@@ -309,15 +309,46 @@ mod tests {
 
     use super::*;
 
-    /// What `graph` renders of `component` under its key, null when it renders none.
-    fn the_rendering_of(component: &impl NodeComponentGraphRenders) -> JsonValue {
+    /// What `graph` renders of `component` under its key, null when it renders none: the one key
+    /// its rendering changes from that of a node keeping nothing.
+    fn the_rendering_of(component: &impl GraphRenders<GraphNodeComponentsOnTheWire>) -> JsonValue {
+        let keeping_nothing =
+            serde_json::to_value(GraphNodeComponentsOnTheWire::default()).unwrap();
         let mut components = GraphNodeComponentsOnTheWire::default();
         component.render_onto(&mut components);
-        serde_json::to_value(components)
-            .unwrap()
+        let rendered = serde_json::to_value(components).unwrap();
+        rendered
             .as_object()
-            .and_then(|rendered| rendered.values().next().cloned())
+            .and_then(|rendered| {
+                rendered
+                    .iter()
+                    .find(|(key, value)| keeping_nothing.get(key.as_str()) != Some(*value))
+                    .map(|(_, value)| value.clone())
+            })
             .unwrap_or(JsonValue::Null)
+    }
+
+    #[test]
+    fn a_node_that_has_not_failed_carries_each_reason_as_null() {
+        let state = Arc::new(ObservableNodeState::new(NodeState::Running));
+        let mut components = GraphNodeComponentsOnTheWire::default();
+        NodeFailureReasonComponent(Arc::clone(&state)).render_onto(&mut components);
+        ProcessRaisingBecauseComponent(Arc::clone(&state)).render_onto(&mut components);
+        NodeNotReadyBecauseComponent(Arc::clone(&state)).render_onto(&mut components);
+        StateComponent(state).render_onto(&mut components);
+
+        let rendered = serde_json::to_value(components).unwrap();
+        for reason in [
+            "failed_because",
+            "process_raising_because",
+            "not_ready_because",
+        ] {
+            assert_eq!(
+                rendered.get(reason),
+                Some(&JsonValue::Null),
+                "a healthy node carries `{reason}` as null, never leaves it out: {rendered}"
+            );
+        }
     }
 
     /// A deadline far enough out that reaching it means the wait failed to

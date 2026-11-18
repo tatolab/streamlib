@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::{Iceoryx2ServicesHeldOpenForLinkComponent, LinkComponentGraphRenders};
+use super::{GraphRenders, Iceoryx2ServicesHeldOpenForLinkComponent};
 use crate::core::graph::{InputLinkPortRef, LinkUniqueId};
 use crate::core::json_schema::GraphLinkComponentsOnTheWire;
 use crate::core::nodes::OutOfProcessLinkWireReply;
@@ -48,7 +48,9 @@ impl LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
     }
 }
 
-impl LinkComponentGraphRenders for LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent {
+impl GraphRenders<GraphLinkComponentsOnTheWire>
+    for LinkReadThroughTheReaderOfItsFunctionNodeIslandComponent
+{
     fn render_onto(&self, components: &mut GraphLinkComponentsOnTheWire) {
         let mut reader_input_ports: Vec<String> = self
             .reads_by_island_link

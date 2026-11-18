@@ -799,17 +799,18 @@ export interface GraphNodeComponentsOnTheWire {
    */
   state?: NodeStateOnTheWire | null;
   /**
-   * Why the node failed, while its state is `Error`.
+   * Why the node failed, while its state is `Error`; null on a node that has not failed.
    */
-  failed_because?: string | null;
+  failed_because: string | null;
   /**
-   * What the node's `process()` keeps raising, while it does.
+   * What the node's `process()` keeps raising, while it does; null once a call runs cleanly.
    */
-  process_raising_because?: string | null;
+  process_raising_because: string | null;
   /**
-   * Why a running node is not ready, in its own words, while it says so.
+   * Why a running node is not ready, in its own words, while it says so; null once it
+   * reports itself ready.
    */
-  not_ready_because?: string | null;
+  not_ready_because: string | null;
   /**
    * On a node in a helper process of its own, the helper processes started for it since its
    * stream loaded.
@@ -965,10 +966,6 @@ export interface NodeReadyBarrierOnTheWire {
  */
 export interface NodeShutdownChannelOnTheWire {
   /**
-   * Always `true`: the channel is attached.
-   */
-  attached: boolean;
-  /**
    * Whether the node's thread has taken the channel's receiver.
    */
   receiver_taken: boolean;
@@ -978,10 +975,6 @@ export interface NodeShutdownChannelOnTheWire {
  * The thread a node runs on.
  */
 export interface NodeThreadHandleOnTheWire {
-  /**
-   * Always `true`: the thread is attached.
-   */
-  attached: boolean;
   /**
    * The thread's id, as the runtime prints it.
    */
@@ -997,10 +990,6 @@ export interface NodeThreadHandleOnTheWire {
  */
 export interface NodeInstanceOnTheWire {
   /**
-   * Always `true`: the instance is attached.
-   */
-  attached: boolean;
-  /**
    * The strong references held to the instance.
    */
   arc_strong_count: number;
@@ -1015,9 +1004,7 @@ export interface NodeInstanceOnTheWire {
  */
 export type FunctionNodeHostOnTheWire = {
   inside_the_read_of: Array<string>;
-} | {
-  in_a_helper_process_of_its_own: boolean;
-};
+} | "in_a_helper_process_of_its_own";
 
 /**
  * The shader nodes one evaluator runs as one island, and how its evaluations cut them into
@@ -1245,7 +1232,7 @@ export interface GraphLinkComponentsOnTheWire {
 }
 
 /**
- * A link's state as wiring stamped it on the link, spelled with a capital.
+ * A link's state as wiring stamped it on the link, spelled with a capital: always the link's `state`.
  */
 export type GraphLinkStateComponentOnTheWire = "Pending" | "Wired" | "Disconnecting" | "Disconnected" | "Error";
 

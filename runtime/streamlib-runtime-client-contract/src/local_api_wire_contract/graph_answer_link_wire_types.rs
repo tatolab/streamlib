@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::PinLinkWarningOnTheWire;
+use super::PinLinkMarksOnTheWire;
 
 /// One link of a stream's graph, from an output port to an input port.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -31,21 +31,11 @@ pub struct GraphLinkOnTheWire {
     /// not start to: disconnect it and wire again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
-    /// `true` when the input reads what the output carries as its own type at no cost: Boolean,
-    /// Integer and Float among themselves, a Vector into a Vector or a Color, one number into a
-    /// Vector or a Color, or a Menu into a String. Absent on every other link.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub free_conversion: bool,
-    /// What the link does that a person may not expect, as the judgement of its two ends' pin
-    /// types says; none of these blocks it. Absent when it warns of nothing.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<PinLinkWarningOnTheWire>,
+    /// What the link converts and warns of, as the judgement of its two typed ends says.
+    #[serde(flatten)]
+    pub marks: PinLinkMarksOnTheWire,
     /// What the runtime keeps on the link, by what it is.
     pub components: GraphLinkComponentsOnTheWire,
-}
-
-fn is_false(value: &bool) -> bool {
-    !*value
 }
 
 /// One end of a link of a stream's graph: a node by its name, and one of its ports.
@@ -105,31 +95,70 @@ pub struct GraphLinkComponentsOnTheWire {
     pub graph_variable: Option<GraphVariableOnTheWire>,
 }
 
-/// A link's state as wiring stamped it on the link, spelled with a capital.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
-pub enum GraphLinkStateComponentOnTheWire {
-    /// In the graph, not wired yet.
-    Pending,
-    /// Wired, its channel carrying samples.
-    Wired,
-    /// Being disconnected.
-    Disconnecting,
-    /// Disconnected.
-    Disconnected,
-    /// Wiring failed.
-    Error,
-}
+/// A link's state as wiring stamped it on the link, spelled with a capital: the key a reader
+/// written before `state` was typed reads. Always the link's `state`, the one set of states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphLinkStateComponentOnTheWire(pub GraphLinkStateOnTheWire);
 
 impl From<GraphLinkStateOnTheWire> for GraphLinkStateComponentOnTheWire {
     fn from(state: GraphLinkStateOnTheWire) -> Self {
-        match state {
-            GraphLinkStateOnTheWire::Pending => Self::Pending,
-            GraphLinkStateOnTheWire::Wired => Self::Wired,
-            GraphLinkStateOnTheWire::Disconnecting => Self::Disconnecting,
-            GraphLinkStateOnTheWire::Disconnected => Self::Disconnected,
-            GraphLinkStateOnTheWire::Error => Self::Error,
+        Self(state)
+    }
+}
+
+/// `spelled` with its first letter a capital; each link state is one word.
+fn with_a_capital(spelled: &str) -> String {
+    let mut letters = spelled.chars();
+    letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default()
+}
+
+impl Serialize for GraphLinkStateComponentOnTheWire {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let spelled = serde_json::to_value(self.0).map_err(serde::ser::Error::custom)?;
+        let spelled = spelled.as_str().unwrap_or_default();
+        serializer.serialize_str(&with_a_capital(spelled))
+    }
+}
+
+impl<'de> Deserialize<'de> for GraphLinkStateComponentOnTheWire {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let spelled = String::deserialize(deserializer)?;
+        serde_json::from_value(serde_json::Value::String(spelled.to_lowercase()))
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(feature = "json-schema")]
+impl schemars::JsonSchema for GraphLinkStateComponentOnTheWire {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("GraphLinkStateComponentOnTheWire")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let mut schema = GraphLinkStateOnTheWire::json_schema(generator);
+        if let Some(states) = schema
+            .get_mut("oneOf")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for state in states {
+                if let Some(spelled) = state.get("const").and_then(serde_json::Value::as_str) {
+                    state["const"] = serde_json::Value::String(with_a_capital(spelled));
+                }
+            }
         }
+        schema.insert(
+            "description".to_owned(),
+            serde_json::Value::String(
+                "A link's state as wiring stamped it on the link, spelled with a capital: always \
+                 the link's `state`."
+                    .to_owned(),
+            ),
+        );
+        schema
     }
 }
 
@@ -158,18 +187,10 @@ pub struct GraphInterfacePortOnTheWire {
     /// saved one. Absent elsewhere, and where it reads none.
     #[serde(
         default,
-        deserialize_with = "a_value_that_may_be_null",
+        deserialize_with = "super::graph_answer_wire_types::a_value_that_may_be_null",
         skip_serializing_if = "Option::is_none"
     )]
     pub current_value: Option<serde_json::Value>,
-}
-
-/// A `current_value` present on the wire, null among them: only an absent one reads as `None`.
-fn a_value_that_may_be_null<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    serde_json::Value::deserialize(deserializer).map(Some)
 }
 
 /// Whether a stream takes a port it declares in or gives it out.

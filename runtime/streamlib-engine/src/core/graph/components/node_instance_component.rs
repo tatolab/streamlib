@@ -6,16 +6,15 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeInstanceOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::core::nodes::NodeInstance;
 
 pub struct NodeInstanceComponent(pub Arc<Mutex<NodeInstance>>);
 
-impl NodeComponentGraphRenders for NodeInstanceComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeInstanceComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.node_instance = Some(NodeInstanceOnTheWire {
-            attached: true,
             arc_strong_count: Arc::strong_count(&self.0),
             arc_weak_count: Arc::weak_count(&self.0),
         });

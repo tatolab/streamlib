@@ -387,7 +387,7 @@ impl NativeLinkWiredForLossCounting {
             .v(proc_id)
             .first()
             .expect("the node's node must be in the graph")
-            .serialize_components()
+            .render_components()
             .metrics
             .map(|metrics| serde_json::to_value(metrics).unwrap())
     }
@@ -516,7 +516,7 @@ impl NativeLinkIntoAWindowedPort {
             .v(&self.dest_id)
             .first()
             .expect("the destination's node must be in the graph")
-            .serialize_components()
+            .render_components()
             .metrics
             .map(|metrics| serde_json::to_value(metrics).unwrap())
             .unwrap_or_default()

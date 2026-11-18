@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeThreadHandleOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::compiler::NodeThreadKind;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
@@ -14,10 +14,9 @@ pub struct ThreadHandleComponent {
     pub kind: NodeThreadKind,
 }
 
-impl NodeComponentGraphRenders for ThreadHandleComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ThreadHandleComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.thread_handle = Some(NodeThreadHandleOnTheWire {
-            attached: true,
             thread_id: format!("{:?}", self.join_handle.thread().id()),
             thread_name: self
                 .join_handle

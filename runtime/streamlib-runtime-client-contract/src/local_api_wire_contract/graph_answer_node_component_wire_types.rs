@@ -19,14 +19,24 @@ pub struct GraphNodeComponentsOnTheWire {
     /// The node's state now.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<NodeStateOnTheWire>,
-    /// Why the node failed, while its state is `Error`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Why the node failed, while its state is `Error`; null on a node that has not failed.
+    #[cfg_attr(
+        feature = "json-schema",
+        schemars(required, schema_with = "a_string_or_null")
+    )]
     pub failed_because: Option<String>,
-    /// What the node's `process()` keeps raising, while it does.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What the node's `process()` keeps raising, while it does; null once a call runs cleanly.
+    #[cfg_attr(
+        feature = "json-schema",
+        schemars(required, schema_with = "a_string_or_null")
+    )]
     pub process_raising_because: Option<String>,
-    /// Why a running node is not ready, in its own words, while it says so.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Why a running node is not ready, in its own words, while it says so; null once it
+    /// reports itself ready.
+    #[cfg_attr(
+        feature = "json-schema",
+        schemars(required, schema_with = "a_string_or_null")
+    )]
     pub not_ready_because: Option<String>,
     /// On a node in a helper process of its own, the helper processes started for it since its
     /// stream loaded.
@@ -73,6 +83,12 @@ pub struct GraphNodeComponentsOnTheWire {
     /// On a graph variable's node, the variable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graph_variable: Option<GraphVariableOnTheWire>,
+}
+
+/// The schema of a string that is always present and may be null.
+#[cfg(feature = "json-schema")]
+fn a_string_or_null(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": ["string", "null"] })
 }
 
 /// A node's state as `graph` renders it.
@@ -160,8 +176,6 @@ pub struct NodeReadyBarrierOnTheWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeShutdownChannelOnTheWire {
-    /// Always `true`: the channel is attached.
-    pub attached: bool,
     /// Whether the node's thread has taken the channel's receiver.
     pub receiver_taken: bool,
 }
@@ -170,8 +184,6 @@ pub struct NodeShutdownChannelOnTheWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeThreadHandleOnTheWire {
-    /// Always `true`: the thread is attached.
-    pub attached: bool,
     /// The thread's id, as the runtime prints it.
     pub thread_id: String,
     /// The thread's name.
@@ -182,8 +194,6 @@ pub struct NodeThreadHandleOnTheWire {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
 pub struct NodeInstanceOnTheWire {
-    /// Always `true`: the instance is attached.
-    pub attached: bool,
     /// The strong references held to the instance.
     pub arc_strong_count: usize,
     /// The weak references held to the instance.
@@ -197,8 +207,8 @@ pub struct NodeInstanceOnTheWire {
 pub enum FunctionNodeHostOnTheWire {
     /// Inside the read of each reader named, by node id.
     InsideTheReadOf(Vec<String>),
-    /// Always `true`: in a helper process of its own.
-    InAHelperProcessOfItsOwn(bool),
+    /// In a helper process of its own.
+    InAHelperProcessOfItsOwn,
 }
 
 /// The shader nodes one evaluator runs as one island, and how its evaluations cut them into

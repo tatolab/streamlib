@@ -336,7 +336,7 @@ pub struct InputValueReadOnTheWire {
 }
 
 /// A `value` present on the wire, null among them: only an absent one reads as `None`.
-fn a_value_that_may_be_null<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+pub(super) fn a_value_that_may_be_null<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {

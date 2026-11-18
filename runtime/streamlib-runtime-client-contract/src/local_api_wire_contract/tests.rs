@@ -447,6 +447,9 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             "pins": {"trim": 0.5},
             "components": {
                 "state": "Running",
+                "failed_because": null,
+                "process_raising_because": null,
+                "not_ready_because": null,
                 "metrics": {"frames_dropped": 2, "dropped_bags_by_link": {"L1": 2},
                             "refused_bags_by_output_port": {},
                             "written_bags_by_output_port": {"out": 40}},
@@ -522,11 +525,11 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
     assert!(inputs[0].pin.is_some() && inputs[1].pin.is_none());
     let link = &graph.links[0];
     assert!(
-        link.free_conversion,
+        link.marks.free_conversion,
         "a link that converts for free says so: {link:?}"
     );
     assert_eq!(
-        link.warnings,
+        link.marks.warnings,
         [PinLinkWarningOnTheWire::VectorReadAsAColor],
         "a warned link carries its warnings"
     );

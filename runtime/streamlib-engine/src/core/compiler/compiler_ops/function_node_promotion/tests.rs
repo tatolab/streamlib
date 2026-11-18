@@ -413,7 +413,7 @@ fn graph_shows_each_promotion_under_the_promoted_nodes_metrics() {
             .v(promoted_id)
             .first()
             .filter(|node| node.has::<NodeMetrics>())
-            .and_then(|node| node.serialize_components().metrics)
+            .and_then(|node| node.render_components().metrics)
             .map(|metrics| serde_json::to_value(metrics).unwrap())
             .unwrap();
         assert_eq!(
@@ -493,7 +493,7 @@ fn the_ran_compiled_graph_renders_on(graph: &Graph, node_id: &NodeRunId) -> Opti
         node.has::<FunctionNodeRanCompiledComponent>(),
         "a promoted function node carries the report `graph` renders"
     );
-    node.serialize_components().ran_compiled
+    node.render_components().ran_compiled
 }
 
 fn the_report_its_own_helper_notes_on(

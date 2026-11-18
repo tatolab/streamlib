@@ -146,7 +146,7 @@ fn each_island_node_renders_how_its_readers_helper_ran_it() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
+            .render_components()
             .ran_compiled
     };
     assert_eq!(ran_compiled(&graph, &lfo), None);
@@ -190,7 +190,7 @@ fn each_island_node_renders_the_raise_its_readers_helper_reports_on_it() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
+            .render_components()
             .process_raising_because
     };
     let how_the_readers_helper_ran_each_function_node = graph
@@ -238,7 +238,7 @@ fn graph_names_each_function_nodes_host_as_the_readers_its_island_feeds() {
             .v(node_id)
             .first()
             .unwrap()
-            .serialize_components()
+            .render_components()
             .host
             .map(|host| serde_json::to_value(host).unwrap())
     };

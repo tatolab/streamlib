@@ -12,7 +12,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::{
-    DeclaredPinType, NodeInputMode, PinAnnotations, PortFamilyDeclaration, SettingReadTime,
+    DeclaredPinType, NodeInputMode, PinAnnotations, PinLinkVerdict, PortFamilyDeclaration,
+    SettingReadTime,
 };
 use crate::core::graph::legacy_config_of_a_node::{
     ConfigAndPinValues, ConfigFieldDescribedAsASetting, LegacyConfigOfANodeType,
@@ -22,6 +23,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
+use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 pub use streamlib_node_schema::NodeClassImportPath;
 pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     ConfigNodeReferenceEdgeOnTheWire, FunctionNodeLanguageOnTheWire, GraphFragmentOnTheWire,
@@ -29,16 +31,9 @@ pub use streamlib_runtime_client_contract::local_api_wire_contract::{
     GraphLinkStateOnTheWire, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire,
     GraphNodeOnTheWire, GraphNodePortOnTheWire, GraphNodePortsOnTheWire,
     InputValueComesFromOnTheWire, InputValueReadOnTheWire, LabelledNodeGroup,
-    LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire, PortKindOnTheWire,
-    StreamGraphOnTheWire,
+    LinkCarriedThroughTheFunctionNodePoolOnTheWire, MachineWideGraphOnTheWire,
+    PinLinkMarksOnTheWire, PortKindOnTheWire, StreamGraphOnTheWire,
 };
-use streamlib_runtime_client_contract::local_api_wire_contract::{
-    LinkCheckResult, PinLinkOutcomeOnTheWire,
-};
-
-use crate::core::descriptors::PinLinkVerdict;
-
-use crate::core::compiler::compiler_ops::function_node_pool::LinkCarriedThroughTheFunctionNodePool;
 
 // =============================================================================
 // Graph Response (/api/graph and the `graph` operation)
@@ -538,7 +533,7 @@ impl From<&crate::core::graph::GraphNode> for GraphNodeOutput {
             exposed_config_fields: node.exposed_config_fields.clone(),
             studio: node.studio.clone(),
             inputs_waiting_for_a_value: Vec::new(),
-            components: node.serialize_components(),
+            components: node.render_components(),
             fragment: None,
         }
     }
@@ -629,7 +624,7 @@ pub(crate) fn rendered_link(
     verdict: Option<&PinLinkVerdict>,
 ) -> LinkOutput {
     let rendered = RenderedLinkState::of(link);
-    let mut components = link.serialize_components();
+    let mut components = link.render_components();
     // `LinkStateComponent` renders under `components.state` too, and for a link waiting on a
     // helper it holds the `Pending` the op stamped. Left alone it would contradict the
     // top-level state a reader was told to check — the same disagreement the top-level state
@@ -665,10 +660,7 @@ pub(crate) fn mark_what_a_link_converts_and_warns_of(
     rendered: &mut LinkOutput,
     verdict: Option<&PinLinkVerdict>,
 ) {
-    let answered = LinkCheckResult::of_a_link_connect_makes(verdict);
-    rendered.free_conversion =
-        answered.outcome == PinLinkOutcomeOnTheWire::ConnectsWithFreeConversion;
-    rendered.warnings = answered.warnings;
+    rendered.marks = PinLinkMarksOnTheWire::of(verdict);
 }
 
 /// `carried`, a link the graph carries through the function node pool as two links, as it was
@@ -742,11 +734,11 @@ impl RenderedLinkState {
             .map(|state| state.0)
             .unwrap_or(link.state);
         if stamped != crate::core::graph::LinkState::Pending {
-            return Self::WithoutAReason(link_state_rendered(stamped));
+            return Self::WithoutAReason(LinkStateOutput::from(stamped));
         }
         let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
         else {
-            return Self::WithoutAReason(link_state_rendered(stamped));
+            return Self::WithoutAReason(LinkStateOutput::from(stamped));
         };
         match replies.what_its_out_of_process_ends_have_answered() {
             crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
@@ -770,14 +762,15 @@ impl RenderedLinkState {
     }
 }
 
-/// `state` as `graph` answers it.
-pub(crate) fn link_state_rendered(state: crate::core::graph::LinkState) -> LinkStateOutput {
-    match state {
-        crate::core::graph::LinkState::Pending => LinkStateOutput::Pending,
-        crate::core::graph::LinkState::Wired => LinkStateOutput::Wired,
-        crate::core::graph::LinkState::Disconnecting => LinkStateOutput::Disconnecting,
-        crate::core::graph::LinkState::Disconnected => LinkStateOutput::Disconnected,
-        crate::core::graph::LinkState::Error => LinkStateOutput::Error,
+impl From<crate::core::graph::LinkState> for LinkStateOutput {
+    fn from(state: crate::core::graph::LinkState) -> Self {
+        match state {
+            crate::core::graph::LinkState::Pending => LinkStateOutput::Pending,
+            crate::core::graph::LinkState::Wired => LinkStateOutput::Wired,
+            crate::core::graph::LinkState::Disconnecting => LinkStateOutput::Disconnecting,
+            crate::core::graph::LinkState::Disconnected => LinkStateOutput::Disconnected,
+            crate::core::graph::LinkState::Error => LinkStateOutput::Error,
+        }
     }
 }
 

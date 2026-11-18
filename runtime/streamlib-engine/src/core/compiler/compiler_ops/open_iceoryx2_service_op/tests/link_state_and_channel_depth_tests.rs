@@ -132,7 +132,7 @@ fn a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_ow
             .v(NodeRunId::from(newest_consumer_id.as_str()))
             .first()
             .expect("the newest consumer is in the graph")
-            .serialize_components()
+            .render_components()
             .metrics
             .and_then(|metrics| metrics
                 .dropped_bags_by_link

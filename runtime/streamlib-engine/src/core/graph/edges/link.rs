@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::LinkUniqueId;
 use super::super::components::{
-    ComponentMap, ComponentSerializer, default_component_serializers, default_components,
+    ComponentMap, ComponentRenderer, default_component_renderers, default_components,
 };
 use super::super::{GraphEdgeWithComponents, GraphWeight};
 use super::LinkCapacity;
@@ -25,13 +25,13 @@ pub struct Link {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkState,
-    /// Runtime components (not serialized by derive, but via serialize_components).
+    /// Runtime components (not serialized by derive, but rendered by render_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
     /// Serializers for each inserted component type.
-    #[serde(skip, default = "default_component_serializers")]
-    component_serializers:
-        Vec<ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>>,
+    #[serde(skip, default = "default_component_renderers")]
+    component_renderers:
+        Vec<ComponentRenderer<crate::core::json_schema::GraphLinkComponentsOnTheWire>>,
 }
 
 impl PartialEq for Link {
@@ -55,7 +55,7 @@ impl std::fmt::Debug for Link {
             .field("target", &self.target)
             .field("capacity", &self.capacity)
             .field("state", &self.state)
-            // Skip: components, component_serializers (runtime-only)
+            // Skip: components, component_renderers (runtime-only)
             .finish()
     }
 }
@@ -85,7 +85,7 @@ impl Link {
             capacity,
             state: LinkState::Pending,
             components: ComponentMap::new(),
-            component_serializers: Vec::new(),
+            component_renderers: Vec::new(),
         }
     }
 
@@ -120,16 +120,16 @@ impl GraphEdgeWithComponents for Link {
         &mut self.components
     }
 
-    fn component_serializers(
+    fn component_renderers(
         &self,
-    ) -> &[ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>] {
-        &self.component_serializers
+    ) -> &[ComponentRenderer<crate::core::json_schema::GraphLinkComponentsOnTheWire>] {
+        &self.component_renderers
     }
 
-    fn component_serializers_mut(
+    fn component_renderers_mut(
         &mut self,
-    ) -> &mut Vec<ComponentSerializer<crate::core::json_schema::GraphLinkComponentsOnTheWire>> {
-        &mut self.component_serializers
+    ) -> &mut Vec<ComponentRenderer<crate::core::json_schema::GraphLinkComponentsOnTheWire>> {
+        &mut self.component_renderers
     }
 }
 

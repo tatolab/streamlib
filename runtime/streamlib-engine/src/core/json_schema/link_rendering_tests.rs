@@ -227,3 +227,56 @@ fn a_link_that_converts_nothing_says_neither() {
         );
     }
 }
+
+/// Give the port `port_name` on `direction`'s side of `node` in `graph` the pin type
+/// `pin_type`.
+fn give_a_port_the_pin_type(
+    graph: &mut crate::core::graph::Graph,
+    node: &crate::core::graph::NodeRunId,
+    direction: crate::core::PortDirection,
+    port_name: &str,
+    pin_type: crate::core::descriptors::PinType,
+) {
+    let node = graph.traversal_mut().v(node);
+    let node = node.first_mut().unwrap();
+    let port = node
+        .ports
+        .on_mut(direction)
+        .iter_mut()
+        .find(|port| port.name == port_name)
+        .unwrap();
+    port.pin = Some(crate::core::descriptors::ResolvedPin {
+        pin_type,
+        flow: crate::core::descriptors::PinFlow::Value,
+    });
+}
+
+#[test]
+fn a_carried_link_between_typed_ends_says_it_converts_for_free_as_its_two_ends_judge_it() {
+    use crate::core::descriptors::PinType;
+    let (mut graph, lfo, reader, _) =
+        crate::core::compiler::compiler_ops::function_node_pool::tests::a_graph_carrying_an_lfo_into_its_reader_through_the_pool();
+    give_a_port_the_pin_type(
+        &mut graph,
+        &lfo,
+        crate::core::PortDirection::Output,
+        "result",
+        PinType::Integer { exact_size: None },
+    );
+    give_a_port_the_pin_type(
+        &mut graph,
+        &reader,
+        crate::core::PortDirection::Input,
+        "in1",
+        PinType::Float { exact_size: None },
+    );
+
+    let rendered = graph.to_graph_response("rig".to_string());
+
+    assert_eq!(rendered.links.len(), 1, "{:?}", rendered.links);
+    assert!(
+        rendered.links[0].marks.free_conversion,
+        "an Integer read as a Float through the pool converts for free: {:?}",
+        rendered.links[0]
+    );
+}

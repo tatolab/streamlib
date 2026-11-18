@@ -3,7 +3,8 @@
 
 use anymap2::Map;
 
-use super::{LinkComponentGraphRenders, NodeComponentGraphRenders};
+use super::GraphRenders;
+use crate::core::json_schema::{GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire};
 
 /// Anything a node's component map can hold.
 ///
@@ -17,26 +18,26 @@ pub trait StorableComponent: anymap2::any::Any + Send + Sync + 'static {}
 impl<T: anymap2::any::Any + Send + Sync + 'static> StorableComponent for T {}
 
 /// A node's component that also renders as its own key in `graph`.
-pub trait NodeComponent: StorableComponent + NodeComponentGraphRenders {}
+pub trait NodeComponent: StorableComponent + GraphRenders<GraphNodeComponentsOnTheWire> {}
 
-impl<T: StorableComponent + NodeComponentGraphRenders> NodeComponent for T {}
+impl<T: StorableComponent + GraphRenders<GraphNodeComponentsOnTheWire>> NodeComponent for T {}
 
 /// A link's component that also renders as its own key in `graph`.
-pub trait LinkComponent: StorableComponent + LinkComponentGraphRenders {}
+pub trait LinkComponent: StorableComponent + GraphRenders<GraphLinkComponentsOnTheWire> {}
 
-impl<T: StorableComponent + LinkComponentGraphRenders> LinkComponent for T {}
+impl<T: StorableComponent + GraphRenders<GraphLinkComponentsOnTheWire>> LinkComponent for T {}
 
 /// TypeMap for component storage (Send + Sync).
 pub type ComponentMap = Map<dyn anymap2::any::Any + Send + Sync>;
 
 /// Closure that renders one component of the map onto what `graph` renders of its node or link,
 /// `Rendered`.
-pub type ComponentSerializer<Rendered> = Box<dyn Fn(&ComponentMap, &mut Rendered) + Send + Sync>;
+pub type ComponentRenderer<Rendered> = Box<dyn Fn(&ComponentMap, &mut Rendered) + Send + Sync>;
 
 pub fn default_components() -> ComponentMap {
     ComponentMap::new()
 }
 
-pub fn default_component_serializers<Rendered>() -> Vec<ComponentSerializer<Rendered>> {
+pub fn default_component_renderers<Rendered>() -> Vec<ComponentRenderer<Rendered>> {
     Vec::new()
 }

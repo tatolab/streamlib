@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::Mutex;
 use streamlib_runtime_client_contract::local_api_wire_contract::ShaderNodeFusedGroupOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 /// The shader nodes one evaluator runs as one island, and how its evaluations
@@ -62,7 +62,7 @@ impl ShaderNodeFusedGroupOfAnIsland {
 /// first), and the submissions and dispatches every evaluation recorded.
 pub struct ShaderNodeFusedGroupComponent(pub Arc<ShaderNodeFusedGroupOfAnIsland>);
 
-impl NodeComponentGraphRenders for ShaderNodeFusedGroupComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for ShaderNodeFusedGroupComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         let fused_group = &self.0;
         components.fused_group = Some(ShaderNodeFusedGroupOnTheWire {

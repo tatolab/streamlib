@@ -32,7 +32,7 @@ use crate::core::graph::{
 use crate::core::json_schema::{
     GraphFragmentOutput, GraphNodeComponentsOnTheWire, GraphNodeKindOnTheWire, GraphNodeOutput,
     GraphNodePortsOnTheWire, GraphResponse, InputValuesRendered, LinkOutput, LinkPortRefOutput,
-    LinkStateOutput, redraw_a_node_over_its_pins,
+    LinkStateOutput, PinLinkMarksOnTheWire, redraw_a_node_over_its_pins,
 };
 use crate::core::nodes::NodeTypesOneStreamResolves;
 use crate::core::{Error, Result};
@@ -742,7 +742,8 @@ fn ends_match(running: &LinkPortRefOutput, drawn: &LinkPortRefOutput) -> bool {
 }
 
 /// `link` rendered with the live keys of the running links it stands for: the first of them
-/// not wired, else the first; with its ends alone when it stands for none.
+/// not wired, else the first; converting for free when any of them does, and warning of each
+/// warning any of them gives, once; with its ends alone when it stands for none.
 fn rendered_with_the_live_keys_of(
     link: &GraphSnapshotLink,
     running_links_it_stands_for: &[&LinkOutput],
@@ -755,9 +756,24 @@ fn rendered_with_the_live_keys_of(
     else {
         return drawn;
     };
+    let mut warnings = Vec::new();
+    for warning in running_links_it_stands_for
+        .iter()
+        .flat_map(|running| &running.marks.warnings)
+    {
+        if !warnings.contains(warning) {
+            warnings.push(warning.clone());
+        }
+    }
     LinkOutput {
         source: drawn.source,
         target: drawn.target,
+        marks: PinLinkMarksOnTheWire {
+            free_conversion: running_links_it_stands_for
+                .iter()
+                .any(|running| running.marks.free_conversion),
+            warnings,
+        },
         ..(*running).clone()
     }
 }

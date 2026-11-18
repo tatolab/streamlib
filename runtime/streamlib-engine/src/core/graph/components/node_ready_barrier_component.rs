@@ -4,7 +4,7 @@
 use crossbeam_channel::{Receiver, Sender};
 use streamlib_runtime_client_contract::local_api_wire_contract::NodeReadyBarrierOnTheWire;
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct NodeReadyBarrierComponent {
@@ -56,7 +56,7 @@ impl Default for NodeReadyBarrierComponent {
     }
 }
 
-impl NodeComponentGraphRenders for NodeReadyBarrierComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodeReadyBarrierComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.ready_barrier = Some(NodeReadyBarrierOnTheWire {
             ready_signaled: self.ready_sender.is_none(),

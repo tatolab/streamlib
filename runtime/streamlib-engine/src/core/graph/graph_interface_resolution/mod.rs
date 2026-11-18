@@ -52,8 +52,6 @@ pub use streamlib_project_repository::{
     is_the_graph_input_type,
 };
 
-/// The component key an interface node, and a drawn link with an end on one,
-/// renders what it declares under.
 /// The name a top-level `GraphInput`'s `value` input had: a stream saved before it was an input
 /// holds its saved value under this key.
 pub const GRAPH_INPUT_VALUE_FORMER_NAME: &str = "default";
@@ -751,7 +749,6 @@ impl GraphInterfaceAsDrawn {
             graph_response.links.insert(
                 position,
                 LinkOutput {
-                    id: String::new(),
                     source: LinkPortRefOutput {
                         node: cast_or_as_written(&drawn.link.source.node),
                         port: drawn.link.source.port.clone(),

@@ -7424,21 +7424,21 @@
               "string",
               "null"
             ],
-            "description": "Why the node failed, while its state is `Error`."
+            "description": "Why the node failed, while its state is `Error`; null on a node that has not failed."
           },
           "process_raising_because": {
             "type": [
               "string",
               "null"
             ],
-            "description": "What the node's `process()` keeps raising, while it does."
+            "description": "What the node's `process()` keeps raising, while it does; null once a call runs cleanly."
           },
           "not_ready_because": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Why a running node is not ready, in its own words, while it says so."
+            "description": "Why a running node is not ready, in its own words, while it says so; null once it\nreports itself ready."
           },
           "helper_process_restarts": {
             "anyOf": [
@@ -7580,6 +7580,11 @@
             "description": "On a graph variable's node, the variable."
           }
         },
+        "required": [
+          "failed_because",
+          "process_raising_because",
+          "not_ready_because"
+        ],
         "description": "What the runtime keeps on a node, each under its own key; a key is absent where the node\nkeeps nothing of that kind."
       },
       "NodeStateOnTheWire": {
@@ -7769,17 +7774,12 @@
       "NodeShutdownChannelOnTheWire": {
         "type": "object",
         "properties": {
-          "attached": {
-            "type": "boolean",
-            "description": "Always `true`: the channel is attached."
-          },
           "receiver_taken": {
             "type": "boolean",
             "description": "Whether the node's thread has taken the channel's receiver."
           }
         },
         "required": [
-          "attached",
           "receiver_taken"
         ],
         "description": "The channel a node's thread is told to shut down on."
@@ -7787,10 +7787,6 @@
       "NodeThreadHandleOnTheWire": {
         "type": "object",
         "properties": {
-          "attached": {
-            "type": "boolean",
-            "description": "Always `true`: the thread is attached."
-          },
           "thread_id": {
             "type": "string",
             "description": "The thread's id, as the runtime prints it."
@@ -7801,7 +7797,6 @@
           }
         },
         "required": [
-          "attached",
           "thread_id",
           "thread_name"
         ],
@@ -7810,10 +7805,6 @@
       "NodeInstanceOnTheWire": {
         "type": "object",
         "properties": {
-          "attached": {
-            "type": "boolean",
-            "description": "Always `true`: the instance is attached."
-          },
           "arc_strong_count": {
             "type": "integer",
             "format": "uint",
@@ -7828,7 +7819,6 @@
           }
         },
         "required": [
-          "attached",
           "arc_strong_count",
           "arc_weak_count"
         ],
@@ -7853,17 +7843,9 @@
             "description": "Inside the read of each reader named, by node id."
           },
           {
-            "type": "object",
-            "properties": {
-              "in_a_helper_process_of_its_own": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "in_a_helper_process_of_its_own"
-            ],
-            "additionalProperties": false,
-            "description": "Always `true`: in a helper process of its own."
+            "type": "string",
+            "const": "in_a_helper_process_of_its_own",
+            "description": "In a helper process of its own."
           }
         ],
         "description": "Where a function node is evaluated."
@@ -8304,10 +8286,10 @@
           {
             "type": "string",
             "const": "Error",
-            "description": "Wiring failed."
+            "description": "Wiring failed; `error_reason` says why."
           }
         ],
-        "description": "A link's state as wiring stamped it on the link, spelled with a capital."
+        "description": "A link's state as wiring stamped it on the link, spelled with a capital: always the link's `state`."
       },
       "LinkCarriedThroughTheFunctionNodePoolOnTheWire": {
         "type": "object",

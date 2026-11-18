@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::NodeComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 
 pub struct NodePauseGateComponent(Arc<AtomicBool>);
@@ -55,7 +55,7 @@ impl Clone for NodePauseGateComponent {
     }
 }
 
-impl NodeComponentGraphRenders for NodePauseGateComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for NodePauseGateComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.paused = Some(self.is_paused());
     }

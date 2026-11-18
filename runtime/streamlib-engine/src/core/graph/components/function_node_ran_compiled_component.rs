@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
-use super::{NodeComponentGraphRenders, ObservableNodeState};
+use super::{GraphRenders, ObservableNodeState};
 use crate::core::json_schema::GraphNodeComponentsOnTheWire;
 use crate::core::nodes::NodeState;
 
@@ -192,7 +192,7 @@ impl HowOneReadersHelperRanEachFunctionNode {
 /// set up.
 pub struct FunctionNodeRanCompiledComponent(pub Arc<HowItsHelpersRanAFunctionNode>);
 
-impl NodeComponentGraphRenders for FunctionNodeRanCompiledComponent {
+impl GraphRenders<GraphNodeComponentsOnTheWire> for FunctionNodeRanCompiledComponent {
     fn render_onto(&self, components: &mut GraphNodeComponentsOnTheWire) {
         components.ran_compiled = self.0.ran_compiled();
     }

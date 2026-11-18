@@ -153,41 +153,20 @@ impl GraphVariablesAsDrawn {
                 .or_else(|| variable_by_node_cast.get(&target_cast))
                 .copied()
                 .unwrap_or_default();
-            let mut components = runtime_link
-                .map(|rendered| rendered.components.clone())
-                .unwrap_or_default();
-            components.graph_variable = Some(GraphVariableOnTheWire {
+            let mut drawn_link = runtime_link.cloned().unwrap_or_default();
+            drawn_link.source = LinkPortRefOutput {
+                node: source_cast,
+                port: drawn.source.port.clone(),
+            };
+            drawn_link.target = LinkPortRefOutput {
+                node: target_cast,
+                port: drawn.target.port.clone(),
+            };
+            drawn_link.components.graph_variable = Some(GraphVariableOnTheWire {
                 variable: Some(variable.to_string()),
             });
             let position = (*drawn_position).min(graph_response.links.len());
-            graph_response.links.insert(
-                position,
-                LinkOutput {
-                    id: runtime_link
-                        .map(|rendered| rendered.id.clone())
-                        .unwrap_or_default(),
-                    source: LinkPortRefOutput {
-                        node: source_cast,
-                        port: drawn.source.port.clone(),
-                    },
-                    target: LinkPortRefOutput {
-                        node: target_cast,
-                        port: drawn.target.port.clone(),
-                    },
-                    capacity: runtime_link
-                        .map(|rendered| rendered.capacity)
-                        .unwrap_or_default(),
-                    state: runtime_link
-                        .map(|rendered| rendered.state)
-                        .unwrap_or_default(),
-                    error_reason: runtime_link.and_then(|rendered| rendered.error_reason.clone()),
-                    free_conversion: runtime_link.is_some_and(|rendered| rendered.free_conversion),
-                    warnings: runtime_link
-                        .map(|rendered| rendered.warnings.clone())
-                        .unwrap_or_default(),
-                    components,
-                },
-            );
+            graph_response.links.insert(position, drawn_link);
         }
         for node in &mut graph_response.nodes {
             let Some(config_naming_a_get) = self

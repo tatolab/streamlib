@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
-use super::LinkComponentGraphRenders;
+use super::GraphRenders;
 use crate::core::graph::edges::LinkState;
 use crate::core::json_schema::GraphLinkComponentsOnTheWire;
 
@@ -13,8 +13,8 @@ impl Default for LinkStateComponent {
     }
 }
 
-impl LinkComponentGraphRenders for LinkStateComponent {
+impl GraphRenders<GraphLinkComponentsOnTheWire> for LinkStateComponent {
     fn render_onto(&self, components: &mut GraphLinkComponentsOnTheWire) {
-        components.state = Some(crate::core::json_schema::link_state_rendered(self.0).into());
+        components.state = Some(crate::core::json_schema::LinkStateOutput::from(self.0).into());
     }
 }

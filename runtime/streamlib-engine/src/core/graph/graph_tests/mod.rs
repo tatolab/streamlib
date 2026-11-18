@@ -4,8 +4,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents};
-use crate::core::graph::{LinkComponentGraphRenders, NodeComponentGraphRenders};
+use crate::core::graph::{Graph, GraphEdgeWithComponents, GraphNodeWithComponents, GraphRenders};
 use crate::core::json_schema::{GraphLinkComponentsOnTheWire, GraphNodeComponentsOnTheWire};
 use crate::core::nodes::NodeState;
 use crate::core::test_support::{
@@ -40,17 +39,7 @@ impl Default for MockState {
     }
 }
 
-impl NodeComponentGraphRenders for MockState {
-    /// A mock `graph` renders under no key: these tests read the component itself.
-    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
-}
-
 struct MockNodeInstance;
-
-impl NodeComponentGraphRenders for MockNodeInstance {
-    /// A mock `graph` renders under no key: these tests read the component itself.
-    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
-}
 
 /// Mock pause gate component.
 struct MockPauseGate {
@@ -81,11 +70,6 @@ impl Clone for MockPauseGate {
     }
 }
 
-impl NodeComponentGraphRenders for MockPauseGate {
-    /// A mock `graph` renders under no key: these tests read the component itself.
-    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
-}
-
 /// Mock link instance component.
 struct MockLinkInstance {
     capacity: usize,
@@ -97,15 +81,22 @@ impl MockLinkInstance {
     }
 }
 
-impl LinkComponentGraphRenders for MockLinkInstance {
-    /// A mock `graph` renders under no key: these tests read the component itself.
-    fn render_onto(&self, _components: &mut GraphLinkComponentsOnTheWire) {}
-}
-
 /// Counter component for mutation tests.
 struct CounterComponent(i32);
 
-impl NodeComponentGraphRenders for CounterComponent {
-    /// A mock `graph` renders under no key: these tests read the component itself.
-    fn render_onto(&self, _components: &mut GraphNodeComponentsOnTheWire) {}
+/// Each mock `graph` renders under no key of `$onto`: these tests read the component itself.
+macro_rules! mocks_render_under_no_key {
+    ($onto:ty: $($mock:ty),+) => {
+        $(impl GraphRenders<$onto> for $mock {
+            fn render_onto(&self, _components: &mut $onto) {}
+        })+
+    };
 }
+
+mocks_render_under_no_key!(
+    GraphNodeComponentsOnTheWire: MockState,
+    MockNodeInstance,
+    MockPauseGate,
+    CounterComponent
+);
+mocks_render_under_no_key!(GraphLinkComponentsOnTheWire: MockLinkInstance);
