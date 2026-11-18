@@ -61,7 +61,7 @@ impl ControlOperationDispatcher {
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         let OneProjectByItsDirectoryRequest { project_directory } = pause_playback_request;
         refuse_a_relative_project_directory(&project_directory)
-            .map_err(ControlOperationRefusal::Failed)?;
+            .map_err(ControlOperationRefusal::failed)?;
         self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
             operations_on_the_loaded_streams.pause_playback(&project_directory)
         })
@@ -80,7 +80,7 @@ impl ControlOperationDispatcher {
     ) -> Result<ControlOperationAnswer, ControlOperationRefusal> {
         let OneProjectByItsDirectoryRequest { project_directory } = resume_playback_request;
         refuse_a_relative_project_directory(&project_directory)
-            .map_err(ControlOperationRefusal::Failed)?;
+            .map_err(ControlOperationRefusal::failed)?;
         self.a_stream_action_off_the_async_runtime(move |operations_on_the_loaded_streams| {
             operations_on_the_loaded_streams.resume_playback(&project_directory)
         })

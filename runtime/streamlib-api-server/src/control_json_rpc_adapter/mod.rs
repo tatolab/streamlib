@@ -932,9 +932,7 @@ fn the_json_rpc_error_of_a_refusal(
             return the_json_rpc_error_of_a_contract_version_mismatch(request_id, mismatch);
         }
         ControlOperationRefusal::RefusedAction(_) => CONTROL_OPERATION_REFUSED_ERROR_CODE,
-        ControlOperationRefusal::Failed(_) | ControlOperationRefusal::RuntimeFailed(_) => {
-            CONTROL_OPERATION_FAILED_ERROR_CODE
-        }
+        ControlOperationRefusal::Coded { .. } => CONTROL_OPERATION_FAILED_ERROR_CODE,
     };
     let runtime_words = refusal.to_string();
     a_json_rpc_error(

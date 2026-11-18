@@ -285,15 +285,15 @@ fn a_value_set_live_on_a_function_node_and_a_shader_node_is_the_pin_value_each_h
     }
 }
 
-/// A value set live on a function node's input is held apart from the graph, so `graph` renders
-/// it live and its saved pins are unchanged; one set on a shader node's input is held on the
-/// graph, as its evaluator is built from the values the graph holds.
+/// A value set live on a function node's input, and on a shader node's, is held apart from the
+/// graph, so `graph` renders it live and the saved pins are unchanged: the shader's evaluator
+/// takes it as it runs.
 ///
-/// Mental-revert: holding a shader node's value live renders it `live` while the shader's
-/// evaluator, built from its pins, reads another.
+/// Mental-revert: holding a shader node's value on the graph answers `OnTheGraph`, and a running
+/// shader, built once from its pins, never takes it.
 #[test]
 #[serial_test::serial]
-fn a_live_set_on_a_function_node_is_held_apart_and_one_on_a_shader_node_on_the_graph() {
+fn a_live_set_on_a_function_node_and_on_a_shader_node_is_held_apart_from_the_graph() {
     use crate::core::graph::input_values::{InputValueToSetLive, InputValuesSetLive};
     use crate::core::nodes::NodeSpec;
     use crate::core::runtime::Runner;
@@ -334,40 +334,45 @@ fn a_live_set_on_a_function_node_is_held_apart_and_one_on_a_shader_node_on_the_g
         set_live(scale, "x", json!(0.5)),
         InputValuesSetLive::ApartFromTheGraph(_)
     ));
-    assert_eq!(
+    assert!(matches!(
         set_live(tint, "amount", json!(0.25)),
-        InputValuesSetLive::OnTheGraph
-    );
+        InputValuesSetLive::ApartFromTheGraph(_)
+    ));
 
     let graph = stream.to_json().expect("the graph serializes");
-    let rendered_scale = graph["nodes"]
-        .as_array()
-        .and_then(|nodes| nodes.iter().find(|node| node["id"] == scale.to_string()))
-        .unwrap_or_else(|| panic!("the graph holds `scale`: {graph}"));
-    let x = rendered_scale["ports"]["inputs"]
-        .as_array()
-        .and_then(|inputs| inputs.iter().find(|port| port["name"] == "x"))
-        .unwrap_or_else(|| panic!("`scale` renders `x`: {rendered_scale}"));
-    assert_eq!(
-        (&x["value"], &x["value_comes_from"]),
-        (&json!(0.5), &json!("live"))
-    );
-    assert!(
-        rendered_scale["pins"].get("x").is_none(),
-        "{rendered_scale}"
-    );
+    for (node, input, value) in [(scale, "x", json!(0.5)), (tint, "amount", json!(0.25))] {
+        let rendered = graph["nodes"]
+            .as_array()
+            .and_then(|nodes| {
+                nodes
+                    .iter()
+                    .find(|rendered| rendered["id"] == node.to_string())
+            })
+            .unwrap_or_else(|| panic!("the graph holds {node}: {graph}"));
+        let rendered_input = rendered["ports"]["inputs"]
+            .as_array()
+            .and_then(|inputs| inputs.iter().find(|port| port["name"] == input))
+            .unwrap_or_else(|| panic!("{node} renders `{input}`: {rendered}"));
+        assert_eq!(
+            (
+                &rendered_input["value"],
+                &rendered_input["value_comes_from"]
+            ),
+            (&value, &json!("live"))
+        );
+        assert!(rendered["pins"].get(input).is_none(), "{rendered}");
+    }
 }
 
-/// A saved value set on a shader node's input announces one graph change, which begins a commit,
-/// as its evaluator is built from the values the graph holds; one set on a function node's input,
-/// read each run, announces none, and only its input value change.
+/// A saved value set on a shader node's input, as one on a function node's input, announces only
+/// its input value change and no graph change, so no commit begins: the shader's evaluator is
+/// handed the value as it runs.
 ///
-/// Mental-revert: a saved set that never announces a graph change leaves a shader's evaluator on
-/// the value it was built with; one that always does begins a commit on every set of a value read
-/// each run.
+/// Mental-revert: announcing a graph change for a shader input begins a commit that rebuilds
+/// nothing, and the running shader keeps the value it was built with.
 #[test]
 #[serial_test::serial]
-fn a_saved_set_on_a_shader_input_announces_one_graph_change_and_one_read_each_run_none() {
+fn a_saved_set_on_a_shader_or_function_node_input_announces_no_graph_change() {
     use std::sync::Arc;
 
     use parking_lot::Mutex;
@@ -465,7 +470,7 @@ fn a_saved_set_on_a_shader_input_announces_one_graph_change_and_one_read_each_ru
     save(tint, "amount", json!(0.25));
     assert_eq!(
         changes_once_delivered(2),
-        (1, 2),
-        "a saved set on a shader input announces one graph change"
+        (0, 2),
+        "a saved set on a shader input announces its input and no graph change"
     );
 }

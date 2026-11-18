@@ -627,7 +627,9 @@ fn a_node_holding_its_config_or_pins_as_no_object_is_refused_naming_it_and_the_k
             "{refusal}"
         );
         let document = StreamGraphDocument::from_value(json!({"nodes": [recorded]})).unwrap();
-        let refusal = document.node(node).expect_err("refused");
+        let NodeNotRead::DoesNotRead(refusal) = document.node(node).expect_err("refused") else {
+            panic!("the document holds node {node}");
+        };
         assert!(refusal.contains(&format!("`{key}`")), "{refusal}");
     }
 }

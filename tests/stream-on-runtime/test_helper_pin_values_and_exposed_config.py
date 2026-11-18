@@ -55,7 +55,7 @@ def test_a_python_class_reads_its_unlinked_inputs_default_then_each_pin_value_se
         local_api.call_tool(
             "set_pin_value",
             {
-                "stream": local_api.stream_asset_of(stream_id),
+                "stream": stream_id,
                 "node": sink["id"],
                 "input": "brightness",
                 "value": value,
@@ -130,7 +130,7 @@ def test_a_function_node_linked_live_with_an_input_no_value_reaches_holds_until_
 
     def edit_live(tool: str, arguments: dict) -> dict:
         return local_api.call_tool(
-            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+            tool, {**arguments, "stream": stream_id, "mode": "live"}
         )
 
     def the_clamp_node() -> dict:
@@ -203,7 +203,7 @@ def test_a_config_field_exposed_live_reads_the_config_until_a_link_drives_it(
 
     def edit_live(tool: str, arguments: dict) -> dict:
         return local_api.call_tool(
-            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+            tool, {**arguments, "stream": stream_id, "mode": "live"}
         )
 
     def the_scaled_node() -> dict:
@@ -287,7 +287,7 @@ def test_a_config_field_a_promoted_function_node_exposes_reads_the_config_until_
 
     def edit_live(tool: str, arguments: dict) -> dict:
         return local_api.call_tool(
-            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+            tool, {**arguments, "stream": stream_id, "mode": "live"}
         )
 
     (held_node,) = [
@@ -358,7 +358,7 @@ def test_a_config_field_a_python_class_exposes_reads_the_config_again_once_its_l
 
     def edit_live(tool: str, arguments: dict) -> dict:
         return local_api.call_tool(
-            tool, {**arguments, "stream": local_api.stream_asset_of(stream_id), "mode": "live"}
+            tool, {**arguments, "stream": stream_id, "mode": "live"}
         )
 
     (configured_node,) = [

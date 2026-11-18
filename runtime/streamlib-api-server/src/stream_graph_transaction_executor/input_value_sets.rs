@@ -129,7 +129,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         &input_values_after_the_set(&set_on.input_values, input, value),
                         input,
                         value,
-                        "/value",
+                        Some("/value"),
                     )
                     .map_err(refused)?;
                     vec![(input.clone(), value.cloned())]
@@ -226,8 +226,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     let config_the_running_node_holds = if level.is_empty() {
                         let rendered_graph = self
                             .async_runtime
-                            .block_on(stream_operations.to_json_async())
-                            .map_err(|refusal| refusal.to_string())?;
+                            .block_on(stream_operations.to_json_async())?;
                         the_config_a_running_node_holds(&rendered_graph, configured.id)
                     } else {
                         None
@@ -254,12 +253,10 @@ impl StreamGraphTransactionExecutor<'_> {
             } => {
                 if let Some(exposed_on) =
                     self.the_node_an_action_sets_values_on(stream_id, level, node, staged)
-                    && !stream_operations
-                        .an_exposure_of_config_fields_is_recorded_on(
-                            &the_node_type_of(&exposed_on)?,
-                            exposed_config_fields,
-                        )
-                        .map_err(|refusal| refusal.to_string())?
+                    && !stream_operations.an_exposure_of_config_fields_is_recorded_on(
+                        &the_node_type_of(&exposed_on)?,
+                        exposed_config_fields,
+                    )?
                 {
                     return Ok(Vec::new());
                 }
@@ -409,14 +406,15 @@ fn the_node_type_of(node: &StreamGraphDocumentNode) -> Result<NodeClassImportPat
 
 /// Refuse `value`, set on input `input` of `set_on` with `None` taking it off, when the input
 /// does not take it, as the stream `stream_operations` runs resolves the node's type; the value
-/// is at `refused_params_pointer` in the action's params.
+/// is at `refused_params_pointer` in the action's params, and in none when the runtime made the
+/// set itself, as an undo or redo does.
 pub(super) fn refuse_a_value_the_input_does_not_take(
     stream_operations: &dyn RuntimeOperations,
     set_on: &StreamGraphDocumentNode,
     input_values_after_the_set: &Map<String, Value>,
     input: &str,
     value: Option<&Value>,
-    refused_params_pointer: &str,
+    refused_params_pointer: Option<&str>,
 ) -> Result<(), GraphRequestRefusal> {
     stream_operations
         .refuse_an_input_value_its_input_does_not_take(
@@ -427,7 +425,10 @@ pub(super) fn refuse_a_value_the_input_does_not_take(
             value,
         )
         .map_err(|refusal| {
-            GraphRequestRefusal::of_an_input_value(refusal, refused_params_pointer.to_owned())
+            GraphRequestRefusal::of_an_input_value(
+                refusal,
+                refused_params_pointer.map(str::to_owned),
+            )
         })
 }
 
@@ -453,13 +454,10 @@ fn the_input_value_sets_a_config_stands_for(
         })
         .collect();
     if stream_operations.node_type_takes_a_config(&node_type) {
-        let config_held = match stream_operations
-            .the_config_a_node_holding_the_input_values_takes(
-                &configured.node_type,
-                &configured.input_values,
-            )
-            .map_err(|refusal| refusal.to_string())?
-        {
+        let config_held = match stream_operations.the_config_a_node_holding_the_input_values_takes(
+            &configured.node_type,
+            &configured.input_values,
+        )? {
             Value::Object(config_held) => config_held,
             Value::Null => Map::new(),
             other => {
@@ -498,10 +496,10 @@ fn the_input_value_sets_a_config_stands_for(
             &input_values_after_the_sets,
             input,
             value.as_ref(),
-            &format!(
+            Some(&format!(
                 "/config/{}",
                 streamlib_control_contract::the_json_pointer_token_of(input)
-            ),
+            )),
         )
         .map_err(|refusal| refusal.of_the_field(input))?;
     }

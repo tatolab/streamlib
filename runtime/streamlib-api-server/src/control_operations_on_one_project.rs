@@ -81,7 +81,7 @@ impl ControlOperationDispatcher {
         let cover = cover
             .map(|cover| {
                 Uuid::parse_str(&cover).map_err(|_| {
-                    ControlOperationRefusal::Failed(format!(
+                    ControlOperationRefusal::failed(format!(
                         "set_project_cover failed: `cover` must be an asset's UUID; got `{cover}`"
                     ))
                 })

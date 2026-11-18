@@ -47,29 +47,24 @@ impl StreamGraphTransactionExecutor<'_> {
         >,
     ) -> Result<
         streamlib_runtime_client_contract::local_api_wire_contract::ProjectTransactionOnTheWire,
-        String,
+        GraphRequestRefusal,
     > {
         let project_repository = self
             .project_repositories
-            .the_project_repository_at(project_directory)
-            .map_err(|refusal| refusal.to_string())?;
+            .the_project_repository_at(project_directory)?;
         let mut project_repository = project_repository.lock();
-        let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
-            .map_err(|refusal| refusal.to_string())?;
+        let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
         if let Some(applied_before) = project_repository
-            .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())
-            .map_err(|refusal| refusal.to_string())?
+            .the_transaction_applied_under_a_key_the_caller_sent(idempotency_key.as_ref())?
         {
-            let undo_state_of_each_transaction = project_repository
-                .the_undo_state_of_each_transaction()
-                .map_err(|refusal| refusal.to_string())?;
+            let undo_state_of_each_transaction =
+                project_repository.the_undo_state_of_each_transaction()?;
             return Ok(project_transaction_on_the_wire(
                 applied_before,
                 &undo_state_of_each_transaction,
             ));
         }
-        let reversal =
-            reversal_of(&project_repository, author).map_err(|refusal| refusal.to_string())?;
+        let reversal = reversal_of(&project_repository, author)?;
         let project = project_repository.project_file().project;
         let stream_id_of_each_stream_asset =
             self.the_stream_id_of_each_loaded_stream_asset(project);
@@ -110,8 +105,7 @@ impl StreamGraphTransactionExecutor<'_> {
                     None => {
                         let stream_operations = self
                             .operations_on_the_loaded_streams
-                            .runtime_operations_of_the_stream_a_call_names(stream_id)
-                            .map_err(|refusal| refusal.to_string())?;
+                            .runtime_operations_of_the_stream_a_call_names(stream_id)?;
                         streams.insert(
                             stream_id.clone(),
                             StreamATransactionEdits {
@@ -136,7 +130,7 @@ impl StreamGraphTransactionExecutor<'_> {
                         stream_operations
                             .apply_a_stream_graph_operation_live(graph_operation.clone()),
                     )
-                    .map_err(|refusal| refusal.to_string())
+                    .map_err(GraphRequestRefusal::from)
                     .map(|applied| {
                         (
                             stream_id.clone(),
@@ -164,9 +158,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 self.project_repositories
                     .announce_the_transaction_if_applied_now(&project_repository, &outcome);
                 let applied = outcome.into_applied_transaction();
-                let undo_state_of_each_transaction = project_repository
-                    .the_undo_state_of_each_transaction()
-                    .map_err(|refusal| refusal.to_string())?;
+                let undo_state_of_each_transaction =
+                    project_repository.the_undo_state_of_each_transaction()?;
                 let edited_project_directory = project_repository.project_directory().to_path_buf();
                 drop(project_repository);
                 self.make_live_what_the_documents_now_hold(made_live_once_the_documents_hold_them);
@@ -193,7 +186,7 @@ impl StreamGraphTransactionExecutor<'_> {
             }
             Err(refusal) => {
                 self.reverse_what_was_applied_live(&streams, applied_live);
-                Err(refusal.to_string())
+                Err(refusal.into())
             }
         }
     }
@@ -207,7 +200,7 @@ impl StreamGraphTransactionExecutor<'_> {
         project_repository: &ProjectRepository,
         stream_id_of_each_stream_asset: &HashMap<Uuid, String>,
         operations: &[ProjectOperation],
-    ) -> Result<(), String> {
+    ) -> Result<(), GraphRequestRefusal> {
         let mut node_as_the_operations_leave_it: HashMap<(Uuid, Uuid), StreamGraphDocumentNode> =
             HashMap::new();
         for operation in operations {
@@ -236,8 +229,7 @@ impl StreamGraphTransactionExecutor<'_> {
             };
             let stream_operations = self
                 .operations_on_the_loaded_streams
-                .runtime_operations_of_the_stream_a_call_names(stream_id)
-                .map_err(|refusal| refusal.to_string())?;
+                .runtime_operations_of_the_stream_a_call_names(stream_id)?;
             let input_values_after_the_set =
                 input_values_after_the_set(&set_on.input_values, input, to.as_ref());
             refuse_a_value_the_input_does_not_take(
@@ -246,9 +238,8 @@ impl StreamGraphTransactionExecutor<'_> {
                 &input_values_after_the_set,
                 input,
                 to.as_ref(),
-                "/value",
-            )
-            .map_err(|refusal| refusal.runtime_words)?;
+                None,
+            )?;
             set_on.input_values = input_values_after_the_set;
             node_as_the_operations_leave_it.insert((*stream, *node), set_on);
         }

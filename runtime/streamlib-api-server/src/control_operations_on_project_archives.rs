@@ -28,14 +28,11 @@ impl ControlOperationDispatcher {
                 &project_directory,
                 &source,
                 &author,
-            )
-            .map_err(|refusal| refusal.to_string())?;
-            let commit = imported
-                .history()
-                .head_commit()
-                .map_err(|refusal| refusal.to_string())?
-                .ok_or_else(|| "the new project's history holds no first commit".to_owned())?;
-            Ok::<_, String>(ImportProjectToolResult {
+            )?;
+            let commit = imported.history().head_commit()?.ok_or_else(|| {
+                ControlOperationRefusal::failed("the new project's history holds no first commit")
+            })?;
+            Ok::<_, ControlOperationRefusal>(ImportProjectToolResult {
                 project_directory: std::fs::canonicalize(&project_directory)
                     .unwrap_or(project_directory),
                 project: imported.project_file().project.to_string(),
@@ -47,7 +44,7 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "import_project failed: the call",
         ))?
-        .map_err(|refusal| format!("import_project failed: {refusal}"))?;
+        .map_err(|refusal| refusal.with_its_words_after("import_project failed"))?;
         Ok(answered)
     }
 }

@@ -197,7 +197,7 @@ class ContractBackedAgentSession:
             "operations": requested, "added_nodes": [], "connected_links": [],
         }
         for each in requested:
-            assert each["stream"] == self.stream_asset, each
+            assert each["stream"] == self.stream_id, each
             if each["operation"] == "add_node":
                 node = {"id": str(uuid.uuid4()), "name": each.get("as") or "node",
                         "type": each["type"]}
@@ -274,7 +274,7 @@ def test_an_operation_that_is_not_a_listed_tool_is_called_through_call_operation
         "steps": [
             {"name": "streams", "tool": "list_streams", "arguments": {}},
             {"name": "added", "tool": "add_node", "arguments": {
-                "stream": {"$read": {"step": "streams", "pointer": "/streams/0/location/stream_asset"}},
+                "stream": {"$read": {"step": "streams", "pointer": "/streams/0/stream"}},
                 "type": {"$given": "sink_node_type"},
             }, "expect": [{"at": "/added_nodes", "has_length": 1}]},
         ],

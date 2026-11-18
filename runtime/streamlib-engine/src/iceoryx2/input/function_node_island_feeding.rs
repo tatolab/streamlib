@@ -4,6 +4,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::core::context::stream_time_now_ns_on;
+use crate::core::graph::cast_exposed_name_to_url_safe;
+use crate::core::graph::input_values::the_control_value_of_a_pin;
 use crate::iceoryx2::function_node_island_input_port::{
     FunctionNodeIslandEvaluatedAtEachRead, InputPortFedByAFunctionNodeIsland,
     PinValueReadByAnUnlinkedInputPort,
@@ -113,6 +116,39 @@ impl InputMailboxesInner {
         *input_ports_read_as_their_pin_value = pinned_ports;
     }
 
+    /// Read each input of `input_values` that holds a number or a bool as that number, 1 or 0
+    /// for a bool, while no link feeds it, stamped with stream time at each read, in place of
+    /// the values read before; each is held at its port's cast name, which every read looks up.
+    /// An input left out, holding a value of another kind, or whose name casts to nothing,
+    /// reads only its links again.
+    pub fn read_each_unlinked_input_as_its_value(
+        &self,
+        input_values: &serde_json::Map<String, serde_json::Value>,
+    ) {
+        let numbers = input_values
+            .iter()
+            .filter_map(|(input, value)| {
+                let number = the_control_value_of_a_pin(value)?;
+                let port = cast_exposed_name_to_url_safe(input).ok()?.into_owned();
+                Some((port, number))
+            })
+            .collect();
+        let stream_clock = Arc::clone(&self.stream_clock);
+        self.read_each_unlinked_input_port_as_its_pin_value(
+            numbers,
+            Arc::new(move || stream_time_now_ns_on(stream_clock.get().map(Arc::as_ref))),
+        );
+    }
+
+    /// Whether a link feeds `port`.
+    pub(super) fn is_fed_by_a_link(&self, port: &str) -> bool {
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .bound_to_local_port(port)
+            .next()
+            .is_some()
+    }
+
     /// The pin value `port` reads, when one is set on it and no link feeds it.
     pub(super) fn pin_value_read_by_an_unlinked(
         &self,
@@ -123,12 +159,6 @@ impl InputMailboxesInner {
             .read()
             .get(port)
             .cloned()?;
-        let no_link_feeds_the_port = self
-            .inbound_link_subscribers_and_listener
-            .lock()
-            .bound_to_local_port(port)
-            .next()
-            .is_none();
-        no_link_feeds_the_port.then_some(pinned_port)
+        (!self.is_fed_by_a_link(port)).then_some(pinned_port)
     }
 }

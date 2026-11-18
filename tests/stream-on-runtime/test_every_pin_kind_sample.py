@@ -255,12 +255,11 @@ def test_the_sample_declaring_each_kind_of_pin_opens_plays_saves_and_reopens(
             node_named(graph, node_name)
         )
 
-    stream_asset = local_api.stream_asset_of(stream_id)
     for (node_name, input_name), value in SAVED_VALUE_BY_NODE_AND_INPUT.items():
         local_api.call_tool(
             "set_node_input_value",
             {
-                "stream": stream_asset,
+                "stream": stream_id,
                 "node": node_named(graph, node_name)["id"],
                 "input": input_name,
                 "value": value,

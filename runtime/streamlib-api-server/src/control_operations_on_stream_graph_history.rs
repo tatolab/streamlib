@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use streamlib_control_contract::{GraphEditMode, RefreshFragmentsRequest, UndoOrRedoRequest};
 use streamlib_project_repository::{
-    ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
+    GraphEditStream, ProjectRepository, ProjectRepositoryRefusal, ProjectTransactionAuthor,
     ProjectTransactionReversal,
 };
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -60,7 +60,9 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "refresh_fragments failed: the refresh",
         ))?
-        .map_err(|refusal| format!("refresh_fragments failed: {refusal}"))?;
+        .map_err(|refusal| {
+            ControlOperationRefusal::of_a_project_repository_refusal("refresh_fragments", &refusal)
+        })?;
         if refreshes.is_empty() {
             return Ok(GraphTransactionToolResult {
                 mode: mode.unwrap_or_default().on_the_wire().to_owned(),
@@ -77,7 +79,10 @@ impl ControlOperationDispatcher {
         }
         self.apply_a_graph_transaction(
             "refresh_fragments",
-            refreshes,
+            refreshes
+                .into_iter()
+                .map(|refresh| refresh.map_stream(GraphEditStream::StreamAsset))
+                .collect(),
             mode,
             author,
             idempotency_key,

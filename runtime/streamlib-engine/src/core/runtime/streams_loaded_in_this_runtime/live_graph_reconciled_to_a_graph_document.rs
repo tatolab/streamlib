@@ -29,6 +29,9 @@ use crate::core::runtime::operations_runtime::{
     ConfigReferencesOfTheAddedNode, add_node_impl, connect_impl,
     describe_the_type_an_add_names_when_it_must, disconnect_impl, remove_node_impl,
 };
+use crate::core::runtime::streams_loaded_in_this_runtime::loaded_stream::{
+    SavedValuesOfAKeptNode, set_the_saved_values_of_each_kept_node_and_hand_them_over,
+};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 
 /// One link of a running graph, each end its node's UUID and its port's cast name.
@@ -82,7 +85,8 @@ impl LoadedStreamInThisRuntime {
     /// its UUID: a node the document no longer holds, or holds as another type, taken out; a
     /// kept node renamed, reconfigured and repinned to the document's; each new node added;
     /// and the links made to be the document's. The document is resolved and validated whole,
-    /// as a load is, before the live graph is touched.
+    /// as a load is, before the live graph is touched. A kept node not handed the values the
+    /// document sets on it fails the reconcile once every node and link is made.
     pub(in crate::core::runtime) async fn reconcile_the_live_graph_to_the_graph_document(
         &self,
         mut graph_document: Value,
@@ -163,6 +167,7 @@ impl LoadedStreamInThisRuntime {
 
         let kept_live_nodes = self.the_live_nodes();
         let mut kept_live_nodes_to_rename = Vec::new();
+        let mut kept_nodes_whose_saved_values_change = Vec::new();
         for live_node in &kept_live_nodes {
             let document_node = document_node_by_uuid[&live_node.node_uuid];
             if live_node.display_name != cast_name(&document_node.name)? {
@@ -247,18 +252,19 @@ impl LoadedStreamInThisRuntime {
                 )?;
             }
             if live_node.pins != document_pins || live_node.studio != document_node.studio {
-                self.compiler.scope(|this_streams_graph, _tx| {
-                    if let Some(node) = this_streams_graph
-                        .traversal_mut()
-                        .v(&live_node.node_run_id)
-                        .first_mut()
-                    {
-                        node.pins = document_pins.clone();
-                        node.studio = document_node.studio.clone();
-                    }
+                kept_nodes_whose_saved_values_change.push(SavedValuesOfAKeptNode {
+                    node_run_id: live_node.node_run_id.clone(),
+                    pins: document_pins,
+                    studio: document_node.studio.clone(),
                 });
             }
         }
+        let saved_values_handed_over = self.with_no_other_input_value_change(|| {
+            set_the_saved_values_of_each_kept_node_and_hand_them_over(
+                self.compiler.graph_lock(),
+                kept_nodes_whose_saved_values_change,
+            )
+        });
 
         let node_run_id_of_each_node_uuid: HashMap<Uuid, NodeRunId> = self
             .the_live_nodes()
@@ -296,7 +302,7 @@ impl LoadedStreamInThisRuntime {
             .await?;
         }
         self.publish_on_this_streams_topic(RuntimeEvent::GraphDidChange);
-        Ok(())
+        saved_values_handed_over
     }
 
     /// Describe each type `graph_whose_every_node_holds_a_uuid` names into this stream, then

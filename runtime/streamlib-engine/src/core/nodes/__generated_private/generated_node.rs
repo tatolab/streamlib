@@ -35,6 +35,19 @@ pub trait GeneratedNode: Send + 'static {
         self.update_config(config)
     }
 
+    /// Take `input_values`, the value each input reads while no link feeds it, by input, in
+    /// place of those it took before; by default each lands in its input mailboxes, which answer
+    /// a read of the input with it while no link feeds it.
+    fn set_unlinked_input_values(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+    ) -> Result<()> {
+        land_the_unlinked_input_values_in_the_input_mailboxes(
+            self.iceoryx2_input_mailboxes_inner(),
+            input_values,
+        )
+    }
+
     fn execution_config(&self) -> ExecutionConfig {
         ExecutionConfig::default()
     }
@@ -116,4 +129,17 @@ pub trait GeneratedNode: Send + 'static {
             "stop() is only valid for Manual execution mode".into(),
         ))
     }
+}
+
+/// Land each of `input_values` in `input_mailboxes`, a node's input mailboxes when it has them,
+/// which answer a read of an input with its value while no link feeds it: how a node takes the
+/// values its unlinked inputs read unless its type takes them itself.
+pub(super) fn land_the_unlinked_input_values_in_the_input_mailboxes(
+    input_mailboxes: Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>,
+    input_values: &serde_json::Map<String, JsonValue>,
+) -> Result<()> {
+    if let Some(input_mailboxes) = input_mailboxes {
+        input_mailboxes.read_each_unlinked_input_as_its_value(input_values);
+    }
+    Ok(())
 }

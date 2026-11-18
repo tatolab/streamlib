@@ -41,9 +41,7 @@ impl StreamGraphTransactionExecutor<'_> {
         let stream_operations = self
             .operations_on_the_loaded_streams
             .runtime_operations_of_the_stream_a_call_names(&stream_id)
-            .map_err(|refusal| {
-                GraphTransactionRefusal::of_the_whole_transaction(refusal.to_string())
-            })?;
+            .map_err(GraphTransactionRefusal::of_the_whole_transaction)?;
         let refusal_of_the_set = |set_index: usize, refusal: GraphRequestRefusal| {
             let request_index = request_index_of_each_set
                 .get(set_index)
@@ -64,7 +62,7 @@ impl StreamGraphTransactionExecutor<'_> {
             Err(LiveInputValueSetRefusal::TheInputDoesNotTakeIt { set_index, refusal }) => {
                 return Err(refusal_of_the_set(
                     set_index,
-                    GraphRequestRefusal::of_an_input_value(refusal, "/value".to_owned()),
+                    GraphRequestRefusal::of_an_input_value(refusal, Some("/value".to_owned())),
                 ));
             }
             Err(LiveInputValueSetRefusal::TheInputIsResetWhileStopped {

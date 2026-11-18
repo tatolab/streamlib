@@ -107,6 +107,48 @@ async fn tools_call_add_node_carries_back_an_engine_refusal_in_its_own_words() {
     );
 }
 
+/// An engine's typed refusal of a live add keeps its code through the transaction: an unknown
+/// node type answers `node_type_not_found`, a name another node has `node_name_taken`.
+#[tokio::test]
+async fn a_transact_whose_live_add_the_engine_refuses_answers_the_engine_refusals_code() {
+    type AnEngineRefusal = fn() -> streamlib::sdk::error::Error;
+    let cases: [(AnEngineRefusal, &str); 2] = [
+        (
+            || streamlib::sdk::error::Error::UnknownNodeType {
+                ident: streamlib::sdk::descriptors::NodeClassImportPath::new("nodes.absent:Absent")
+                    .unwrap(),
+            },
+            "node_type_not_found",
+        ),
+        (
+            || streamlib::sdk::error::Error::NodeNameTaken {
+                name: "gray".to_owned(),
+                cast: "gray".to_owned(),
+            },
+            "node_name_taken",
+        ),
+    ];
+    for (the_refusal, refusal_code) in cases {
+        let body = tool_call_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::refusing_every_add_node_with(the_refusal)),
+            "transact",
+            json!({
+                "mode": "live",
+                "operations": [{
+                    "operation": "add_node",
+                    "stream": STUB_STREAM_ASSET,
+                    "type": "nodes.absent:Absent",
+                    "name": "gray",
+                }],
+            }),
+        )
+        .await;
+        let refusal = &body["structuredContent"]["refusal"];
+        assert_eq!(refusal["refusal_code"], refusal_code, "{refusal}");
+        assert_eq!(refusal["refused_operation_index"], 0, "{refusal}");
+    }
+}
+
 /// A committed edit is kept in the stream's graph document, so a stream whose directory
 /// holds no project is refused before anything is applied.
 #[tokio::test]
@@ -545,7 +587,7 @@ async fn a_refused_graph_edit_answers_a_structured_refusal_naming_what_it_refuse
     assert_eq!(refusal["action"], "transact", "{refusal}");
     assert_eq!(refusal["refused_operation_index"], 1, "{refusal}");
     assert_eq!(refusal["refused_node"], absent_node, "{refusal}");
-    assert_eq!(refusal["refusal_code"], "refused", "{refusal}");
+    assert_eq!(refusal["refusal_code"], "node_not_found", "{refusal}");
     the_refusal_of_a_tool_result(&body);
 
     let body = tool_call_result(

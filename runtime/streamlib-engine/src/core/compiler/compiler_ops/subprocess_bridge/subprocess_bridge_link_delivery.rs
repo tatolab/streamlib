@@ -139,17 +139,17 @@ impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
     }
 
     /// Unanswered, like `unwire_link`.
-    fn hand_over_the_pin_values_of_its_input_ports(
+    fn hand_over_the_unlinked_input_values(
         &self,
-        pin_values: &serde_json::Map<String, serde_json::Value>,
+        input_values: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<()> {
         if self.parent_side.the_subprocess_was_given_up_on() {
             return Ok(());
         }
         self.parent_side
             .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
-                "cmd": "set_pin_values",
-                "pins": pin_values,
+                "cmd": "set_input_values",
+                "input_values": input_values,
             }))
     }
 
