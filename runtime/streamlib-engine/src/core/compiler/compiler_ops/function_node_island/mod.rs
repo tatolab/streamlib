@@ -13,7 +13,10 @@
 mod island_edit_refusals;
 mod island_placement;
 
-pub(crate) use island_edit_refusals::refuse_an_edit_an_island_cannot_take;
+use island_edit_refusals::the_refusal_of_an_island_fed_into_the_app_process;
+pub(crate) use island_edit_refusals::{
+    refuse_a_link_feeding_an_island_into_the_app_process, refuse_an_edit_an_island_cannot_take,
+};
 pub(crate) use island_placement::{the_island_feeding_a_link, the_state_fields_of_a_function_node};
 
 use std::collections::HashSet;
@@ -401,11 +404,10 @@ pub(crate) fn wire_a_link_from_a_function_node_island_into_its_reader(
         .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
         .map(|component| std::sync::Arc::clone(&component.0))
         .ok_or_else(|| {
-            Error::InvalidLink(format!(
-                "link `{link_id}` feeds a function node island into `{reader_id}`, which runs in \
-                 the app process; a function node runs inside the read of a node in a helper \
-                 process, and the app process runs no node code"
-            ))
+            the_refusal_of_an_island_fed_into_the_app_process(
+                &format!("link `{link_id}`"),
+                &reader_id,
+            )
         })?;
     if reader_link_wiring.far_side_process_execution() == ProcessExecution::Reactive
         && !is_fed_by_a_node_that_is_not_a_function_node(graph, &reader_id)
