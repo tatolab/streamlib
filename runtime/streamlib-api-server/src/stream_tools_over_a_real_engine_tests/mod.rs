@@ -64,6 +64,7 @@ mod stream_input_of_a_playing_stream_tests;
 mod stream_listing_actions_and_record_tests;
 mod stream_named_by_its_id_tests;
 mod venv_sync_stream_action_resource_tests;
+mod view_output_of_a_playing_stream_tests;
 
 /// A native source with one output port, `video`, and nothing to do.
 #[streamlib::sdk::node(execution = manual, output("video", family = Image))]

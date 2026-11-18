@@ -5489,6 +5489,7 @@ dependencies = [
  "streamlib",
  "streamlib-asset-media-facts",
  "streamlib-control-contract",
+ "streamlib-ipc-types",
  "streamlib-project-repository",
  "streamlib-runtime-client-contract",
  "tempfile",

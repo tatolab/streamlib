@@ -7,7 +7,7 @@ use streamlib_runtime_client_contract::local_api_wire_contract::{
     ProjectFileTransactionToolResult, ReadProjectFileToolResult, WriteStudioViewOutputToolResult,
 };
 
-use super::EVERY_SURFACE;
+use super::{EVERY_SURFACE, SetNodeInputValue};
 use crate::control_operation::{
     ControlOperation, ControlOperationAgentToolListing, ControlOperationEffect,
     ControlOperationExposure, ControlOperationGroup, ControlOperationStability,
@@ -136,9 +136,8 @@ impl ControlOperation for WriteStudioViewOutput {
     type Request = WriteStudioViewOutputRequest;
     type Result = WriteStudioViewOutputToolResult;
     const METHOD_NAME: &'static str = "write_studio_view_output";
-    const ONE_LINE_DOC: &'static str =
-        "Write a value a Tato Studio view produced onto its node's output port.";
-    const AGENT_USAGE_NOTE: &'static str = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. A write is live data: the last value written is what a reader keeps, many panels may write one node and the last write wins, and nothing is recorded in the graph document or the project's history. Array, Channels and Records outputs are written; an Image or Packets output is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; and a value its port's family does not take. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`.";
+    const ONE_LINE_DOC: &'static str = "Write a value a Tato Studio view produced onto its node's output port. Replaced by `set_node_input_value`.";
+    const AGENT_USAGE_NOTE: &'static str = "Hand a value a Tato Studio panel wrote to the view node `node` of the stream `stream`, which publishes it on its output `port` to every link and viewer reading that port, stamped with stream time now. A view node is a node of a view type, `<project name>:<view folder>`, which each view of the stream's project or of one of its imports is when it opens and its `placement` is `node`; its ports are the view's declared inputs and outputs, and a panel reads its inputs with `open_viewer` on the port linked into each. Each Array, Channels or Records output of a view node has an input of its name, a setting read each run that takes no wire and holds no saved value, whose value the node publishes on the output; this call sets that input. Every write is published, stamped with stream time now, the same value written again as much as a new one, a Channels block starting where the last one written ended. A write is live data: the last value written is what a reader keeps, and a reader that connects later reads it, many panels may write one node and the last write wins, nothing is recorded in the graph document or the project's history, and the input returns to no value at Stop; a saved value on that input, by a `commit` set or an `add_node`'s `pins`, is refused, and one a graph document holds is dropped as the stream loads, with a warning naming the node and the input. `graph` renders the value as the input's live value. An Image or Packets output, which has no such input, is refused. Refused for a stream whose project is stopped, naming `start_playback`; a node of another type; a node that is not running; a node with no such output; `null`, which sets no value; and a value its port's family does not take, as `input_value_not_valid` at `/value`. A refusal because the node does not run comes with `structuredContent.refusal.not_running_because` naming why: `playback_stopped`, `playback_paused` (a node added while its project is paused), `preparing` or `node_failed`, the runtime's words beside it in `runtime_words`. Replaced by `set_node_input_value`, which this call is one `live` set of, naming the view node as `node` and the output as `input`.";
     const SINCE_CONTRACT_VERSION: u32 = 1;
     const STABILITY: ControlOperationStability = ControlOperationStability::Stable;
     const GROUP: ControlOperationGroup = ControlOperationGroup::View;
@@ -146,6 +145,7 @@ impl ControlOperation for WriteStudioViewOutput {
     const EFFECT: ControlOperationEffect = ControlOperationEffect::Changes;
     const AGENT_TOOL_LISTING: ControlOperationAgentToolListing =
         ControlOperationAgentToolListing::ReachedThroughCallOperation;
+    const REPLACED_BY: Option<&'static str> = Some(SetNodeInputValue::METHOD_NAME);
 }
 
 /// `open_viewer`: open a viewer of a node's output port, held open for the connection that opened
