@@ -606,7 +606,8 @@ export type StreamClockSpec = {
    */
   pace?: number | null;
   /**
-   * The step after which the stream stops itself.
+   * The step after which the stream stops itself, at least the first; it runs on while
+   * absent or null.
    */
   stop_after_steps?: number | bigint | null;
   mode: "stepped";

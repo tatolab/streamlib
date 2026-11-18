@@ -18,7 +18,7 @@ use crate::core::compiler::compiler_ops::function_node_pool::{
 };
 use crate::core::compiler::compiler_ops::input_port_pin_values::the_inputs_a_function_node_has_no_value_for;
 use crate::core::graph::input_values::{LiveInputValuesOfAStream, the_value_an_input_reads};
-use crate::core::graph::the_verdict_on_a_link_between_typed_ends;
+use crate::core::graph::pin_type_link_checks::the_verdict_on_a_link_between_typed_ends;
 use crate::core::json_schema::{
     GraphNodeOutput, GraphResponse, LinkOutput, NodeNamesByNodeRunId, rendered_link,
     rendered_link_carried_through_the_function_node_pool,

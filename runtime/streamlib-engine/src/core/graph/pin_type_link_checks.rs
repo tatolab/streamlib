@@ -123,7 +123,7 @@ pub(crate) fn the_ends_a_link_is_judged_by(
 
 /// The judgement of a link from `from` to `to` by its two ends' pin types, among
 /// `conversions`; `None` when either end is no node of `graph`, or either port is untyped.
-pub fn the_verdict_on_a_link_between_typed_ends(
+pub(crate) fn the_verdict_on_a_link_between_typed_ends(
     graph: &Graph,
     from: &OutputLinkPortRef,
     to: &InputLinkPortRef,

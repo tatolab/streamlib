@@ -41,8 +41,10 @@ pub enum StreamClockSpec {
         #[serde(default)]
         #[cfg_attr(feature = "json-schema", schemars(extend("exclusiveMinimum" = 0)))]
         pace: Option<f64>,
-        /// The step after which the stream stops itself.
+        /// The step after which the stream stops itself, at least the first; it runs on while
+        /// absent or null.
         #[serde(default)]
+        #[cfg_attr(feature = "json-schema", schemars(range(min = 1)))]
         stop_after_steps: Option<u64>,
     },
 }

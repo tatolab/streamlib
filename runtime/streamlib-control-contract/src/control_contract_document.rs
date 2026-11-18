@@ -253,7 +253,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_stream_clock_spec_with_a_scale_step_or_pace_of_zero_is_no_clock_the_contract_takes() {
+    fn a_stream_clock_spec_with_a_scale_step_pace_or_step_count_of_zero_is_no_clock_the_contract_takes()
+     {
         let document = control_contract_document();
         let schema = &document["components"]["schemas"]["StreamClockSpec"];
         let validator = jsonschema::validator_for(schema)
@@ -265,6 +266,8 @@ mod tests {
             json!({"mode": "stepped", "step_ns": 1}),
             json!({"mode": "stepped", "step_ns": 1000, "pace": null}),
             json!({"mode": "stepped", "step_ns": 1000, "pace": 0.5}),
+            json!({"mode": "stepped", "step_ns": 1000, "stop_after_steps": 1}),
+            json!({"mode": "stepped", "step_ns": 1000, "stop_after_steps": null}),
         ] {
             assert!(validator.is_valid(&taken), "{taken} is a clock");
         }
@@ -273,6 +276,7 @@ mod tests {
             json!({"mode": "scaled", "scale": 1.0, "step_ns": 0}),
             json!({"mode": "stepped", "step_ns": 0}),
             json!({"mode": "stepped", "step_ns": 1000, "pace": 0}),
+            json!({"mode": "stepped", "step_ns": 1000, "stop_after_steps": 0}),
         ] {
             assert!(!validator.is_valid(&refused), "{refused} is refused");
         }

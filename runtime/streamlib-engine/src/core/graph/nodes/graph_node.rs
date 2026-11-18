@@ -49,7 +49,7 @@ pub struct GraphNode {
     /// Runtime components (not serialized by derive, but rendered by render_components).
     #[serde(skip, default = "default_components")]
     components: ComponentMap,
-    /// Serializers for each inserted component type.
+    /// The renderer of each inserted component type.
     #[serde(skip, default = "default_component_renderers")]
     component_renderers:
         Vec<ComponentRenderer<crate::core::json_schema::GraphNodeComponentsOnTheWire>>,

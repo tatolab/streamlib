@@ -6486,8 +6486,8 @@
                   "null"
                 ],
                 "format": "uint64",
-                "minimum": 0,
-                "description": "The step after which the stream stops itself.",
+                "minimum": 1,
+                "description": "The step after which the stream stops itself, at least the first; it runs on while\nabsent or null.",
                 "default": null
               },
               "mode": {
