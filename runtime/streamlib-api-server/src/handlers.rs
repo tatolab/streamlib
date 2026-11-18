@@ -542,7 +542,8 @@ pub(crate) mod router_surface_tests {
     }
 
     /// The registry's machine-wide answer is documented under the type the
-    /// schema generator writes, so a generated client parses both forms; the
+    /// schema generator writes, so a generated client parses both forms, each
+    /// node type's kind and language naming one of theirs; the
     /// graph's two forms are documented as open objects, which the control
     /// contract's `graph` answer types.
     #[test]
@@ -558,6 +559,15 @@ pub(crate) mod router_surface_tests {
         assert!(
             schemas["MachineWideRegistryResponse"].is_object(),
             "MachineWideRegistryResponse: {spec}"
+        );
+        let descriptor = &schemas["NodeDescriptorOutput"]["properties"];
+        assert_eq!(
+            (&descriptor["kind"]["enum"], &descriptor["language"]["enum"]),
+            (
+                &serde_json::json!(["shader", "function", "process", "fragment"]),
+                &serde_json::json!(["python", "rust"])
+            ),
+            "a node type's kind and language name one of theirs: {descriptor}"
         );
         let graph_forms = schemas["GraphOfOneStreamOrOfEveryStream"]["oneOf"]
             .as_array()

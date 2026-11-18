@@ -74,7 +74,7 @@ async fn the_graph_the_typescript_client_reads(socket_path: &Path, stream_id: &s
     serde_json::from_str(&printed).unwrap()
 }
 
-/// Mental-revert: an answer key the contract does not state, such as `input_values` left out of
+/// An answer key the contract does not state, such as `input_values` left out of
 /// the node's type, is printed as a key the contract does not state; a key typed otherwise than
 /// served, such as `value_comes_from` missing a source, makes the client refuse the answer.
 #[tokio::test(flavor = "multi_thread")]

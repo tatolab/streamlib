@@ -435,6 +435,8 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
                      "delivery_profile": "newest", "value_comes_from": "wire"},
                     {"name": "bias", "description": "", "port_kind": "data",
                      "delivery_profile": "newest", "value": null},
+                    {"name": "video", "description": "", "port_kind": "data",
+                     "delivery_profile": "newest"},
                 ],
                 "outputs": [
                     {"name": "out", "description": "", "port_kind": "data",
@@ -473,7 +475,24 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
             Some(InputValueComesFromOnTheWire::Default),
             Some(InputValueComesFromOnTheWire::Wire),
             None,
+            None,
         ]
+    );
+    assert_eq!(
+        inputs[4].value_read,
+        Some(InputValueReadOnTheWire {
+            value: Some(serde_json::Value::Null),
+            value_comes_from: None,
+        }),
+        "an input reading nothing reads a null value"
+    );
+    assert_eq!(
+        (
+            &inputs[5].value_read,
+            &graph.nodes[0].ports.outputs[0].value_read
+        ),
+        (&None, &None),
+        "an input with neither key, and an output, read no value"
     );
     assert!(inputs[0].pin.is_some() && inputs[1].pin.is_none());
     assert_eq!(serde_json::to_value(&read_one).unwrap(), one_stream);
@@ -484,4 +503,14 @@ fn a_graph_answer_reads_as_one_stream_or_every_stream_and_writes_back_as_it_was_
         "every stream's graph reads as every stream: {read_every:?}"
     );
     assert_eq!(serde_json::to_value(&read_every).unwrap(), every_stream);
+}
+
+#[test]
+fn each_node_kind_and_language_is_named_as_it_is_written() {
+    for kind in GraphNodeKindOnTheWire::EVERY_KIND {
+        assert_eq!(serde_json::to_value(kind).unwrap(), kind.name());
+    }
+    for language in FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE {
+        assert_eq!(serde_json::to_value(language).unwrap(), language.name());
+    }
 }

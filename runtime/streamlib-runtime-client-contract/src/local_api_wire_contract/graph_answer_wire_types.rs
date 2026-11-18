@@ -196,6 +196,21 @@ pub enum GraphNodeKindOnTheWire {
     Fragment,
 }
 
+impl GraphNodeKindOnTheWire {
+    /// Every kind a node runs as.
+    pub const EVERY_KIND: [Self; 4] = [Self::Shader, Self::Function, Self::Process, Self::Fragment];
+
+    /// The name a reader reads this kind under.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Shader => "shader",
+            Self::Function => "function",
+            Self::Process => "process",
+            Self::Fragment => "fragment",
+        }
+    }
+}
+
 /// The language a function node is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -205,6 +220,19 @@ pub enum FunctionNodeLanguageOnTheWire {
     Python,
     /// Rust.
     Rust,
+}
+
+impl FunctionNodeLanguageOnTheWire {
+    /// Every language a function node is written in.
+    pub const EVERY_LANGUAGE: [Self; 2] = [Self::Python, Self::Rust];
+
+    /// The name a reader reads this language under.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Python => "python",
+            Self::Rust => "rust",
+        }
+    }
 }
 
 /// The nodes and links a fragment holds, each link end naming a node of the fragment.
@@ -286,7 +314,7 @@ pub struct GraphNodePortOnTheWire {
     /// On an input, the value it reads while unlinked, as `value`, and where that value comes
     /// from, as `value_comes_from`. Both are absent on an input that takes no stored value and
     /// no link feeds, and on an output.
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "a_read_only_when_either_key_is_present")]
     pub value_read: Option<InputValueReadOnTheWire>,
 }
 
@@ -328,6 +356,18 @@ where
     D: serde::Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
+}
+
+/// A port's `value` and `value_comes_from`, read only when either key is present: an output, or
+/// an input that takes no stored value and no link feeds, reads none.
+fn a_read_only_when_either_key_is_present<'de, D>(
+    deserializer: D,
+) -> Result<Option<InputValueReadOnTheWire>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let read = InputValueReadOnTheWire::deserialize(deserializer)?;
+    Ok((read.value.is_some() || read.value_comes_from.is_some()).then_some(read))
 }
 
 /// Where the value an input reads comes from, as `graph` renders it.

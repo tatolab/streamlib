@@ -322,6 +322,52 @@ pub enum NodeRuntimeOutput {
     Python,
 }
 
+/// A string schema naming one of `names`.
+fn one_of_the_names_schema(
+    names: impl IntoIterator<Item = &'static str>,
+) -> schemars::schema::Schema {
+    schemars::schema::SchemaObject {
+        instance_type: Some(schemars::schema::InstanceType::String.into()),
+        enum_values: Some(names.into_iter().map(serde_json::Value::from).collect()),
+        ..Default::default()
+    }
+    .into()
+}
+
+/// A string OpenAPI schema naming one of `names`.
+fn one_of_the_names_openapi_schema(
+    names: impl IntoIterator<Item = &'static str>,
+) -> utoipa::openapi::Object {
+    utoipa::openapi::ObjectBuilder::new()
+        .schema_type(utoipa::openapi::schema::Type::String)
+        .enum_values(Some(names))
+        .build()
+}
+
+fn every_node_kind_schema(_: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+    one_of_the_names_schema(GraphNodeKindOnTheWire::EVERY_KIND.map(GraphNodeKindOnTheWire::name))
+}
+
+fn every_node_kind_openapi_schema() -> utoipa::openapi::Object {
+    one_of_the_names_openapi_schema(
+        GraphNodeKindOnTheWire::EVERY_KIND.map(GraphNodeKindOnTheWire::name),
+    )
+}
+
+fn every_function_node_language_schema(
+    _: &mut schemars::r#gen::SchemaGenerator,
+) -> schemars::schema::Schema {
+    one_of_the_names_schema(
+        FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE.map(FunctionNodeLanguageOnTheWire::name),
+    )
+}
+
+fn every_function_node_language_openapi_schema() -> utoipa::openapi::Object {
+    one_of_the_names_openapi_schema(
+        FunctionNodeLanguageOnTheWire::EVERY_LANGUAGE.map(FunctionNodeLanguageOnTheWire::name),
+    )
+}
+
 /// Descriptor for a node type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct NodeDescriptorOutput {
@@ -329,15 +375,14 @@ pub struct NodeDescriptorOutput {
     /// node carries and `add_node` takes.
     #[serde(rename = "type")]
     pub node_class_import_path: NodeClassImportPath,
-    /// How this node type's code runs: `shader`, `function`, `process` or `fragment`.
-    #[schemars(with = "String")]
-    #[schema(value_type = String)]
+    /// How this node type's code runs.
+    #[schemars(schema_with = "every_node_kind_schema")]
+    #[schema(schema_with = every_node_kind_openapi_schema)]
     pub kind: GraphNodeKindOnTheWire,
-    /// The language a function node is written in, `python` or `rust`; absent on every other
-    /// kind.
+    /// The language a function node is written in; absent on every other kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(with = "Option<String>")]
-    #[schema(value_type = Option<String>)]
+    #[schemars(schema_with = "every_function_node_language_schema")]
+    #[schema(schema_with = every_function_node_language_openapi_schema)]
     pub language: Option<FunctionNodeLanguageOnTheWire>,
     /// Human-readable description.
     pub description: String,
