@@ -45,6 +45,15 @@ fn the_deck_manifest() -> Value {
     })
 }
 
+const PULSE_VIEW_TYPE: &str = "acme-dj:pulse";
+
+fn the_pulse_manifest() -> Value {
+    json!({
+        "contract": "1.0", "title": "Pulse", "entry": "index.html", "placement": "node",
+        "outputs": [{ "name": "beat", "family": "channels" }]
+    })
+}
+
 const LEVEL_VIEW_TYPE: &str = "acme-dj:level";
 
 fn the_level_manifest() -> Value {
@@ -90,6 +99,7 @@ impl AStreamOfAProjectBringingViews {
         .unwrap();
         a_view_folder_in(project_directory.path(), "deck", &the_deck_manifest());
         a_view_folder_in(project_directory.path(), "level", &the_level_manifest());
+        a_view_folder_in(project_directory.path(), "pulse", &the_pulse_manifest());
         a_view_folder_in(
             project_directory.path(),
             "broken",
@@ -168,13 +178,17 @@ impl AStreamOfAProjectBringingViews {
         (viewer, reader)
     }
 
-    /// A panel's write of `value` onto output `port` of the view node `node_uuid`, as the one
-    /// live set makes it: the view node is read, then its input of the output's name set live.
+    /// A panel's write of `value` onto output `port` of the view node `node_uuid`, as
+    /// `write_studio_view_output` makes it in the engine: the view node is read, then its input
+    /// of the output's name set live, as a `live` transaction of that one set hands it over.
     fn write(&self, node_uuid: &str, port: &str, value: Value) -> Result<()> {
-        let node = self.async_runtime.block_on(
-            self.stream
-                .the_running_view_node_a_panel_writes(node_uuid.to_string(), port.to_string()),
-        )?;
+        let node =
+            self.async_runtime
+                .block_on(self.stream.the_running_view_node_a_panel_writes(
+                    node_uuid.to_string(),
+                    port.to_string(),
+                    value.clone(),
+                ))?;
         match self.stream.set_input_values_live(&[InputValueToSetLive {
             node,
             input: port.to_string(),

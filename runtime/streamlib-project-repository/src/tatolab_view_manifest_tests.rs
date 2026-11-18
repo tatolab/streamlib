@@ -201,8 +201,25 @@ fn an_output_named_after_one_of_its_inputs_is_refused_by_name() {
         .expect_err("an output and an input would be one name on one node");
 
     assert!(
-        refusal.starts_with("`outputs[1].name`: `waveform` names an input too"),
+        refusal.starts_with("`outputs[1].name`: `waveform` names an input or a setting too"),
         "{refusal}"
     );
     assert!(!refusal.contains("outputs[0]"), "{refusal}");
+}
+
+#[test]
+fn an_output_named_after_one_of_its_settings_is_refused_by_name() {
+    let mut manifest = a_node_view_manifest();
+    manifest["settings"] = json!({
+        "type": "object",
+        "properties": { "fader": { "type": "number" } }
+    });
+
+    let refusal = read_tatolab_view_manifest(&manifest)
+        .expect_err("an output and a setting would be one input name on one node");
+
+    assert!(
+        refusal.starts_with("`outputs[0].name`: `fader` names an input or a setting too"),
+        "{refusal}"
+    );
 }

@@ -126,21 +126,15 @@ impl ControlOperationDispatcher {
         const ACTION_NAME: &str = <WriteStudioViewOutput as ControlOperation>::METHOD_NAME;
         let view_node = self
             .the_stream_a_call_names(ACTION_NAME, &stream)?
-            .the_running_view_node_a_panel_writes(node.clone(), port.clone())
+            .the_running_view_node_a_panel_writes(node.clone(), port.clone(), value.clone())
             .await
             .map_err(|refusal| the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal))?;
-        self.apply_a_graph_transaction(
+        self.set_one_input_value_live(
             ACTION_NAME,
-            vec![StreamGraphAction::SetNodeInputValue {
-                stream: GraphEditStream::StreamId(stream.clone()),
-                level: Vec::new(),
-                node: view_node.to_string(),
-                input: port.clone(),
-                value: Some(value),
-            }],
-            Some(GraphEditMode::Live),
-            None,
-            None,
+            &stream,
+            view_node,
+            port.clone(),
+            value,
             request_origin,
         )
         .await?;
@@ -165,18 +159,12 @@ impl ControlOperationDispatcher {
         if let Some(refusal) = graph_input.refusal_while_its_node_does_not_run {
             return Err(the_refusal_of_a_reach_for_a_node(ACTION_NAME, refusal));
         }
-        self.apply_a_graph_transaction(
+        self.set_one_input_value_live(
             ACTION_NAME,
-            vec![StreamGraphAction::SetNodeInputValue {
-                stream: GraphEditStream::StreamId(stream.clone()),
-                level: Vec::new(),
-                node: graph_input.node.to_string(),
-                input: GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
-                value: Some(value),
-            }],
-            Some(GraphEditMode::Live),
-            None,
-            None,
+            &stream,
+            graph_input.node,
+            GRAPH_INTERFACE_VALUE_PORT_NAME.to_owned(),
+            value,
             request_origin,
         )
         .await?;
@@ -185,6 +173,36 @@ impl ControlOperationDispatcher {
             input,
             family: graph_input.family.wire_name().to_owned(),
         })
+    }
+
+    /// One `live` `set_node_input_value` of `value` on input `input` of the node `node` at the
+    /// top level of the loaded stream `stream_id`, as `action_name`, an operation it replaces,
+    /// makes it.
+    async fn set_one_input_value_live(
+        &self,
+        action_name: &'static str,
+        stream_id: &str,
+        node: Uuid,
+        input: String,
+        value: serde_json::Value,
+        request_origin: &ControlRequestOrigin,
+    ) -> Result<(), ControlOperationRefusal> {
+        self.apply_a_graph_transaction(
+            action_name,
+            vec![StreamGraphAction::SetNodeInputValue {
+                stream: GraphEditStream::StreamId(stream_id.to_owned()),
+                level: Vec::new(),
+                node: node.to_string(),
+                input,
+                value: Some(value),
+            }],
+            Some(GraphEditMode::Live),
+            None,
+            None,
+            request_origin,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// The node a `set_node_input_value` naming no node sets the `value` input of, in the stream

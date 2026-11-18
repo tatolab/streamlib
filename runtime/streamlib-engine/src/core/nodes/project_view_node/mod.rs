@@ -32,8 +32,11 @@ use crate::core::graph::graph_interface_resolution::{
     GRAPH_INPUT_NODE_TYPE, GRAPH_INPUT_VALUE_FORMER_NAME, GRAPH_INTERFACE_FAMILY_CONFIG_KEY,
     GRAPH_INTERFACE_VALUE_PORT_NAME,
 };
+use crate::core::graph::input_values::{
+    InputValueRefusal, InputValueRefusalCode, NodeAnInputValueIsSetOn,
+};
 use crate::core::nodes::__generated_private::land_the_unlinked_input_values_in_the_input_mailboxes;
-use crate::core::nodes::DynGeneratedNode;
+use crate::core::nodes::{DynGeneratedNode, NodeTypesOneStreamResolves};
 use crate::iceoryx2::{
     InputMailboxes, InputMailboxesInner, MessageGroupBoundary, OutputWriter, OutputWriterInner,
 };
@@ -83,44 +86,74 @@ pub(crate) fn the_node_type_of_a_project_view(
         .map(|port| {
             the_port_a_view_declares(port).with_delivery_profile(VIEW_NODE_INPUT_DELIVERY_PROFILE)
         })
+        .chain(
+            manifest
+                .outputs
+                .iter()
+                .filter(|port| a_panel_writes(port.family))
+                .map(the_input_of_an_output_a_panel_writes),
+        )
         .collect();
     descriptor.outputs = manifest
         .outputs
         .iter()
-        .map(|port| {
-            the_port_a_view_declares(port).with_pin_declaration(carried_as_a_value(Vec::new()))
+        .map(|port| match a_panel_writes(port.family) {
+            true => {
+                the_port_a_view_declares(port).with_pin_declaration(carried_as_a_value(Vec::new()))
+            }
+            false => the_port_a_view_declares(port),
         })
         .collect();
     Ok(descriptor)
 }
 
-/// `descriptor`, the node type of a view as registered, with the input of each output a panel
-/// writes, whose value the node publishes on that output: of the output's name, family and
-/// description, a setting read each run that takes no wire, and returned to no value at Stop,
-/// since what a panel writes is live data. Added once the type's own ports are registered, as
-/// each such input shares its name with its output.
-pub(crate) fn with_the_input_of_each_output_a_panel_writes(
-    mut descriptor: NodeDescriptor,
-) -> NodeDescriptor {
-    let inputs_of_the_outputs: Vec<PortDescriptor> = descriptor
-        .outputs
-        .iter()
-        .map(|output| {
-            PortDescriptor::new(
-                output.name.clone(),
-                output.description.clone(),
-                false,
-                output.family.clone(),
-            )
-            .with_pin_declaration(carried_as_a_value(Vec::new()))
-            .with_input_mode(NodeInputMode::SettingOnly {
-                read: SettingReadTime::EachRun,
-            })
-            .with_lifetime(NodeValueLifetime::Reset)
+/// The families of the outputs a panel writes: each value of one is set on the view node's input
+/// of the output's name, and published on the output.
+const FAMILIES_A_PANEL_WRITES: [PortFamily; 3] =
+    [PortFamily::Array, PortFamily::Channels, PortFamily::Records];
+
+/// Whether a panel writes an output of `family`.
+pub(crate) fn a_panel_writes(family: PortFamily) -> bool {
+    FAMILIES_A_PANEL_WRITES.contains(&family)
+}
+
+/// Why a panel never writes an output of `family`, one it does not write.
+fn why_a_panel_never_writes(family: PortFamily) -> String {
+    let [families_listed @ .., last] = FAMILIES_A_PANEL_WRITES.map(PortFamily::declaration_name);
+    format!(
+        "a client writes {} and {last} values, never {}",
+        families_listed.join(", "),
+        family.declaration_name()
+    )
+}
+
+/// The input of a view node whose value its output `port`, one a panel writes, publishes: of the
+/// output's name, family and description, a setting read each run that takes no wire and holds
+/// no saved value, and returned to no value at Stop, since what a panel writes is live data.
+fn the_input_of_an_output_a_panel_writes(port: &TatolabViewDeclaredPort) -> PortDescriptor {
+    the_port_a_view_declares(port)
+        .with_pin_declaration(carried_as_a_value(Vec::new()))
+        .with_input_mode(NodeInputMode::SettingOnly {
+            read: SettingReadTime::EachRun,
         })
-        .collect();
-    descriptor.inputs.extend(inputs_of_the_outputs);
-    descriptor
+        .with_lifetime(NodeValueLifetime::Reset)
+}
+
+/// Whether input `input` of a node of `node_type` is the input of an output a panel writes, on a
+/// view this stream's project brings: a setting of the name of one of the type's outputs.
+pub(crate) fn is_the_input_of_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node_type: &NodeClassImportPath,
+    input: &str,
+) -> bool {
+    node_types.is_a_view_type_of_this_streams_project(node_type)
+        && node_types.port_info(node_type).is_some_and(|ports| {
+            ports.outputs.iter().any(|output| output.name == input)
+                && ports
+                    .inputs
+                    .iter()
+                    .any(|port| port.name == input && !port.takes_a_wire())
+        })
 }
 
 /// A port carried as a value of any type, its family alone deciding what it takes; an output so
@@ -133,6 +166,31 @@ fn carried_as_a_value(former_names: Vec<String>) -> PinDeclaration {
         former_names,
         may_be_unset: false,
     }
+}
+
+/// Refuse `value`, saved on input `input` of `node`, when it is the input of an output a panel
+/// writes, which holds what a panel writes, live, and no saved value; taking a value off is no
+/// refusal.
+pub(crate) fn refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+    node_types: &NodeTypesOneStreamResolves,
+    node: &NodeAnInputValueIsSetOn<'_>,
+    input: &str,
+    value: Option<&JsonValue>,
+) -> std::result::Result<(), InputValueRefusal> {
+    if value.is_none()
+        || !is_the_input_of_an_output_a_panel_writes(node_types, node.node_type, input)
+    {
+        return Ok(());
+    }
+    Err(InputValueRefusal {
+        code: InputValueRefusalCode::InputTakesNoValue,
+        words: format!(
+            "input `{input}` of `{}` holds what a panel writes onto its output `{input}`, live, \
+             and no saved value: it returns to no value at Stop. To fix: set it with `mode` \
+             `live`, in a transaction of value sets alone",
+            node.name
+        ),
+    })
 }
 
 /// The config schema a node of a view takes: the view's `settings`, closed to the settings it
@@ -321,11 +379,14 @@ impl ValueSourceNode {
     }
 
     /// Publish the value each input of `input_values` names reads on its output of the same
-    /// name, where it differs from what that output carries; an output whose input reads nothing
-    /// now keeps what it carries. Answers the values of the inputs no output is named after.
+    /// name: every value of an input of `set_live`, which a client has just set, each set being
+    /// one message, and the value of any other input where it differs from what its output
+    /// carries; an output whose input reads nothing now keeps what it carries. Answers the values
+    /// of the inputs no output is named after.
     fn publish_each_input_value_on_its_output(
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
+        set_live: &[String],
     ) -> Result<serde_json::Map<String, JsonValue>> {
         let mut read_by_an_input_alone = serde_json::Map::new();
         for (input, value) in input_values {
@@ -333,7 +394,9 @@ impl ValueSourceNode {
                 read_by_an_input_alone.insert(input.clone(), value.clone());
                 continue;
             }
-            if self.current_value_of_each_output.get(input) != Some(value) {
+            if set_live.contains(input)
+                || self.current_value_of_each_output.get(input) != Some(value)
+            {
                 self.publish_a_value_written_onto_an_output(input, value)?;
             }
         }
@@ -354,7 +417,7 @@ impl ValueSourceNode {
     }
 }
 
-fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
+pub(crate) fn the_names_listed<'a>(names: impl Iterator<Item = &'a String>) -> String {
     let mut names: Vec<String> = names.map(|name| format!("`{name}`")).collect();
     if names.is_empty() {
         return "none".to_string();
@@ -384,10 +447,7 @@ pub(crate) fn the_message_a_value_written_onto_an_output_is(
         }
         PortFamily::Array => the_array_frame_of_a_value(value),
         PortFamily::Channels => the_channels_block_of_a_value(value, next_start_sample),
-        PortFamily::Image | PortFamily::Packets => Err(format!(
-            "a client writes Array, Channels and Records values, never {}",
-            family.declaration_name()
-        )),
+        PortFamily::Image | PortFamily::Packets => Err(why_a_panel_never_writes(family)),
     }
 }
 
@@ -645,7 +705,16 @@ impl DynGeneratedNode for ValueSourceNode {
         &mut self,
         input_values: &serde_json::Map<String, JsonValue>,
     ) -> Result<()> {
-        let read_by_an_input_alone = self.publish_each_input_value_on_its_output(input_values)?;
+        self.set_unlinked_input_values_naming_those_set_live(input_values, &[])
+    }
+
+    fn set_unlinked_input_values_naming_those_set_live(
+        &mut self,
+        input_values: &serde_json::Map<String, JsonValue>,
+        set_live: &[String],
+    ) -> Result<()> {
+        let read_by_an_input_alone =
+            self.publish_each_input_value_on_its_output(input_values, set_live)?;
         land_the_unlinked_input_values_in_the_input_mailboxes(
             self.iceoryx2_input_mailboxes_inner(),
             &read_by_an_input_alone,

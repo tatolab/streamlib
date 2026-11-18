@@ -228,17 +228,28 @@ fn every_issue_of_a_manifest(manifest: &TatolabViewManifest) -> Vec<TatolabViewM
             }
         }
     }
+    let names_an_output_may_not_take: BTreeSet<&str> = manifest
+        .inputs
+        .iter()
+        .map(|input| input.name.as_str())
+        .chain(
+            manifest
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.get("properties"))
+                .and_then(Value::as_object)
+                .into_iter()
+                .flat_map(|properties| properties.keys().map(String::as_str)),
+        )
+        .collect();
     for (index, output) in manifest.outputs.iter().enumerate() {
-        if manifest
-            .inputs
-            .iter()
-            .any(|input| input.name == output.name)
-        {
+        if names_an_output_may_not_take.contains(output.name.as_str()) {
             issue(
                 format!("outputs[{index}].name"),
                 &format!(
-                    "`{}` names an input too, and the value of an output is set on the view \
-                     node's input of the output's name, so an output is named after no input",
+                    "`{}` names an input or a setting too, and the value of an output is set on \
+                     the view node's input of the output's name, so an output is named after no \
+                     input or setting",
                     output.name
                 ),
             );

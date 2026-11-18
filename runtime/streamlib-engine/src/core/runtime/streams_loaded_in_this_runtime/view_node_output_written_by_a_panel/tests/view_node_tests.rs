@@ -275,3 +275,138 @@ fn a_write_sets_the_view_nodes_input_of_the_outputs_name_which_takes_no_link() {
         .to_string();
     assert!(refusal.contains("takes no wire"), "{refusal}");
 }
+
+/// The Records message `message` carries, read back.
+fn the_record_of(message: &MessageReadFromAReservedSlot) -> Value {
+    rmp_serde::from_slice(&message.payload).unwrap()
+}
+
+/// The `start_sample` of the Channels block `message` carries.
+fn the_start_sample_of(message: &MessageReadFromAReservedSlot) -> u64 {
+    streamlib_ipc_types::ChannelsBlockDescriptorBody::from_descriptor_body(
+        &message.payload_descriptor.body,
+    )
+    .start_sample
+}
+
+#[test]
+#[serial]
+fn the_same_records_event_written_twice_is_published_twice() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+    let (_viewer, mut reader) = stream.a_reader_of(&deck_uuid, "cue");
+
+    for _ in 0..2 {
+        stream
+            .write(&deck_uuid, "cue", json!({ "track": "drop" }))
+            .expect("the view node takes the record");
+        assert_eq!(
+            the_record_of(&the_next_message_read(&mut reader)),
+            json!({ "track": "drop" }),
+            "each write is one message, the same event as much as a new one"
+        );
+    }
+}
+
+#[test]
+#[serial]
+fn the_same_channels_block_written_twice_is_two_blocks_one_after_the_other() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let pulse_id = stream.add_a_node(PULSE_VIEW_TYPE, "pulse").unwrap();
+    let pulse_uuid = stream.run(&pulse_id);
+    let (_viewer, mut reader) = stream.a_reader_of(&pulse_uuid, "beat");
+    let silence = json!({ "samples": [[0.0, 0.0, 0.0]], "sample_rate": 48000 });
+
+    stream
+        .write(&pulse_uuid, "beat", silence.clone())
+        .expect("the view node takes the block");
+    let first = the_next_message_read(&mut reader);
+    stream
+        .write(&pulse_uuid, "beat", silence)
+        .expect("the same block is taken again");
+    let second = the_next_message_read(&mut reader);
+
+    assert_eq!(the_start_sample_of(&first), 0);
+    assert_eq!(
+        the_start_sample_of(&second),
+        3,
+        "the second block starts where the first ends"
+    );
+}
+
+#[test]
+#[serial]
+fn a_write_onto_one_output_publishes_nothing_on_another() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+    let (_viewer, mut fader_reader) = stream.a_reader_of(&deck_uuid, "fader");
+    stream.write(&deck_uuid, "fader", json!(0.5)).unwrap();
+    the_next_message_read(&mut fader_reader);
+
+    stream
+        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
+        .unwrap();
+    stream
+        .write(&deck_uuid, "cue", json!({ "track": "intro" }))
+        .unwrap();
+
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        fader_reader.read_the_latest_message().unwrap().is_none(),
+        "`fader` carries what it carried, and is not sent it again"
+    );
+}
+
+#[test]
+#[serial]
+fn a_reader_that_connects_after_a_write_reads_the_value_its_output_keeps() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+    let pulse_id = stream.add_a_node(PULSE_VIEW_TYPE, "pulse").unwrap();
+    let pulse_uuid = stream.run(&pulse_id);
+
+    stream
+        .write(&deck_uuid, "cue", json!({ "track": "outro" }))
+        .unwrap();
+    stream.write(&pulse_uuid, "beat", json!(1)).unwrap();
+    let (_cue_viewer, mut cue_reader) = stream.a_reader_of(&deck_uuid, "cue");
+    let (_beat_viewer, mut beat_reader) = stream.a_reader_of(&pulse_uuid, "beat");
+    for node_id in [&deck_id, &pulse_id] {
+        // What each pass of a running node's scheduling loop does; these nodes run none.
+        stream
+            .the_output_writer_of(node_id)
+            .send_each_kept_message_to_a_reader_it_missed();
+    }
+
+    assert_eq!(
+        the_record_of(&the_next_message_read(&mut cue_reader)),
+        json!({ "track": "outro" })
+    );
+    let beat = the_next_message_read(&mut beat_reader);
+    assert_eq!(
+        beat.payload,
+        1.0_f32.to_le_bytes().to_vec(),
+        "the control value written before the reader connected"
+    );
+}
+
+#[test]
+#[serial]
+fn a_null_or_a_write_onto_an_output_no_panel_writes_is_refused_in_its_familys_words() {
+    let stream = AStreamOfAProjectBringingViews::load();
+    let deck_id = stream.add_a_node(DECK_VIEW_TYPE, "deck").unwrap();
+    let deck_uuid = stream.run(&deck_id);
+
+    let refusal = stream
+        .write(&deck_uuid, "cue", Value::Null)
+        .expect_err("null sets no value")
+        .to_string();
+    assert!(
+        refusal.contains("output `cue` of node `deck` carries Records")
+            && refusal.contains("a Records value is a JSON object"),
+        "{refusal}"
+    );
+}

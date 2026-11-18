@@ -94,9 +94,11 @@ pub trait RuntimeOperations: Send + Sync {
         node_type: &str,
     ) -> Option<crate::core::GraphNodePorts>;
 
-    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`,
-    /// with `None` taking it off, when the input does not take it, as this stream resolves the
-    /// type; `input_values_after_the_set` are every input value the node holds once it is made.
+    /// Refuse `value`, set on input `input` of the node named `node_name` of type `node_type`
+    /// and held on the graph, with `None` taking it off, when the input does not take it, as this
+    /// stream resolves the type: among them a value on the input of an output a panel writes,
+    /// which holds no saved value; `input_values_after_the_set` are every input value the node
+    /// holds once it is made.
     fn refuse_an_input_value_its_input_does_not_take(
         &self,
         node_type: &NodeClassImportPath,
@@ -154,14 +156,16 @@ pub trait RuntimeOperations: Send + Sync {
     ) -> BoxFuture<'_, Result<crate::core::runtime::OutputPortViewerHeldOpen>>;
 
     /// The UUID of the running view node whose UUID, as `graph` lists it under `id`, is
-    /// `node_id`, and one of whose outputs is `port_name`: the node a panel's write onto that
-    /// output sets the input of the same name of, live, which it publishes on the output.
-    /// Refused while the stream is stopped, and for a node not of a view type, not running, or
-    /// with no such output.
+    /// `node_id`, and one of whose outputs a panel writes `value` onto, as `port_name`: the node
+    /// whose input of that output's name the write sets, live, which it publishes on the output.
+    /// Refused while the stream is stopped; for a node not of a view type, not running, or with
+    /// no such output; and for a value no panel writes there: any onto an Image or Packets
+    /// output, and `null`.
     fn the_running_view_node_a_panel_writes(
         &self,
         node_id: String,
         port_name: String,
+        value: serde_json::Value,
     ) -> BoxFuture<'_, Result<uuid::Uuid>>;
 
     /// The top-level `GraphInput` declaring the stream's input `input_name`, whose `value` input

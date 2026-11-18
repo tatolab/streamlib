@@ -27,6 +27,7 @@ macro_rules! every_reserved_slot_reader_is_unreachable {
             &self,
             node_id: String,
             port_name: String,
+            _value: ::serde_json::Value,
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<::uuid::Uuid>>
         {
             Box::pin(async move {

@@ -79,7 +79,7 @@ async fn a_recorder_reads(record: &Value) {
 
 impl AnEngineRecordingItsStreamsInATemporaryStateDirectory {
     /// The project `project` opened and playing.
-    async fn playing(&self, project: &ProjectWithGraphDocuments) {
+    pub(super) async fn playing(&self, project: &ProjectWithGraphDocuments) {
         let opened = the_run_of_the_project_once_finished(
             &self.operations_on_the_loaded_streams(),
             project.path(),

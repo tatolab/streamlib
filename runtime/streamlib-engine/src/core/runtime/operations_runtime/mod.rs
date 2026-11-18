@@ -792,15 +792,17 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         input: &str,
         value: Option<&serde_json::Value>,
     ) -> std::result::Result<(), crate::core::graph::input_values::InputValueRefusal> {
+        let node = crate::core::graph::input_values::NodeAnInputValueIsSetOn {
+            name: node_name,
+            node_type,
+            input_values_after_the_set,
+        };
+        let node_types = self.node_types_this_stream_resolves();
+        crate::core::nodes::refuse_a_saved_value_on_the_input_of_an_output_a_panel_writes(
+            node_types, &node, input, value,
+        )?;
         crate::core::graph::input_values::refuse_an_input_value_its_input_does_not_take(
-            self.node_types_this_stream_resolves(),
-            &crate::core::graph::input_values::NodeAnInputValueIsSetOn {
-                name: node_name,
-                node_type,
-                input_values_after_the_set,
-            },
-            input,
-            value,
+            node_types, &node, input, value,
         )
     }
 
@@ -910,9 +912,10 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
         &self,
         node_id: String,
         port_name: String,
+        value: serde_json::Value,
     ) -> BoxFuture<'_, Result<uuid::Uuid>> {
         self.in_this_streams_log_route(
-            self.read_the_running_view_node_a_panel_writes(node_id, port_name),
+            self.read_the_running_view_node_a_panel_writes(node_id, port_name, value),
         )
     }
 
