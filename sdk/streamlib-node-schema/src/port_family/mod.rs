@@ -485,11 +485,14 @@ pub fn output_port_codec_resolved_against_config(
     }
 }
 
-/// The node a person places between `from` and `to` to convert one family to
-/// the other.
-fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str {
+/// The node a person places between an output of family `from` and an input of family `to`
+/// to convert one to the other; `None` when no one node does.
+pub(crate) fn node_placed_between_families(
+    from: PortFamily,
+    to: PortFamily,
+) -> Option<&'static str> {
     use PortFamily::*;
-    match (from, to) {
+    Some(match (from, to) {
         (Image, Array) => "place an ImageToArray node between them",
         (Array, Image) => "place an ArrayToImage node between them",
         (Channels, Array) => "place a ChannelsToArray node between them",
@@ -500,8 +503,15 @@ fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str
         (Packets, Image) => "place a video decoder (H264Decoder, H265Decoder) between them",
         (Channels, Packets) => "place an OpusEncoder between them",
         (Packets, Channels) => "place an OpusDecoder between them",
-        _ => "no one node converts between them; chain the conversion nodes that do",
-    }
+        _ => return None,
+    })
+}
+
+/// The node a person places between `from` and `to` to convert one family to
+/// the other.
+fn conversion_between_families(from: PortFamily, to: PortFamily) -> &'static str {
+    node_placed_between_families(from, to)
+        .unwrap_or("no one node converts between them; chain the conversion nodes that do")
 }
 
 /// Why `connect` refuses a link from `output` to `input`, or `None` when it
@@ -542,6 +552,44 @@ pub fn refusal_of_a_link_between_port_families(
             conversion_between_families(output_family, input_family)
         ));
     }
+    if let Some(refusal) = refusal_of_the_names_and_codec_a_link_carries(
+        output,
+        output_family,
+        output_node_config,
+        input,
+    ) {
+        return Some(refusal);
+    }
+    if output_family == PortFamily::Image
+        && !output_declaration.formats.is_empty()
+        && !input_declaration.formats.is_empty()
+    {
+        let output_formats: BTreeSet<&String> = output_declaration.formats.iter().collect();
+        let formats_overlap = input_declaration
+            .formats
+            .iter()
+            .any(|format| output_formats.contains(format));
+        if !formats_overlap {
+            return Some(format!(
+                "cannot link {output} to {input}: {output} writes formats {:?}, and {input} \
+                 reads only {:?}",
+                output_declaration.formats, input_declaration.formats
+            ));
+        }
+    }
+    None
+}
+
+/// Why an output of `output_family` cannot feed `input` by the names and the codec it resolves
+/// against its node's config; `None` when the input requires none it lacks.
+pub fn refusal_of_the_names_and_codec_a_link_carries(
+    output: PortFamilyLinkEndpoint<'_>,
+    output_family: PortFamily,
+    output_node_config: Option<&serde_json::Value>,
+    input: PortFamilyLinkEndpoint<'_>,
+) -> Option<String> {
+    let output_declaration = output.declaration;
+    let input_declaration = input.declaration;
     if output_family.has_names() && !input_declaration.requires.is_empty() {
         let resolved_names = output_port_names_resolved_against_config(
             output_declaration.names.as_ref(),
@@ -593,23 +641,6 @@ pub fn refusal_of_a_link_between_port_families(
                 output_codec
                     .as_deref()
                     .map_or_else(|| "no codec".to_owned(), |codec| format!("{codec:?}"))
-            ));
-        }
-    }
-    if output_family == PortFamily::Image
-        && !output_declaration.formats.is_empty()
-        && !input_declaration.formats.is_empty()
-    {
-        let output_formats: BTreeSet<&String> = output_declaration.formats.iter().collect();
-        let formats_overlap = input_declaration
-            .formats
-            .iter()
-            .any(|format| output_formats.contains(format));
-        if !formats_overlap {
-            return Some(format!(
-                "cannot link {output} to {input}: {output} writes formats {:?}, and {input} \
-                 reads only {:?}",
-                output_declaration.formats, input_declaration.formats
             ));
         }
     }

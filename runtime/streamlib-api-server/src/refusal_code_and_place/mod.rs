@@ -5,6 +5,7 @@
 //! the project repository's refusals and one over the engine's errors, so a new case does not
 //! compile until it has a code.
 
+use streamlib::sdk::descriptors::PinLinkRefusal;
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -164,8 +165,8 @@ impl RefusalCodeAndPlace {
     /// A variant with fields is coded by what it names.
     pub(crate) fn of_an_engine_error(refusal: &Error) -> Self {
         use ControlOperationRefusalCode::{
-            LinkAlreadyExists, NodeNameTaken, NodeNotFound, NodeNotRunning, NodeTypeNotFound,
-            PortNotFound, Refused, RuntimeFailed,
+            InputTakesNoWire, LinkAlreadyExists, LinkPinTypesDoNotConnect, NodeNameTaken,
+            NodeNotFound, NodeNotRunning, NodeTypeNotFound, PortNotFound, Refused, RuntimeFailed,
         };
         match refusal {
             Error::NodeOfAStreamIsNotRunning {
@@ -210,6 +211,19 @@ impl RefusalCodeAndPlace {
             }
             Error::NodeNameTaken { .. } => Self::coded(NodeNameTaken),
             Error::LinkAlreadyExists(_) => Self::coded(LinkAlreadyExists),
+            Error::PinLinkRefused(refusal) => match refusal.as_ref() {
+                PinLinkRefusal::InputTakesNoWire {
+                    node_name,
+                    input_name,
+                } => Self {
+                    refused_node: Some(node_name.clone()),
+                    refused_field: Some(input_name.clone()),
+                    ..Self::coded(InputTakesNoWire)
+                },
+                PinLinkRefusal::PinTypesDoNotConnect { .. } => {
+                    Self::coded(LinkPinTypesDoNotConnect)
+                }
+            },
             Error::GpuError(_)
             | Error::EngineResourceRefusedAtAStreamsStart(_)
             | Error::TextureError(_)

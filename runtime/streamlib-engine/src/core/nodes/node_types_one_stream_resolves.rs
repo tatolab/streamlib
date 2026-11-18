@@ -185,7 +185,7 @@ impl NodeTypesOneStreamResolves {
                 );
                 continue;
             }
-            let descriptor = match the_node_type_as_registered(descriptor) {
+            let descriptor = match the_project_node_type_as_registered(descriptor) {
                 Ok(descriptor) => descriptor,
                 Err(refusal) => {
                     why_no_node_takes_each_view.insert(
@@ -263,7 +263,7 @@ impl NodeTypesOneStreamResolves {
         descriptor: NodeDescriptor,
         how_its_nodes_run: HowANodeOfADescribedTypeRuns,
     ) -> Result<()> {
-        let descriptor = the_node_type_as_registered(descriptor)?;
+        let descriptor = the_project_node_type_as_registered(descriptor)?;
         let node_type = descriptor.node_class_import_path.clone();
         if self.is_a_natively_compiled_node_type(&node_type) {
             return Err(Error::Configuration(format!(
@@ -772,6 +772,19 @@ impl NodeTypesOneStreamResolves {
     }
 }
 
+/// `descriptor` as a project's node type is registered, refusing one that states a conversion.
+fn the_project_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
+    let registered = the_node_type_as_registered(descriptor)?;
+    if registered.conversion.is_some() {
+        return Err(Error::Configuration(format!(
+            "`{}` states that it is a conversion, and a project's node type cannot state a \
+             conversion yet; only a node type the runtime or a module registers can",
+            registered.descriptor.node_class_import_path
+        )));
+    }
+    Ok(registered.descriptor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,6 +828,31 @@ mod tests {
 
     fn a_node_of(node_type: &NodeClassImportPath) -> GraphNode {
         GraphNode::new(node_type.clone(), None, "a-node", None, vec![], vec![])
+    }
+
+    /// A project's node type may not state a conversion yet.
+    #[test]
+    fn a_projects_node_type_stating_a_conversion_is_refused() {
+        use crate::core::descriptors::{PinDeclaration, PinType};
+        let path = "node_types_one_stream_resolves_tests.filters:StatesAConversion";
+        let texture = PinDeclaration::exactly(PinType::Texture {
+            pixel_formats: vec![],
+        });
+        let typed = |name| port_named(name).with_pin_declaration(texture.clone());
+        let descriptor = descriptor_for(path)
+            .with_input(typed("video"))
+            .with_output(typed("out"));
+        let Err(Error::Configuration(refusal)) = NodeTypesOneStreamResolves::new()
+            .register_a_type_described_in_this_streams_node_interpreter(
+                descriptor.stating_a_conversion(),
+                HowANodeOfADescribedTypeRuns::AsANodeItsConstructorBuilds(
+                    a_constructor_refusing_with("a describe that must be refused"),
+                ),
+            )
+        else {
+            panic!("a project's node type cannot state a conversion");
+        };
+        assert!(refusal.contains("a project's node type cannot state a conversion yet"));
     }
 
     /// A later describe of a type into one stream replaces what the earlier

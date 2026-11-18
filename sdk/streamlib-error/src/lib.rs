@@ -18,6 +18,7 @@ pub use node_and_port_refusal_details::{
     OutputPortNotExposedToTheReader, PortDirection, WhyANodeOfAStreamIsNotRunning,
 };
 pub use privacy_gated_capture_device::PrivacyGatedCaptureDevice;
+use streamlib_node_schema::pin_type::PinLinkRefusal;
 use streamlib_node_schema::{ExposedNameCastsToNothingError, NodeClassImportPath};
 
 /// The StreamLib error type.
@@ -60,6 +61,11 @@ pub enum Error {
 
     #[error("Invalid link: {0}")]
     InvalidLink(String),
+
+    /// A link the verdict on its two pins refuses: into a setting, which takes no wire, or
+    /// between two typed pins no rule connects, in the verdict's words.
+    #[error("{0}")]
+    PinLinkRefused(Box<PinLinkRefusal>),
 
     /// A chunk of a channel name is not one address chunk.
     #[error(

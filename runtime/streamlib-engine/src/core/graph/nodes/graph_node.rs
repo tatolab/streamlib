@@ -163,8 +163,9 @@ impl GraphNode {
     /// never a wire.
     pub(crate) fn refuse_a_link_into_a_setting(&self, input: &str) -> crate::core::Result<()> {
         match self.input_port(input) {
-            Some(port) if !port.takes_a_wire() => Err(crate::core::Error::InvalidLink(
-                the_words_of_a_link_into_a_setting(&port.name, &self.display_name),
+            Some(port) if !port.takes_a_wire() => Err(the_refusal_of_a_link_into_a_setting(
+                &port.name,
+                &self.display_name,
             )),
             _ => Ok(()),
         }
@@ -294,10 +295,9 @@ impl GraphNodeWithComponents for GraphNode {
     }
 }
 
-/// The words refusing a link into input `input` of the node `node`, a setting.
-pub(crate) fn the_words_of_a_link_into_a_setting(input: &str, node: &str) -> String {
-    format!(
-        "a link enters input `{input}` of `{node}`, a setting, which takes no wire. To fix: set \
-         its value with `set_node_input_value`"
-    )
+/// The refusal of a link into input `input` of node `node`, a setting, which takes no wire.
+pub(crate) fn the_refusal_of_a_link_into_a_setting(input: &str, node: &str) -> crate::core::Error {
+    crate::core::Error::PinLinkRefused(Box::new(
+        crate::core::descriptors::PinLinkRefusal::input_takes_no_wire(node, input),
+    ))
 }

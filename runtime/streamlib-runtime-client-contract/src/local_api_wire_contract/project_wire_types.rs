@@ -472,6 +472,13 @@ pub enum ControlOperationRefusalCode {
     NodeNameTaken,
     /// The link sent is already in the graph.
     LinkAlreadyExists,
+    /// The two ends of the link sent carry pin types that do not connect, or connect only
+    /// through a convert node; the runtime's words name both ends, both types and each node type
+    /// that converts between them.
+    LinkPinTypesDoNotConnect,
+    /// The link sent ends at an input that is a setting, which takes a stored value and never a
+    /// link; `refused_field` names it.
+    InputTakesNoWire,
     /// The project holds no file or folder at the path sent; `refused_file` names it.
     FileNotFound,
     /// The file changed, or was taken out, since it was read, so the write was not made;

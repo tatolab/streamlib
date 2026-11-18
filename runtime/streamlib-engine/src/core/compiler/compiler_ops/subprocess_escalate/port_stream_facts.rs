@@ -118,6 +118,7 @@ mod tests {
             family: crate::core::descriptors::PortFamilyDeclaration::of_family(PortFamily::Packets),
             input_mode: None,
             range: None,
+            meaning: None,
         }
     }
 

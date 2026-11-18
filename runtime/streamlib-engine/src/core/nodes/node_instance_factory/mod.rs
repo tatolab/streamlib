@@ -8,8 +8,8 @@ use parking_lot::RwLock;
 
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::PortDescriptor;
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
+use crate::core::descriptors::{PinConversion, PortDescriptor};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
@@ -215,6 +215,8 @@ pub struct NodeInstanceFactory {
     registrations: RwLock<HashMap<NodeClassImportPath, HostCompiledRustTypeRegistration>>,
     port_info: RwLock<HashMap<NodeClassImportPath, GraphNodePorts>>,
     descriptors: RwLock<HashMap<NodeClassImportPath, NodeDescriptor>>,
+    /// The conversion each registered node type states, sorted by node type.
+    conversions: RwLock<Arc<[PinConversion]>>,
     /// Each former built-in node type, with the module node that replaced it.
     built_in_node_types_moved_to_modules:
         RwLock<HashMap<NodeClassImportPath, ModuleNodeThatReplacedABuiltIn>>,
@@ -242,6 +244,7 @@ impl NodeInstanceFactory {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
+            conversions: RwLock::new(Arc::from([])),
             built_in_node_types_moved_to_modules: RwLock::new(HashMap::new()),
         }
     }
@@ -309,7 +312,10 @@ impl NodeInstanceFactory {
         descriptor: NodeDescriptor,
         registration: HostCompiledRustTypeRegistration,
     ) -> Result<()> {
-        let descriptor = the_node_type_as_registered(descriptor)?;
+        let NodeTypeAsRegistered {
+            descriptor,
+            conversion,
+        } = the_node_type_as_registered(descriptor)?;
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -335,6 +341,7 @@ impl NodeInstanceFactory {
             .insert(node_class_import_path.clone(), registration);
 
         descriptors.insert(node_class_import_path.clone(), descriptor);
+        self.store_the_conversion_stated(conversion);
         drop(descriptors);
 
         tracing::info!(
@@ -345,8 +352,10 @@ impl NodeInstanceFactory {
         Ok(())
     }
 
+    /// Register `descriptor` with no constructor; a conversion it states is never offered, since
+    /// no node of it can be created.
     pub fn register_descriptor_only(&self, descriptor: NodeDescriptor) -> Result<()> {
-        let descriptor = the_node_type_as_registered(descriptor)?;
+        let NodeTypeAsRegistered { descriptor, .. } = the_node_type_as_registered(descriptor)?;
         let node_class_import_path = descriptor.node_class_import_path.clone();
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
@@ -373,6 +382,22 @@ impl NodeInstanceFactory {
         );
 
         Ok(())
+    }
+
+    /// Register `descriptor` with `constructor` and a config check that takes any config.
+    #[cfg(test)]
+    pub(crate) fn register_with_a_constructor_for_a_test(
+        &self,
+        descriptor: NodeDescriptor,
+        constructor: DynamicNodeConstructorFn,
+    ) -> Result<()> {
+        self.register_with_constructor(
+            descriptor,
+            HostCompiledRustTypeRegistration {
+                constructor,
+                config_taken_check: Box::new(|_, _, _| Ok(())),
+            },
+        )
     }
 
     /// Record a built-in that left the runtime for a module, so a graph naming
@@ -502,6 +527,23 @@ impl NodeInstanceFactory {
     pub fn list_registered(&self) -> Vec<NodeDescriptor> {
         self.descriptors.read().values().cloned().collect()
     }
+
+    /// The conversion each registered node type states, sorted by node type.
+    pub(crate) fn pin_conversions(&self) -> Arc<[PinConversion]> {
+        Arc::clone(&self.conversions.read())
+    }
+
+    /// Store `conversion` beside the others, kept sorted; called under the `descriptors` guard.
+    fn store_the_conversion_stated(&self, conversion: Option<PinConversion>) {
+        let Some(conversion) = conversion else {
+            return;
+        };
+        let mut conversions = self.conversions.write();
+        let mut stored = conversions.to_vec();
+        stored.push(conversion);
+        stored.sort_by(|one, other| one.node_type.cmp(&other.node_type));
+        *conversions = stored.into();
+    }
 }
 
 /// `config` as the `C` a node of `node_type` takes, or the refusal naming
@@ -534,17 +576,35 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 /// cast form under a name of its own — every lookup casts its argument, so a
 /// port registered under an uncast name could never be reached — a name a port
 /// had that would not find that port alone, an output that may be unset, a flow
-/// a port's pin type does not take, and a config field named as an input port.
-pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
+/// a port's pin type does not take, a config field named as an input port, and
+/// a conversion of any shape but one wired input and one output, each typed.
+pub(crate) fn the_node_type_as_registered(
+    descriptor: NodeDescriptor,
+) -> Result<NodeTypeAsRegistered> {
     refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
     refuse_former_port_names_that_do_not_find_one_port(&descriptor)?;
     refuse_an_output_that_may_be_unset(&descriptor)?;
+    let conversion = descriptor
+        .pin_conversion()
+        .map_err(|refusal| Error::Configuration(refusal.to_string()))?;
     crate::core::graph::legacy_config_of_a_node::refuse_a_config_field_named_as_an_input_port(
         &descriptor,
     )?;
-    descriptor
+    let descriptor = descriptor
         .with_input_deliveries_defaulted_by_pin()
-        .map_err(Error::Configuration)
+        .map_err(Error::Configuration)?;
+    Ok(NodeTypeAsRegistered {
+        descriptor,
+        conversion,
+    })
+}
+
+/// A node type as it is registered, with the conversion it states.
+pub(crate) struct NodeTypeAsRegistered {
+    /// Its descriptor.
+    pub(crate) descriptor: NodeDescriptor,
+    /// The conversion it states, if it states one.
+    pub(crate) conversion: Option<PinConversion>,
 }
 
 /// Refuse a port name not in cast form, and one declared twice: an output takes the name of an

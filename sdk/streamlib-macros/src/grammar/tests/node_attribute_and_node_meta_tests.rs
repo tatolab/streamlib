@@ -111,6 +111,30 @@ fn a_node_with_no_meta_has_no_category_and_no_description() {
     let parsed = parse_ok(quote! { execution = manual });
     assert_eq!(parsed.category, None);
     assert!(parsed.description.is_none());
+    assert!(!parsed.conversion);
+}
+
+#[test]
+fn a_node_meta_states_a_conversion_with_a_bool() {
+    let parsed = parse_ok_with_meta(
+        quote! { #[meta(conversion = true)] },
+        quote! { execution = manual },
+    );
+    assert!(parsed.conversion);
+    let stated_false = parse_ok_with_meta(
+        quote! { #[meta(conversion = false)] },
+        quote! { execution = manual },
+    );
+    assert!(!stated_false.conversion);
+}
+
+#[test]
+fn a_conversion_that_is_not_a_bool_is_refused() {
+    let msg = node_meta_err(quote! { #[meta(conversion = "yes")] });
+    assert!(
+        msg.contains("`conversion` takes `true` or `false`"),
+        "got: {msg}"
+    );
 }
 
 #[test]
@@ -188,7 +212,10 @@ fn an_unknown_node_meta_key_is_refused_naming_it_and_the_keys_there_are() {
         msg.contains("unknown `#[meta(...)]` key `tags`"),
         "got: {msg}"
     );
-    assert!(msg.contains("`category` or `description`"), "got: {msg}");
+    assert!(
+        msg.contains("`category`, `description` or `conversion`"),
+        "got: {msg}"
+    );
 }
 
 #[test]

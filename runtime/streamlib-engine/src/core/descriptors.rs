@@ -13,9 +13,10 @@ pub use streamlib_node_schema::descriptors::{
     CodeExamples, NodeDescriptor, NodeRuntime, PortDescriptor,
 };
 pub use streamlib_node_schema::pin_type::{
-    DeclaredPinType, FloatSize, IntegerSize, NodeInputMode, PinAnnotations, PinDeclaration,
-    PinFlow, PinNumberRange, PinProjectAssetAnnotation, PinType, PinValueNotTaken, ResolvedPin,
-    SettingReadTime, TexturePixelFormat,
+    DeclaredPinType, FloatSize, IntegerSize, NamedPinTypeImportPath, NodeInputMode, PinAnnotations,
+    PinConversion, PinDeclaration, PinFlow, PinLinkEnd, PinLinkEndNamed, PinLinkInputEnd,
+    PinLinkRefusal, PinLinkVerdict, PinNumberRange, PinProjectAssetAnnotation, PinType,
+    PinValueNotTaken, ResolvedPin, SettingReadTime, TexturePixelFormat, pin_link_verdict,
 };
 pub use streamlib_node_schema::{
     AUDIO_WINDOW_CHANNELS_FOLLOWING_THE_SOURCE, AUDIO_WINDOW_DTYPE_DECLARATION_VALUES,
@@ -30,5 +31,6 @@ pub use streamlib_node_schema::{
     output_port_codec_resolved_against_config, output_port_family_resolved_against_config,
     output_port_frame_rate_resolved_against_config, output_port_names_resolved_against_config,
     refusal_of_a_link_between_port_families, refusal_of_required_names,
+    refusal_of_the_names_and_codec_a_link_carries,
     refuse_audio_window_beside_a_skipping_delivery_profile, refuse_stream_facts_of_another_family,
 };

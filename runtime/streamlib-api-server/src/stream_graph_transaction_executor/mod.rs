@@ -477,8 +477,16 @@ impl GraphTransactionRefusal {
             }
             (pointer, _) => pointer,
         };
+        let the_links_target_as_its_caller_named_it = what_the_refused_operation_names
+            .link
+            .as_ref()
+            .filter(|_| {
+                code_and_place.refusal_code == ControlOperationRefusalCode::InputTakesNoWire
+            })
+            .map(|link| link.target.node.clone());
         code_and_place.refused_node = what_the_refused_operation_names
             .node
+            .or(the_links_target_as_its_caller_named_it)
             .or(code_and_place.refused_node)
             .or(what_the_refused_operation_names.node_unless_the_refusal_names_one);
         code_and_place.refused_field = code_and_place

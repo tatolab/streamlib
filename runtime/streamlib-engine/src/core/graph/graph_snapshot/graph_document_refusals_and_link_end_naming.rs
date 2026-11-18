@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 use crate::core::graph::{
     GraphNodePorts, PortInfo, cast_exposed_name_to_url_safe, port_names_listed_for_a_refusal,
-    the_input_ports_of_the_exposed_config_fields, the_words_of_a_link_into_a_setting,
+    the_input_ports_of_the_exposed_config_fields, the_refusal_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::LabelledNodeGroup;
 use crate::core::nodes::NodeTypesOneStreamResolves;
@@ -354,12 +354,9 @@ pub(crate) fn refuse_a_port_the_node_does_not_have(
         })
         .unwrap_or_default();
     match ports.iter().find(|declared| declared.name == port_cast) {
-        Some(declared) if direction == PortDirection::Input && !declared.takes_a_wire() => {
-            Err(Error::InvalidLink(the_words_of_a_link_into_a_setting(
-                &declared.name,
-                node_name,
-            )))
-        }
+        Some(declared) if direction == PortDirection::Input && !declared.takes_a_wire() => Err(
+            the_refusal_of_a_link_into_a_setting(&declared.name, node_name),
+        ),
         Some(_) => Ok(()),
         None => Err(Error::GraphError(format!(
             "node `{node_name}` has no {direction} port `{port}`. Its {direction} ports are: {}",
