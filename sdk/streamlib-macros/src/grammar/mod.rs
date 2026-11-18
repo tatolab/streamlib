@@ -8,7 +8,7 @@ use streamlib_node_schema::{
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::spanned::Spanned;
-use syn::{Attribute, Ident, LitInt, LitStr, Path, Token, parenthesized};
+use syn::{Attribute, Ident, LitBool, LitInt, LitStr, Path, Token, parenthesized};
 
 mod port_grammar;
 
@@ -109,7 +109,7 @@ pub(crate) fn declared_description_str_expression(
     }
 }
 
-/// The helper attribute a node type's category and description are declared in.
+/// The helper attribute a node type's category, description and conversion are declared in.
 const NODE_META_ATTRIBUTE_NAME: &str = "meta";
 
 /// What a category path's levels are separated by, as `Effects/Stylize`.
@@ -122,6 +122,9 @@ pub(crate) struct DeclaredNodeMeta {
     pub category: Option<String>,
     /// A string literal or the path of a `const`.
     pub description: Option<DeclaredDescription>,
+    /// Whether the node type states that it converts what its one wired input takes into what
+    /// its one output gives, as `conversion = true` declares; `None` where it states nothing.
+    pub conversion: Option<bool>,
 }
 
 impl DeclaredNodeMeta {
@@ -153,7 +156,8 @@ impl DeclaredNodeMeta {
         if input.is_empty() {
             return Err(syn::Error::new(
                 input.span(),
-                "`#[meta()]` declares nothing — it takes `category`, `description` or both, \
+                "`#[meta()]` declares nothing — it takes `category`, `description`, \
+                 `conversion` or several, \
                  `#[meta(category = \"Effects/Stylize\", description = \"…\")]`",
             ));
         }
@@ -180,12 +184,25 @@ impl DeclaredNodeMeta {
                         return Err(declared_more_than_once(&key));
                     }
                 }
+                "conversion" => {
+                    let conversion: LitBool = input.parse().map_err(|not_a_bool| {
+                        syn::Error::new(
+                            not_a_bool.span(),
+                            "`conversion` takes `true` or `false` — `conversion = true` states \
+                             that the node converts what its one wired input takes into what its \
+                             one output gives",
+                        )
+                    })?;
+                    if self.conversion.replace(conversion.value()).is_some() {
+                        return Err(declared_more_than_once(&key));
+                    }
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
-                            "unknown `#[meta(...)]` key `{other}` — expected `category` or \
-                             `description`"
+                            "unknown `#[meta(...)]` key `{other}` — expected `category`, \
+                             `description` or `conversion`"
                         ),
                     ));
                 }
@@ -266,6 +283,8 @@ pub(crate) struct ParsedNodeAttr {
     pub description: Option<DeclaredDescription>,
     /// The category the node's `#[meta(...)]` declares, exactly as written.
     pub category: Option<String>,
+    /// Whether the node's `#[meta(...)]` states that it is a conversion.
+    pub conversion: bool,
     pub execution: NodeSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
     pub unsafe_send: bool,
@@ -436,6 +455,7 @@ fn parse_body(
         node_class_short_name: struct_name.to_string(),
         description: node_meta.description,
         category: node_meta.category,
+        conversion: node_meta.conversion.unwrap_or(false),
         execution,
         scheduling,
         unsafe_send,

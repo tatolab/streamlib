@@ -22,7 +22,7 @@ use crate::core::graph::input_values::{
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, NodeInstanceComponent,
     NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves, node_named_or_refused,
-    refuse_a_link_between_ports_whose_families_do_not_match,
+    refuse_a_link_its_pin_types_or_families_refuse,
 };
 use crate::core::logging::{
     carrying_this_threads_project_log_route_entry, polled_in_a_project_log_route_entry,
@@ -395,8 +395,9 @@ pub(super) async fn remove_node_impl(
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
-/// Connect compares the two ports' families, names, codec and formats and
-/// refuses a mismatch by name before any channel exists.
+/// Connect judges two typed ports by their pin link verdict, and any other two
+/// by their families, names, codec and formats, and refuses a link that does
+/// not connect as it is by name before any channel exists.
 #[tracing::instrument(
     name = "stream.connect",
     skip(live_graph_change),
@@ -465,7 +466,7 @@ fn apply_a_link(
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
             refuse_a_source_this_graph_cannot_take(graph, &from)?;
             refuse_a_destination_this_graph_cannot_take(graph, &to)?;
-            refuse_a_link_between_ports_whose_families_do_not_match(graph, &from, &to)?;
+            refuse_a_link_its_pin_types_or_families_refuse(graph, &from, &to)?;
 
             let channel =
                 crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
@@ -978,3 +979,6 @@ mod connect_wires_a_matching_link_in_silence_tests;
 
 #[cfg(test)]
 mod connect_refuses_ports_whose_families_do_not_match_tests;
+
+#[cfg(test)]
+mod connect_judges_two_typed_pins_by_their_verdict_tests;

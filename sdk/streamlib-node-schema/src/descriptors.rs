@@ -202,6 +202,11 @@ pub struct NodeDescriptor {
     /// Python and only a reader holding the interpreter's lock can call it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub function_node_runs_as_python: bool,
+    /// Whether the node type states that it converts what its one wired input takes into what
+    /// its one output gives, so the link verdict finds it between two ends.
+    /// [`NodeDescriptor::pin_conversion`] is the conversion it states.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub conversion: bool,
     pub inputs: Vec<PortDescriptor>,
     pub outputs: Vec<PortDescriptor>,
     pub examples: CodeExamples,
@@ -227,6 +232,7 @@ impl NodeDescriptor {
             function_node_state_fields: Vec::new(),
             category: None,
             function_node_runs_as_python: false,
+            conversion: false,
             inputs: Vec::new(),
             outputs: Vec::new(),
             examples: CodeExamples::default(),
@@ -266,6 +272,13 @@ impl NodeDescriptor {
 
     pub fn paced_by_real_time(mut self) -> Self {
         self.paced_by_real_time = true;
+        self
+    }
+
+    /// Declare that the node type converts what its one wired input takes into what its one
+    /// output gives.
+    pub fn stating_a_conversion(mut self) -> Self {
+        self.conversion = true;
         self
     }
 

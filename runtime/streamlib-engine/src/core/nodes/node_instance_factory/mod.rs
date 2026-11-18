@@ -8,8 +8,8 @@ use parking_lot::RwLock;
 
 use crate::core::NodeDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::PortDescriptor;
 use crate::core::descriptors::{NodeClassImportPath, NodeKind};
+use crate::core::descriptors::{PinConversion, PortDescriptor};
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{GraphNode, GraphNodePorts, PortInfo, is_in_exposed_name_cast_form};
@@ -502,6 +502,19 @@ impl NodeInstanceFactory {
     pub fn list_registered(&self) -> Vec<NodeDescriptor> {
         self.descriptors.read().values().cloned().collect()
     }
+
+    /// The conversion each registered node type states, by node type, for the link verdict to
+    /// find between two ends.
+    pub(crate) fn pin_conversions(&self) -> Vec<PinConversion> {
+        let mut conversions: Vec<PinConversion> = self
+            .descriptors
+            .read()
+            .values()
+            .filter_map(|descriptor| descriptor.pin_conversion().ok().flatten())
+            .collect();
+        conversions.sort_by(|one, other| one.node_type.cmp(&other.node_type));
+        conversions
+    }
 }
 
 /// `config` as the `C` a node of `node_type` takes, or the refusal naming
@@ -534,11 +547,13 @@ fn duplicate_class_import_path(node_class_import_path: &NodeClassImportPath) -> 
 /// cast form under a name of its own — every lookup casts its argument, so a
 /// port registered under an uncast name could never be reached — a name a port
 /// had that would not find that port alone, an output that may be unset, a flow
-/// a port's pin type does not take, and a config field named as an input port.
+/// a port's pin type does not take, a config field named as an input port, and
+/// a conversion of any shape but one wired input and one output, each typed.
 pub(crate) fn the_node_type_as_registered(descriptor: NodeDescriptor) -> Result<NodeDescriptor> {
     refuse_port_names_not_cast_or_declared_twice(&descriptor)?;
     refuse_former_port_names_that_do_not_find_one_port(&descriptor)?;
     refuse_an_output_that_may_be_unset(&descriptor)?;
+    descriptor.pin_conversion().map_err(Error::Configuration)?;
     crate::core::graph::legacy_config_of_a_node::refuse_a_config_field_named_as_an_input_port(
         &descriptor,
     )?;

@@ -61,6 +61,10 @@ pub struct PortInfo {
     /// declares no range. Not rendered here: the pin declaration a client reads carries it.
     #[serde(skip)]
     pub range: Option<InputNumberRange>,
+    /// What this port's value stands for, as its pin declares it, such as `frequency`; `None`
+    /// when it declares none. Not rendered here: the pin declaration a client reads carries it.
+    #[serde(skip)]
+    pub meaning: Option<String>,
 }
 
 /// The lowest and highest number an input takes, compared bound by bound bit for bit, so a port
@@ -108,6 +112,9 @@ impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
                 .as_ref()
                 .and_then(|declared| declared.annotations.range)
                 .map(InputNumberRange),
+            meaning: declared_pin
+                .as_ref()
+                .and_then(|declared| declared.annotations.meaning.clone()),
             pin: declared_pin.and_then(crate::core::descriptors::PinDeclaration::into_resolved),
             lifetime: port.lifetime,
             input_mode: port.input_mode,

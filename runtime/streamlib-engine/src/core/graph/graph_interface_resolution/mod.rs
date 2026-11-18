@@ -26,7 +26,7 @@ use crate::core::graph::legacy_config_of_a_node::{
 };
 use crate::core::graph::{
     GraphNodePorts, InputNumberRange, cast_exposed_name_to_url_safe,
-    the_words_of_a_link_into_a_setting,
+    the_refusal_of_a_link_into_a_setting,
 };
 use crate::core::json_schema::{
     GraphNodeOutput, GraphNodePortsOutput, GraphResponse, LinkOutput, LinkPortRefOutput,
@@ -407,10 +407,10 @@ impl GraphSnapshot {
                     runtime_links.push(link.clone());
                     continue;
                 }
-                return Err(Error::InvalidLink(the_words_of_a_link_into_a_setting(
+                return Err(the_refusal_of_a_link_into_a_setting(
                     &link.target.port,
                     &link.target.node,
-                )));
+                ));
             }
             if source_direction.is_some() && target_direction.is_some() {
                 return Err(Error::GraphError(format!(

@@ -239,6 +239,7 @@ mod tests {
             family,
             input_mode: None,
             range: None,
+            meaning: None,
         }
     }
 

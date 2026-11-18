@@ -204,36 +204,51 @@ pub(crate) fn refuse_a_link_between_ports_whose_families_do_not_match(
     if output_port_family(from_node, from.port_name()).is_none() {
         return Ok(());
     }
-    let inputs_carried_on_to = the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name());
     for carried_on in the_outputs_a_link_carries_on(graph, from_node, from.port_name()) {
         if let Some(refusal) =
             refusal_of_a_link_from_an_output(carried_on, to_node, to.port_name(), input_declaration)
         {
             return Err(Error::InvalidLink(refusal));
         }
-        for (following_node, following_output_name, downstream_node, downstream_input_port) in
-            &inputs_carried_on_to
-        {
-            let Some(downstream_input_declaration) =
-                input_port_family(downstream_node, downstream_input_port)
-            else {
-                continue;
-            };
-            if let Some(refusal) = refusal_of_a_link_from_an_output(
-                carried_on,
-                downstream_node,
-                downstream_input_port,
-                downstream_input_declaration,
-            ) {
-                return Err(Error::InvalidLink(format!(
-                    "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
-                     feeds {}.{}: {refusal}",
-                    following_node.display_name,
-                    following_output_name,
-                    downstream_node.display_name,
-                    downstream_input_port
-                )));
-            }
+        refuse_what_a_link_carries_on_past_its_input(graph, carried_on, from, to)?;
+    }
+    Ok(())
+}
+
+/// Refuse a link from `from` into `to` when an output that follows `to`'s input carries what
+/// `carried_on` sends on into an input whose family refuses it, naming both and the input that
+/// refuses.
+pub(crate) fn refuse_what_a_link_carries_on_past_its_input(
+    graph: &Graph,
+    carried_on: (&GraphNode, &str, &PortFamilyDeclaration),
+    from: &OutputLinkPortRef,
+    to: &InputLinkPortRef,
+) -> Result<()> {
+    let Some(to_node) = graph.traversal().v(to.node_run_id()).first() else {
+        return Ok(());
+    };
+    for (following_node, following_output_name, downstream_node, downstream_input_port) in
+        the_inputs_an_input_is_carried_on_to(graph, to_node, to.port_name())
+    {
+        let Some(downstream_input_declaration) =
+            input_port_family(downstream_node, downstream_input_port)
+        else {
+            continue;
+        };
+        if let Some(refusal) = refusal_of_a_link_from_an_output(
+            carried_on,
+            downstream_node,
+            downstream_input_port,
+            downstream_input_declaration,
+        ) {
+            return Err(Error::InvalidLink(format!(
+                "cannot link {from} to {to}: {}.{} carries on what {to} takes, and it \
+                 feeds {}.{}: {refusal}",
+                following_node.display_name,
+                following_output_name,
+                downstream_node.display_name,
+                downstream_input_port
+            )));
         }
     }
     Ok(())
