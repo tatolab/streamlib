@@ -6,6 +6,7 @@
 //! duplicated and deleted.
 
 use super::*;
+use streamlib_runtime_client_contract::local_api_wire_contract::ControlOperationRefusalCode;
 
 /// `write_project_file` writes a file of the project as one commit that `undo` reverses,
 /// `read_project_file` answers its bytes whole, and a path outside the project is refused.
@@ -69,6 +70,74 @@ async fn a_project_file_written_over_the_socket_is_read_back_listed_and_undone()
     );
 }
 
+/// A `read_project_file` of a file the project does not hold is refused as `file_not_found`,
+/// naming the file, through the one repository call every file operation makes.
+#[tokio::test]
+async fn a_read_of_a_project_file_the_project_does_not_hold_answers_file_not_found_at_its_path() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let refusal = crate::mcp::tests::the_refusal_of_a_tool_result(
+        &served
+            .tool_call("read_project_file", json!({ "path": "nodes/absent.py" }))
+            .await,
+    );
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::FileNotFound
+    );
+    assert_eq!(
+        refusal.refused_file.map(|place| place.path),
+        Some("nodes/absent.py".to_owned())
+    );
+    assert_eq!(refusal.action, "read_project_file");
+    assert!(
+        refusal
+            .runtime_words
+            .starts_with("read_project_file failed: "),
+        "{}",
+        refusal.runtime_words
+    );
+}
+
+/// `undo` and `add_dependency` pass on the project repository's typed refusal: a project file
+/// that does not read answers its code and names the file.
+#[tokio::test]
+async fn undo_and_add_dependency_answer_the_code_and_file_of_a_project_file_that_does_not_read() {
+    let served = AssetToolsServedOverAProject::over_a_new_project().await;
+    let project_file = served.project_directory().join("tatolab-project.json");
+    std::fs::write(&project_file, b"not json").unwrap();
+    let project_file_as_the_runtime_resolves_it = std::fs::canonicalize(&project_file).unwrap();
+    let source = served.a_file_outside_the_project("imported.zip", b"PK");
+
+    for (tool_name, arguments) in [
+        ("undo", json!({})),
+        ("add_dependency", json!({ "source": source })),
+    ] {
+        let refusal = crate::mcp::tests::the_refusal_of_a_tool_result(
+            &served.tool_call(tool_name, arguments).await,
+        );
+        assert_eq!(
+            refusal.refusal_code,
+            ControlOperationRefusalCode::Refused,
+            "{tool_name}"
+        );
+        assert_eq!(
+            refusal.refused_file.map(|place| place.path),
+            Some(
+                project_file_as_the_runtime_resolves_it
+                    .to_string_lossy()
+                    .into_owned()
+            ),
+            "{tool_name}: {}",
+            refusal.runtime_words
+        );
+        assert!(
+            refusal.runtime_words.contains("could not be read"),
+            "{}",
+            refusal.runtime_words
+        );
+    }
+}
+
 /// A `write_project_file` carrying the `content_sha256` its `read_project_file` answered is
 /// refused in the runtime's words once another write changed the file, leaving the file as the
 /// other write left it; the hash the read and each write answer chains the next save.
@@ -106,7 +175,7 @@ async fn a_project_file_save_carrying_a_stale_hash_is_refused_over_the_socket() 
         )
         .await;
 
-    let refused = the_error_text_of(
+    let refusal = crate::mcp::tests::the_refusal_of_a_tool_result(
         &served
             .tool_call(
                 "write_project_file",
@@ -118,6 +187,15 @@ async fn a_project_file_save_carrying_a_stale_hash_is_refused_over_the_socket() 
             )
             .await,
     );
+    assert_eq!(
+        refusal.refusal_code,
+        ControlOperationRefusalCode::FileChangedSinceItWasRead
+    );
+    assert_eq!(
+        refusal.refused_file.map(|place| place.path),
+        Some("nodes/camera.py".to_owned())
+    );
+    let refused = refusal.runtime_words;
     assert_eq!(
         refused,
         "write_project_file failed: `nodes/camera.py` changed since it was read, so this write \

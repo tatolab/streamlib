@@ -52,23 +52,20 @@ impl ControlOperationDispatcher {
             let project_repository =
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
             let mut project_repository_held = project_repository.lock();
-            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
-                .map_err(|refusal| refusal.to_string())?;
-            let outcome = project_repository_held
-                .add_dependency(
-                    &author,
-                    idempotency_key.as_ref(),
-                    &source,
-                    folder.as_deref(),
-                )
-                .map_err(|refusal| refusal.to_string())?;
+            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
+            let outcome = project_repository_held.add_dependency(
+                &author,
+                idempotency_key.as_ref(),
+                &source,
+                folder.as_deref(),
+            )?;
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
             let venv_to_make_current =
                 VenvToMakeCurrent::once_applied_now(&project_repository_held, &outcome);
             let applied = outcome.into_applied_transaction();
             let added = the_import_the_transaction_placed(&applied)?;
-            Ok::<_, String>((
+            Ok::<_, ControlOperationRefusal>((
                 DependencyTransactionToolResult {
                     dependency: the_dependency_on_the_wire(&added),
                     transaction: applied.transaction.transaction.to_string(),
@@ -81,7 +78,7 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "add_dependency failed: the call",
         ))?
-        .map_err(|refusal| format!("add_dependency failed: {refusal}"))?;
+        .map_err(|refusal| refusal.with_its_words_after("add_dependency failed"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
@@ -110,12 +107,11 @@ impl ControlOperationDispatcher {
             let project_repository =
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
             let mut project_repository_held = project_repository.lock();
-            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
-                .map_err(|refusal| refusal.to_string())?;
+            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
             let files_the_update_overwrites = match project_repository_held.import(project) {
-                Ok(held) if overwrite_edited_files => project_repository_held
-                    .files_edited_in_the_import(&held)
-                    .map_err(|refusal| refusal.to_string())?,
+                Ok(held) if overwrite_edited_files => {
+                    project_repository_held.files_edited_in_the_import(&held)?
+                }
                 _ => Vec::new(),
             };
             let outcome = match project_repository_held.update_dependency(
@@ -129,10 +125,8 @@ impl ControlOperationDispatcher {
                 Err(ProjectRepositoryRefusal::ImportEditedSinceItsCopy {
                     edited_files, ..
                 }) => {
-                    let held = project_repository_held
-                        .import(project)
-                        .map_err(|refusal| refusal.to_string())?;
-                    return Ok::<_, String>((
+                    let held = project_repository_held.import(project)?;
+                    return Ok::<_, ControlOperationRefusal>((
                         UpdateDependencyToolResult {
                             dependency: the_dependency_on_the_wire(&held),
                             edited_files,
@@ -143,7 +137,7 @@ impl ControlOperationDispatcher {
                         None,
                     ));
                 }
-                Err(refusal) => return Err(refusal.to_string()),
+                Err(refusal) => return Err(refusal.into()),
             };
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
@@ -180,7 +174,7 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "update_dependency failed: the call",
         ))?
-        .map_err(|refusal| format!("update_dependency failed: {refusal}"))?;
+        .map_err(|refusal| refusal.with_its_words_after("update_dependency failed"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
@@ -200,7 +194,7 @@ impl ControlOperationDispatcher {
             let listing = project_repository
                 .lock()
                 .import_listing(check_for_newer.unwrap_or(false));
-            Ok::<_, String>(ListDependenciesToolResult {
+            Ok::<_, ControlOperationRefusal>(ListDependenciesToolResult {
                 dependencies: listing
                     .into_iter()
                     .map(|listed| {
@@ -235,7 +229,7 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "list_dependencies failed: the call",
         ))?
-        .map_err(|refusal| format!("list_dependencies failed: {refusal}"))?;
+        .map_err(|refusal| refusal.with_its_words_after("list_dependencies failed"))?;
         Ok(answered)
     }
 
@@ -257,18 +251,19 @@ impl ControlOperationDispatcher {
             let project_repository =
                 the_project_repository_open_at(&project_repositories, &project_directory)?;
             let mut project_repository_held = project_repository.lock();
-            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)
-                .map_err(|refusal| refusal.to_string())?;
-            let outcome = project_repository_held
-                .remove_dependency(&author, idempotency_key.as_ref(), project)
-                .map_err(|refusal| refusal.to_string())?;
+            let idempotency_key = the_idempotency_key_a_caller_sent(idempotency_key)?;
+            let outcome = project_repository_held.remove_dependency(
+                &author,
+                idempotency_key.as_ref(),
+                project,
+            )?;
             project_repositories
                 .announce_the_transaction_if_applied_now(&project_repository_held, &outcome);
             let venv_to_make_current =
                 VenvToMakeCurrent::once_applied_now(&project_repository_held, &outcome);
             let applied = outcome.into_applied_transaction();
             let removed = the_import_the_transaction_removed(&applied)?;
-            Ok::<_, String>((
+            Ok::<_, ControlOperationRefusal>((
                 DependencyTransactionToolResult {
                     dependency: the_dependency_on_the_wire(&removed),
                     transaction: applied.transaction.transaction.to_string(),
@@ -281,7 +276,7 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "remove_dependency failed: the call",
         ))?
-        .map_err(|refusal| format!("remove_dependency failed: {refusal}"))?;
+        .map_err(|refusal| refusal.with_its_words_after("remove_dependency failed"))?;
         let (answered, venv_to_make_current) = answered;
         self.make_the_venv_current_and_announce_it(venv_to_make_current);
         Ok(answered)
@@ -420,16 +415,14 @@ fn the_import_named(project: &str) -> Result<Uuid, String> {
 fn the_project_repository_open_at(
     project_repositories: &ProjectRepositoriesOpenInThisRuntime,
     project_directory: &std::path::Path,
-) -> Result<ProjectRepositoryOneWriterAtATime, String> {
+) -> Result<ProjectRepositoryOneWriterAtATime, ControlOperationRefusal> {
     if !project_directory.is_absolute() {
-        return Err(format!(
+        return Err(ControlOperationRefusal::failed(format!(
             "`project_directory` must be an absolute path; got `{}`",
             project_directory.display()
-        ));
+        )));
     }
-    project_repositories
-        .the_project_repository_at(project_directory)
-        .map_err(|refusal| refusal.to_string())
+    Ok(project_repositories.the_project_repository_at(project_directory)?)
 }
 
 fn the_import_the_transaction_placed(

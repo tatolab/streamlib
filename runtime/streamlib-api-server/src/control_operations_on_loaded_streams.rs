@@ -69,7 +69,7 @@ impl ControlRequestOrigin {
         method_name: &str,
     ) -> Result<&Arc<ViewersOneConnectionHoldsOpen>, ControlOperationRefusal> {
         self.viewers_held_open.as_ref().ok_or_else(|| {
-            ControlOperationRefusal::Failed(format!(
+            ControlOperationRefusal::failed(format!(
                 "{method_name} failed: a viewer stays open for the connection that opened it, \
                  and this request's connection ends with its answer; open it over a connection \
                  that stays open, `/mcp/stdio` or `/control/ws`"

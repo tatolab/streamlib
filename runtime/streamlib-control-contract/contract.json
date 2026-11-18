@@ -5005,6 +5005,41 @@
           },
           {
             "type": "string",
+            "const": "stream_not_found",
+            "description": "No stream the runtime holds, or no stream asset the project holds, is the one named."
+          },
+          {
+            "type": "string",
+            "const": "node_not_found",
+            "description": "The stream holds no node of the UUID or `as` label sent; `refused_node` names it, when the\ncall named one."
+          },
+          {
+            "type": "string",
+            "const": "node_type_not_found",
+            "description": "No node type of the name sent is one the stream can add."
+          },
+          {
+            "type": "string",
+            "const": "node_name_taken",
+            "description": "Another node of the graph already has the name sent."
+          },
+          {
+            "type": "string",
+            "const": "link_already_exists",
+            "description": "The link sent is already in the graph."
+          },
+          {
+            "type": "string",
+            "const": "file_not_found",
+            "description": "The project holds no file or folder at the path sent; `refused_file` names it."
+          },
+          {
+            "type": "string",
+            "const": "file_changed_since_it_was_read",
+            "description": "The file changed, or was taken out, since it was read, so the write was not made;\n`refused_file` names it. Read it again to see what it holds now."
+          },
+          {
+            "type": "string",
             "const": "refused",
             "description": "The request was understood and not done; changing it can help. The runtime's words say\nwhat to change."
           }
@@ -5053,7 +5088,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "description": "The file's path in the project, `/`-separated."
+            "description": "The file's path in the project, `/`-separated; its absolute path when the refusal is\nabout a file the runtime could not read from disk."
           },
           "line": {
             "type": [

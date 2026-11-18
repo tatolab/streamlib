@@ -131,7 +131,7 @@ export interface ProjectActionRefusalOnTheWire {
  * What kind of refusal a refused call is. The set grows: a code a client does not know reads
  * as `refused`.
  */
-export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "refused";
+export type ControlOperationRefusalCode = "params_do_not_match_schema" | "operation_not_found" | "node_not_running" | "runtime_failed" | "port_not_found" | "input_takes_no_value" | "input_value_not_valid" | "stream_not_found" | "node_not_found" | "node_type_not_found" | "node_name_taken" | "link_already_exists" | "file_not_found" | "file_changed_since_it_was_read" | "refused";
 
 /**
  * The link a refused operation names, each end as the caller named it.
@@ -166,7 +166,8 @@ export interface GraphLinkEndOnTheWire {
  */
 export interface ProjectFilePlaceOnTheWire {
   /**
-   * The file's path in the project, `/`-separated.
+   * The file's path in the project, `/`-separated; its absolute path when the refusal is
+   * about a file the runtime could not read from disk.
    */
   path: string;
   /**

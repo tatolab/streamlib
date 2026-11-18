@@ -60,7 +60,9 @@ impl ControlOperationDispatcher {
         .map_err(ControlOperationRefusal::the_task_did_not_finish(
             "refresh_fragments failed: the refresh",
         ))?
-        .map_err(|refusal| format!("refresh_fragments failed: {refusal}"))?;
+        .map_err(|refusal| {
+            ControlOperationRefusal::of_a_project_repository_refusal("refresh_fragments", &refusal)
+        })?;
         if refreshes.is_empty() {
             return Ok(GraphTransactionToolResult {
                 mode: mode.unwrap_or_default().on_the_wire().to_owned(),
