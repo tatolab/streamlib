@@ -363,7 +363,14 @@ async fn an_input_that_may_be_unset_starts_its_node_with_no_value_and_no_wire() 
         .the_action_on_the_project_done("start_playback", &project)
         .await;
     let stream_id = project.stream_id_of("main");
-    let dimmer = the_node_named(&engine.the_live_graph_of(&stream_id), "dimmer");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let dimmer = loop {
+        let dimmer = the_node_named(&engine.the_live_graph_of(&stream_id), "dimmer");
+        if dimmer["components"]["state"] == "Running" || std::time::Instant::now() > deadline {
+            break dimmer;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
     assert_eq!(dimmer["components"]["state"], "Running", "{dimmer}");
     assert!(
         dimmer.get("inputs_waiting_for_a_value").is_none(),
