@@ -481,6 +481,11 @@ impl LoadedStreamInThisRuntime {
                 .map_err(Error::GraphError)?;
             return Ok(WhatALiveConnectMakesOfALink::JudgesItOnlyAsItIsMade);
         }
+        let StreamGraphOperation::Connect { link } = &connect else {
+            return Err(Error::GraphError(
+                "a connect read under its ports' current names is no longer a connect".into(),
+            ));
+        };
         let (from, to) = self.the_ends_of_the_link(link)?;
         the_verdict_connect_takes_on_a_link(&self.compiler, from, to)
             .map(|verdict| WhatALiveConnectMakesOfALink::Makes(verdict.map(Box::new)))

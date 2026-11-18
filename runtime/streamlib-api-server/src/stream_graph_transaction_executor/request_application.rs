@@ -355,14 +355,8 @@ impl StreamGraphTransactionExecutor<'_> {
             },
             &mut placed_stream_a_collapse_saves,
         )?;
-        if let StreamGraphOperation::Connect { link } = &edit_as_drawn
-            && level_as_drawn.links().contains(link)
-        {
-            return Err(format!(
-                "the graph already links {}/{} -> {}/{}",
-                link.source.node, link.source.port, link.target.node, link.target.port
-            )
-            .into());
+        if let StreamGraphOperation::Connect { link } = &edit_as_drawn {
+            refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
         }
         let overridden_by_a_link = match &edit_as_drawn {
             StreamGraphOperation::SetNodeInputValue {

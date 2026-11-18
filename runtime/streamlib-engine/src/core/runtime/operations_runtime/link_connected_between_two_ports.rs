@@ -10,7 +10,9 @@ use super::link_ends_this_graph_cannot_take::{
     refuse_a_destination_this_graph_cannot_take, refuse_a_source_this_graph_cannot_take,
 };
 use super::{LiveGraphChangeOnOneStream, commit_live_graph_change};
-use crate::core::compiler::compiler_ops::function_node_island::refuse_a_link_feeding_an_island_into_the_app_process;
+use crate::core::compiler::compiler_ops::function_node_island::{
+    refuse_a_link_an_island_cannot_take, refuse_a_link_feeding_an_island_into_the_app_process,
+};
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::descriptors::PinLinkVerdict;
 use crate::core::graph::{
@@ -84,7 +86,7 @@ fn the_ends_connect_links(
 /// Refuse a link from `from` to `to` that connect refuses, in `graph`, before anything is made:
 /// an end the graph cannot take, a link its pin types or families refuse (one the verdict alone
 /// refuses kept as `a_link_the_pin_types_refuse` says), one feeding a function node island into
-/// the app process, or one whose channel cannot be named. Answers the verdict of two typed ends
+/// the app process, one an island cannot take, or one whose channel cannot be named. Answers the verdict of two typed ends
 /// that connect, `None` for ends their families judge, and the channel the link carries on.
 fn refuse_a_link_connect_refuses(
     graph: &Graph,
@@ -101,6 +103,7 @@ fn refuse_a_link_connect_refuses(
         a_link_the_pin_types_refuse,
     )?;
     refuse_a_link_feeding_an_island_into_the_app_process(graph, from, to)?;
+    refuse_a_link_an_island_cannot_take(graph, from, to, None)?;
     let channel =
         crate::iceoryx2::source_channel_name(from.node_run_id().as_str(), from.port_name())
             .map_err(|source| Error::InvalidLink(source.to_string()))?;

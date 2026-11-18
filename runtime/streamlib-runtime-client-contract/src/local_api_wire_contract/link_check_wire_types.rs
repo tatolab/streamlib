@@ -87,6 +87,8 @@ pub enum PinLinkOutcomeOnTheWire {
     /// or a Color, or a Menu into a String.
     ConnectsWithFreeConversion,
     /// The two ends connect through the convert node `convert_node` names, placed between them.
+    /// Not answered yet: `connect` refuses a link that needs a convert node, so such a link is
+    /// answered `refused`.
     ConnectsThroughConvertNode,
     /// The link is not made; `refusal` says why.
     Refused,
