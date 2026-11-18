@@ -741,6 +741,41 @@ fn a_load_waits_for_an_edit_made_through_a_stream_held_from_its_document() {
 
 #[test]
 #[serial]
+fn a_graph_document_given_another_documents_node_uuid_while_its_project_prepares_refuses_the_load()
+{
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+    stub_uv.handed_to(&runner);
+    let queued = runner
+        .open_project(project_open_or_reload_request_of(project.path()))
+        .expect("an open of a project is queued");
+    the_stream_action_once(&runner, &queued.action_id, |action| {
+        action.step == Some(StreamActionStep::MakingTheVenv)
+    });
+
+    let camera_document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.graph_document_path_of("camera")).unwrap())
+            .unwrap();
+    let mut copied_by_hand = the_graph_of_a_stream_named("camera-copy");
+    copied_by_hand["nodes"][0]["id"] = camera_document["nodes"][0]["id"].clone();
+    project.write_the_graph_document(copied_by_hand);
+    std::fs::write(&gate, "").unwrap();
+    let failed = the_stream_action_once_finished(&runner, &queued.action_id);
+
+    assert_eq!(failed.state, StreamActionState::Failed, "{failed:?}");
+    let failed_because = failed.failed_because.unwrap_or_default();
+    assert!(
+        failed_because.contains("`streams/camera.graph.json`")
+            && failed_because.contains("`streams/camera-copy.graph.json`"),
+        "{failed_because}"
+    );
+    assert!(runner.ids_of_the_loaded_streams().is_empty());
+}
+
+#[test]
+#[serial]
 fn a_stream_of_a_closed_project_is_held_from_its_document_alone() {
     let state_directory = tempfile::tempdir().unwrap();
     let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
