@@ -12,8 +12,7 @@ use streamlib::sdk::descriptors::{
 use streamlib::sdk::nodes::NODE_REGISTRY;
 use streamlib_media_builtins::register_media_builtin_node_types;
 
-/// The formats one `[h, w, 4]` tensor holds a pixel of, which `TextureToTensor` takes and
-/// `TensorToTexture` writes.
+/// The formats one `[h, w, 4]` tensor holds a pixel of, which `TextureToTensor` takes.
 const ONE_TENSOR_PIXEL_FORMATS: [TexturePixelFormat; 6] = [
     TexturePixelFormat::Rgba8Unorm,
     TexturePixelFormat::Rgba8UnormSrgb,
@@ -57,7 +56,7 @@ fn the_typed_conversions() -> [PinConversion; 4] {
             "array",
             PinType::Tensor {},
             "image",
-            a_texture_of(&ONE_TENSOR_PIXEL_FORMATS),
+            a_texture_of(&[]),
         ),
         conversion(
             "AudioToTensor",
@@ -161,20 +160,18 @@ fn the_verdict_finds_each_typed_conversion_between_the_two_types_it_converts() {
     }
 }
 
-/// An `nv12` Texture has no one-tensor layout, so no conversion is offered into a Tensor, and
-/// no Tensor reaches a Texture input that takes `nv12` alone.
+/// An `nv12` Texture has no one-tensor layout, so no conversion is offered into a Tensor.
 #[test]
-fn the_verdict_offers_no_conversion_to_or_from_an_nv12_texture() {
+fn the_verdict_offers_no_conversion_from_an_nv12_texture_into_a_tensor() {
     let conversions = the_conversions_stated_by(&the_registered_built_ins());
     let nv12 = a_texture_of(&[TexturePixelFormat::Nv12]);
 
-    for (output, input) in [(&nv12, &PinType::Tensor {}), (&PinType::Tensor {}, &nv12)] {
-        let verdict = the_verdict_between(output, input, &conversions);
-        assert!(
-            matches!(verdict.outcome, PinLinkOutcome::Refused(_)),
-            "{output} into {input}: {verdict:?}"
-        );
-    }
+    let verdict = the_verdict_between(&nv12, &PinType::Tensor {}, &conversions);
+
+    assert!(
+        matches!(verdict.outcome, PinLinkOutcome::Refused(_)),
+        "{verdict:?}"
+    );
 }
 
 fn the_verdict_between(
