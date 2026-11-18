@@ -133,7 +133,8 @@ fn each_output_a_panel_writes_is_a_value_publishing_its_same_named_setting_read_
         the_node_type_of_a_project_view(&a_view_read_from("acme-dj:deck", the_deck_manifest()))
             .expect("a node view that opens is a node type"),
     )
-    .expect("an output takes the name of the setting whose value it publishes");
+    .expect("an output takes the name of the setting whose value it publishes")
+    .descriptor;
     let [_waveform, setting] = descriptor.inputs.as_slice() else {
         panic!("the deck takes its declared input and one input of its output's name");
     };

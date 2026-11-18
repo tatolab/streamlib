@@ -597,6 +597,7 @@ fn no_declared_meta_or_port_descriptions() -> NodeDeclaredMetaAndPortDescription
     NodeDeclaredMetaAndPortDescriptions {
         node_description: None,
         category: None,
+        conversion: false,
         inputs: Vec::new(),
         outputs: Vec::new(),
     }
@@ -646,6 +647,22 @@ fn only_a_node_that_declares_a_category_sets_one_on_its_descriptor() {
     };
     assert!(rendered_for(Some("Effects/Stylize")).contains(".with_category(\"Effects/Stylize\")"));
     assert!(!rendered_for(None).contains("with_category"));
+}
+
+#[test]
+fn only_a_node_that_states_a_conversion_says_so_on_its_descriptor() {
+    let rendered_for = |conversion: bool| {
+        render_token_stream_without_whitespace(generate_descriptor_from_schema(
+            &minimal_schema(),
+            &NodeDeclaredMetaAndPortDescriptions {
+                conversion,
+                ..no_declared_meta_or_port_descriptions()
+            },
+            &quote! { __streamlib_sdk::nodes::EmptyConfig },
+        ))
+    };
+    assert!(rendered_for(true).contains(".stating_a_conversion()"));
+    assert!(!rendered_for(false).contains("stating_a_conversion"));
 }
 
 fn rendered_node_impl() -> String {

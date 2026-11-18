@@ -508,12 +508,14 @@ fn generate_from_config_from_schema(
     }
 }
 
-/// The node's declared category and description and each port's description,
-/// beside the schema the descriptor is emitted from: the schema carries no
-/// category, and a `const` description has no text it could carry.
+/// The node's declared category, description and conversion and each port's
+/// description, beside the schema the descriptor is emitted from: the schema
+/// carries no category or conversion, and a `const` description has no text it
+/// could carry.
 struct NodeDeclaredMetaAndPortDescriptions<'parsed> {
     node_description: Option<&'parsed DeclaredDescription>,
     category: Option<&'parsed str>,
+    conversion: bool,
     inputs: Vec<Option<&'parsed DeclaredDescription>>,
     outputs: Vec<Option<&'parsed DeclaredDescription>>,
 }
@@ -526,6 +528,7 @@ impl<'parsed> NodeDeclaredMetaAndPortDescriptions<'parsed> {
         Self {
             node_description: parsed.description.as_ref(),
             category: parsed.category.as_deref(),
+            conversion: parsed.conversion,
             inputs: of_ports(&parsed.inputs),
             outputs: of_ports(&parsed.outputs),
         }
@@ -645,6 +648,10 @@ fn generate_descriptor_from_schema(
         .category
         .map(|category| quote! { .with_category(#category) });
 
+    let conversion = declared_meta_and_port_descriptions
+        .conversion
+        .then(|| quote! { .stating_a_conversion() });
+
     // `module_path!()` resolves here to `<author's module>::<authored type>`,
     // because this expansion lands inside the module the macro names after
     // the author's struct — the generated module's own path *is* the type
@@ -663,6 +670,7 @@ fn generate_descriptor_from_schema(
                     #scheduling
                     #paced_by_real_time
                     #category
+                    #conversion
                     #(#ipc_input_ports)*
                     #(#ipc_output_ports)*
             )

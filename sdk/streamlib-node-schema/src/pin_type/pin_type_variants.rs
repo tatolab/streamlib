@@ -293,6 +293,20 @@ pub enum ProjectAssetMedia {
     Stream,
 }
 
+impl ProjectAssetMedia {
+    /// Its name as it serializes.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Lut => "lut",
+            Self::Scene => "scene",
+            Self::Stream => "stream",
+        }
+    }
+}
+
 /// One member of a bundle.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Tatolab LLC
 // SPDX-License-Identifier: GPL-3.0-only
 
+use streamlib::sdk::descriptors::{PinLinkEndNamed, PinLinkRefusal, PinType};
 use streamlib::sdk::error::{Error, PortDirection, WhyANodeOfAStreamIsNotRunning};
 use streamlib_project_repository::ProjectRepositoryRefusal;
 use streamlib_runtime_client_contract::local_api_wire_contract::{
@@ -144,6 +145,35 @@ fn an_engine_error_reads_back_with_its_code_and_the_input_it_names() {
         (
             Error::LinkAlreadyExists("camera.video -> blur.video".to_owned()),
             ControlOperationRefusalCode::LinkAlreadyExists,
+            None,
+        ),
+        (
+            Error::PinLinkRefused(Box::new(PinLinkRefusal::InputTakesNoWire {
+                node_name: "blur".to_owned(),
+                input_name: "radius".to_owned(),
+            })),
+            ControlOperationRefusalCode::InputTakesNoWire,
+            Some("radius".to_owned()),
+        ),
+        (
+            Error::PinLinkRefused(Box::new(PinLinkRefusal::PinTypesDoNotConnect {
+                output: PinLinkEndNamed {
+                    node_name: "camera".to_owned(),
+                    port_name: "video".to_owned(),
+                    member_name: None,
+                    pin_type: PinType::Texture {
+                        pixel_formats: Vec::new(),
+                    },
+                },
+                input: PinLinkEndNamed {
+                    node_name: "gain".to_owned(),
+                    port_name: "level".to_owned(),
+                    member_name: None,
+                    pin_type: PinType::Float { exact_size: None },
+                },
+                conversions_that_bridge: Vec::new(),
+            })),
+            ControlOperationRefusalCode::LinkPinTypesDoNotConnect,
             None,
         ),
         (

@@ -17,6 +17,7 @@ pub mod input_values;
 pub(crate) mod legacy_config_of_a_node;
 mod node_state_ecs_component;
 mod nodes;
+mod pin_type_link_checks;
 mod port_family_link_checks;
 mod traits;
 mod traversal;
@@ -43,9 +44,9 @@ pub(crate) use data_structure::{
 pub(crate) use exposed_config_field_input_ports::the_input_ports_of_the_exposed_config_fields;
 pub use graph_readiness::ObservableGraphReadiness;
 pub use node_state_ecs_component::{NodeState, NodeStateComponent};
+pub(crate) use pin_type_link_checks::refuse_a_link_its_pin_types_or_families_refuse;
 pub(crate) use port_family_link_checks::{
     refuse_a_config_update_that_a_wired_link_out_of_the_node_would_refuse,
-    refuse_a_link_between_ports_whose_families_do_not_match,
     the_family_a_link_out_of_an_output_carries, the_outputs_a_link_carries_on,
 };
 pub(crate) use streamlib_node_schema::is_in_exposed_name_cast_form;
@@ -83,7 +84,7 @@ pub use edges::{
     InputLinkPortRef, InputPortMarker, Link, LinkCapacity, LinkDirection, LinkState, LinkUniqueId,
     OutputLinkPortRef, OutputPortMarker, PortMarker, input, output,
 };
-pub(crate) use nodes::the_words_of_a_link_into_a_setting;
+pub(crate) use nodes::the_refusal_of_a_link_into_a_setting;
 pub use nodes::{
     GraphNode, GraphNodePorts, InputHoldingAValueUnderANameItHad, InputNumberRange, NodeRunId,
     PortInfo,
