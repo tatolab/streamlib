@@ -1,0 +1,21 @@
+{
+  "contract": "1.0",
+  "title": "Paint Pulse stage",
+  "description": "The painted ball, live. Drag to orbit, scroll to zoom, click or press space to burst, double-click to reset.",
+  "entry": "index.html",
+  "placement": "node",
+  "inputs": [
+    {
+      "name": "video",
+      "family": "image",
+      "description": "The finished picture to show and steer."
+    }
+  ],
+  "outputs": [
+    {
+      "name": "camera",
+      "family": "records",
+      "description": "Where the stage has been dragged and zoomed to, and how many bursts it has asked for."
+    }
+  ]
+}

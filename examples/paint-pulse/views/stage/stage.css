@@ -1,0 +1,10 @@
+:root { color-scheme: dark; }
+html, body { margin: 0; height: 100%; background: #0b0c12; color: #d8d8e0; font: 12px/1.4 system-ui, sans-serif; }
+.stage { position: relative; height: 100%; display: flex; flex-direction: column; }
+.stage-picture { flex: 1; min-height: 0; width: 100%; object-fit: contain; cursor: grab; outline: none; touch-action: none; }
+.stage-picture.is-dragging { cursor: grabbing; }
+.stage-notice { position: absolute; top: 8px; left: 8px; margin: 0; opacity: 0.8; }
+.stage-controls { display: flex; gap: 8px; align-items: center; padding: 6px 8px; }
+.stage-controls button { background: #262836; color: inherit; border: 1px solid #3a3d52; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.stage-controls button:hover { background: #31344a; }
+.stage-hint { opacity: 0.6; margin-left: auto; }

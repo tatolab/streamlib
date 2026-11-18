@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paint Pulse stage</title>
+<link rel="stylesheet" href="stage.css">
+</head>
+<body>
+<main class="stage">
+  <canvas class="stage-picture" tabindex="0" aria-label="The painted ball. Drag to orbit, scroll to zoom, click or press space to burst."></canvas>
+  <p class="stage-notice" role="status"></p>
+  <div class="stage-controls">
+    <button type="button" class="stage-burst">Burst</button>
+    <button type="button" class="stage-reset">Reset view</button>
+    <span class="stage-hint">Drag to orbit · scroll to zoom · space to burst</span>
+  </div>
+</main>
+<script type="module" src="stage.js"></script>
+</body>
+</html>
