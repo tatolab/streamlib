@@ -3,6 +3,9 @@
 
 """`SourceSwitch`: picks which sound the ball follows, the song, the computer's audio or a mic.
 
+Its `monitor` output carries the sound only while the song plays: the computer's audio and a
+mic are already audible in the room, so playing them back again doubles them or feeds back.
+
 Every source keeps running; the switch passes on the one `source` names and drops the rest,
 each block resampled by the engine to one shape on the way in. Its output keeps one
 unbroken sample count across switches, so the listener downstream never sees a gap or a jump.
@@ -45,11 +48,13 @@ class SourceSwitch:
     song = Input(Channels, delivery="ordered", window=BLOCK, description="Source 0")
     computer = Input(Channels, delivery="ordered", window=BLOCK, description="Source 1")
     mic = Input(Channels, delivery="ordered", window=BLOCK, description="Source 2")
-    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The chosen source")
+    audio = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The chosen source, for listening to")
+    monitor = Output(Channels, rate=SAMPLE_RATE, dtype="f32", description="The chosen source to play out loud: the song only")
 
     def __init__(self, config: SourceSwitchConfig) -> None:
         self.source = 0
         self.samples_written = 0
+        self.samples_monitored = 0
         self.configure(config)
 
     def configure(self, config: SourceSwitchConfig) -> None:
@@ -71,3 +76,11 @@ class SourceSwitch:
                     timestamp_ns=block.timestamp_ns,
                 )
                 self.samples_written += samples.shape[1]
+                if index == 0:
+                    ctx.outputs.write(
+                        self.monitor,
+                        samples,
+                        start_sample=self.samples_monitored,
+                        timestamp_ns=block.timestamp_ns,
+                    )
+                    self.samples_monitored += samples.shape[1]

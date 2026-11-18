@@ -313,7 +313,7 @@
     {
       "source": {
         "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
-        "port": "audio"
+        "port": "monitor"
       },
       "target": {
         "node": "c39fea05-57b1-5144-87db-7c614307bfbf",
@@ -323,7 +323,7 @@
     {
       "source": {
         "node": "395312a2-d4bb-5507-9506-ab72d7dd03f8",
-        "port": "audio"
+        "port": "monitor"
       },
       "target": {
         "node": "9c9248d9-af50-57e3-ac90-e3ba0f92a8d3",
