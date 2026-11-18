@@ -18,8 +18,8 @@ use crate::core::pubsub::LoadedStreamIdentity;
 use crate::core::runtime::operations::RuntimeOperations;
 use crate::core::runtime::{
     CreateProjectRequest, MachineName, ProjectCreationQueued, ProjectOpenOrReloadRequest,
-    ProjectPausedOrResumed, Runner, StreamAction, StreamActionQueued,
-    StreamHeldFromItsDocumentAlone, StreamListing,
+    ProjectPausedOrResumed, Runner, StreamAction, StreamActionQueued, StreamListing,
+    StreamsToReadOrEdit,
 };
 
 /// What the local API reaches a runtime through: the runtime's description, the
@@ -177,17 +177,9 @@ pub trait OperationsOnTheStreamsLoadedInThisRuntime: Send + Sync {
     /// [`Runner::list_streams`].
     fn list_streams(&self) -> Vec<StreamListing>;
 
-    /// [`Runner::the_stream_held_from_its_document_alone`]; refused by a runtime that holds
-    /// no stream from its document alone.
-    fn the_stream_held_from_its_document_alone(
-        &self,
-        stream_id: &str,
-    ) -> Result<StreamHeldFromItsDocumentAlone> {
-        Err(crate::core::error::Error::NotFound(format!(
-            "no stream with the id `{stream_id}` is loaded in this runtime, and it holds no \
-             stream from its document alone"
-        )))
-    }
+    /// [`Runner::the_streams_to_read_or_edit`].
+    fn the_streams_to_read_or_edit(&self, stream_ids: &[String])
+    -> Result<StreamsToReadOrEdit<'_>>;
 
     /// [`Runner::set_stream_clock_scale`].
     fn set_stream_clock_scale(&self, stream_id: &str, scale: f64) -> Result<StreamClockReading>;
@@ -391,11 +383,11 @@ impl OperationsOnTheStreamsLoadedInThisRuntime for Runner {
         Runner::delete_project(self, project_directory)
     }
 
-    fn the_stream_held_from_its_document_alone(
+    fn the_streams_to_read_or_edit(
         &self,
-        stream_id: &str,
-    ) -> Result<StreamHeldFromItsDocumentAlone> {
-        Runner::the_stream_held_from_its_document_alone(self, stream_id)
+        stream_ids: &[String],
+    ) -> Result<StreamsToReadOrEdit<'_>> {
+        Runner::the_streams_to_read_or_edit(self, stream_ids)
     }
 
     fn list_streams(&self) -> Vec<StreamListing> {

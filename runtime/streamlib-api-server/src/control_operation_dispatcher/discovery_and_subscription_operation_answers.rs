@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use streamlib::sdk::error::Error;
 use streamlib_control_contract::{
     CONTROL_CONTRACT_REVISION, CONTROL_CONTRACT_VERSION, CONTROL_OPERATIONS, DiscoverResult,
     SubscribeInputValueChangesResult, SubscribeProjectChangesResult,
@@ -95,25 +94,28 @@ impl ControlOperationDispatcher {
     ) -> Result<Value, ControlOperationRefusal> {
         match stream {
             Some(stream) => {
-                let stream_operations = match self
-                    .operations_on_the_loaded_streams
-                    .runtime_operations_of_the_stream_a_call_names(&stream)
-                {
-                    Ok(loaded) => loaded,
-                    Err(Error::NotFound(_)) => {
-                        return self
-                            .the_graph_of_a_stream_held_from_its_document_alone(stream)
-                            .await;
-                    }
-                    Err(refusal) => {
-                        return Err(ControlOperationRefusal::of_an_engine_error(
-                            "graph", &refusal,
-                        ));
-                    }
-                };
-                stream_operations.to_json_async().await.map_err(|refusal| {
-                    ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
+                let operations_on_the_loaded_streams =
+                    Arc::clone(&self.operations_on_the_loaded_streams);
+                let async_runtime = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    let streams = operations_on_the_loaded_streams
+                        .the_streams_to_read_or_edit(std::slice::from_ref(&stream))
+                        .map_err(|refusal| {
+                            ControlOperationRefusal::of_an_engine_error("graph", &refusal)
+                        })?;
+                    streams
+                        .runtime_operations_of(&stream)
+                        .and_then(|stream_operations| {
+                            async_runtime.block_on(stream_operations.to_json_async())
+                        })
+                        .map_err(|refusal| {
+                            ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
+                        })
                 })
+                .await
+                .map_err(ControlOperationRefusal::the_task_did_not_finish(
+                    "the graph read",
+                ))?
             }
             None => {
                 crate::handlers::machine_wide_graph_json(&self.operations_on_the_loaded_streams)
@@ -123,33 +125,6 @@ impl ControlOperationDispatcher {
                     })
             }
         }
-    }
-
-    /// The graph of `stream`, which this runtime lists but has not loaded, read from its graph
-    /// document. The stand-in is built and torn down on a blocking thread, since loading a graph
-    /// blocks on the engine's tokio runtime.
-    async fn the_graph_of_a_stream_held_from_its_document_alone(
-        &self,
-        stream: String,
-    ) -> Result<Value, ControlOperationRefusal> {
-        let operations_on_the_loaded_streams = Arc::clone(&self.operations_on_the_loaded_streams);
-        let held_alone = tokio::task::spawn_blocking(move || {
-            operations_on_the_loaded_streams.the_stream_held_from_its_document_alone(&stream)
-        })
-        .await
-        .map_err(ControlOperationRefusal::the_task_did_not_finish(
-            "the graph read",
-        ))?
-        .map_err(|refusal| ControlOperationRefusal::of_an_engine_error("graph", &refusal))?;
-        let graph = held_alone.runtime_operations().to_json_async().await;
-        tokio::task::spawn_blocking(move || drop(held_alone))
-            .await
-            .map_err(ControlOperationRefusal::the_task_did_not_finish(
-                "the graph read's teardown",
-            ))?;
-        graph.map_err(|refusal| {
-            ControlOperationRefusal::of_an_engine_error("graph export", &refusal)
-        })
     }
 }
 

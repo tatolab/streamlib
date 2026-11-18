@@ -651,12 +651,12 @@ fn a_stream_whose_project_is_preparing_is_held_from_its_document_alone_and_loads
         action.step == Some(StreamActionStep::MakingTheVenv)
     });
 
-    let held_alone = runner
-        .the_stream_held_from_its_document_alone(&camera)
+    let streams = runner
+        .the_streams_to_read_or_edit(std::slice::from_ref(&camera))
         .expect("a stream preparing is held from its document alone");
-    let graph = tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(held_alone.runtime_operations().to_json_async())
+    let graph = streams
+        .runtime_operations_of(&camera)
+        .and_then(|held_alone| held_alone.to_json())
         .expect("the graph held from its document renders");
     assert_eq!(graph["nodes"].as_array().map(Vec::len), Some(1), "{graph}");
     assert!(
@@ -665,7 +665,7 @@ fn a_stream_whose_project_is_preparing_is_held_from_its_document_alone_and_loads
             .is_none(),
         "a stream held alone is never entered in the stream table"
     );
-    drop(held_alone);
+    drop(streams);
 
     let mut edited = the_graph_of_a_stream_named("camera");
     edited["nodes"]
@@ -693,11 +693,86 @@ fn a_stream_whose_project_is_preparing_is_held_from_its_document_alone_and_loads
 
 #[test]
 #[serial]
+fn a_load_waits_for_an_edit_made_through_a_stream_held_from_its_document() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    let camera = project.stream_id_of("camera");
+    let (stub_uv, gate) = a_uv_making_the_venv_once_released(&project);
+    stub_uv.handed_to(&runner);
+    let queued = runner
+        .open_project(project_open_or_reload_request_of(project.path()))
+        .expect("an open of a project is queued");
+    the_stream_action_once(&runner, &queued.action_id, |action| {
+        action.step == Some(StreamActionStep::MakingTheVenv)
+    });
+
+    let streams_being_edited = runner
+        .the_streams_to_read_or_edit(std::slice::from_ref(&camera))
+        .expect("a stream preparing is held from its document alone");
+    std::fs::write(&gate, "").unwrap();
+    the_stream_action_once(&runner, &queued.action_id, |action| {
+        action.step == Some(StreamActionStep::Starting)
+    });
+    let mut edited = the_graph_of_a_stream_named("camera");
+    edited["nodes"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": "second_source",
+            "type": MockOutputOnlyNode::Node::node_class_import_path().as_str(),
+            "config": {},
+        }));
+    project.write_the_graph_document(edited);
+    drop(streams_being_edited);
+    let done = the_stream_action_once_finished(&runner, &queued.action_id);
+
+    assert_eq!(done.state, StreamActionState::Done, "{done:?}");
+    assert_eq!(
+        runner
+            .loaded_stream_of_the_id(&camera)
+            .unwrap()
+            .node_count(),
+        2,
+        "the load reads the document only once the edit made through the stream held from it \
+         is written"
+    );
+}
+
+#[test]
+#[serial]
+fn a_stream_of_a_closed_project_is_held_from_its_document_alone() {
+    let state_directory = tempfile::tempdir().unwrap();
+    let runner = a_runner_recording_its_streams_in(Some(state_directory.path()));
+    let project = ProjectWithGraphDocuments::holding(the_graph_of_a_stream_named("camera"));
+    let camera = project.stream_id_of("camera");
+    a_project_opened_on(&runner, &project);
+    let queued = runner
+        .close_project(project.path())
+        .expect("a close of an open project is queued");
+    the_stream_action_once_finished(&runner, &queued.action_id);
+
+    let streams = runner
+        .the_streams_to_read_or_edit(std::slice::from_ref(&camera))
+        .expect("a stream of a closed project is held from its document alone");
+    let graph = streams
+        .runtime_operations_of(&camera)
+        .and_then(|held_alone| held_alone.to_json())
+        .expect("the graph held from its document renders");
+
+    assert_eq!(graph["nodes"].as_array().map(Vec::len), Some(1), "{graph}");
+    drop(streams);
+    assert!(runner.ids_of_the_loaded_streams().is_empty());
+    assert_eq!(runner.list_streams()[0].state, StreamListingState::Closed);
+}
+
+#[test]
+#[serial]
 fn a_stream_this_runtime_does_not_list_is_not_held_from_any_document() {
     let runner = a_runner_recording_its_streams_in(Some(tempfile::tempdir().unwrap().path()));
 
     let refusal = runner
-        .the_stream_held_from_its_document_alone("nowhere")
+        .the_streams_to_read_or_edit(&["nowhere".to_owned()])
         .err()
         .expect("a stream not listed is refused");
 

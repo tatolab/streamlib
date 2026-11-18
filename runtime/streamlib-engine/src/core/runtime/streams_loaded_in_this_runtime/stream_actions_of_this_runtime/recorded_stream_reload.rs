@@ -540,24 +540,12 @@ impl Runner {
             OneStreamAStreamActionLoads::recorded_by(stream_record, display_name, graph)
                 .abandoned_once(is_interrupted),
         );
-        let stream = match loaded {
-            Ok(LoadedOrHeldFromItsDocument::Loaded(stream)) => stream,
+        let (stream, load_refusal) = match loaded {
+            Ok(LoadedOrHeldFromItsDocument::Loaded(stream)) => (stream, None),
             Ok(LoadedOrHeldFromItsDocument::HeldFromItsDocument {
                 stream,
                 load_refusal,
-            }) => {
-                if record_it_once_loaded
-                    && let Err(not_written) = stream_records
-                        .write_the_record_a_load_made(stream_record.clone())
-                        .map(|written| *stream_record = written)
-                {
-                    unload_a_stream_an_action_took_back(&stream, "its record was not written");
-                    return Err(not_written);
-                }
-                stream.hold_stopped_without_a_start();
-                stream_record.mark_open_with_its_playback_stopped();
-                return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
-            }
+            }) => (stream, Some(load_refusal)),
             Err(load_refusal) => {
                 return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
             }
@@ -569,6 +557,11 @@ impl Runner {
         {
             unload_a_stream_an_action_took_back(&stream, "its record was not written");
             return Err(not_written);
+        }
+        if let Some(load_refusal) = load_refusal {
+            stream.hold_stopped_without_a_start();
+            stream_record.mark_open_with_its_playback_stopped();
+            return record_a_refused_load_failed(stream_records, stream_record, load_refusal);
         }
         if let Some(why_it_cannot_play) =
             stream.why_its_graph_as_held_keeps_this_stream_from_playing()
