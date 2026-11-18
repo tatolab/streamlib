@@ -560,8 +560,9 @@ enum Commands {
 
     /// CI gate on a change to the control contract file: fails when it breaks a client built
     /// against an earlier contract file — a removed operation or field, a newly required
-    /// param, a narrowed type — and still states that file's contract version. See
-    /// [`check_control_contract_compatibility`].
+    /// param, a narrowed type, a value added to a closed set in an answer — and still states
+    /// that file's contract version, or when it changes and raises neither the version nor the
+    /// revision. See [`check_control_contract_compatibility`].
     CheckControlContractCompatibility {
         /// The contract file the change is compared with: `main`'s.
         #[arg(long)]
