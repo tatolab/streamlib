@@ -10,8 +10,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use super::{
-    ALinkThePinTypesRefuse, LiveGraphChangeOnOneStream, connect_impl,
-    the_verdict_connect_takes_on_a_link,
+    ALinkConnected, LiveGraphChangeOnOneStream, connect_impl, the_verdict_connect_takes_on_a_link,
 };
 use crate::core::compiler::Compiler;
 use crate::core::descriptors::{
@@ -263,14 +262,14 @@ fn connect_on_this_thread(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    connect_on_this_thread_as(compiler, from, to, ALinkThePinTypesRefuse::IsRefused)
+    connect_on_this_thread_as(compiler, from, to, ALinkConnected::MadeNow)
 }
 
 fn connect_on_this_thread_as(
     compiler: &Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
-    a_link_the_pin_types_refuse: ALinkThePinTypesRefuse,
+    a_link_connected: ALinkConnected,
 ) -> Result<LinkUniqueId> {
     tokio::runtime::Builder::new_current_thread()
         .build()
@@ -287,7 +286,7 @@ fn connect_on_this_thread_as(
             },
             from,
             to,
-            a_link_the_pin_types_refuse,
+            a_link_connected,
         ))
 }
 
@@ -576,7 +575,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
         &compiler,
         OutputLinkPortRef::new(source, "temperature"),
         InputLinkPortRef::new(sink, "temperature"),
-        ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+        ALinkConnected::OfASavedGraph,
     )
     .expect("a saved link both ends' families take is kept");
     assert_eq!(the_links_in(&compiler), 1);
@@ -588,7 +587,7 @@ fn a_saved_graphs_link_its_pin_types_alone_refuse_is_kept_when_its_families_take
             &compiler,
             OutputLinkPortRef::new(level, "value"),
             InputLinkPortRef::new(numbers, "gain"),
-            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            ALinkConnected::OfASavedGraph,
         )
         .expect_err("a setting takes no wire, saved or not"),
     );

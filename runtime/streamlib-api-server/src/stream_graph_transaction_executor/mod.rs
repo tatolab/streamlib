@@ -96,7 +96,8 @@ fn what_a_link_action_names(
 /// `stream_operations` runs asks of it, made as a transaction's `connect` makes it on the
 /// stream's graph as `rendered_graph` renders it: each port under its current name, each node
 /// by its UUID, a loop of function nodes closed by a `PreviousValue` node added on it, and a
-/// link the graph already holds refused.
+/// link the graph already holds refused, in the order
+/// [`StreamGraphTransactionExecutor::apply_one_request`] takes those steps.
 pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
     source: StreamGraphActionLinkEnd,
     target: StreamGraphActionLinkEnd,
@@ -112,14 +113,12 @@ pub(crate) fn the_operation_a_connect_asks_of_the_running_stream(
         &no_node_by_label,
         stream_operations,
     );
-    let mut function_nodes = HashSet::new();
-    the_function_nodes_rendered_in(rendered_graph, &mut function_nodes);
     let operation = the_operation_a_connect_asks(
         &source,
         &target,
         &level_as_drawn,
         &no_node_by_label,
-        &|| Ok(function_nodes.clone()),
+        &|| Ok(the_function_nodes_of_the_render(rendered_graph)),
     )?;
     if let StreamGraphOperation::Connect { link } = &operation {
         refuse_a_link_the_graph_already_holds(&level_as_drawn, link)?;
@@ -821,6 +820,14 @@ struct WhatAGraphRequestReadsOfItsStreamAndProject<'reads> {
     family_of_an_output_port: &'reads FamilyOfAnOutputPortOfTheRunningStream<'reads>,
     function_nodes_of_the_running_stream: &'reads FunctionNodesOfTheRunningStream<'reads>,
     config_a_node_takes: &'reads ConfigANodeOfTheRunningStreamTakes<'reads>,
+}
+
+/// The UUID of each node `rendered_graph`, a stream's `graph` render, renders as a function
+/// node, at any level of the fragments it holds.
+fn the_function_nodes_of_the_render(rendered_graph: &Value) -> HashSet<Uuid> {
+    let mut function_nodes = HashSet::new();
+    the_function_nodes_rendered_in(rendered_graph, &mut function_nodes);
+    function_nodes
 }
 
 /// The UUID of each node `rendered_level`, a level of a stream's `graph` render, renders as a

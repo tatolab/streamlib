@@ -18,7 +18,7 @@ use crate::core::descriptors::{
 };
 use crate::core::graph::input_values::LiveInputValuesOfAStream;
 use crate::core::graph::{
-    ALinkThePinTypesRefuse, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
+    ALinkConnected, InputLinkPortRef, LinkUniqueId, NodeRunId, OutputLinkPortRef,
 };
 use crate::core::nodes::{HowANodeOfADescribedTypeRuns, NodeSpec, NodeTypesOneStreamResolves};
 use crate::core::pubsub::LoadedStreamIdentity;
@@ -129,7 +129,7 @@ fn connect_on_this_thread(
             },
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
 }
 

@@ -331,9 +331,7 @@ impl StreamGraphTransactionExecutor<'_> {
             let rendered_graph = self
                 .async_runtime
                 .block_on(stream_operations.to_json_async())?;
-            let mut function_nodes = HashSet::new();
-            the_function_nodes_rendered_in(&rendered_graph, &mut function_nodes);
-            Ok(function_nodes)
+            Ok(the_function_nodes_of_the_render(&rendered_graph))
         };
         let config_a_node_takes = |node_type: &str, input_values: &Map<String, Value>| {
             stream_operations

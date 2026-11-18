@@ -23,7 +23,7 @@ use crate::core::graph::input_values::{
     InputValueToSetLive, InputValuesSetLive, LiveInputValueSetRefusal,
 };
 use crate::core::graph::{
-    ALinkThePinTypesRefuse, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
+    ALinkConnected, Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId,
     NodeInstanceComponent, NodeRunId, PendingDeletionComponent, StateComponent, WhyTheNodeLeaves,
     node_named_or_refused,
 };
@@ -577,7 +577,8 @@ impl LoadedStreamInThisRuntime {
     }
 
     /// Connect one link of a saved graph `from` to `to` as a load makes it: one whose pin types
-    /// alone refuse it is kept when its ports' families take it.
+    /// alone refuse it is kept when its ports' families take it, and one an island cannot take
+    /// is left to the commit that builds the stream to refuse.
     pub(crate) fn connect_a_link_of_a_saved_graph(
         &self,
         from: OutputLinkPortRef,
@@ -587,7 +588,7 @@ impl LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsKeptWhenItsFamiliesTakeIt,
+            ALinkConnected::OfASavedGraph,
         ))
     }
 
@@ -645,7 +646,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
     }
 
@@ -882,7 +883,7 @@ impl RuntimeOperations for LoadedStreamInThisRuntime {
             self.live_graph_change(),
             from,
             to,
-            ALinkThePinTypesRefuse::IsRefused,
+            ALinkConnected::MadeNow,
         ))
     }
 

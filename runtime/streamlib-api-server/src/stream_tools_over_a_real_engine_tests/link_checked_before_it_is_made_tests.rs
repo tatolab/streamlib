@@ -548,3 +548,54 @@ async fn check_link_refuses_unchecked_a_link_reaching_a_fragment_node() {
         "{refusal:?}"
     );
 }
+
+/// A saved graph holding a second link into a port an island feeds loads into a stopped stream,
+/// as a saved graph's link is judged leniently so the graph opens, while a fresh `connect` of
+/// that same link, once it is taken out, is refused.
+///
+/// Mental-revert: a load judging a saved graph's link as one made now would refuse to open the
+/// graph.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_saved_graph_an_island_cannot_take_loads_while_a_fresh_connect_of_its_link_is_refused() {
+    let engine = AnEngineRecordingItsStreamsInATemporaryStateDirectory::new();
+    let project = a_project_whose_main_stream_holds_function_nodes();
+    let mut graph = project.the_graph_document_of("main");
+    let second_link_into_the_mix = json!({
+        "source": { "node": SECOND_LFO_UUID, "port": "result" },
+        "target": { "node": MIX_UUID, "port": "a" },
+    });
+    graph["links"]
+        .as_array_mut()
+        .expect("links")
+        .push(second_link_into_the_mix);
+    project.write_the_graph_document(graph);
+
+    let stream_id = engine.a_stream_loaded_from_its_graph_document(&project, "main");
+
+    assert_eq!(
+        engine.the_live_graph_of(&stream_id)["links"]
+            .as_array()
+            .map(Vec::len),
+        Some(3),
+        "the saved graph opens with each link it holds"
+    );
+    let link = the_link(
+        json!(project.stream_asset_of("main")),
+        (SECOND_LFO_UUID, "result"),
+        (MIX_UUID, "a"),
+    );
+    engine
+        .the_answer_or_the_refusal_of("disconnect", connected_by_alice(&link))
+        .await
+        .expect("the saved link is taken out");
+    let refused = engine
+        .the_answer_or_the_refusal_of("connect", connected_by_alice(&link))
+        .await
+        .expect_err("a fresh connect of the link is refused");
+    assert!(
+        refused
+            .runtime_words
+            .contains("shares the port with no other link"),
+        "{refused:?}"
+    );
+}
